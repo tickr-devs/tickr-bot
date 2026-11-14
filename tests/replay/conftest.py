@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from aperture.replay.clock import fixed_clock
 from aperture.replay.settings import ReplaySettings, load_settings
 from aperture.strategy.base import Decision, SymbolContext, Verdict
 from aperture.types import Bar
@@ -18,6 +19,10 @@ NY = ZoneInfo("America/New_York")
 DAY = date(2026, 11, 10)
 LAST_ENTRY = time(15, 45)
 FLATTEN = time(15, 55)
+REGULAR_OPEN = time(9, 30)
+CLOCK = fixed_clock(NY, REGULAR_OPEN, LAST_ENTRY, FLATTEN)
+BOT_TOML = HERE.parent.parent / "config" / "bot.toml"
+FLAT = ("10.00", "10.05", "9.95", "10.00")
 
 
 def at(clock: str, day: date = DAY) -> datetime:

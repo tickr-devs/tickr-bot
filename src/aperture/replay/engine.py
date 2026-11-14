@@ -22,10 +22,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
+from aperture.calendar import ny_date_of
+from aperture.replay.clock import ClockFor, SessionClock
 from aperture.replay.errors import ReplayError, StrategyContractError
 from aperture.replay.settings import ReplaySettings
 from aperture.strategy.base import Decision, PositionView, Strategy, SymbolContext, Verdict
@@ -124,14 +126,6 @@ class _Open:
     exit_requested: bool = False
 
 
-def _check_clock(settings: ReplaySettings, last_entry: time, flatten: time) -> None:
-    if not settings.regular_open < last_entry <= flatten:
-        raise ReplayError(
-            f"clock must satisfy regular_open < last_entry <= flatten: "
-            f"{settings.regular_open} / {last_entry} / {flatten}"
-        )
-
-
 def _check_decision(strategy: Strategy, symbol: str, decision: Decision) -> None:
     if not isinstance(decision, Decision):
         raise StrategyContractError(f"evaluate returned {type(decision).__name__}, not Decision")
@@ -170,8 +164,7 @@ class _SessionReplay:
         bars: Sequence[Bar],
         prior: tuple[tuple[Bar, ...], ...],
         settings: ReplaySettings,
-        last_entry: time,
-        flatten: time,
+        clock: SessionClock,
     ) -> None:
         self.strategy = strategy
         self.symbol = symbol
@@ -180,16 +173,12 @@ class _SessionReplay:
         self.prior = prior
         self.history = tuple(b for session in prior for b in session)
         self.settings = settings
-        self.last_entry = last_entry
-        self.flatten = flatten
+        self.session_clock = clock
         self.pending: _Pending | None = None
         self.open: _Open | None = None
         self.trades: list[SimulatedTrade] = []
         self.signals: list[Signal] = []
         self.verdicts: dict[str, int] = {}
-
-    def clock(self, bar: Bar) -> time:
-        return bar.start.astimezone(self.settings.session_timezone).time()
 
     def _signal(
         self, decision: Decision, bar_start: datetime, outcome: SignalOutcome, cause: str
@@ -245,7 +234,7 @@ class _SessionReplay:
         assert stop is not None
         if position.exit_requested:
             self._close(index, bar.open, bar.start, ExitReason.STRATEGY_EXIT)
-        elif self.clock(bar) >= self.flatten:
+        elif bar.start >= self.session_clock.flatten:
             self._close(index, bar.open, bar.start, ExitReason.FLATTEN)
         elif bar.low <= stop:
             self._close(index, min(bar.open, stop), bar.start, ExitReason.STOP)
@@ -258,7 +247,7 @@ class _SessionReplay:
         top = decision.entry_high
         stop = decision.stop
         assert top is not None and stop is not None
-        if self.clock(bar) >= self.last_entry:
+        if bar.start >= self.session_clock.last_entry:
             self.pending = None
             self._signal(decision, pending.bar_start, SignalOutcome.MISSED, "last entry time")
             return
@@ -327,10 +316,14 @@ class _SessionReplay:
         if self.pending is not None:
             self._signal(decision, bar.start, SignalOutcome.IGNORED, "entry pending")
             return
-        if self.clock(bar) < self.settings.regular_open:
+        refused = self.session_clock.entries_refused
+        if refused is not None:
+            self._signal(decision, bar.start, SignalOutcome.REJECTED, refused)
+            return
+        if bar.start < self.session_clock.regular_open:
             self._signal(decision, bar.start, SignalOutcome.REJECTED, "before regular open")
             return
-        if (bar.start + M1).astimezone(self.settings.session_timezone).time() >= self.last_entry:
+        if bar.start + M1 >= self.session_clock.last_entry:
             self._signal(decision, bar.start, SignalOutcome.REJECTED, "after last entry time")
             return
         problem = _entry_problem(decision)
@@ -355,13 +348,11 @@ class _SessionReplay:
             )
 
 
-def split_sessions(
-    bars: Sequence[Bar], settings: ReplaySettings
-) -> list[tuple[date, tuple[Bar, ...]]]:
-    """Group one symbol's bars (oldest first) by exchange-time session date."""
+def split_sessions(bars: Sequence[Bar]) -> list[tuple[date, tuple[Bar, ...]]]:
+    """Group one symbol's bars (oldest first) by New York session date."""
     sessions: list[tuple[date, list[Bar]]] = []
     for bar in bars:
-        day = bar.start.astimezone(settings.session_timezone).date()
+        day = ny_date_of(bar.start)
         if not sessions or sessions[-1][0] != day:
             sessions.append((day, []))
         sessions[-1][1].append(bar)
@@ -372,11 +363,9 @@ def replay(
     create_strategy: Callable[[], Strategy],
     bars_by_symbol: Mapping[str, Sequence[Bar]],
     settings: ReplaySettings,
-    last_entry: time,
-    flatten: time,
+    clock_for: ClockFor,
 ) -> ReplayResult:
-    """Replay every symbol through a fresh strategy instance. Times are exchange time."""
-    _check_clock(settings, last_entry, flatten)
+    """Replay every symbol through a fresh strategy instance; `clock_for` gives each day's clock."""
     trades: list[SimulatedTrade] = []
     signals: list[Signal] = []
     verdicts: dict[str, int] = {}
@@ -390,9 +379,9 @@ def replay(
         elif (strategy.name, strategy.version) != (name, version):
             raise StrategyContractError("strategy factory returned different name/version")
         prior: list[tuple[Bar, ...]] = []
-        for day, day_bars in split_sessions(bars_by_symbol[symbol], settings):
+        for day, day_bars in split_sessions(bars_by_symbol[symbol]):
             session = _SessionReplay(
-                strategy, symbol, day, day_bars, tuple(prior), settings, last_entry, flatten
+                strategy, symbol, day, day_bars, tuple(prior), settings, clock_for(day)
             )
             session.run()
             trades.extend(session.trades)

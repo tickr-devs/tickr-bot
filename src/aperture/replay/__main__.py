@@ -9,11 +9,15 @@ import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from aperture import config
+from aperture.calendar import TIMEZONE_NAME, CalendarRefused, SessionCalendar
+from aperture.config import ConfigError
 from aperture.replay.bars import load_bars
+from aperture.replay.clock import ClockFor, calendar_clock
 from aperture.replay.engine import replay
 from aperture.replay.errors import ReplayError, SettingsError
 from aperture.replay.report import render_summary, write_all
-from aperture.replay.settings import load_settings, parse_clock
+from aperture.replay.settings import load_settings
 from aperture.strategy.base import Strategy
 
 
@@ -35,6 +39,17 @@ def strategy_factory(module_name: str, values_path: Path) -> Callable[[], Strate
     return lambda: create(values)
 
 
+def session_clock(config_path: Path) -> ClockFor:
+    """Each day's clock from bot.toml `[session]` and the calendar it names."""
+    cfg = config.load(config_path)
+    if cfg.session.timezone != TIMEZONE_NAME:
+        raise ReplayError(
+            f"[session] timezone {cfg.session.timezone!r} is not the calendar's {TIMEZONE_NAME!r}"
+        )
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    return calendar_clock(calendar, cfg.session)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m aperture.replay",
@@ -43,9 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bars", type=Path, nargs="+", required=True, help="JSONL bar files")
     parser.add_argument("--strategy", required=True, help="strategy module exposing create()")
     parser.add_argument("--values", type=Path, required=True, help="strategy.toml for create()")
-    parser.add_argument("--settings", type=Path, required=True, help="replay settings TOML")
-    parser.add_argument("--last-entry", required=True, help="last entry time, HH:MM exchange")
-    parser.add_argument("--flatten", required=True, help="flatten time, HH:MM exchange")
+    parser.add_argument(
+        "--settings", type=Path, default=Path("config/replay.toml"), help="replay settings TOML"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config/bot.toml"),
+        help="bot config: [session] offsets and the calendar give each day's clock",
+    )
     parser.add_argument("--out", type=Path, required=True, help="output directory")
     return parser
 
@@ -54,13 +75,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         settings = load_settings(args.settings)
-        last_entry = parse_clock("--last-entry", args.last_entry)
-        flatten = parse_clock("--flatten", args.flatten)
+        clock_for = session_clock(args.config)
         factory = strategy_factory(args.strategy, args.values)
         bars = load_bars(args.bars)
-        result = replay(factory, bars, settings, last_entry, flatten)
+        result = replay(factory, bars, settings, clock_for)
         summary = write_all(result, args.out, settings.output_decimal_places)
-    except (ReplayError, SettingsError, OSError, tomllib.TOMLDecodeError) as exc:
+    except (
+        ReplayError,
+        SettingsError,
+        ConfigError,
+        CalendarRefused,
+        OSError,
+        tomllib.TOMLDecodeError,
+    ) as exc:
         print(f"replay refused: {exc}", file=sys.stderr)
         return 2
     print(render_summary(summary, settings.output_decimal_places))

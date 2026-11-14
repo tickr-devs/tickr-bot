@@ -5,8 +5,9 @@ from datetime import time, timedelta
 from decimal import Decimal
 
 import pytest
-from conftest import FLATTEN, LAST_ENTRY, at, enter, series
+from conftest import CLOCK, FLATTEN, LAST_ENTRY, NY, REGULAR_OPEN, at, enter, series
 
+from aperture.replay.clock import fixed_clock
 from aperture.replay.engine import ExitReason, SignalOutcome, replay
 from aperture.replay.errors import ReplayError, StrategyContractError
 from aperture.strategy.base import Decision, Verdict
@@ -16,7 +17,8 @@ FLAT = ("10.00", "10.05", "9.95", "10.00")
 
 
 def run(settings, strategy, bars, last_entry=LAST_ENTRY, flatten=FLATTEN):
-    return replay(lambda: strategy, {"ABC": bars}, settings, last_entry, flatten)
+    clock = fixed_clock(NY, REGULAR_OPEN, last_entry, flatten)
+    return replay(lambda: strategy, {"ABC": bars}, settings, clock)
 
 
 def test_entry_at_top_of_window_plus_slippage_and_stop_exit(settings, scripted):
@@ -250,5 +252,5 @@ def test_each_symbol_gets_a_fresh_strategy(settings, scripted):
         return made[-1]
 
     bars = {"AAA": series("10:00", [FLAT], "AAA"), "BBB": series("10:00", [FLAT], "BBB")}
-    replay(factory, bars, settings, LAST_ENTRY, FLATTEN)
+    replay(factory, bars, settings, CLOCK)
     assert [m.contexts[0].symbol for m in made] == ["AAA", "BBB"]

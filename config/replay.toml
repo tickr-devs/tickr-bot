@@ -8,10 +8,6 @@ slippage_percent = 0.05
 slippage_min_usd = 0.01
 # Bars after an ENTER decision during which the simulated entry may fill; read by replay/engine.py.
 entry_wait_bars = 1
-# Exchange time zone for session dates and clock parameters (IANA name); read by replay/engine.py.
-session_timezone = "America/New_York"
-# Regular session open, HH:MM exchange time; no entry is decided on an earlier bar; read by replay/engine.py.
-regular_open = "09:30"
 # Decimal places for prices, R and percent in CSV and summary outputs; read by replay/report.py.
 output_decimal_places = 4
 # Prior sessions of the same symbol passed to the strategy as history (in bars and prior_sessions); read by replay/engine.py.

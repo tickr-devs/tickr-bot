@@ -4,7 +4,7 @@ import csv
 import json
 from decimal import Decimal
 
-from conftest import FLATTEN, HERE, LAST_ENTRY, enter, series
+from conftest import BOT_TOML, CLOCK, HERE, enter, series
 
 from aperture.replay.__main__ import main
 from aperture.replay.engine import replay
@@ -33,7 +33,7 @@ def two_trades(settings, scripted):
             5: {"verdict": Verdict.EXIT},
         }
     )
-    return replay(lambda: strategy, {"ABC": series("10:00", rows)}, settings, LAST_ENTRY, FLATTEN)
+    return replay(lambda: strategy, {"ABC": series("10:00", rows)}, settings, CLOCK)
 
 
 def test_summary_in_r_and_percent(settings, scripted):
@@ -51,9 +51,7 @@ def test_summary_in_r_and_percent(settings, scripted):
 
 def test_empty_summary_has_no_averages(settings, scripted):
     strategy = scripted({})
-    result = replay(
-        lambda: strategy, {"ABC": series("10:00", [FLAT])}, settings, LAST_ENTRY, FLATTEN
-    )
+    result = replay(lambda: strategy, {"ABC": series("10:00", [FLAT])}, settings, CLOCK)
     summary = summarize(result)
     assert summary.trades == 0 and summary.average_r is None and summary.total_r == 0
 
@@ -114,10 +112,8 @@ def test_cli_end_to_end_with_stub_strategy(tmp_path, monkeypatch, capsys):
             str(HERE / "stub_strategy.toml"),
             "--settings",
             str(HERE / "replay_settings.toml"),
-            "--last-entry",
-            "15:45",
-            "--flatten",
-            "15:55",
+            "--config",
+            str(BOT_TOML),
             "--out",
             str(out),
         ]
@@ -146,10 +142,8 @@ def test_cli_refuses_bad_settings(tmp_path, capsys):
             str(bad),
             "--settings",
             str(bad),
-            "--last-entry",
-            "15:45",
-            "--flatten",
-            "15:55",
+            "--config",
+            str(BOT_TOML),
             "--out",
             str(tmp_path / "o"),
         ]
@@ -169,10 +163,8 @@ def test_cli_refuses_unknown_strategy_module(tmp_path, capsys):
             str(HERE / "stub_strategy.toml"),
             "--settings",
             str(HERE / "replay_settings.toml"),
-            "--last-entry",
-            "15:45",
-            "--flatten",
-            "15:55",
+            "--config",
+            str(BOT_TOML),
             "--out",
             str(tmp_path / "o"),
         ]

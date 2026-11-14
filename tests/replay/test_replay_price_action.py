@@ -1,7 +1,4 @@
-"""End-to-end replay of the real price-action-v1 strategy over generated M1 bars.
-
-Skipped only while the strategy module is not on the branch yet (it arrives with its own PR).
-"""
+"""End-to-end replay of the real price-action-v1 strategy over generated M1 bars."""
 
 from __future__ import annotations
 
@@ -11,13 +8,11 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import pytest
-
+from aperture.replay.__main__ import session_clock
 from aperture.replay.engine import ExitReason, SignalOutcome, replay
 from aperture.replay.settings import load_settings
+from aperture.strategy import price_action_v1 as pa
 from aperture.types import Bar
-
-pa = pytest.importorskip("aperture.strategy.price_action_v1")
 
 ROOT = Path(__file__).resolve().parents[2]
 NY = ZoneInfo("America/New_York")
@@ -62,8 +57,7 @@ def test_real_strategy_enters_and_trades():
         lambda: pa.create(values),
         {SYMBOL: bars},
         settings,
-        datetime.strptime("15:45", "%H:%M").time(),
-        datetime.strptime("15:55", "%H:%M").time(),
+        session_clock(ROOT / "config" / "bot.toml"),
     )
     assert (result.strategy, result.version) == ("price-action-v1", "1")
     assert result.verdict_counts.get("ENTER", 0) >= 1

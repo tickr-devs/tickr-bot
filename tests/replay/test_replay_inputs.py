@@ -98,8 +98,6 @@ def test_settings_load(settings):
         ("entry_wait_bars", True, "integer"),
         ("slippage_percent", -1, "negative"),
         ("slippage_percent", "0.1", "number"),
-        ("session_timezone", "Mars/Base", "unknown"),
-        ("regular_open", "9h30", "HH:MM"),
     ],
 )
 def test_bad_setting_refused(key, value, cause):

@@ -26,7 +26,14 @@ def test_bot_toml_loads():
     assert len(cfg.digest) == 64
 
 
-@pytest.mark.parametrize("path", [BOT, *sorted((ROOT / "strategies").glob("*/strategy.toml"))],
+COMMENTED_TOML = [
+    BOT,
+    ROOT / "config" / "replay.toml",
+    *sorted((ROOT / "strategies").glob("*/strategy.toml")),
+]
+
+
+@pytest.mark.parametrize("path", COMMENTED_TOML,
                          ids=lambda p: str(p.relative_to(ROOT)))
 def test_every_key_is_commented(path: Path):
     assert config.uncommented_keys(path.read_text("utf-8")) == []

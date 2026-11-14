@@ -14,16 +14,19 @@ python -m aperture.replay \
   --bars data/history/ABC-2026-11.jsonl data/history/XYZ-2026-11.jsonl \
   --strategy aperture.strategy.price_action_v1 \
   --values strategies/price-action-v1/strategy.toml \
-  --settings config/replay.toml \
-  --last-entry 15:45 --flatten 15:55 \
+  --settings config/replay.toml --config config/bot.toml \
   --out out/replay-2026-11
 ```
 
 - `--strategy` is any importable module exposing `create(values) -> Strategy`; `--values` is
   the TOML passed to it. Comparing two strategy versions = two runs with different modules or
   values over the same bars.
-- `--last-entry` and `--flatten` are exchange-time `HH:MM` (normally the `[session]` values of
-  `config/bot.toml`). Half days need their own run with the earlier times.
+- `--settings` defaults to `config/replay.toml`, `--config` to `config/bot.toml`.
+- Session clock per day, exactly as live: regular open and close from the calendar named by
+  `bot.toml [session] calendar_file`; last entry and flatten = close minus
+  `last_entry_minutes_before_close` / `flatten_minutes_before_close`. On a half day the early
+  close applies, and entries are `rejected` while `half_days_enabled = false`. Bars on a
+  weekend, a holiday or a day outside the calendar's coverage refuse the whole replay.
 - Exit code 2 and `replay refused: <cause>` on any bad input; nothing is guessed.
 
 ## Input: bars JSONL
@@ -36,7 +39,7 @@ One completed M1 bar per line, exactly these keys:
 
 `start` is the bar's opening minute in UTC with an explicit offset (`+00:00` or `Z`). Prices
 and volume are strings (floats are refused). Within a symbol, starts must strictly increase
-across the files in the order given. Bars are grouped into sessions by their exchange-time
+across the files in the order given. Bars are grouped into sessions by their New York
 date; earlier sessions of the same symbol are passed as `prior_sessions`.
 
 ## Settings
@@ -64,9 +67,9 @@ results remain `simulated`. With `false` the quote is `None`.
 For bar `i` of a session, in this order:
 
 1. **Open position.** A strategy EXIT decided on bar `i-1` closes at bar `i`'s open. A bar at
-   or after `--flatten` closes at its open. Otherwise a bar whose low reaches the stop closes
+   or after the flatten time closes at its open. Otherwise a bar whose low reaches the stop closes
    at the stop, or at the open if the bar opened below the stop (gap).
-2. **Pending entry.** A bar at or after `--last-entry` cancels it (missed). A bar whose range
+2. **Pending entry.** A bar at or after the last-entry time cancels it (missed). A bar whose range
    touches the price window `[entry_low, entry_high]` fills it at **`entry_high` plus
    slippage**, never better. If that bar also reaches the stop, the stop is taken in the same
    bar. After `entry_wait_bars` bars without a touch the entry is missed; it is never chased.
@@ -78,7 +81,7 @@ Every exit pays slippage. A position still open on the last bar closes at that b
 (`end_of_data`); positions never cross sessions. Each symbol is replayed independently with a
 fresh strategy instance, so the one-open-position platform limit is not applied across symbols.
 ENTER decisions while a position or an entry is pending are recorded as `ignored`; ENTER
-on a bar starting before `regular_open`, or completing at or after `--last-entry` (live
+on a bar starting before the regular open, or completing at or after the last-entry time (live
 admission would refuse it), or without `entry_high`/`stop`, or with the stop not below `entry_high`,
 is `rejected` with the cause.
 
@@ -100,5 +103,3 @@ Percent per trade = (exit - entry) / entry x 100.
 
 - Replaying captured L1 quotes (`data/capture/...`) instead of the synthetic quote.
 - A shared portfolio across symbols (one open position at a time, daily loss ceiling).
-- Taking session times from `config/bot.toml` and half days from the calendar instead of
-  `--last-entry`/`--flatten` (after the config and calendar PRs merge).
