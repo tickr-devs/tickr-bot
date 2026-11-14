@@ -93,6 +93,10 @@ window_end = "15:30"
 entry_wait_seconds = 60
 # Seconds to hold a protected probe position before closing it; read by the probe command.
 hold_seconds = 60
+# Largest stop tightening in one probe-replace-stop, USD per share (new stop minus current stop); read by the probe-replace-stop command.
+replace_max_move_usd = 0.50
+# Seconds Detail of the stop is polled after a probe-replace-stop request, one read per detail_poll_seconds; read by the probe-replace-stop command.
+replace_observe_seconds = 15
 
 [api]
 # Local API bind address; loopback only; read by the api server.
@@ -341,4 +345,4 @@ token_check_interval_seconds = 5
 # Maximum pages read when listing open orders; more pages = refuse as incomplete; read by the broker adapter.
 open_orders_max_pages = 20
 # Route-specific limits "<route path>" = [requests, window seconds] (docs, unverified; never assume the looser value); read by the request budget.
-route_limits = { "/trading/accounts/list" = [10, 30], "/trading/orders/get" = [2, 2], "/trading/orders/open-orders/list" = [2, 2], "/trading/assets/positions/list" = [2, 2], "/trading/orders/place" = [600, 60], "/trading/orders/cancel" = [600, 60] }
+route_limits = { "/trading/accounts/list" = [10, 30], "/trading/orders/get" = [2, 2], "/trading/orders/open-orders/list" = [2, 2], "/trading/assets/positions/list" = [2, 2], "/trading/orders/place" = [600, 60], "/trading/orders/cancel" = [600, 60], "/trading/orders/replace" = [600, 60] }

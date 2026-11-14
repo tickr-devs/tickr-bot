@@ -173,6 +173,20 @@ def test_market_data_requests_never_carry_the_account_id(env, monkeypatch):
     assert ACCOUNT not in get.url and ACCOUNT not in str(post.body)
 
 
+def test_replace_goes_once_to_the_host_with_the_account(env, monkeypatch):
+    wire = install(monkeypatch, {
+        "/trading/orders/replace": [requests.Timeout("read timed out after send")] * 2,
+    })
+    transport = SdkTransport(settings(env))
+    body = {"modify_orders": [{"client_order_id": "ap-1", "quantity": "1", "stop_price": "9.9"}]}
+    with pytest.raises(TransportFailure):
+        transport.send(Route.REPLACE, body)
+    (post,) = [c for c in wire.calls if urlsplit(c.url).path == "/trading/orders/replace"]
+    assert urlsplit(post.url).hostname == HOST and post.method == "POST"
+    sent = json.loads(post.body)
+    assert sent["account_id"] == ACCOUNT and sent["modify_orders"] == body["modify_orders"]
+
+
 TOKEN = "CANARY-TOKEN-4417"
 CREATE, CHECK = "/auth/tokens/create", "/auth/tokens/check"
 

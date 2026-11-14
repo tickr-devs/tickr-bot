@@ -27,7 +27,7 @@ A fact marked UNPROVEN must not be relied on by trading code until a probe prove
 |---|---|---|
 | Place | POST `/trading/orders/place` | `account_id`, `new_orders[]` |
 | Preview | POST `/trading/orders/preview` | same body as place |
-| Replace | POST `/trading/orders/replace` | behaviour UNPROVEN |
+| Replace | POST `/trading/orders/replace` | `account_id`, `modify_orders[]`; behaviour UNPROVEN (F5 below) |
 | Cancel | POST `/trading/orders/cancel` | by `client_order_id` |
 | Detail | GET `/trading/orders/get` | by `client_order_id` |
 | Open orders | GET `/trading/orders/open-orders/list` | empty account returns `{"data": []}` (probe) |
@@ -145,6 +145,22 @@ So the 100-symbol cap is on the current subscribed set per session, not on total
 
 Fixture: `tests/fixtures/webull/market_data/streaming_subscribe_slot_reuse.json`.
 - **How Aperture uses it:** `StreamSession` counts the current desired set against `stream_max_symbols` and sends unsubscribes before subscribes, so candidates rotate on one connection. The reconnect on a provider 417 under our cap stays only as a fallback.
+
+## F5 — replace (SDK reading 2026-11-14; NOT probed yet)
+
+What the SDK 3.0.3 source says (`trade/v3/order_operation_v3.py` `replace_order`, `trade/request/v3/replace_order_request.py`, `samples/trade/trade_client_v3.py`):
+- `POST /trading/orders/replace` (v3), body `{account_id, modify_orders: [...]}`, optional `client_combo_order_id`. No `category` header (unlike place).
+- Each `modify_orders[]` element names the order by its EXISTING `client_order_id`; the request has no field for a new id. Samples always send `quantity` with the new price (`limit_price`; by analogy `stop_price` for a stop). After a replace the samples cancel by the same `client_order_id`.
+- Docs (unverified): Production limit for place/replace/cancel 600 per 60 s; Sandbox 30 per 60 s per route.
+
+UNPROVEN, to be answered by the Monday probe (`aperture probe-replace-stop`, docs/manual-trade.md):
+- whether a replaced STOP_LOSS keeps its `client_order_id` and `order_id`, or Webull creates a new order (and which status the old one then shows: CANCELLED, a REPLACED-like status outside our vocabulary, or none);
+- the success body (does it echo `client_order_id` / `order_id`?) and the error codes of a refused replace; until a refusal code is proven, every non-success answer except "order not present" is treated as OutcomeUnknown;
+- whether `quantity` is required (we send the unchanged quantity) and whether Detail rows show `stop_price` under that name (read as optional; `limit_price` is the recorded analogue);
+- the status sequence during a replace (a pending-replace status would map to UNKNOWN and fence entries);
+- whether the stop stays working throughout (no unprotected gap).
+
+How Aperture uses it now: only the manual `probe-replace-stop` command. Trading code does not replace orders until this section records a probe.
 
 ## Known SDK defects (3.0.3)
 - KD-1: streaming `SnapshotResult.close` is filled from `open`. Never use it.

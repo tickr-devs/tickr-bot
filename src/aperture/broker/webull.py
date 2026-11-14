@@ -48,6 +48,7 @@ from aperture.broker.base import (
     OutcomeUnknown,
     RateLimited,
     Refused,
+    ReplaceAck,
 )
 from aperture.broker.budget import RequestBudget, RouteLimit
 from aperture.broker.status import map_status
@@ -110,6 +111,7 @@ class Route(Enum):
     ORDER_DETAIL = ("GET", "/trading/orders/get", False)
     PLACE = ("POST", "/trading/orders/place", True)
     CANCEL = ("POST", "/trading/orders/cancel", True)
+    REPLACE = ("POST", "/trading/orders/replace", True)
     GAINERS_LOSERS = ("GET", "/market-data/screeners/gainers-losers/list", False)
     TOP_ACTIVES = ("GET", "/market-data/screeners/top-actives/list", False)
     SNAPSHOT = ("GET", "/market-data/stocks/snapshots/list", False)
@@ -315,7 +317,8 @@ def read_order(item: Any, is_own: IsOwnAccount, where: str) -> OrderDetail:
     Field names are the recorded ones (tests/fixtures/webull). `filled_quantity` is required:
     an order whose fill we cannot read is one we cannot reason about. Status/quantity
     contradictions map to UNKNOWN (broker/status.py). `filled_price` has not been observed
-    on a fill yet (no fill recorded so far), so it stays optional."""
+    on a fill yet (no fill recorded so far), so it stays optional; so do `stop_price` (no
+    working stop recorded yet; named like the recorded `limit_price`) and `order_id`."""
     _check_account(item, is_own, where)
     raw_status = str(_require(item, "status", where)).strip()
     quantity = _decimal_field(item, "total_quantity", where)
@@ -330,6 +333,8 @@ def read_order(item: Any, is_own: IsOwnAccount, where: str) -> OrderDetail:
         average_fill_price=_optional_decimal(item, "filled_price", where),
         state=map_status(raw_status, quantity, filled),
         raw_status=raw_status,
+        stop_price=_optional_decimal(item, "stop_price", where),
+        broker_order_id=None if _optional(item, "order_id") is None else str(item["order_id"]),
     )
 
 
@@ -483,6 +488,34 @@ def build_order_body(request: OrderRequest, client_order_id_max_length: int) -> 
     if request.stop_price is not None:
         body["stop_price"] = _wire_decimal(request.stop_price)
     return body
+
+
+def build_replace_stop_body(client_order_id: str, quantity: Decimal, stop_price: Decimal,
+                            client_order_id_max_length: int) -> dict[str, Any]:
+    """One `modify_orders[]` element (SDK v3 samples: the existing `client_order_id` names the
+    order, with `quantity` and the new price). Raises Refused for what must never be sent."""
+    if not client_order_id or len(client_order_id) > client_order_id_max_length:
+        raise Refused("LOCAL_CLIENT_ORDER_ID", "empty or longer than the broker limit")
+    if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
+        raise Refused("LOCAL_QUANTITY", "quantity must be a positive whole number")
+    if not stop_price.is_finite() or stop_price <= 0:
+        raise Refused("LOCAL_PRICE", "prices must be positive")
+    return {
+        "client_order_id": client_order_id,
+        "quantity": _wire_decimal(quantity.to_integral_value()),
+        "stop_price": _wire_decimal(stop_price),
+    }
+
+
+def read_replace_ack(body: Any) -> ReplaceAck:
+    """Replace success body -> whatever ids it echoes (shape unproven). An error envelope
+    under a success status is not an acknowledgement."""
+    if isinstance(body, Mapping) and "error_code" in body:
+        raise MalformedResponse("replace: success status with an error envelope")
+    if not isinstance(body, Mapping):
+        return ReplaceAck(None, None)
+    cid, oid = _optional(body, "client_order_id"), _optional(body, "order_id")
+    return ReplaceAck(None if cid is None else str(cid), None if oid is None else str(oid))
 
 
 # --------------------------------------------------------------------------------------------
@@ -645,6 +678,23 @@ class WebullBroker:
             raise OrderNotFound(client_order_id)
         # No cancel refusal code is proven yet: anything else is resolved by Detail.
         raise OutcomeUnknown(f"CANCEL: HTTP {response.status} {response.error_code or ''}".strip())
+
+    def replace_stop_price(self, client_order_id: str, quantity: Decimal,
+                           stop_price: Decimal) -> ReplaceAck:
+        self._require_gate()
+        body = build_replace_stop_body(client_order_id, quantity, stop_price,
+                                       self._client_order_id_max_length)
+        response = self._send(Route.REPLACE, {"modify_orders": [body]})
+        if response.ok:
+            try:
+                return read_replace_ack(response.body)
+            except MalformedResponse as exc:
+                raise OutcomeUnknown(f"REPLACE: unreadable answer ({exc})") from None
+        if self._order_not_present(response):
+            raise OrderNotFound(client_order_id)
+        # No replace refusal code is proven yet (probe F5): Detail decides what happened.
+        raise OutcomeUnknown(
+            f"REPLACE: HTTP {response.status} {response.error_code or ''}".strip())
 
 
 # --------------------------------------------------------------------------------------------
@@ -1603,6 +1653,16 @@ def broker_from_config(config: Config, transport: Transport | None = None,
         (config.orders.client_order_id_prefix, config.orders.probe_client_order_id_prefix),
         gate=lambda: trading_gate(config),
     )
+
+
+def probe_adapters(config: Config, on_token_pending: Callable[[], None] = _no_token_hook,
+                   ) -> tuple[WebullBroker, WebullMarketData]:
+    """Broker and snapshot market data for the manual probe commands: one SDK transport (one
+    token) and one request budget."""
+    transport = SdkTransport(settings_from_config(config), on_token_pending)
+    budget = budget_from_config(config)
+    return (broker_from_config(config, transport, budget),
+            market_data_from_config(config, transport, budget))
 
 
 def bot_adapters(

@@ -82,6 +82,8 @@ class ProbeConfig:
     window_end: str
     entry_wait_seconds: int
     hold_seconds: int
+    replace_max_move_usd: Decimal
+    replace_observe_seconds: int
 
 
 @dataclass(frozen=True)

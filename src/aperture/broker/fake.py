@@ -13,6 +13,7 @@ from aperture.broker.base import (
     OutcomeUnknown,
     RateLimited,
     Refused,
+    ReplaceAck,
 )
 from aperture.types import OrderDetail, OrderRequest, OrderState, Position, Side
 
@@ -21,7 +22,12 @@ from aperture.types import OrderDetail, OrderRequest, OrderState, Position, Side
 class FakeBroker:
     """Scripted outcomes for `place`: "ack" (default), "refuse", "unknown", "unknown-lost",
     "rate-limited". "unknown" means the order reached the broker but the reply was lost;
-    "unknown-lost" means it never arrived."""
+    "unknown-lost" means it never arrived.
+
+    Scripted outcomes for `replace_stop_price` (`replace_outcomes`): "ack" (default: same id,
+    new stop price), "new-id" (the old order is CANCELLED and a new one with id
+    `<old>-r` carries the new price), "refuse", "unknown" (changed, reply lost),
+    "unknown-lost" (not changed), "rate-limited", "not-found"."""
 
     account_present: bool = True
     trading_permitted: bool = True
@@ -29,6 +35,8 @@ class FakeBroker:
     orders: dict[str, OrderDetail] = field(default_factory=dict)
     holdings: dict[str, Position] = field(default_factory=dict)
     sent: list[OrderRequest] = field(default_factory=list)
+    replace_outcomes: deque[str] = field(default_factory=deque)
+    replaced: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
     _next_id: int = 1
     place_budget: int | None = None  # None = unlimited; else place requests can_place admits
 
@@ -71,12 +79,38 @@ class FakeBroker:
             average_fill_price=None,
             state=OrderState.ACCEPTED,
             raw_status="SUBMITTED",
+            stop_price=request.stop_price,
         )
         if outcome == "unknown":
             raise OutcomeUnknown("scripted: reply lost after acceptance")
         broker_id = f"fake-{self._next_id}"
         self._next_id += 1
         return Acknowledgement(request.client_order_id, broker_id)
+
+    def replace_stop_price(self, client_order_id: str, quantity: Decimal,
+                           stop_price: Decimal) -> ReplaceAck:
+        self.replaced.append((client_order_id, quantity, stop_price))
+        outcome = self.replace_outcomes.popleft() if self.replace_outcomes else "ack"
+        if outcome == "rate-limited":
+            raise RateLimited("429")
+        if outcome == "refuse":
+            raise Refused("REFUSED", "scripted refusal")
+        if outcome == "not-found":
+            raise OrderNotFound(client_order_id)
+        if outcome == "unknown-lost":
+            raise OutcomeUnknown("scripted: request lost")
+        order = self.order_detail(client_order_id)
+        if outcome == "new-id":
+            self.orders[client_order_id] = replace(order, state=OrderState.CANCELLED,
+                                                   raw_status="CANCELLED")
+            new_id = f"{client_order_id}-r"
+            self.orders[new_id] = replace(order, client_order_id=new_id, stop_price=stop_price)
+        else:
+            new_id = client_order_id
+            self.orders[client_order_id] = replace(order, stop_price=stop_price)
+        if outcome == "unknown":
+            raise OutcomeUnknown("scripted: reply lost after the replace")
+        return ReplaceAck(new_id, None)
 
     def can_place(self, count: int) -> bool:
         return self.place_budget is None or count <= self.place_budget

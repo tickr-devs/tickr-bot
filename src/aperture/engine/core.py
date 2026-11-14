@@ -81,12 +81,14 @@ class Fence(StrEnum):
     QUANTITY_MISMATCH = "quantity-mismatch"
     SHUTTING_DOWN = "shutting-down"
     ENTRY_STOP = "entry-stop"  # operator command; only the entry-stop-off command clears it
+    REPLACE_UNRESOLVED = "replace-unresolved"  # a stop replace whose result is not confirmed
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
 # when their condition is gone.
 OPERATOR_FENCES = frozenset({Fence.STOP_REJECTED, Fence.EXIT_REFUSED, Fence.CANCEL_FAILED,
-                             Fence.RESURRECTED, Fence.UNPROTECTED_TIMEOUT})
+                             Fence.RESURRECTED, Fence.UNPROTECTED_TIMEOUT,
+                             Fence.REPLACE_UNRESOLVED})
 
 _LEG_LETTER = {Leg.ENTRY: "e", Leg.STOP: "s", Leg.EXIT: "x"}
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
@@ -856,6 +858,70 @@ class Engine:
                               run_id=self.run_id)
         for fence in (Fence.UNPROTECTED, Fence.QUANTITY_MISMATCH, Fence.OVER_PROTECTED):
             self._clear_fence(fence, trade.trade_id)
+
+    # --- stop replace (probe F5) --------------------------------------------------------------
+
+    def replace_intent(self, stop: OrderRow, stop_price: Decimal, facts: dict[str, Any]) -> None:
+        """Durable BEFORE the replace request: the intent, and an operator fence that only a
+        confirmed result (`replace_confirmed`) or the operator clears, so a crash or an
+        unknown outcome leaves entries blocked until someone has looked."""
+        cid = stop.client_order_id
+        with self.store.transaction():
+            self.store.append("replace-intent", {"from": stop.stop_price, "to": stop_price,
+                                                 "quantity": stop.quantity, **facts},
+                              key=cid, run_id=self.run_id)
+            self._fence_row(Fence.REPLACE_UNRESOLVED, cid,
+                            f"stop replace to {stop_price} not confirmed; operator must look")
+        with self.store.transaction():
+            self.store.append("replace-attempted", {}, key=cid, run_id=self.run_id)
+
+    def replace_outcome(self, cid: str, outcome: str, body: dict[str, Any],
+                        *, unchanged: bool = False) -> None:
+        """Record the answer to the replace request. Only an answer proving the order did not
+        change (Refused, or the local budget) lifts the fence here."""
+        with self.store.transaction():
+            self.store.append(f"replace-{outcome}", body, key=cid, run_id=self.run_id)
+            if unchanged:
+                self._drop_replace_fence(cid, f"replace-{outcome}")
+
+    def replace_confirmed(self, cid: str, stop_price: Decimal, how: dict[str, Any]) -> None:
+        """Detail and open orders showed the same order working at the new price."""
+        with self.store.transaction():
+            self.store.execute("UPDATE orders SET stop_price = ?, updated_at = ? "
+                               "WHERE client_order_id = ?",
+                               (str(stop_price), self.store.stamp(), cid))
+            self.store.append("replace-confirmed", {"stop_price": stop_price, **how}, key=cid,
+                              run_id=self.run_id)
+            self._drop_replace_fence(cid, "replace-confirmed")
+
+    def _drop_replace_fence(self, cid: str, by: str) -> None:
+        """Inside a transaction."""
+        name = f"{Fence.REPLACE_UNRESOLVED}:{cid}"
+        if self.store.execute("DELETE FROM fences WHERE name = ?", (name,)):
+            self.store.append("fence-cleared", {"by": by}, key=name, run_id=self.run_id)
+
+    def adopt_replacement(self, old: OrderRow, old_detail: OrderDetail,
+                          detail: OrderDetail) -> None:
+        """Webull answered the replace with a NEW order (`old_detail` shows the old one
+        terminal): track it as this trade's stop so protection and teardown see it. The
+        replace fence stays set."""
+        with self.store.transaction():
+            self._apply_detail(old, old_detail, resurrected=False)
+            self.store.execute(
+                "INSERT INTO orders(client_order_id, trade_id, leg, symbol, side, order_type, "
+                "quantity, limit_price, stop_price, send_state, broker_state, "
+                "filled_quantity, average_fill_price, broker_order_id, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                (detail.client_order_id, old.trade_id, Leg.STOP, detail.symbol, detail.side,
+                 detail.order_type, str(detail.quantity),
+                 None if detail.stop_price is None else str(detail.stop_price),
+                 SendState.ACKNOWLEDGED, detail.state, str(detail.filled_quantity),
+                 None if detail.average_fill_price is None else str(detail.average_fill_price),
+                 detail.broker_order_id, self.store.stamp()))
+            self.store.append("order-adopted", {"replaces": old.client_order_id,
+                                                "stop_price": detail.stop_price,
+                                                "state": detail.state},
+                              key=detail.client_order_id, run_id=self.run_id)
 
     # --- shutdown --------------------------------------------------------------------------
 

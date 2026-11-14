@@ -205,3 +205,13 @@ def test_another_accounts_row_fails_the_read():
     b, _, _ = broker(open_orders_page(other))
     with pytest.raises(MalformedResponse):
         b.open_orders()
+
+
+def test_detail_reads_order_id_and_optional_stop_price():
+    """The recorded row has `order_id` and no stop; a stop row's `stop_price` (named like the
+    recorded `limit_price`; no working stop recorded yet) is read when present."""
+    detail = read_order_detail(recorded_combo(), CID, own)
+    assert detail.broker_order_id == "ORDERID000000000000000001" and detail.stop_price is None
+    stop = read_order_detail(with_row(order_type="STOP_LOSS", side="SELL", status="SUBMITTED",
+                                      limit_price=None, stop_price="98.50"), CID, own)
+    assert stop.stop_price == D("98.50") and stop.order_type is OrderType.STOP_LOSS

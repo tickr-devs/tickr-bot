@@ -15,6 +15,7 @@ from aperture.broker.base import (
     OutcomeUnknown,
     RateLimited,
     Refused,
+    ReplaceAck,
 )
 from aperture.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
 from aperture.broker.webull import (
@@ -187,6 +188,69 @@ def test_cancel_ok_and_errors():
         with pytest.raises(OutcomeUnknown):
             b.cancel("ap-1")
     assert len(t.sent) == 5
+
+
+# -- replace (probe F5) -----------------------------------------------------------------------
+
+
+def test_replace_stop_body_and_ack():
+    b, t, budget = broker(WireResponse(200, {"client_order_id": "ap-1", "order_id": "X9"}),
+                          WireResponse(200, None))
+    assert b.replace_stop_price("ap-1", D(1), D("9.90")) == ReplaceAck("ap-1", "X9")
+    route, params = t.sent[0]
+    assert route is Route.REPLACE and route.path == "/trading/orders/replace"
+    assert params == {"modify_orders": [
+        {"client_order_id": "ap-1", "quantity": "1", "stop_price": "9.90"}]}
+    assert budget.usage(Route.REPLACE.path).used == 1
+    assert b.replace_stop_price("ap-1", D(1), D("9.95")) == ReplaceAck(None, None)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        TransportFailure("SDK.HttpError"),  # timeout after send
+        THROTTLED,
+        NON_TRADING,  # no replace refusal code is proven
+        err(500, "INTERNAL_ERROR"),
+        WireResponse(200, {"error_code": "X", "message": "under a success status"}),
+    ],
+)
+def test_replace_doubt_is_outcome_unknown_and_never_resent(outcome):
+    b, t, _ = broker(outcome)
+    with pytest.raises(OutcomeUnknown):
+        b.replace_stop_price("ap-1", D(1), D("9.90"))
+    assert len(t.sent) == 1
+
+
+def test_replace_not_present():
+    b, _, _ = broker(NOT_PRESENT)
+    with pytest.raises(OrderNotFound):
+        b.replace_stop_price("ap-1", D(1), D("9.90"))
+
+
+@pytest.mark.parametrize("cid, qty, price, code", [
+    ("", "1", "9.90", "LOCAL_CLIENT_ORDER_ID"),
+    ("x" * (MAX_CID + 1), "1", "9.90", "LOCAL_CLIENT_ORDER_ID"),
+    ("ap-1", "1.5", "9.90", "LOCAL_QUANTITY"),
+    ("ap-1", "1", "0", "LOCAL_PRICE"),
+])
+def test_replace_invalid_refused_locally(cid, qty, price, code):
+    b, t, _ = broker()
+    with pytest.raises(Refused) as exc:
+        b.replace_stop_price(cid, D(qty), D(price))
+    assert exc.value.code == code and t.sent == []
+
+
+def test_replace_refused_by_budget_or_gate_sends_nothing():
+    b, t, _ = broker(limit=RouteLimit(1, 60, 60))
+    b._budget.take(Route.REPLACE.path)
+    with pytest.raises(RateLimited):
+        b.replace_stop_price("ap-1", D(1), D("9.90"))
+    closed, t2, _ = broker(gate=GateResult(False, "closed"))
+    with pytest.raises(Refused) as exc:
+        closed.replace_stop_price("ap-1", D(1), D("9.90"))
+    assert exc.value.code == GATE_CLOSED
+    assert t.sent == [] and t2.sent == []
 
 
 # -- reads ------------------------------------------------------------------------------------

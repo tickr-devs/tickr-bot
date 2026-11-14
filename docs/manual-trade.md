@@ -86,3 +86,47 @@ aperture status
 Entries stay blocked while any fence is set (printed at the end of every command). Fences that
 need a look (`stop-rejected:*`, `exit-refused:*`) are cleared with
 `aperture clear-fence NAME`; all others clear themselves.
+
+## Probe F5: replace the stop (Monday 2026-11-16)
+
+Goal: learn how Webull replaces the price of a working STOP_LOSS (docs/webull-facts.md, F5),
+so the trailing stop can be built. One replace, tightening only, on the bot's own trade.
+
+1. Terminal A: `aperture trade SYMBOL --limit PRICE` as usual. Wait until the app shows the
+   working SELL stop and the terminal is in the hold (`hold_seconds`, 60 s, from the moment
+   the stop is seen working: step 2 must happen inside it).
+2. Terminal B: `aperture status` (note the pid), then `kill -TERM <pid>`. The trade command
+   stops; the position and its stop stay at the broker. Do not use Ctrl-C (the first one asks
+   for an exit).
+3. Look up the bid in the app. Pick a new stop above the current stop, below the bid, at most
+   `[probe] replace_max_move_usd` (0.50) above the current stop, whole cents.
+4. Terminal A: `aperture probe-replace-stop --to NEW_STOP`.
+   It refuses (exit 3, nothing sent) unless: gate open, inside the probe window, exactly one
+   open trade with no exit requested, no fence, the broker position equals our records, one
+   verified working unfilled stop, a quote no older than `max_quote_age_seconds`, and the
+   price rules above. Then it journals the intent and sets the operator fence
+   `replace-unresolved:<stop id>`, sends ONE replace, polls Detail for
+   `replace_observe_seconds`, reads open orders, and prints all of it.
+5. Write down (screenshot the terminal and the app's order list):
+   - the replace answer line (success / unknown / not present, echoed ids);
+   - every `Detail:` line: client_order_id, order_id, status, stop_price (or "not shown");
+   - every `open order:` line;
+   - the `F5 result:` line and what the app shows for the stop (same order edited, or a new
+     order; price; still working throughout?).
+6. Close: `aperture exit`. Check in the app: no position, no working orders.
+
+Results:
+- `F5 result: confirmed` (exit 0): same client_order_id, working at the new price. Fence
+  cleared; our record carries the new price.
+- `F5 result: adopted` (exit 4): Webull made a NEW order at the new price and the old one ended.
+  The bot now tracks the new order as the trade's stop, so `aperture exit` cancels it. Check the
+  app shows exactly one working stop, then `aperture clear-fence replace-unresolved:<stop id>`.
+- `F5 result: not-sent` (exit 3): refused before or by the broker; nothing changed.
+- `F5 result: unresolved` (exit 4), including an unknown outcome: the command never resends.
+  Do NOT run another replace. Look in the app: count the working SELL stops in the symbol.
+  - Exactly one, ours, any price: `aperture exit` closes normally (it cancels our stop id).
+  - None: the position is unprotected; run `aperture exit` at once.
+  - A stop with an id that is not ours (the bot then reports `foreign-order:<id>`), or more
+    than one: cancel the extra stops in the app and close the position there, then
+    `aperture status`; send the screenshots before running anything else.
+  Clear `replace-unresolved:<stop id>` only after the app shows a clean state.

@@ -7,6 +7,7 @@ No other module may import a broker SDK. Implementations return typed results an
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol
 
 from aperture.types import OrderDetail, OrderRequest, Position
@@ -43,6 +44,16 @@ class Acknowledgement:
 
 
 @dataclass(frozen=True)
+class ReplaceAck:
+    """The broker answered a replace with success. It proves only that the request arrived:
+    whether the order changed, and under which id, is decided by Detail and open orders.
+    The ids are what the answer echoed, if anything (shape unproven, probe F5)."""
+
+    client_order_id: str | None
+    broker_order_id: str | None
+
+
+@dataclass(frozen=True)
 class AccountSnapshot:
     account_present: bool
     trading_permitted: bool
@@ -63,6 +74,13 @@ class Broker(Protocol):
 
     def cancel(self, client_order_id: str) -> None:
         """Request cancellation. State is confirmed only by a later order_detail()."""
+        ...
+
+    def replace_stop_price(self, client_order_id: str, quantity: Decimal,
+                           stop_price: Decimal) -> ReplaceAck:
+        """Ask once to move a working STOP_LOSS to `stop_price`, quantity unchanged. Raises
+        Refused or RateLimited (nothing sent / not changed), OrderNotFound, or OutcomeUnknown
+        (may have changed: read Detail, never resend)."""
         ...
 
     def can_place(self, count: int) -> bool:

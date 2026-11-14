@@ -93,7 +93,9 @@ class OrderRequest:
 
 @dataclass(frozen=True)
 class OrderDetail:
-    """Broker's view of one order (cumulative aggregates only)."""
+    """Broker's view of one order (cumulative aggregates only). `stop_price` and
+    `broker_order_id` are what the broker row shows, when it shows them (both optional: no
+    working stop has been recorded yet)."""
 
     client_order_id: str
     symbol: str
@@ -104,6 +106,8 @@ class OrderDetail:
     average_fill_price: Decimal | None
     state: OrderState
     raw_status: str
+    stop_price: Decimal | None = None
+    broker_order_id: str | None = None
 
 
 @dataclass(frozen=True)
