@@ -26,6 +26,7 @@ class RunConfig:
     environment: str
     data_dir: str
     database_busy_timeout_seconds: Decimal
+    decisions_dir: str
 
 
 @dataclass(frozen=True)

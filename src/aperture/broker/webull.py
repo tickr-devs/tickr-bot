@@ -631,6 +631,9 @@ class WebullBroker:
             raise Refused(response.error_code or "", response.message)
         raise OutcomeUnknown(f"PLACE: HTTP {response.status} {response.error_code or ''}".strip())
 
+    def can_place(self, count: int) -> bool:
+        return self._budget.can_take(Route.PLACE.path, count)
+
     def cancel(self, client_order_id: str) -> None:
         self._require_gate()
         response = self._send(Route.CANCEL, {"client_order_id": client_order_id})

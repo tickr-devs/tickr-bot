@@ -73,6 +73,29 @@ def _average(orders: list[OrderRow]) -> Decimal | None:
     return sum((o.filled_quantity * o.average_fill_price for o in filled), ZERO) / quantity
 
 
+def trades_today(engine: Engine, now: datetime) -> tuple[api.Trade, ...]:
+    """Trades closed today (New York date) that had fills, with gross result."""
+    today = now.astimezone(NEW_YORK).date()
+    result = []
+    for row in engine.store.query(
+            "SELECT trade_id, symbol, opened_at, closed_at, close_cause FROM trades "
+            "WHERE closed_at IS NOT NULL ORDER BY closed_at"):
+        closed = _iso(row["closed_at"])
+        if closed.astimezone(NEW_YORK).date() != today:
+            continue
+        orders = engine.orders(row["trade_id"])
+        entries = [o for o in orders if o.leg is Leg.ENTRY]
+        sells = [o for o in orders if o.leg is not Leg.ENTRY]
+        entry_price, exit_price = _average(entries), _average(sells)
+        quantity = sum((o.filled_quantity for o in sells), ZERO)
+        if entry_price is None or exit_price is None or quantity == 0:
+            continue  # never filled: not a trade
+        result.append(api.Trade(row["symbol"], quantity, entry_price, exit_price,
+                                _iso(row["opened_at"]), closed, row["close_cause"],
+                                (exit_price - entry_price) * quantity))
+    return tuple(result)
+
+
 class Service:
     def __init__(self, engine: Engine, *, now: Callable[[], datetime],
                  calendar: SessionCalendar | None, strategy: api.StrategyId,
@@ -222,25 +245,7 @@ class Service:
         return None
 
     def _trades_today(self) -> tuple[api.Trade, ...]:
-        today = self.now().astimezone(NEW_YORK).date()
-        result = []
-        for row in self.engine.store.query(
-                "SELECT trade_id, symbol, opened_at, closed_at, close_cause FROM trades "
-                "WHERE closed_at IS NOT NULL ORDER BY closed_at"):
-            closed = _iso(row["closed_at"])
-            if closed.astimezone(NEW_YORK).date() != today:
-                continue
-            orders = self.engine.orders(row["trade_id"])
-            entries = [o for o in orders if o.leg is Leg.ENTRY]
-            sells = [o for o in orders if o.leg is not Leg.ENTRY]
-            entry_price, exit_price = _average(entries), _average(sells)
-            quantity = sum((o.filled_quantity for o in sells), ZERO)
-            if entry_price is None or exit_price is None or quantity == 0:
-                continue  # never filled: not a trade
-            result.append(api.Trade(row["symbol"], quantity, entry_price, exit_price,
-                                    _iso(row["opened_at"]), closed, row["close_cause"],
-                                    (exit_price - entry_price) * quantity))
-        return tuple(result)
+        return trades_today(self.engine, self.now())
 
     def _recent_commands(self) -> tuple[api.CommandRecord, ...]:
         rows = self.engine.store.journal(COMMAND)[-self.config.api.status_recent_commands:]

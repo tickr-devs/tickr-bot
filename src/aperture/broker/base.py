@@ -64,3 +64,8 @@ class Broker(Protocol):
     def cancel(self, client_order_id: str) -> None:
         """Request cancellation. State is confirmed only by a later order_detail()."""
         ...
+
+    def can_place(self, count: int) -> bool:
+        """True if the request budget would admit `count` place requests now (an entry and
+        its stop). Takes nothing and sends nothing."""
+        ...

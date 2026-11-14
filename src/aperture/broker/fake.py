@@ -30,6 +30,7 @@ class FakeBroker:
     holdings: dict[str, Position] = field(default_factory=dict)
     sent: list[OrderRequest] = field(default_factory=list)
     _next_id: int = 1
+    place_budget: int | None = None  # None = unlimited; else place requests can_place admits
 
     def script(self, *outcomes: str) -> None:
         self.outcomes.extend(outcomes)
@@ -76,6 +77,9 @@ class FakeBroker:
         broker_id = f"fake-{self._next_id}"
         self._next_id += 1
         return Acknowledgement(request.client_order_id, broker_id)
+
+    def can_place(self, count: int) -> bool:
+        return self.place_budget is None or count <= self.place_budget
 
     def cancel(self, client_order_id: str) -> None:
         order = self.order_detail(client_order_id)
