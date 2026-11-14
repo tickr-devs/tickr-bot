@@ -141,6 +141,7 @@ class Watchdog:
         self.times = check_times(config, day)
         self.interval = float(config.runtime.watchdog_bot_check_seconds)
         self.stale_seconds = config.runtime.watchdog_status_stale_seconds
+        self.max_lead_seconds = config.risk.max_clock_skew_seconds
         self._status_path = status_path
         self._connect = connect
         self._reads: Reads | None = None
@@ -215,7 +216,9 @@ class Watchdog:
         except (contract.ContractError, OSError):
             return "status file unreadable"
         age = contract.seconds_between(status.written_at, now)
-        if age < 0:
+        # `now` is read before the file, so a write landing in between looks slightly ahead:
+        # allow [risk] max_clock_skew_seconds of lead before calling it "future".
+        if age < -self.max_lead_seconds:
             return "status file dated in the future"
         if age > self.stale_seconds:
             return f"status file older than {self.stale_seconds} s"

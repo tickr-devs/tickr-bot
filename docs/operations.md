@@ -293,6 +293,9 @@ open trade. Running means both: its lock file names a live process, and `data/st
 says which failed: "no live pid in its lock file" (crashed or stopped), "status file older
 than ..." (hung, or the pid now belongs to another process after a crash or reboot), "no status
 file" or "status file unreadable". Nothing will flatten that trade at 15:55 ET.
+A mid-session restart of the bot can raise this alert once while the new bot starts and
+recovers (no live pid, or a status file not yet rewritten); if the next check is quiet and
+`data/status.json` is fresh again, the bot is back.
 
 1. Open the Webull app: is the position still there, and is its stop working?
 2. Close the position by hand, or keep it with its stop and close it before 16:00 ET yourself.

@@ -229,13 +229,17 @@ def test_alive_pid_with_stale_status_is_bot_down(cfg, tmp_path, pid):
     (None, "no status file"),
     (b"{not json", "status file unreadable"),
     ("future", "status file dated in the future"),
+    ("lead", None),  # written after the watchdog read its clock: not "future"
     ("fresh", None),
 ])
 def test_alive_pid_needs_a_fresh_readable_status(cfg, tmp_path, status, why):
     _, lock_path = data_paths(cfg)
     write_pid(lock_path, os.getpid())
+    lead = timedelta(seconds=float(cfg.risk.max_clock_skew_seconds))
     if status == "future":
-        write_status(cfg, AT + timedelta(seconds=1))
+        write_status(cfg, AT + lead + timedelta(milliseconds=1))
+    elif status == "lead":
+        write_status(cfg, AT + lead)
     elif status == "fresh":
         write_status(cfg, AT - timedelta(seconds=cfg.runtime.watchdog_status_stale_seconds))
     elif status is not None:
