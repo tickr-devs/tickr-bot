@@ -60,6 +60,7 @@ from aperture.data.base import (
     QuoteListener,
     ScreenerKind,
     ScreenerRow,
+    StreamNotice,
     SubscriptionLimit,
 )
 from aperture.types import (
@@ -1065,6 +1066,19 @@ def quote_from_stream(result: Any, receipt_time: datetime) -> Quote | None:
     )
 
 
+def notice_from_stream(payload: Mapping[str, Any], receipt_time: datetime) -> StreamNotice:
+    """Notice 1001 -> StreamNotice. Each counter (`drop`, `rtt`, `sent`; probe M3 saw JSON
+    integers) must be a whole number >= 0; a missing or other value is MalformedResponse."""
+    counters: dict[str, int] = {}
+    for name in ("drop", "rtt", "sent"):
+        where = f"stream notice {NOTICE_STATUS}.{name}"
+        value = to_decimal(payload.get(name), where)
+        if value != value.to_integral_value() or value < 0:
+            raise MalformedResponse(f"{where}: not a whole number >= 0")
+        counters[name] = int(value)
+    return StreamNotice(receipt_time, counters["drop"], counters["rtt"], counters["sent"])
+
+
 class StreamSession:
     """Desired subscriptions and event translation for one MQTT connection, without the SDK.
 
@@ -1077,6 +1091,8 @@ class StreamSession:
       for a deliberate reconnect; nothing is retried here and nothing raises into the
       provider thread.
     - Disconnect, entitlement pre-emption (notice 1002) and a stopped loop report "down".
+    - Notice 1001 counters go to the listener's `on_notice`; a malformed one goes to
+      `on_error` (journaled as a stream error) and the stream carries on.
     - At most `max_symbols` symbols per connection (probe M3: 100, cumulative). A subscribe()
       that would pass it raises SubscriptionLimit before anything is sent, without reconnecting.
       Slots are counted on the current set, as Webull does (probe M3b: an unsubscribe frees its
@@ -1251,7 +1267,13 @@ class StreamSession:
                     with self._lock:
                         self._up = False
                     self._notify(False, "entitlement taken by another device (notice 1002)")
-                elif kind != NOTICE_STATUS:
+                elif kind == NOTICE_STATUS:
+                    notice = notice_from_stream(payload, self._utc_now())
+                    with self._lock:
+                        listener = self._listener
+                    if listener is not None:
+                        listener.on_notice(notice)
+                else:
                     log.warning("stream notice of unknown type %r", kind)
         except Exception as exc:  # noqa: BLE001 - never into the provider thread
             self._on_error(topic, exc)

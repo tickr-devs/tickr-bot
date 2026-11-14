@@ -6,6 +6,7 @@ Decimal price and string size); no real frame has been recorded yet.
 
 from __future__ import annotations
 
+import ast
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
@@ -24,10 +25,11 @@ from aperture.broker.webull import (
     StreamSession,
     StreamSettings,
     WebullMarketData,
+    notice_from_stream,
     quote_from_stream,
     subscribe_error,
 )
-from aperture.data.base import MarketDataError, SubscriptionLimit
+from aperture.data.base import MarketDataError, StreamNotice, SubscriptionLimit
 from aperture.data.health import StreamHealth, StreamState
 
 NOW = datetime(2026, 11, 13, 15, 0, tzinfo=UTC)
@@ -49,9 +51,13 @@ class Recorder:
     def __init__(self) -> None:
         self.quotes: list = []
         self.transport: list = []
+        self.notices: list = []
 
     def on_quote(self, q):
         self.quotes.append(q)
+
+    def on_notice(self, n):
+        self.notices.append(n)
 
     def on_transport(self, up, at, detail):
         self.transport.append((up, detail))
@@ -158,9 +164,10 @@ def test_messages_reach_the_listener_only_for_wanted_symbols_and_notices():
     s.on_message("quote", frame("AAA"))
     s.on_message("quote", frame("ZZZ"))
     s.on_message("quote", frame("AAA", bids=[]))
-    s.on_message("notice", {"type": "1001", "rtt": "5"})
+    s.on_message("notice", {"type": "1001", "drop": 0, "rtt": 43, "sent": 0})
     s.on_message("snapshot", object())
     assert [q.symbol for q in rec.quotes] == ["AAA"]
+    assert rec.notices == [StreamNotice(NOW, 0, 43, 0)]
     s.on_message("notice", {"type": "1002", "content": "preempted"})
     assert rec.transport[-1] == (False, "entitlement taken by another device (notice 1002)")
     assert not s.up and errors == []
@@ -178,6 +185,38 @@ def test_bad_frames_and_listener_errors_never_raise_into_the_provider_thread():
     s.on_message("quote", frame("AAA"))
     s.on_message("quote", frame(""))
     assert [w for w, _ in errors] == ["quote", "quote"]
+
+
+def test_notice_counters_from_the_recorded_probe_payloads():
+    events = json.loads((FIXTURES / "streaming_subscribe_capacity_ramp.json").read_text())
+    payloads = [ast.literal_eval(e["payload"]) for e in events["events"]
+                if e.get("topic") == "notice"]
+    assert [notice_from_stream(p, NOW) for p in payloads] == [StreamNotice(NOW, 0, 43, 0),
+                                                              StreamNotice(NOW, 0, 42, 0)]
+    assert notice_from_stream({"drop": "2", "rtt": 7, "sent": 9}, NOW) == StreamNotice(
+        NOW, 2, 7, 9)
+
+
+@pytest.mark.parametrize("payload", [
+    {"rtt": 5, "sent": 0},
+    {"drop": None, "rtt": 5, "sent": 0},
+    {"drop": 0, "rtt": 5.0, "sent": 0},
+    {"drop": 0, "rtt": True, "sent": 0},
+    {"drop": 0, "rtt": "fast", "sent": 0},
+    {"drop": -1, "rtt": 5, "sent": 0},
+    {"drop": 0, "rtt": "4.5", "sent": 0},
+])
+def test_malformed_notice_is_recorded_and_the_stream_carries_on(payload):
+    with pytest.raises(MalformedResponse):
+        notice_from_stream(payload, NOW)
+    s, _, errors, _ = session()
+    rec = Recorder()
+    s.subscribe(["AAA"], rec)
+    s.on_connected()
+    s.on_message("notice", {"type": "1001", **payload})
+    s.on_message("quote", frame("AAA"))
+    assert [(w, type(e)) for w, e in errors] == [("notice", MalformedResponse)]
+    assert rec.notices == [] and [q.symbol for q in rec.quotes] == ["AAA"] and s.up
 
 
 def test_one_listener_per_session():

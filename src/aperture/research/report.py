@@ -14,6 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from aperture.research import latency as lat
 from aperture.research import observer_report as orep
 from aperture.research import outcomes as oc
 from aperture.research import refusals as rf
@@ -176,6 +177,32 @@ def write_observer_report(
     body = {"label": orep.LABEL, "active": result.active,
             "identities": [asdict(r) for r in result.identities]}
     return _json(out_dir / "observers.json", body, places)
+
+
+LATENCY_COLUMNS = ("group", "key", "count", "median_ms", "p90_ms", "max_ms", "min_ms",
+                   "clock_skew")
+NOTICE_COLUMNS = ("hour", "notices", "drop_sum", "drop_max", "sent_sum", "sent_max",
+                  "rtt_median", "rtt_max")
+
+
+def write_latency(result: lat.LatencyReport, source: str, out_dir: Path,
+                  places: int) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    groups = (("symbol", result.by_symbol), ("hour", result.by_hour))
+    _write_csv(out_dir / "latency.csv", LATENCY_COLUMNS,
+               ([group, key, s.count, s.median, s.p90, s.max, s.min, s.clock_skew]
+                for group, rows in groups for key, s in rows.items()), places)
+    _write_csv(out_dir / "notices.csv", NOTICE_COLUMNS,
+               ([hour, *(row[c] for c in NOTICE_COLUMNS[1:])]
+                for hour, row in result.notices_by_hour.items()), places)
+    hours = result.by_hour.values()
+    body = {"source": source, "quotes": sum(s.count for s in hours),
+            "symbols": len(result.by_symbol), "hours": len(result.by_hour),
+            "clock_skew_quotes": sum(s.clock_skew for s in hours),
+            "min_latency_ms": min((s.min for s in hours), default=None),
+            "notices": sum(int(n["notices"]) for n in result.notices_by_hour.values()),
+            "partial_last_lines": result.partial_last_lines}
+    return _json(out_dir / "latency_summary.json", body, places)
 
 
 REFUSAL_COLUMNS = ("day", "strategy", "version", "role", "setup", "kind", "name", "count")

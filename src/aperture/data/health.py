@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from aperture.config import Config
-from aperture.data.base import QuoteListener
+from aperture.data.base import QuoteListener, StreamNotice
 from aperture.types import Quote
 
 
@@ -86,6 +86,9 @@ class StreamHealth:
             self._last.clear()
             self._transport = TransportStatus(up, at, detail)
 
+    def on_notice(self, notice: StreamNotice) -> None:
+        """Notice counters are captured for research; they never decide health."""
+
     # -- queries
     def _state(self, symbol: str, now: datetime) -> StreamState:
         if symbol not in self._tracked:
@@ -131,3 +134,6 @@ class FanOut:
 
     def on_transport(self, up: bool, at: datetime, detail: str) -> None:
         self._each("transport", lambda listener: listener.on_transport(up, at, detail))
+
+    def on_notice(self, notice: StreamNotice) -> None:
+        self._each("notice", lambda listener: listener.on_notice(notice))

@@ -8,10 +8,12 @@ import pytest
 from md_helpers import NOW, OPEN, bars, quote, row, settings
 
 from aperture import config
-from aperture.data.base import FakeMarketData, ScreenerKind
+from aperture.data.base import FakeMarketData, ScreenerKind, StreamNotice
 from aperture.data.capture import CaptureError, CaptureWriter, export_replay_bars
 from aperture.data.discovery import discover
+from aperture.data.health import FanOut, StreamHealth
 from aperture.replay.bars import load_bars
+from aperture.runtime.market import StreamInbox
 from aperture.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +49,19 @@ def test_records_are_strings_with_provider_and_receipt_time(tmp_path):
     b = lines(day / "bars.jsonl")
     assert b[0]["close"] == "10" and b[0]["provider"] == "fake"
     assert all(isinstance(v, str) for rec in b for v in rec.values())
+
+
+def test_stream_notices_reach_capture_through_fan_out(tmp_path):
+    w = CaptureWriter(tmp_path, "webull")
+    inbox = StreamInbox()
+    fan = FanOut(StreamHealth(timedelta(seconds=5)), inbox, w,
+                 on_error=inbox.on_listener_error)
+    fan.on_notice(StreamNotice(NOW, 1, 43, 7))
+    w.close()
+    assert lines(tmp_path / DAY / "notices.jsonl") == [
+        {"type": "1001", "drop": 1, "rtt": 43, "sent": 7, "provider": "webull",
+         "receipt_time": NOW.isoformat()}]
+    assert inbox.take_events() == []
 
 
 def test_ny_date_decides_the_folder(tmp_path):

@@ -12,6 +12,8 @@ are strings (never floats); times are ISO-8601 UTC. Every record carries `provid
   `export_replay_bars` turns a captured file into a file the replay tool loads.
 - quotes.jsonl: Quote fields plus `provider` and `source` ("snapshot" or "stream").
 - screener.jsonl: kind, rank, typed identity fields and the complete provider row `fields`.
+- notices.jsonl: stream status notices: `type` ("1001"), the integer counters `drop`, `rtt`,
+  `sent` as received, `provider` and `receipt_time`. Read by `aperture.research latency`.
 
 Bulk market data never enters the trading database (spec section 3). A write failure raises
 `CaptureError`; the caller decides what that means for trading.
@@ -29,7 +31,7 @@ from typing import IO, Any
 
 from aperture.calendar import ny_date_of
 from aperture.config import Config
-from aperture.data.base import ScreenerRow
+from aperture.data.base import ScreenerRow, StreamNotice
 from aperture.replay.bars import BAR_KEYS, parse_bar
 from aperture.replay.errors import BarFileError
 from aperture.types import Bar, Quote
@@ -37,6 +39,8 @@ from aperture.types import Bar, Quote
 SCREENER_FILE = "screener.jsonl"
 BARS_FILE = "bars.jsonl"
 QUOTES_FILE = "quotes.jsonl"
+NOTICES_FILE = "notices.jsonl"
+NOTICE_STATUS_TYPE = "1001"
 STREAM_SOURCE = "stream"
 CAPTURE_KEYS = frozenset({"provider", "receipt_time"})
 
@@ -179,6 +183,14 @@ class CaptureWriter:
     # -- QuoteListener (stream)
     def on_quote(self, quote: Quote) -> None:
         self.quotes([quote], self._provider, STREAM_SOURCE)
+
+    def on_notice(self, notice: StreamNotice) -> None:
+        record = {"type": NOTICE_STATUS_TYPE, "drop": notice.drop, "rtt": notice.rtt,
+                  "sent": notice.sent, "provider": self._provider,
+                  "receipt_time": _time(notice.receipt_time)}
+        day = _day(notice.receipt_time)
+        with self._lock:
+            self._append(day, NOTICES_FILE, [record])
 
     def on_transport(self, up: bool, at: datetime, detail: str) -> None:
         """Transport events are journaled by the bot loop, not captured here."""

@@ -19,6 +19,7 @@ from aperture.replay.errors import ReplayError
 from aperture.replay.settings import load_settings
 from aperture.research import compare, observer_report, refusals, report
 from aperture.research.errors import ResearchError
+from aperture.research.latency import latency_report
 from aperture.research.outcomes import outcomes
 from aperture.research.records import load_records, write_records
 from aperture.research.settings import load_research_settings
@@ -74,6 +75,15 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--settings", type=Path, required=True, help="research TOML (time zone)")
     p.add_argument("--out", type=Path, required=True, help="output directory")
 
+    p = sub.add_parser("latency", help="quote latency and stream notice counters from capture")
+    p.add_argument("--quotes", type=Path, nargs="+", required=True, help="captured quotes.jsonl")
+    p.add_argument("--notices", type=Path, nargs="*", default=[],
+                   help="captured notices.jsonl")
+    p.add_argument("--source", choices=("stream", "snapshot"), default="stream",
+                   help="which captured quotes to measure")
+    p.add_argument("--settings", type=Path, required=True, help="research TOML (time zone)")
+    p.add_argument("--out", type=Path, required=True, help="output directory")
+
     p = sub.add_parser("refusals", help="per day and setup: first failed checks, refusals, entries")
     p.add_argument("--decisions", type=Path, nargs="+", required=True, help="decision JSONL")
     p.add_argument("--strategy", help="NAME or NAME:VERSION to keep")
@@ -105,6 +115,12 @@ def _run(args: argparse.Namespace) -> dict:
             settings.session_timezone,
         )
         return report.write_diff(result, args.out, settings.output_decimal_places)
+    if args.command == "latency":
+        settings = load_research_settings(args.settings)
+        result = latency_report(args.quotes, args.notices, args.source,
+                                settings.session_timezone)
+        return report.write_latency(result, args.source, args.out,
+                                    settings.output_decimal_places)
     if args.command == "refusals":
         settings = load_research_settings(args.settings)
         rows = refusals.table(_filter(load_records(args.decisions), args.strategy),

@@ -77,10 +77,23 @@ class SubscriptionLimit(MarketDataError):
         super().__init__(f"{who} stream limit of {limit} symbols: refused {refused}")
 
 
+@dataclass(frozen=True)
+class StreamNotice:
+    """A stream status notice (Webull type 1001): the provider's counters as received. Their
+    meaning and units are unproven (docs/webull-facts.md M3); kept for research only."""
+
+    receipt_time: datetime
+    drop: int
+    rtt: int
+    sent: int
+
+
 class QuoteListener(Protocol):
     """Receives stream events. Called on the provider's thread; keep the work tiny."""
 
     def on_quote(self, quote: Quote) -> None: ...
+
+    def on_notice(self, notice: StreamNotice) -> None: ...
 
     def on_transport(self, up: bool, at: datetime, detail: str) -> None:
         """Transport went up (connected and subscribed) or down (`detail` says why)."""

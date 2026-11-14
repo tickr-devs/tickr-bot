@@ -10,6 +10,7 @@ format (`records.py`), through the observers (`docs/observers.md`).
 | `whatif` | What if we had entered on an ENTER that was refused or never evaluated? | `simulated` |
 | `decide` + `diff` | What would another strategy version have decided over the same day? | (decisions) |
 | `observers` | How did the live observer versions do against the active one today? | `simulated` |
+| `latency` | How late do captured quotes arrive, by symbol and hour? What do stream notices say? | (measured) |
 | `refusals` | Per day and setup: which check refused first, which platform causes, how many entries? | (counts) |
 
 Outcomes are price moves, never called profit. What-if results are simulated with the replay's
@@ -126,6 +127,38 @@ close, so quote-dependent checks (spread, cost rule) can differ for that reason 
 Hold-out rule (`docs/advisor.md`): when the candidate version was tuned on some days, a `diff`
 or `whatif` over those days says nothing about the change; run it on other days.
 
+## latency: quote latency from capture files
+
+```
+python -m aperture.research latency --quotes data/capture/<env>/<NY date>/quotes.jsonl \
+  [--notices data/capture/<env>/<NY date>/notices.jsonl] [--source stream|snapshot] \
+  --settings config/research.toml --out out/latency
+```
+
+Reads the capture files as `aperture.data.capture` writes them (several days may be passed).
+Latency = `receipt_time` minus `provider_time` in milliseconds, for quotes of `--source`
+(default `stream`; snapshot quotes measure a REST round trip plus quote age, a different thing).
+
+- `latency.csv`: one row per symbol (`group=symbol`) and per receipt hour in
+  `session_timezone` (`group=hour`, `YYYY-MM-DD HH:00`): `count`, `median_ms` (middle two
+  averaged), `p90_ms` (nearest rank: the smallest value with at least 90% of values at or
+  below it), `max_ms`, `min_ms`, `clock_skew`.
+- **Clock skew is shown, never hidden.** A negative latency means the quote arrived before the
+  provider's own timestamp: our clock and Webull's disagree. It stays in every statistic and is
+  counted in `clock_skew`; `min_ms` shows how far.
+- `notices.csv`: stream notice 1001 counters per receipt hour: `notices`, `drop_sum`,
+  `drop_max`, `sent_sum`, `sent_max`, `rtt_median`, `rtt_max`. The bot captures them to
+  `notices.jsonl` (`type`, integer `drop`, `rtt`, `sent`, `provider`, `receipt_time`), about one a
+  minute. Their meaning is unproven (`docs/webull-facts.md` M3): whether `drop`/`sent` count per
+  interval or since connect, and whether `rtt` is milliseconds, is not known yet, so both sum
+  and max are shown and nothing is converted. A malformed notice is not captured: the stream
+  journals it as a `stream-error` (`where` = `notice`) and carries on.
+- `latency_summary.json`: quote, symbol and hour counts, `clock_skew_quotes`, `min_latency_ms`,
+  notice count and `partial_last_lines`.
+
+A malformed line is refused with file, line and cause. A last line without its newline (a file
+the bot is still appending to) is left unread and counted in `partial_last_lines`.
+
 ## refusals: per-day, per-setup refusal table
 
 ```
@@ -149,7 +182,8 @@ spreadsheet) and `refusals_summary.json` (days, rows, totals by kind).
 ## Settings
 
 `config/research.toml` `[research]` (one comment per key, tested; missing or unknown keys are
-refused): `horizons_minutes`, `atr_period`, `session_timezone`, `output_decimal_places`.
+refused): `horizons_minutes`, `atr_period`, `session_timezone`, `output_decimal_places`
+(`latency` reads only the last two).
 What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay.
 
 Exit code 2 and `research refused: <cause>` on any bad input; nothing is guessed.

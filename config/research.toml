@@ -8,7 +8,7 @@
 horizons_minutes = [1, 5, 15, 30, 60]
 # Wilder ATR length in completed M1 bars (history before the decision bar included) used to express moves in ATR; read by research/outcomes.py.
 atr_period = 14
-# Exchange time zone (IANA name); a horizon that would leave the decision's session date is reported without numbers; read by research/outcomes.py.
+# Exchange time zone (IANA name); a horizon that would leave the decision's session date is reported without numbers, and latency hours are labelled in it; read by research/outcomes.py and research/__main__.py (latency).
 session_timezone = "America/New_York"
 # Decimal places for prices, ATR, percent and USD in CSV and summary outputs; read by research/report.py.
 output_decimal_places = 4

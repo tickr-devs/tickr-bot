@@ -19,7 +19,7 @@ from aperture.api import contract as api
 from aperture.broker.base import BrokerError
 from aperture.calendar import CalendarRefused, SessionCalendar
 from aperture.config import Config
-from aperture.data.base import MarketData, MarketDataError, QuoteListener
+from aperture.data.base import MarketData, MarketDataError, QuoteListener, StreamNotice
 from aperture.data.capture import CaptureWriter
 from aperture.data.discovery import Candidate, DiscoverySettings, discover
 from aperture.data.health import FanOut, StreamHealth, StreamState
@@ -51,6 +51,9 @@ class StreamInbox:
         with self._lock:
             self._events.append((STREAM_TRANSPORT, {"up": up, "at": at.isoformat(),
                                                     "detail": detail}))
+
+    def on_notice(self, notice: StreamNotice) -> None:
+        """Notice counters go to capture only (about one a minute), not to the journal."""
 
     def on_error(self, where: str, error: Exception) -> None:
         """For `StreamSession(on_error=...)` and `FanOut(on_error=...)` (listener ignored).

@@ -125,6 +125,7 @@ One MQTT session; QUOTE subscribes via `POST /market-data/streaming/subscribe` (
 - Success gives no per-symbol confirmation: an empty 200 body. A caller cannot learn from the response which symbols are live.
 - Unsubscribe by explicit symbol list (≤100, `unsubscribe_all=false`) raised no error (the SDK does not surface its status on success).
 - Stream `notice` messages arrive about once a minute, type `1001`, fields `drop`, `rtt`, `sent` (e.g. `{'drop': 0, 'rtt': 43, 'sent': 0, 'type': '1001'}`); no other notice types were seen.
+  - **How Aperture uses it:** `StreamSession` turns each 1001 into a `StreamNotice` (every counter a whole number >= 0, else `MalformedResponse`, journaled as a stream error, stream unaffected); capture writes it to `notices.jsonl`; `python -m aperture.research latency` summarises it per hour. Units and per-interval vs cumulative counting are unproven.
 - **Not measured (market closed):** whether quotes actually flow for all 100 symbols, update rates, and silent drops under load. Zero quote messages arrived in ~90 s, as expected on a Saturday. Repeat during RTH for that half.
 - Not tested: the number of concurrent connections per App Key (docs claim ≤5) and whether two connections give 2 × 100.
 
