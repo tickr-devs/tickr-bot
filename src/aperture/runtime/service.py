@@ -27,6 +27,7 @@ from aperture.runtime.alerts import AlertKind
 from aperture.runtime.watch import Watch
 
 if TYPE_CHECKING:
+    from aperture.observers.runner import ObserverSet
     from aperture.runtime.evaluation import Evaluator
     from aperture.runtime.market import MarketRuntime
 
@@ -35,6 +36,8 @@ STRATEGY_FILE = "strategy.toml"
 COMMAND = "command"
 COMMAND_FILE_REFUSED = "command-file-refused"
 COMMAND_EFFECT = "command-effect"
+OBSERVER_FAILURE = "observer-failure"
+OBSERVERS_STOPPED = "observers-stopped"
 EVALUATION_FAILED = "evaluation-failed"
 STRATEGY_NOT_LOADED = "strategy-not-loaded"
 NOT_WIRED = api.EntryBlock("entries_not_wired",
@@ -111,11 +114,13 @@ class Service:
                  calendar: SessionCalendar | None, strategy: api.StrategyId,
                  paths: ServicePaths, market: MarketRuntime | None = None,
                  evaluator: Evaluator | None = None, entries_off: str | None = None,
+                 observers: ObserverSet | None = None,
                  watch: Watch | None = None) -> None:
         self.engine = engine
         self.market = market
         self.evaluator = evaluator
         self.entries_off = entries_off  # why there is no evaluator (status says so)
+        self.observers = observers
         self.watch = watch
         self.config = engine.config
         self.now = now
@@ -230,6 +235,39 @@ class Service:
                                                              "detail": str(exc)},
                                          run_id=self.engine.run_id)
         self.market.watch = set(self.evaluator.watch)
+        self._feed_observers()
+
+    def _feed_observers(self) -> None:
+        """The contexts the active strategy just saw go to the observers, after all broker
+        work of this pass. Failures are journaled every pass. A full queue (a hung observer)
+        switches the observers off for the run, with one alert; trading goes on."""
+        observers, evaluator = self.observers, self.evaluator
+        if observers is None or evaluator is None:
+            return
+        overflow = False
+        at = evaluator.evaluated_at
+        if at is not None:
+            for context in evaluator.contexts:
+                if observers.on_evaluation(context, at):
+                    overflow = True
+                    break
+        store = self.engine.store
+        failures = observers.take_failures()
+        if failures:
+            with store.transaction():
+                for f in failures:
+                    store.append(OBSERVER_FAILURE, {"folder": f.folder, "identity": f.identity,
+                                                    "at": f.at.isoformat(), "cause": f.cause},
+                                 run_id=self.engine.run_id)
+        if not overflow:
+            return
+        self.observers = None
+        finished = observers.close(float(self.config.observers.max_evaluation_seconds))
+        with store.transaction():
+            store.append(OBSERVERS_STOPPED, {"finished": finished}, run_id=self.engine.run_id)
+        if self.watch is not None:
+            self.watch.alert(AlertKind.OBSERVERS_STOPPED,
+                             "observer queue full: observers switched off for this run")
 
     # --- status ----------------------------------------------------------------------------
 

@@ -50,6 +50,8 @@ class AlertKind(StrEnum):
     BOT_DID_NOT_STOP = "bot-did-not-stop"
     PREFLIGHT_FAILED = "preflight-failed"
     TOKEN_NEEDS_CONFIRMATION = "token-needs-confirmation"
+    # The observer queue overflowed: observers are switched off for the run (trading goes on).
+    OBSERVERS_STOPPED = "observers-stopped"
 
 
 class Delivery(StrEnum):

@@ -52,6 +52,7 @@ class Evaluator:
         self.now = now
         self.watch: set[str] = set()
         self.contexts: list[SymbolContext] = []  # of the latest pass, for observers
+        self.evaluated_at: datetime | None = None  # decision time of `contexts`
         self._last_bar: datetime | None = None
         self._history_refused: set[tuple[str, date]] = set()
 
@@ -74,6 +75,7 @@ class Evaluator:
         """Once per loop pass; does work only when a new minute has completed."""
         self.contexts = []
         now = self.now()
+        self.evaluated_at = now
         try:
             day = self.calendar.day_at(now)
         except CalendarRefused:
