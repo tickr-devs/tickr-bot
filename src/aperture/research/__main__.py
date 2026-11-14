@@ -17,7 +17,7 @@ from aperture.replay.__main__ import session_clock, strategy_factory
 from aperture.replay.bars import load_bars
 from aperture.replay.errors import ReplayError
 from aperture.replay.settings import load_settings
-from aperture.research import compare, report
+from aperture.research import compare, observer_report, report
 from aperture.research.errors import ResearchError
 from aperture.research.outcomes import outcomes
 from aperture.research.records import load_records, write_records
@@ -60,6 +60,11 @@ def _parser() -> argparse.ArgumentParser:
     clock(p)
     p.add_argument("--strategy", required=True, help="strategy module exposing create()")
     p.add_argument("--values", type=Path, required=True, help="strategy.toml for create()")
+
+    p = sub.add_parser("observers", help="daily report: observers against the active strategy")
+    bars_and_out(p)
+    clock(p)
+    p.add_argument("--decisions", type=Path, nargs="+", required=True, help="decision JSONL")
 
     p = sub.add_parser("diff", help="diff two decision record sets bar by bar")
     p.add_argument("--baseline", type=Path, nargs="+", required=True, help="decision JSONL")
@@ -107,6 +112,10 @@ def _run(args: argparse.Namespace) -> dict:
         rows = what_if(load_records(args.decisions), load_bars(args.bars), replay_settings,
                        clock_for, quantity)
         return report.write_whatif(rows, args.out, places)
+    if args.command == "observers":
+        result = observer_report.report(load_records(args.decisions), load_bars(args.bars),
+                                        replay_settings, clock_for)
+        return report.write_observer_report(result, args.out, places)
     factory = strategy_factory(args.strategy, args.values)
     records = compare.decide(factory, load_bars(args.bars), replay_settings, clock_for)
     args.out.mkdir(parents=True, exist_ok=True)

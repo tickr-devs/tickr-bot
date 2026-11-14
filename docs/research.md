@@ -1,13 +1,15 @@
 # Signal research: outcomes, what-if, version diff
 
-`aperture.research` answers three questions offline, from captured M1 bars (the bar JSONL format
-of `docs/replay.md`) and recorded decisions. It never trades and the bot never imports it.
+`aperture.research` answers these questions offline, from captured M1 bars (the bar JSONL format
+of `docs/replay.md`) and recorded decisions. It never trades. The bot imports only its record
+format (`records.py`), through the observers (`docs/observers.md`).
 
 | Command | Question | Label |
 |---|---|---|
 | `outcomes` | What did the price do 1/5/15/30/60 minutes after each WATCH and ENTER? | `observed` |
 | `whatif` | What if we had entered on an ENTER that was refused or never evaluated? | `simulated` |
 | `decide` + `diff` | What would another strategy version have decided over the same day? | (decisions) |
+| `observers` | How did the live observer versions do against the active one today? | `simulated` |
 
 Outcomes are price moves, never called profit. What-if results are simulated with the replay's
 conservative fill model and prove nothing about real fills.

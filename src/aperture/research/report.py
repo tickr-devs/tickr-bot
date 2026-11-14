@@ -14,6 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from aperture.research import observer_report as orep
 from aperture.research import outcomes as oc
 from aperture.research import whatif as wi
 from aperture.research.compare import DiffResult
@@ -148,3 +149,29 @@ def write_diff(result: DiffResult, out_dir: Path, places: int) -> dict[str, Any]
     body = {"baseline": result.baseline, "candidate": result.candidate, "rows": len(result.rows),
             "by_kind": result.counts}
     return _json(out_dir / "diff_summary.json", body, places)
+
+
+OBSERVER_COLUMNS = (
+    "label", "strategy", "version", "role", "decisions", "enters", "enters_taken",
+    "enters_refused", "trades", "wins", "losses", "total_r", "average_r", "total_usd",
+    "usd_trades", "shared_enter_bars", "same", "verdict_changed", "levels_changed",
+)
+
+
+def write_observer_report(
+    result: orep.ObserverReport, out_dir: Path, places: int
+) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def line(r: orep.IdentityReport) -> list[Any]:
+        diff = r.vs_active or {}
+        return [orep.LABEL, r.strategy, r.version, r.role, r.decisions, r.enters,
+                r.enters_taken, r.enters_refused, r.trades, r.wins, r.losses, r.total_r,
+                r.average_r, r.total_usd, r.usd_trades, r.shared_enter_bars,
+                diff.get("same"), diff.get("verdict_changed"), diff.get("levels_changed")]
+
+    _write_csv(out_dir / "observers.csv", OBSERVER_COLUMNS,
+               (line(r) for r in result.identities), places)
+    body = {"label": orep.LABEL, "active": result.active,
+            "identities": [asdict(r) for r in result.identities]}
+    return _json(out_dir / "observers.json", body, places)

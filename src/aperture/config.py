@@ -119,6 +119,15 @@ class MarketDataConfig:
 
 
 @dataclass(frozen=True)
+class ObserversConfig:
+    strategy_modules: tuple[str, ...]
+    max_observers: int
+    max_evaluation_seconds: Decimal
+    queue_size: int
+    decisions_dir: str
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     min_free_disk_mb: int
     supervisor_poll_seconds: Decimal
@@ -178,6 +187,7 @@ class Config:
     runtime: RuntimeConfig
     alerts: AlertsConfig
     market_data: MarketDataConfig
+    observers: ObserversConfig
     environments: dict[str, EnvironmentConfig]
     root: Path
     digest: str
@@ -202,6 +212,7 @@ _SECTIONS: dict[str, type] = {
     "runtime": RuntimeConfig,
     "alerts": AlertsConfig,
     "market_data": MarketDataConfig,
+    "observers": ObserversConfig,
 }
 
 
