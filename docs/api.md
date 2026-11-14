@@ -1,0 +1,71 @@
+# Local API, version 1
+
+The bot is a headless service. Clients (the status page now, the macOS app later) talk only to this
+local API. The API process is separate from the bot and never talks to the broker: it serves the
+status file the bot writes and drops operator commands into an inbox the bot reads.
+
+Run it: `python -m aperture.api --config config/bot.toml`. Settings are in `config/bot.toml` `[api]`.
+
+## Transport and safety
+
+- HTTP on a loopback address only (`[api] host`; a non-loopback address refuses to start).
+- Every request must carry `Host: <name>:<port>` with `<name>` in `[api] allowed_hosts`, and if it
+  sends `Origin`, it must be `http://<name>:<port>`. Otherwise `403`. No CORS headers are ever sent.
+- Commands require `Content-Type: application/json` and a `Content-Length` within
+  `[api] max_request_body_bytes`.
+
+## Wire rules
+
+- Money, prices and quantities are decimal strings (`"12.34"`), never JSON numbers.
+- Times are UTC with milliseconds: `"2026-11-14T18:44:39.123Z"`.
+- Every object has exactly the documented keys. Nullable keys are present with `null`.
+- Every response carries `api_version`; documents written to disk carry `schema_version`.
+- Version 1 never removes or renames a key or changes a type. Such a change is version 2 and
+  gets new paths and schema files; version 1 keeps working until clients move.
+
+JSON Schemas (draft 2020-12) are committed in `src/aperture/api/schema/` and served at
+`GET /schema`. They are generated from the dataclasses in `src/aperture/api/contract.py`
+(`python -m aperture.api.contract`); a test fails if code and committed schemas differ.
+A golden example of the status document is in `tests/api/fixtures/status-v1.example.json`.
+
+## Endpoints
+
+| Method | Path | Answer |
+|---|---|---|
+| GET | `/` | The status page (one HTML file, read-only, refreshes every `poll_seconds`). |
+| GET | `/status` | `200` `status-response-v1`, always this shape. |
+| GET | `/commands/pending` | `200` `pending-commands-v1`: commands written but not yet consumed. |
+| GET | `/schema` | `200` all schemas by name. |
+| POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
+| POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
+| POST | `/commands/flatten` | Body `{}`. `202` `command-accepted-v1`. |
+
+Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
+`forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
+`length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
+`too_many_pending` 429, `internal` 500.
+
+### GET /status
+
+`status` is the bot's `status-v1` document, or `null` with `unavailable_cause` when the file is
+missing, invalid or dated in the future. `age_seconds` = `served_at - status.written_at`.
+`stale` is true when the age exceeds `[api] status_stale_seconds`. `summary` is the one line to
+show first, in plain words: the single entry-blocking reason, "Entries allowed.", or why the status
+cannot be trusted. Clients should poll every `poll_seconds`.
+
+### Commands
+
+`202` means queued, not executed. The command's result appears later in
+`status.recent_commands` (matched by `command_id`) with `outcome` `done` or `refused` and a cause.
+`warning` is non-null when the bot does not look alive at the time of the request.
+
+## Bot side
+
+- Status: after each loop step that changes what `/status` shows, the bot calls
+  `contract.write_status(path, StatusV1(...))` (temp file + fsync + rename).
+- Commands: the bot calls `contract.read_commands(inbox, now, command_max_age_seconds)`. Each item
+  is a command or a refusal (unreadable file, expired, dated in the future). For each item the bot
+  journals it in one transaction, acts if it is a command, then calls `contract.retire_command`
+  (moves the file to `<commands_dir>/processed/`). If the bot crashes between journal and retire,
+  the file is read again: a `command_id` already in the journal is retired without acting.
+  Commands older than `[api] command_max_age_seconds` are refused, never executed late.

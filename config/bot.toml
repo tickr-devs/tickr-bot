@@ -81,6 +81,22 @@ window_end = "15:30"
 host = "127.0.0.1"
 # Local API port; read by the api server and the status screen.
 port = 8766
+# Host names the API answers to; requests whose Host (name:port) or Origin (http://name:port) is not one of these are refused (DNS rebinding / cross-site guard); read by the api server.
+allowed_hosts = ["127.0.0.1", "localhost"]
+# Status file the bot writes and the API serves, relative to data_dir; read by the bot's status writer and the api server.
+status_file = "status.json"
+# Command folder, relative to data_dir; the API writes into <commands_dir>/inbox, the bot consumes from there; read by the api server and the bot.
+commands_dir = "commands"
+# Status older than this many seconds is shown as stale (bot may be down); read by the api server.
+status_stale_seconds = 15
+# Seconds between refreshes of the status page, also returned to clients as a polling hint; read by the api server and the status page.
+poll_seconds = 3
+# Largest accepted command request body in bytes; larger = refused; read by the api server.
+max_request_body_bytes = 1024
+# Maximum unconsumed commands waiting in the inbox; more = new commands refused; read by the api server.
+max_pending_commands = 20
+# A command older than this many seconds when the bot reads it is refused as expired, never executed late; read by the bot via read_commands.
+command_max_age_seconds = 60
 
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).

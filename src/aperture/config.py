@@ -80,6 +80,14 @@ class ProbeConfig:
 class ApiConfig:
     host: str
     port: int
+    allowed_hosts: tuple[str, ...]
+    status_file: str
+    commands_dir: str
+    status_stale_seconds: Decimal
+    poll_seconds: Decimal
+    max_request_body_bytes: int
+    max_pending_commands: int
+    command_max_age_seconds: Decimal
 
 
 @dataclass(frozen=True)
