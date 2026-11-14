@@ -95,10 +95,21 @@ class SessionHistory:
     pages: int  # provider requests made (0 when served from cache)
 
     def bars_of(self, day: date) -> tuple[Bar, ...]:
-        """Bars of one of the sessions (by New York date of the session)."""
+        """Bars of one of the sessions (by New York date of the session). Grouped once per
+        history: the bot loop asks for every session of every symbol each minute."""
         if day not in self.sessions:
             raise KeyError(day)
-        return tuple(b for b in self.bars if ny_date_of(b.start) == day)
+        return self._by_day().get(day, ())
+
+    def _by_day(self) -> dict[date, tuple[Bar, ...]]:
+        cached: dict[date, tuple[Bar, ...]] | None = self.__dict__.get("_grouped")
+        if cached is None:
+            grouped: dict[date, list[Bar]] = {}
+            for bar in self.bars:
+                grouped.setdefault(ny_date_of(bar.start), []).append(bar)
+            cached = {d: tuple(b) for d, b in grouped.items()}
+            object.__setattr__(self, "_grouped", cached)  # frozen: a derived cache only
+        return cached
 
 
 @dataclass(frozen=True)

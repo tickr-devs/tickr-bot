@@ -130,8 +130,8 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"not JSON serialisable: {type(value).__name__}")
 
 
-def now_utc() -> str:
-    return datetime.now(UTC).isoformat()
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -145,12 +145,20 @@ class JournalRow:
 
 
 class Store:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection,
+                 now: Callable[[], datetime] = _utc_now) -> None:
         self._db = connection
         self._in_transaction = False
+        self._now = now
+
+    def stamp(self) -> str:
+        """The time written into rows (journal, runs, orders, trades): the bot's clock, so a
+        rehearsal on a fake clock dates its trades on the day it lives."""
+        return self._now().astimezone(UTC).isoformat()
 
     @classmethod
-    def open(cls, path: Path | str, *, busy_timeout_seconds: Decimal | float) -> Store:
+    def open(cls, path: Path | str, *, busy_timeout_seconds: Decimal | float,
+             now: Callable[[], datetime] = _utc_now) -> Store:
         """Open (and if needed migrate) the database.
 
         An existing database older than this code is first copied to
@@ -168,7 +176,7 @@ class Store:
             # macOS: synchronous=FULL alone does not flush the disk cache.
             db.execute("PRAGMA fullfsync=ON")
             db.execute("PRAGMA checkpoint_fullfsync=ON")
-        store = cls(db)
+        store = cls(db, now)
         current = store.schema_version
         if existed and 0 < current < len(MIGRATIONS):
             store.backup(path.with_name(f"{path.stem}.pre-v{current + 1}{path.suffix}"))
@@ -227,7 +235,7 @@ class Store:
             raise RuntimeError("journal rows are written only inside a transaction")
         cursor = self._db.execute(
             "INSERT INTO journal(at_utc, run_id, kind, key, body) VALUES (?, ?, ?, ?, ?)",
-            (now_utc(), run_id, kind, key,
+            (self.stamp(), run_id, kind, key,
              json.dumps(body, default=_json_default, sort_keys=True)),
         )
         return int(cursor.lastrowid)
@@ -260,7 +268,7 @@ class Store:
             self._db.execute(
                 "INSERT INTO runs(run_id, started_at, environment, config_digest, strategy, "
                 "strategy_version, code_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (run_id, now_utc(), environment, config_digest, strategy, strategy_version,
+                (run_id, self.stamp(), environment, config_digest, strategy, strategy_version,
                  code_version),
             )
             self.append("run-started", {"environment": environment,
@@ -275,7 +283,7 @@ class Store:
         with self.transaction():
             self._db.execute(
                 "UPDATE runs SET ended_at = ?, end_cause = ? WHERE run_id = ?",
-                (now_utc(), cause, run_id),
+                (self.stamp(), cause, run_id),
             )
             self.append("run-ended", {"cause": cause}, key=run_id, run_id=run_id)
 

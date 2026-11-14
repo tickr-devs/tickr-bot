@@ -23,7 +23,7 @@ from typing import Any
 
 from aperture.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, Refused
 from aperture.config import Config, GateResult
-from aperture.store import Store, now_utc
+from aperture.store import Store
 from aperture.types import (
     OrderDetail,
     OrderRequest,
@@ -355,7 +355,7 @@ class Engine:
                 (trade_id, self.run_id, symbol, TradeState.OPENING, str(quantity),
                  str(limit_price), str(stop_price),
                  None if stop_percent_below_fill is None else str(stop_percent_below_fill),
-                 str(planned_loss_usd), now_utc()))
+                 str(planned_loss_usd), self.store.stamp()))
             self.store.append("trade-opened", {
                 "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
                 "stop_price": stop_price, "planned_loss_usd": planned_loss_usd},
@@ -406,7 +406,7 @@ class Engine:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (cid, trade_id, leg, symbol, side, order_type, str(quantity),
              None if limit_price is None else str(limit_price),
-             None if stop_price is None else str(stop_price), SendState.INTENT, now_utc()))
+             None if stop_price is None else str(stop_price), SendState.INTENT, self.store.stamp()))
         self.store.append("order-intent", {
             "trade_id": trade_id, "leg": leg, "symbol": symbol, "side": side,
             "order_type": order_type, "quantity": quantity, "limit_price": limit_price,
@@ -419,7 +419,7 @@ class Engine:
             "UPDATE orders SET send_state = ?, refusal = COALESCE(?, refusal), "
             "broker_order_id = COALESCE(?, broker_order_id), updated_at = ? "
             "WHERE client_order_id = ?",
-            (state, refusal, broker_order_id, now_utc(), cid))
+            (state, refusal, broker_order_id, self.store.stamp(), cid))
         self.store.append(f"order-{state}", body, key=cid, run_id=self.run_id)
 
     def _send(self, cid: str) -> None:
@@ -483,7 +483,7 @@ class Engine:
             self.store.execute(
                 "UPDATE orders SET cancel_state = 'requested', cancel_attempts = "
                 "cancel_attempts + 1, cancel_at = ?, updated_at = ? WHERE client_order_id = ?",
-                (self.clock(), now_utc(), cid))
+                (self.clock(), self.store.stamp(), cid))
             self.store.append("cancel-intent", {"attempt": row.cancel_attempts + 1}, key=cid,
                               run_id=self.run_id)
         try:
@@ -497,7 +497,7 @@ class Engine:
             outcome = "unknown"
         with self.store.transaction():
             self.store.execute("UPDATE orders SET cancel_state = ?, updated_at = ? "
-                               "WHERE client_order_id = ?", (outcome, now_utc(), cid))
+                               "WHERE client_order_id = ?", (outcome, self.store.stamp(), cid))
             self.store.append(f"cancel-{outcome}", {}, key=cid, run_id=self.run_id)
             if outcome in ("unknown", "refused"):
                 self._fence_row(Fence.CANCEL_UNKNOWN, cid, f"cancel {outcome}; waiting for Detail")
@@ -520,7 +520,7 @@ class Engine:
                 "average_fill_price = ?, updated_at = ? WHERE client_order_id = ?",
                 (detail.state, str(detail.filled_quantity),
                  None if detail.average_fill_price is None
-                 else str(detail.average_fill_price), now_utc(), cid))
+                 else str(detail.average_fill_price), self.store.stamp(), cid))
             self.store.append("order-observed", {
                 "state": detail.state, "raw_status": detail.raw_status,
                 "filled_quantity": detail.filled_quantity,
@@ -848,7 +848,7 @@ class Engine:
         with self.store.transaction():
             self.store.execute(
                 "UPDATE trades SET state = ?, closed_at = ?, close_cause = ? WHERE trade_id = ?",
-                (TradeState.CLOSED, now_utc(), cause, trade.trade_id))
+                (TradeState.CLOSED, self.store.stamp(), cause, trade.trade_id))
             self.store.append("trade-closed", {"cause": cause}, key=trade.trade_id,
                               run_id=self.run_id)
         for fence in (Fence.UNPROTECTED, Fence.QUANTITY_MISMATCH, Fence.OVER_PROTECTED):

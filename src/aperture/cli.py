@@ -115,6 +115,8 @@ NOTIFIER: Callable[[config_module.AlertsConfig], Any] = _default_notifier
 BROKER_FACTORY: Callable[[config_module.Config], Broker] = _webull_broker
 NOW: Callable[[], datetime] = lambda: datetime.now(UTC)  # noqa: E731
 SLEEP: Callable[[float], None] = time.sleep
+# Replaced in tests (with SLEEP and NOW) so `aperture run` can live a whole day on a fake clock.
+MONOTONIC: Callable[[], float] = time.monotonic
 
 
 class _Interrupt:
@@ -293,7 +295,8 @@ def _run(path: Path) -> int:
     strategy = service.strategy_id(cfg)
     database, lock_path = data_paths(cfg)
     with SingleInstanceLock(lock_path):
-        store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds)
+        store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds,
+                           now=NOW)
         run_id = store.start_run(environment=cfg.environment_name, config_digest=cfg.digest,
                                  strategy=strategy.name, strategy_version=strategy.version,
                                  code_version="-")
@@ -307,15 +310,16 @@ def _run(path: Path) -> int:
         try:
             adapters = RUN_ADAPTERS(cfg, inbox.on_error)
             engine = Engine(store, adapters.broker, cfg, run_id,
-                            lambda: config_module.trading_gate(cfg))
+                            lambda: config_module.trading_gate(cfg),
+                            clock=lambda: NOW().timestamp())
             alerter = Alerter(cfg.alerts, f"Aperture {cfg.environment_name}",
-                              NOTIFIER(cfg.alerts))
+                              NOTIFIER(cfg.alerts), clock=NOW)
             calendar = service.load_calendar(cfg)
             capture = CaptureWriter.from_config(cfg, adapters.market.provider)
             market = MarketRuntime(engine, cfg, adapters.market,
                                    health=StreamHealth.from_config(cfg), inbox=inbox,
                                    capture=capture, calendar=calendar, now=NOW,
-                                   monotonic=time.monotonic)
+                                   monotonic=MONOTONIC)
             watch = Watch(engine, cfg, alerter, NOW)
 
             def observers_refused(cause: str) -> None:
@@ -341,7 +345,7 @@ def _run(path: Path) -> int:
                                   observers=observers, watch=watch)
             market.bind()
             adapters.start_stream()
-            clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP)
+            clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP, monotonic=MONOTONIC)
             cause = f"stopped ({stop.signal_name})" if clean else "shutdown-deadline"
         finally:
             # Each step guarded: a failing SDK disconnect must not skip recording the run end.
