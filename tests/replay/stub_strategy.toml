@@ -1,0 +1,15 @@
+# Values for tests/replay/stub_strategy.py (test-only strategy).
+
+[strategy]
+# Strategy name recorded with every decision.
+name = "stub-breakout"
+# Strategy version recorded with every decision.
+version = "0"
+
+[rules]
+# Previous completed bars whose highest high must be broken.
+lookback = 3
+# Width of the entry price window above the broken high, USD.
+window_usd = 0.10
+# Close below entry price minus this amount (USD) makes the strategy EXIT.
+exit_drop_usd = 0.30

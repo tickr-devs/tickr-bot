@@ -1,0 +1,25 @@
+# Replay settings used by tests/replay (same keys as config/replay.toml).
+
+[replay]
+# Adverse slippage per simulated fill, percent of the fill price; read by replay/engine.py.
+slippage_percent = 0.1
+# Minimum adverse slippage per simulated fill, USD per share; read by replay/engine.py.
+slippage_min_usd = 0.01
+# Bars after an ENTER decision during which the simulated entry may fill; read by replay/engine.py.
+entry_wait_bars = 2
+# Exchange time zone for session dates and clock parameters (IANA name); read by replay/engine.py.
+session_timezone = "America/New_York"
+# Regular session open, HH:MM exchange time; no entry is decided on an earlier bar; read by replay/engine.py.
+regular_open = "09:30"
+# Decimal places for prices, R and percent in CSV and summary outputs; read by replay/report.py.
+output_decimal_places = 4
+# Prior sessions passed to the strategy as history; read by replay/engine.py.
+history_sessions = 2
+# true = synthetic quote around each completed bar's close; read by replay/engine.py.
+synthesize_quote = true
+# Synthetic quote spread, percent of the close; read by replay/engine.py.
+synthetic_spread_percent = 0.1
+# Minimum synthetic quote spread, USD; read by replay/engine.py.
+synthetic_spread_min_usd = 0.02
+# Bid and ask size of the synthetic quote, shares; read by replay/engine.py.
+synthetic_quote_size_shares = 100
