@@ -126,6 +126,16 @@ host = "127.0.0.1"
 port = 8766
 # Host names the API answers to; requests whose Host (name:port) or Origin (http://name:port) is not one of these are refused (DNS rebinding / cross-site guard); read by the api server.
 allowed_hosts = ["127.0.0.1", "localhost"]
+# Host headers (name, or name:port when not 443) the remote port answers to: the name of the HTTPS proxy in front of it, such as `tailscale serve` on this Mac, e.g. "mac.tailnet-name.ts.net"; empty = remote access off (the remote port is not opened); read by the api server.
+remote_hosts = []
+# Second loopback port, for remote access only: every request on it must carry the paired bearer token whatever its Host, and `tailscale serve` points here, never at `port`; read by the api server.
+remote_port = 8767
+# File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m aperture.api pair`, never the token itself; read by the api server.
+remote_token_hash_file = "remote-token.sha256"
+# Random bytes in a newly paired bearer token (URL-safe text is about 4/3 as long); read by `python -m aperture.api pair`.
+remote_token_bytes = 32
+# File where `pair` leaves the pairing link (it holds the token) for the owner to move to the phone, relative to data_dir; written 0600, never printed, deleted by the api server on the first request that presents the new token; read by `pair` and the api server.
+remote_pairing_file = "remote-pairing-link"
 # Status file the bot writes and the API serves, relative to data_dir; read by the bot's status writer and the api server.
 status_file = "status.json"
 # Command folder, relative to data_dir; the API writes into <commands_dir>/inbox, the bot consumes from there; read by the api server and the bot.

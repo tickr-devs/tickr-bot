@@ -14,6 +14,40 @@ Run it: `python -m aperture.api --config config/bot.toml`. Settings are in `conf
 - Commands require `Content-Type: application/json` and a `Content-Length` within
   `[api] max_request_body_bytes`.
 
+## Remote access (the phone)
+
+The API still binds loopback only. The iPhone reaches it through an HTTPS proxy on the same Mac,
+[Tailscale](https://tailscale.com) `serve`, which is reachable only from devices signed in to the
+owner's tailnet (home Wi-Fi or cellular) and terminates TLS with a certificate for the Mac's
+tailnet name. The proxy points at a second loopback port, `[api] remote_port`, opened only when
+`[api] remote_hosts` is set. Every request on that port must carry the paired token, whatever its
+`Host` header says; the local port never accepts the remote name. Whether a token is needed is
+decided by the port a request arrives on, never by a header the caller chooses.
+
+1. Install Tailscale on the Mac and the iPhone, sign in to the same account, enable MagicDNS and
+   HTTPS certificates in the Tailscale admin console.
+2. On the Mac: `tailscale serve --bg --https=443 http://127.0.0.1:8767` (the `[api] remote_port`,
+   never the `[api] port`). `tailscale serve status` shows the address, e.g.
+   `https://mac.tailnet-name.ts.net`.
+3. In `config/bot.toml` set `[api] remote_hosts = ["mac.tailnet-name.ts.net"]` and restart the API.
+4. `python -m aperture.api --config config/bot.toml pair` makes a new token and leaves the pairing
+   link in a file readable by you only (`[api] remote_pairing_file` under `data_dir`); the token is
+   never printed. AirDrop that file to the iPhone (not Notes or Messages, which sync to iCloud),
+   then in the iOS app: Settings › Pair with Mac, paste the link. The API deletes the file when the
+   phone first connects with the token. The Mac keeps only the token's SHA-256
+   (`[api] remote_token_hash_file`); pairing again revokes the previous token.
+
+Rules on the remote port: `Host` must be one of `remote_hosts` (no port when 443, else
+`name:port`), else `403 forbidden_host`; `Authorization: Bearer <token>` is required, else
+`401 unauthorized` with `WWW-Authenticate: Bearer`; an `Origin`, if sent, must be `https://<host>`.
+An unreadable token hash file answers `503 unavailable`. The local port (the Mac app, the status
+page) needs no token, as before: any process on this Mac can use it. Until the phone first connects,
+the pairing file holds the token in clear (0600); delete it if you abandon a pairing. `remote_hosts = []` (the shipped value) turns remote access off.
+
+The phone keeps the token in its Keychain (this device only) together with the address it was
+paired with, and sends it only over HTTPS to exactly that address; changing the address by hand
+drops the token.
+
 ## Wire rules
 
 - Money, prices and quantities are decimal strings (`"12.34"`), never JSON numbers.
@@ -49,6 +83,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 
 Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
 `forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
+`unauthorized` 401 (remote request without the paired token),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
 `too_many_pending` 429, `internal` 500, `unavailable` 503 (history cannot be read now: database of
 another schema version, unreadable capture file).

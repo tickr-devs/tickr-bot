@@ -97,6 +97,11 @@ class ApiConfig:
     host: str
     port: int
     allowed_hosts: tuple[str, ...]
+    remote_hosts: tuple[str, ...]
+    remote_port: int
+    remote_token_hash_file: str
+    remote_token_bytes: int
+    remote_pairing_file: str
     status_file: str
     commands_dir: str
     status_stale_seconds: Decimal

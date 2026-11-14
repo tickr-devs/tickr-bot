@@ -2,7 +2,12 @@
 
 stdlib only. Binds a loopback address and refuses any request whose Host (or Origin, when sent)
 is not in the configured allowlist, which blocks DNS rebinding and cross-site requests from a
-browser. Commands additionally require `Content-Type: application/json`, which a cross-site form
+browser. Remote access (the phone, through an HTTPS proxy on this Mac such as `tailscale serve`)
+has its own loopback listener, `[api] remote_port`: every request there must carry the paired
+bearer token whatever its Host, and its Host must be one of `[api] remote_hosts`. Whether a token
+is needed is decided by the listener a request arrives on, never by a header the caller chooses.
+The server keeps only the token's SHA-256, written by `pair`.
+Commands additionally require `Content-Type: application/json`, which a cross-site form
 cannot send without a CORS preflight, and this server answers no preflight.
 
 The API never talks to the broker and never changes bot state itself: it reads the bot's status
@@ -11,7 +16,12 @@ file and drops command files into the inbox. The bot decides, acts and journals.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
+import os
+import re
+import secrets
 import sys
 import threading
 from collections.abc import Callable
@@ -21,7 +31,7 @@ from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from aperture.api import contract
 from aperture.api.contract import (
@@ -50,11 +60,22 @@ COMMAND_ROUTES = {
 }
 
 
+# A remote Host header: a lowercase DNS name with at least one dot, optionally ":port".
+_LABEL = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+REMOTE_HOST = re.compile(rf"^{_LABEL}(\.{_LABEL})+(:[0-9]+)?$")
+BEARER = "Bearer "
+
+
 @dataclass(frozen=True)
 class ApiSettings:
     host: str
     port: int
     allowed_hosts: tuple[str, ...]
+    remote_hosts: tuple[str, ...]
+    remote_port: int
+    token_hash_path: Path
+    token_bytes: int
+    pairing_path: Path
     status_path: Path
     inbox: Path
     status_stale_seconds: Decimal
@@ -75,11 +96,26 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         raise ConfigError(f"[api] host {api.host!r} is not a loopback IP address")
     if not api.allowed_hosts:
         raise ConfigError("[api] allowed_hosts is empty")
+    for name in api.remote_hosts:
+        if not REMOTE_HOST.match(name):
+            raise ConfigError(f"[api] remote_hosts entry {name!r} is not a lowercase DNS name "
+                              "(optionally with :port)")
+        if name.split(":", 1)[0] in api.allowed_hosts:
+            raise ConfigError(f"[api] remote_hosts entry {name!r} is also a local allowed host")
+    if api.remote_port == api.port:
+        raise ConfigError("[api] remote_port must differ from port")
+    if api.remote_token_bytes <= 0:
+        raise ConfigError("[api] remote_token_bytes must be positive")
     data = cfg.root / cfg.run.data_dir
     return ApiSettings(
         host=api.host,
         port=api.port,
         allowed_hosts=api.allowed_hosts,
+        remote_hosts=api.remote_hosts,
+        remote_port=api.remote_port,
+        token_hash_path=data / api.remote_token_hash_file,
+        token_bytes=api.remote_token_bytes,
+        pairing_path=data / api.remote_pairing_file,
         status_path=data / api.status_file,
         inbox=data / api.commands_dir / contract.INBOX,
         status_stale_seconds=api.status_stale_seconds,
@@ -121,13 +157,17 @@ def _now() -> datetime:
 class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, settings: ApiSettings, clock: Callable[[], datetime] = _now) -> None:
+    def __init__(self, settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
+                 remote: bool = False, inbox_lock: threading.Lock | None = None) -> None:
         self.settings = settings
         self.clock = clock
-        self.inbox_lock = threading.Lock()
+        self.remote = remote
+        # Shared with the other listener so both count the inbox under one lock.
+        self.inbox_lock = inbox_lock or threading.Lock()
         self.page = (STATIC_DIR / "status.html").read_bytes()
         self.history = History(settings.history)
-        super().__init__((settings.host, settings.port), Handler)
+        port = settings.remote_port if remote else settings.port
+        super().__init__((settings.host, port), Handler)
 
     @property
     def allowed_host_headers(self) -> frozenset[str]:
@@ -183,7 +223,7 @@ _ERROR_CODES = {
     "forbidden_host": 403, "forbidden_origin": 403, "not_found": 404,
     "method_not_allowed": 405, "length_required": 411, "payload_too_large": 413,
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
-    "internal": 500, "unavailable": 503,
+    "internal": 500, "unavailable": 503, "unauthorized": 401,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings")
 DAY_PREFIX = "/days/"
@@ -249,13 +289,48 @@ class Handler(BaseHTTPRequestHandler):
 
     def _guard(self) -> bool:
         host = self.headers.get("Host")
-        if host not in self.server.allowed_host_headers:
-            self._error("forbidden_host", f"Host {host!r} is not allowed")
-            return False
         origin = self.headers.get("Origin")
-        if origin is not None and origin not in self.server.allowed_origins:
-            self._error("forbidden_origin", f"Origin {origin!r} is not allowed")
+        if self.server.remote:
+            # The remote listener: the token is always required; Host guards against rebinding.
+            if host is None or host not in self.server.settings.remote_hosts:
+                self._error("forbidden_host", f"Host {host!r} is not allowed")
+                return False
+            if origin is not None and origin != f"https://{host}":
+                self._error("forbidden_origin", f"Origin {origin!r} is not allowed")
+                return False
+            return self._authorized()
+        if host in self.server.allowed_host_headers:
+            if origin is not None and origin not in self.server.allowed_origins:
+                self._error("forbidden_origin", f"Origin {origin!r} is not allowed")
+                return False
+            return True
+        self._error("forbidden_host", f"Host {host!r} is not allowed")
+        return False
+
+    def _authorized(self) -> bool:
+        """A remote request must present the paired token. The token is never logged or echoed."""
+        challenge = {"WWW-Authenticate": "Bearer"}
+        settings = self.server.settings
+        try:
+            expected = settings.token_hash_path.read_text("ascii").strip()
+        except FileNotFoundError:
+            self._error("unauthorized", "no phone is paired; run `python -m aperture.api pair`",
+                        challenge)
             return False
+        except (OSError, UnicodeDecodeError) as exc:
+            self._error("unavailable",
+                        f"the paired token's hash file is unreadable ({type(exc).__name__})")
+            return False
+        header = self.headers.get("Authorization") or ""
+        if not header.startswith(BEARER):
+            self._error("unauthorized", "a bearer token is required", challenge)
+            return False
+        presented = hashlib.sha256(header[len(BEARER):].encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(presented, expected):
+            self._error("unauthorized", "the bearer token is not the paired one", challenge)
+            return False
+        # The phone has the token now: the pairing link left for the owner is no longer needed.
+        settings.pairing_path.unlink(missing_ok=True)
         return True
 
     def _path(self) -> str:
@@ -390,3 +465,42 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now) -> ApiServer:
     return ApiServer(settings, clock)
+
+
+def make_remote_server(local: ApiServer) -> ApiServer:
+    """The phone-facing listener next to `local`, sharing its settings, clock and inbox lock."""
+    return ApiServer(local.settings, local.clock, remote=True, inbox_lock=local.inbox_lock)
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` to `path` readable by the owner only (0600), atomically."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.unlink(missing_ok=True)  # a leftover from a crash could carry wider permissions
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="ascii") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def pairing_link(address: str, token: str) -> str:
+    return "aperture://pair?" + urlencode({"url": address, "token": token})
+
+
+def pair(settings: ApiSettings) -> Path:
+    """Make a new bearer token for the phone, store only its SHA-256 (replacing any earlier
+    pairing, so the old phone token stops working) and leave the pairing link in a 0600 file for
+    the owner to move to the phone. The token is never printed or logged; the API deletes the
+    link file when the phone first uses the token. Returns the link file's path.
+    """
+    if not settings.remote_hosts:
+        raise ConfigError("[api] remote_hosts is empty: set the Tailscale name of this Mac first")
+    token = secrets.token_urlsafe(settings.token_bytes)
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    _write_private(settings.token_hash_path, digest + "\n")
+    address = f"https://{settings.remote_hosts[0]}"
+    _write_private(settings.pairing_path, pairing_link(address, token) + "\n")
+    return settings.pairing_path
