@@ -149,6 +149,8 @@ snapshot_symbols_per_request = 100
 bars_symbols_per_request = 20
 # M1 bars requested per symbol in discovery (one regular session = 390 minutes); read by data.discovery.
 bars_per_symbol = 390
+# Seconds before the L1 stream connects again after its loop ended (failed resubscribe or SDK gave up); read by broker.webull stream.
+stream_reconnect_delay_seconds = 10
 # Seconds without a received quote, transport up, after which a subscribed symbol is quiet; read by data.health.
 quiet_after_seconds = 5
 # Capture folder relative to [run] data_dir; files go to <capture_dir>/<environment>/<NY date>/; read by data.capture.

@@ -29,7 +29,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
+import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -788,8 +790,8 @@ class WebullMarketData:
     """`MarketData` over the HTTP routes. Takes request budget per route like the broker.
 
     Screener rows get their security type from the instrument profile (one lookup per new
-    symbol per New York day). The L1 stream (MQTT) is not implemented yet: subscribe and
-    unsubscribe raise MarketDataError.
+    symbol per New York day). L1 quotes come from `stream` (a `QuoteStream`); without one,
+    subscribe and unsubscribe raise MarketDataError.
     """
 
     def __init__(
@@ -802,7 +804,9 @@ class WebullMarketData:
         profile_symbols_per_request: int,
         utc_now: Callable[[], datetime],
         clock: Callable[[], float] = time.monotonic,
+        stream: QuoteStream | None = None,
     ) -> None:
+        self._stream = stream
         if profile_symbols_per_request < 1:
             raise AdapterConfigError("profile_symbols_per_request must be at least 1")
         self._profile_chunk = profile_symbols_per_request
@@ -877,10 +881,300 @@ class WebullMarketData:
         return read_bars(body)
 
     def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
-        raise MarketDataError("L1 stream is not implemented in this adapter yet")
+        if self._stream is None:
+            raise MarketDataError("no L1 stream configured for this adapter")
+        self._stream.subscribe(symbols, listener)
 
     def unsubscribe(self, symbols: Iterable[str]) -> None:
-        raise MarketDataError("L1 stream is not implemented in this adapter yet")
+        if self._stream is None:
+            raise MarketDataError("no L1 stream configured for this adapter")
+        self._stream.unsubscribe(symbols)
+
+
+# --------------------------------------------------------------------------------------------
+# L1 quote stream (MQTT). Session logic is SDK-free and tested; SdkQuoteStream binds it to the SDK.
+# --------------------------------------------------------------------------------------------
+
+STREAM_TOPIC_QUOTE = "quote"
+STREAM_TOPIC_NOTICE = "notice"
+NOTICE_STATUS = "1001"
+NOTICE_ENTITLEMENT_PREEMPTED = "1002"
+STREAM_SUB_TYPE_QUOTE = "QUOTE"
+STREAM_SUBSCRIBE_PATH = "/market-data/streaming/subscribe"
+STREAM_UNSUBSCRIBE_PATH = "/market-data/streaming/unsubscribe"
+
+
+class QuoteStream(Protocol):
+    def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None: ...
+
+    def unsubscribe(self, symbols: Iterable[str]) -> None: ...
+
+
+def quote_from_stream(result: Any, receipt_time: datetime) -> Quote | None:
+    """SDK `QuoteResult` (basic{symbol, timestamp ms}, bids[], asks[] of {price, size}) -> Quote.
+
+    Field names from the SDK 3.0.3 decoder; no frame has been recorded yet. A frame without a
+    best bid or ask (empty side) yields None: no quote, never a guessed price."""
+    basic = getattr(result, "basic", None)
+    symbol = getattr(basic, "symbol", "")
+    if not symbol:
+        raise MalformedResponse("stream quote: missing symbol")
+    bids = getattr(result, "bids", None) or []
+    asks = getattr(result, "asks", None) or []
+    if not bids or not asks:
+        return None
+    where = f"stream quote {symbol}"
+    best_bid, best_ask = bids[0], asks[0]
+    if getattr(best_bid, "price", None) is None or getattr(best_ask, "price", None) is None:
+        return None
+    return Quote(
+        symbol=symbol,
+        bid=to_decimal(best_bid.price, f"{where}.bid"),
+        ask=to_decimal(best_ask.price, f"{where}.ask"),
+        bid_size=to_decimal(getattr(best_bid, "size", None), f"{where}.bid_size"),
+        ask_size=to_decimal(getattr(best_ask, "size", None), f"{where}.ask_size"),
+        provider_time=epoch_ms_to_utc(getattr(basic, "timestamp", None), f"{where}.timestamp"),
+        receipt_time=receipt_time,
+    )
+
+
+class StreamSession:
+    """Desired subscriptions and event translation for one MQTT connection, without the SDK.
+
+    - Every (re)connect resubscribes the FULL desired set (the SDK reconnects but never
+      resubscribes, docs/webull-facts.md). The transport is reported "up" only when what the
+      broker has been sent equals the desired set, decided under the same lock, so a
+      subscribe() racing with a connect is never lost.
+    - Every subscribe/unsubscribe POST takes request budget first. A failure while connecting
+      (budget, HTTP) reports the transport down with its cause, goes to `on_error`, and asks
+      for a deliberate reconnect; nothing is retried here and nothing raises into the
+      provider thread.
+    - Disconnect, entitlement pre-emption (notice 1002) and a stopped loop report "down".
+    """
+
+    def __init__(self, budget: RequestBudget, utc_now: Callable[[], datetime],
+                 on_error: Callable[[str, Exception], None]) -> None:
+        self._budget = budget
+        self._utc_now = utc_now
+        self._on_error = on_error
+        self._lock = threading.Lock()
+        self._symbols: set[str] = set()
+        self._sent: set[str] = set()  # subscribed on the current connection
+        self._listener: QuoteListener | None = None
+        self._send_subscribe: Callable[[list[str]], None] | None = None
+        self._send_unsubscribe: Callable[[list[str]], None] | None = None
+        self._reconnect: Callable[[], None] | None = None
+        self._connected = False
+        self._up = False
+
+    @property
+    def symbols(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._symbols)
+
+    @property
+    def up(self) -> bool:
+        with self._lock:
+            return self._up
+
+    def bind(self, send_subscribe: Callable[[list[str]], None],
+             send_unsubscribe: Callable[[list[str]], None],
+             reconnect: Callable[[], None]) -> None:
+        self._send_subscribe = send_subscribe
+        self._send_unsubscribe = send_unsubscribe
+        self._reconnect = reconnect
+
+    def _notify(self, up: bool, detail: str) -> None:
+        with self._lock:
+            listener = self._listener
+        if listener is not None:
+            try:
+                listener.on_transport(up, self._utc_now(), detail)
+            except Exception as exc:  # noqa: BLE001 - never into the provider thread
+                self._on_error("transport", exc)
+
+    def _send(self, subscribe: bool, symbols: list[str]) -> None:
+        send = self._send_subscribe if subscribe else self._send_unsubscribe
+        if send is None:
+            raise MarketDataError("stream session is not bound to a client")
+        self._budget.take(STREAM_SUBSCRIBE_PATH if subscribe else STREAM_UNSUBSCRIBE_PATH)
+        send(symbols)
+
+    def _sync(self) -> bool:
+        """Send until the broker set equals the desired set. True once in sync (then up)."""
+        while True:
+            with self._lock:
+                if not self._connected:
+                    return False
+                pending = sorted(self._symbols - self._sent)
+                stale = sorted(self._sent - self._symbols)
+                if not pending and not stale:
+                    self._up = True
+                    return True
+            if pending:
+                self._send(True, pending)
+                with self._lock:
+                    self._sent.update(pending)
+            if stale:
+                self._send(False, stale)
+                with self._lock:
+                    self._sent.difference_update(stale)
+
+    # -- calls from the bot
+    def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
+        with self._lock:
+            if self._listener is not None and listener is not self._listener:
+                raise MarketDataError("one stream listener per session; use FanOut")
+            self._listener = listener
+            self._symbols.update(symbols)
+            up = self._up
+        if up:
+            self._sync()
+
+    def unsubscribe(self, symbols: Iterable[str]) -> None:
+        with self._lock:
+            self._symbols.difference_update(symbols)
+            up = self._up
+        if up:
+            self._sync()
+
+    # -- calls from the provider thread
+    def on_connected(self) -> None:
+        with self._lock:
+            self._connected, self._up, self._sent = True, False, set()
+        try:
+            self._sync()
+        except Exception as exc:  # noqa: BLE001 - budget, HTTP or SDK failure while subscribing
+            with self._lock:
+                self._connected = self._up = False
+            self._notify(False, f"resubscribe failed ({type(exc).__name__}); reconnecting")
+            self._on_error("subscribe", exc)
+            if self._reconnect is not None:
+                self._reconnect()
+            return
+        with self._lock:
+            count = len(self._sent)
+        self._notify(True, f"connected, {count} symbol(s) subscribed")
+
+    def on_disconnected(self, detail: str) -> None:
+        with self._lock:
+            was = self._connected or self._up
+            self._connected = self._up = False
+            self._sent = set()
+        if was or detail:
+            self._notify(False, detail)
+
+    def on_message(self, topic: str, payload: Any) -> None:
+        try:
+            if topic == STREAM_TOPIC_QUOTE:
+                quote = quote_from_stream(payload, self._utc_now())
+                with self._lock:
+                    listener = self._listener
+                    wanted = quote is not None and quote.symbol in self._symbols
+                if wanted and listener is not None:
+                    listener.on_quote(quote)  # type: ignore[arg-type]
+            elif topic == STREAM_TOPIC_NOTICE and isinstance(payload, Mapping):
+                kind = str(payload.get("type", ""))
+                if kind == NOTICE_ENTITLEMENT_PREEMPTED:
+                    with self._lock:
+                        self._up = False
+                    self._notify(False, "entitlement taken by another device (notice 1002)")
+                elif kind != NOTICE_STATUS:
+                    log.warning("stream notice of unknown type %r", kind)
+        except Exception as exc:  # noqa: BLE001 - never into the provider thread
+            self._on_error(topic, exc)
+
+
+@dataclass(frozen=True)
+class StreamSettings:
+    """What the SDK stream needs; built from the active environment's config."""
+
+    mqtt_host: str
+    mqtt_port: int
+    http_host: str
+    allowed_hosts: frozenset[str]
+    region_id: str
+    token_dir: str
+    app_key_env: str
+    app_secret_env: str
+    category: str
+    reconnect_delay_seconds: float
+
+
+class SdkQuoteStream:
+    """`QuoteStream` over the SDK's DataStreamingClient (MQTT + subscribe POST), own thread.
+
+    Hosts are pinned and checked against the allowlist; the SDK's own logger setup is skipped
+    (`logger_enable=False`, KD-4); the SDK reconnects every 10 s on transport errors and this
+    class resubscribes on each connect through `StreamSession`. If the SDK loop ends for good,
+    the session reports the transport down. Snapshot/tick topics are not subscribed (KD-1)."""
+
+    def __init__(self, settings: StreamSettings, session: StreamSession) -> None:
+        for host in (settings.mqtt_host, settings.http_host):
+            if host not in settings.allowed_hosts:
+                raise AdapterConfigError("stream host is not on the host allowlist")
+        app_key = _read_credential(settings.app_key_env)
+        app_secret = _read_credential(settings.app_secret_env)
+        silence_sdk_loggers()
+        from webull.data.data_streaming_client import DataStreamingClient
+
+        silence_sdk_loggers()
+        client = DataStreamingClient(
+            app_key, app_secret, settings.region_id, uuid.uuid4().hex,
+            http_host=settings.http_host, mqtt_host=settings.mqtt_host,
+            mqtt_port=settings.mqtt_port,
+        )
+        client.set_token_dir(settings.token_dir)
+        category = settings.category
+        session.bind(
+            lambda symbols: client.subscribe(symbols, category, [STREAM_SUB_TYPE_QUOTE]),
+            lambda symbols: client.unsubscribe(symbols, category, [STREAM_SUB_TYPE_QUOTE]),
+            client.disconnect,  # ends this loop; _run starts a new connection after the delay
+        )
+        client.on_connect_success = lambda _c, _api, _sid: session.on_connected()
+        client.on_quotes_message = lambda _c, topic, payload: session.on_message(topic, payload)
+        client.on_disconnect = (
+            lambda _c, _u, rc: session.on_disconnected(f"disconnected (rc={rc})"))
+        silence_sdk_loggers()
+        self._client = client
+        self._session = session
+        self._delay = settings.reconnect_delay_seconds
+        self._stopping = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
+        self._session.subscribe(symbols, listener)
+
+    def unsubscribe(self, symbols: Iterable[str]) -> None:
+        self._session.unsubscribe(symbols)
+
+    def _run(self) -> None:
+        """Connect and loop until stop(). Whenever the SDK loop ends (our deliberate
+        disconnect after a failed resubscribe, or the SDK giving up), report the transport down
+        and connect again after the configured delay."""
+        while not self._stopping.is_set():
+            try:
+                self._client.connect_and_loop_forever(logger_enable=False)
+                detail = "stream loop exited"
+            except Exception as exc:  # noqa: BLE001 - the SDK raises bare Exceptions
+                detail = f"stream loop stopped ({type(exc).__name__})"
+            self._session.on_disconnected(detail)
+            # SDK 3.0.3 / paho 1.6.1: a disconnect sets this flag; clear it for the next loop.
+            self._client._thread_terminate = False
+            self._stopping.wait(self._delay)
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise MarketDataError("stream already started")
+        self._thread = threading.Thread(target=self._run, name="aperture-l1-stream", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stopping.set()
+        # SDK 3.0.3 (paho 1.6.1): connect_and_loop_forever checks this private flag between
+        # reconnect attempts; there is no public way to end its loop.
+        self._client._thread_terminate = True
+        self._client.disconnect()
 
 
 # --------------------------------------------------------------------------------------------
@@ -1069,11 +1363,31 @@ def budget_from_config(
     return RequestBudget(default, limits, clock=clock)
 
 
+def stream_settings_from_config(config: Config) -> StreamSettings:
+    env = config.environment
+    return StreamSettings(
+        mqtt_host=env.mqtt_host,
+        mqtt_port=env.mqtt_port,
+        http_host=env.http_host,
+        allowed_hosts=env.hosts,
+        region_id=env.region_id,
+        token_dir=str(config.root / config.run.data_dir / env.token_dir),
+        app_key_env=env.app_key_variable,
+        app_secret_env=env.app_secret_variable,
+        category=config.market_data.screener_category,
+        reconnect_delay_seconds=float(config.market_data.stream_reconnect_delay_seconds),
+    )
+
+
 def market_data_from_config(
-    config: Config, transport: Transport | None = None, budget: RequestBudget | None = None
+    config: Config,
+    transport: Transport | None = None,
+    budget: RequestBudget | None = None,
+    stream: QuoteStream | None = None,
 ) -> WebullMarketData:
-    """HTTP market data for the active environment. Pass the broker's transport (one token,
-    one SDK client) and, to share route accounting, its budget."""
+    """Market data for the active environment. Pass the broker's transport (one token, one SDK
+    client) and, to share route accounting, its budget. `stream` adds L1 quotes (for example
+    an `SdkQuoteStream` over a `StreamSession` with the same budget)."""
     md = config.market_data
     return WebullMarketData(
         transport if transport is not None else SdkTransport(settings_from_config(config)),
@@ -1083,6 +1397,7 @@ def market_data_from_config(
         md.top_actives_rank_type,
         md.profile_symbols_per_request,
         utc_now=lambda: datetime.now(UTC),
+        stream=stream,
     )
 
 
