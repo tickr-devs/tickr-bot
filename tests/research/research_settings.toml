@@ -1,0 +1,11 @@
+# Research settings used by tests/research (same keys as config/research.toml).
+
+[research]
+# Minutes after the decision bar at which the move is measured; read by research/outcomes.py.
+horizons_minutes = [1, 2, 5]
+# Wilder ATR length in M1 bars; read by research/outcomes.py.
+atr_period = 2
+# Exchange time zone (IANA name); read by research/outcomes.py.
+session_timezone = "America/New_York"
+# Decimal places in outputs; read by research/report.py.
+output_decimal_places = 4

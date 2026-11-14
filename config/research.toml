@@ -1,0 +1,14 @@
+# Settings of the signal research tools (python -m aperture.research outcomes). Results are
+# observed price moves after recorded decisions, never profit. Read only by
+# src/aperture/research/; the trading bot never reads this file. See docs/research.md.
+# The what-if simulation uses config/replay.toml instead, so it fills exactly like the replay.
+
+[research]
+# Minutes after the end of the decision bar at which the price move is measured, strictly increasing; read by research/outcomes.py.
+horizons_minutes = [1, 5, 15, 30, 60]
+# Wilder ATR length in completed M1 bars (history before the decision bar included) used to express moves in ATR; read by research/outcomes.py.
+atr_period = 14
+# Exchange time zone (IANA name); a horizon that would leave the decision's session date is reported without numbers; read by research/outcomes.py.
+session_timezone = "America/New_York"
+# Decimal places for prices, ATR, percent and USD in CSV and summary outputs; read by research/report.py.
+output_decimal_places = 4
