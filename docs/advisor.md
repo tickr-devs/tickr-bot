@@ -61,7 +61,9 @@ Model, effort, output limit and timeout are in `[advisor]` in `config/bot.toml`.
 request uses adaptive thinking, structured JSON output and streaming. It also enables
 server-side model fallback (`fallbacks="default"`), so if the configured model is
 overloaded the API may answer with another model; the report records the model that
-actually answered. The code only checks that `ANTHROPIC_API_KEY` is set; the SDK reads
+actually answered. The SDK's default retries (two, on 429/5xx/connection errors) still apply, so
+one run may bill up to three attempts; this is a read-only advisory call, not a broker send.
+The code only checks that `ANTHROPIC_API_KEY` is set; the SDK reads
 the value itself.
 
 Tests use a fake client and a fake SDK module and never reach the network.
