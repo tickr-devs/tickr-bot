@@ -76,6 +76,7 @@ class Fence(StrEnum):
     EXIT_REFUSED = "exit-refused"
     CANCEL_UNKNOWN = "cancel-unknown"
     CANCEL_FAILED = "cancel-failed"
+    CANCEL_NOT_SENT = "cancel-not-sent"  # cancels kept failing to leave (429 / budget)
     RESURRECTED = "resurrected"
     FOREIGN_POSITION = "foreign-position"
     FOREIGN_ORDER = "foreign-order"
@@ -235,6 +236,9 @@ class Engine:
         self._positions: list[Position] | None = None  # this pass's positions read
         # The latest reconcile's reads; None after a failed read (or when a caller drops it).
         self.broker_view: BrokerView | None = None
+        # First not-sent cancel of each order since the last one that left (process memory:
+        # after a restart the wait starts again, which only delays the alert).
+        self._not_sent_since: dict[str, float] = {}
 
     # --- fences ----------------------------------------------------------------------------
 
@@ -396,7 +400,8 @@ class Engine:
                  None if entry_low_price is None else str(entry_low_price)))
             self.store.append("trade-opened", {
                 "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
-                "stop_price": stop_price, "planned_loss_usd": planned_loss_usd},
+                "stop_price": stop_price, "planned_loss_usd": planned_loss_usd,
+                "entry_low_price": entry_low_price},
                 key=trade_id, run_id=self.run_id)
             cid = self._write_intent(trade_id, Leg.ENTRY, symbol, Side.BUY, OrderType.LIMIT,
                                      quantity, limit_price=limit_price)
@@ -541,9 +546,29 @@ class Engine:
         with self.store.transaction():
             self.store.execute("UPDATE orders SET cancel_state = ?, updated_at = ? "
                                "WHERE client_order_id = ?", (outcome, self.store.stamp(), cid))
+            if outcome == "not-sent":
+                # Refused by the budget or a 429 before reaching the broker: no cancel was
+                # sent, so it does not use up one of the attempts that end in CANCEL_FAILED.
+                self.store.execute("UPDATE orders SET cancel_attempts = cancel_attempts - 1 "
+                                   "WHERE client_order_id = ?", (cid,))
             self.store.append(f"cancel-{outcome}", {}, key=cid, run_id=self.run_id)
             if outcome in ("unknown", "refused"):
                 self._fence_row(Fence.CANCEL_UNKNOWN, cid, f"cancel {outcome}; waiting for Detail")
+        self._note_not_sent(cid, outcome == "not-sent")
+
+    def _note_not_sent(self, cid: str, not_sent: bool) -> None:
+        """A cancel retried every pass but never sent must not stay silent: past
+        `[orders] cancel_not_sent_alert_seconds` the operator is told; cleared once a cancel
+        leaves or the order is finished."""
+        if not not_sent:
+            self._not_sent_since.pop(cid, None)
+            self._clear_fence(Fence.CANCEL_NOT_SENT, cid)
+            return
+        since = self._not_sent_since.setdefault(cid, self.clock())
+        waited = self.clock() - since
+        if waited >= self.config.orders.cancel_not_sent_alert_seconds:
+            self._set_fence(Fence.CANCEL_NOT_SENT, cid,
+                            f"no cancel could be sent for {waited:.0f} s (rate limit or budget)")
 
     # --- observation -----------------------------------------------------------------------
 
@@ -606,6 +631,8 @@ class Engine:
             self._clear_fence(Fence.STATUS_UNKNOWN, cid)
         if detail.state.terminal or self.order(cid).cancel_state == "not-taken":
             self._clear_fence(Fence.CANCEL_UNKNOWN, cid)
+        if detail.state.terminal:
+            self._note_not_sent(cid, False)
 
     def _not_found(self, row: OrderRow, held: dict[str, Decimal]) -> None:
         cid = row.client_order_id
@@ -637,6 +664,7 @@ class Engine:
         # A cancel answered "not found" for an order now proven absent (Detail, open orders,
         # no unexplained position) has nothing left to resolve; Detail never reads it again.
         self._clear_fence(Fence.CANCEL_UNKNOWN, cid)
+        self._note_not_sent(cid, False)
 
     def _expected_in(self, symbol: str) -> Decimal:
         total = ZERO
@@ -885,10 +913,13 @@ class Engine:
         """Teardown in a safe order: entry first (stops keep protecting late fills), then the
         stops, then one closing order for exactly the agreed quantity. Whenever the close
         cannot be sent, protection is restored instead of waiting unprotected."""
-        if entry.live:
+        if entry.live and not self._has_fence(Fence.CANCEL_FAILED, entry.client_order_id):
             self._cancel(entry)
             self._protect(trade, stops, expected)
             return
+        # An entry still working after every cancel (CANCEL_FAILED, operator alerted) must not
+        # keep the filled shares from being closed: they are closed now, and any later fill
+        # of that entry is protected and closed by the following passes.
         if any(e.live for e in exits):
             self._watch_exit(trade, [e for e in exits if e.live])
             return
