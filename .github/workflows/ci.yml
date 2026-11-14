@@ -1,51 +1,74 @@
 name: ci
-# Python tests. Skipped when a change touches only docs/, the root README/CLAUDE.md or app (Swift)
-# sources; markdown under tests/ is scanned for account ids, so it always runs. The Swift code
-# rules that the Python suite also checks run in swift-rules on every pull request.
+# Python tests. The `test` job always reports, because it is a required check and a workflow
+# skipped by path filters never reports it. Its steps (and the docker job) are skipped when a pull
+# request touches only docs/, the root README/CLAUDE.md or app (Swift) sources; markdown under tests/ is
+# scanned for account ids, so it always counts. Pushes to main always run everything. The Swift
+# code rules that the Python suite also checks run in swift-rules on every pull request.
 on:
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
-      - "CLAUDE.md"
-      - "apps/ios/**"
-      - "apps/macos/**"
-      - "apps/shared/**"
-      - "Aperture.xcworkspace/**"
-      - ".github/workflows/ios-app.yml"
-      - ".github/workflows/macos-app.yml"
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
-      - "CLAUDE.md"
-      - "apps/ios/**"
-      - "apps/macos/**"
-      - "apps/shared/**"
-      - "Aperture.xcworkspace/**"
-      - ".github/workflows/ios-app.yml"
-      - ".github/workflows/macos-app.yml"
 # One run per branch: a new push cancels the run still going for the previous one.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    # Says whether this change touches anything the Python suite or the image depends on.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python: ${{ steps.diff.outputs.python }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Its own command, so a failing diff stops the job instead of reading as "no changes".
+          files=$(git diff --name-only --no-renames "$BASE...$HEAD")
+          others=$(printf '%s\n' "$files" | grep -Ev \
+            '^(docs/|apps/(ios|macos|shared)/|Aperture\.xcworkspace/|README\.md$|CLAUDE\.md$|\.github/workflows/(ios|macos)-app\.yml$)' \
+            || true)
+          if [ -n "$others" ]; then echo "python=true"; else echo "python=false"; fi >> "$GITHUB_OUTPUT"
   test:
+    needs: changes
+    # Runs even when `changes` failed, so the required check fails instead of being skipped.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - if: needs.changes.result != 'success'
+        run: |
+          echo "The changed-files check failed."
+          exit 1
+      - if: needs.changes.outputs.python != 'true'
+        run: echo "Only docs or app sources changed; Python checks skipped."
+      - if: needs.changes.outputs.python == 'true'
+        uses: actions/checkout@v4
+      - if: needs.changes.outputs.python == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[dev,webull]"
-      - run: ruff check .
-      - run: pytest -q
+      - if: needs.changes.outputs.python == 'true'
+        run: pip install -e ".[dev,webull]"
+      - if: needs.changes.outputs.python == 'true'
+        run: ruff check .
+      - if: needs.changes.outputs.python == 'true'
+        run: pytest -q
   docker:
     # Builds the server image and checks the compose example (docs/deploy-server.md); never pushes.
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
