@@ -95,6 +95,26 @@ Route: SDK `get_history_bar("AAPL","US_STOCK","M1",count=5)` → `POST /market-d
 
 Fixture: `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1.json`.
 
+## M4 — M1 history by end_time / start_time (probed 2026-11-14, Sandbox, read-only)
+
+Route: SDK `get_batch_history_bar(["AAPL"], "US_STOCK", "M1", ...)` → `POST /market-data/stocks/bars/list` (v3). Six requests; all returned HTTP OK, `delay_minutes=0`. Times below are America/New_York (EST from 2026-11-01, EDT before).
+
+- **end_time is honored and exclusive.** Every request returned its newest bar at exactly `end_time − 1 min` (end 15:00 → newest bar 14:59; end 10:00 → 09:59). Bar `time` is the bar start (see M2).
+- **start_time is honored, but returns one extra bar before it.** Window start 09:00, end 10:00 (2026-11-12) returned 61 bars, 08:59 … 09:59. Consistent with filtering on bar end inclusive on both sides (`start_time ≤ bar_start + 1 min ≤ end_time`). A caller wanting `[start, end)` by bar start must drop the bar labelled `start − 1 min`.
+- **count is honored exactly up to 1200** (SDK doc maximum); there is no pagination key. To go further back, repeat with `end_time` = oldest returned bar time (exclusive end means no duplicate).
+- **Order:** newest first.
+- **Depth:** a 3-month-old window (end 2026-08-14 15:00 EDT) returned full bars; no depth limit was reached. Larger depth not tested.
+- **Sessions:**
+  - `trading_sessions` omitted → RTH only, 09:30–15:59 (count 1200 from 2026-11-10 10:00 reached back to 2026-11-05 09:30, skipping the weekend with no bars).
+  - `["PRE","RTH","ATH"]` → PRE 04:00–09:29, RTH 09:30–15:59, ATH 16:00–19:59. No overnight bars (20:00–03:59) are returned with these values.
+  - Each bar carries `trading_session`; the day boundary in a mixed response is 19:59 (prior day ATH) → 04:00 (PRE).
+- **Missing minutes:** extended-hours minutes with no trades have no bar (e.g. 2026-11-12 04:44 ET absent; several 1-minute holes in 2026-11-09 ATH). RTH had no holes in the sample. Consumers must not assume a dense minute grid outside RTH.
+
+Fixtures:
+- `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1_window_pre_rth.json` — 09:00–10:00 window (PRE→RTH boundary, extra 08:59 bar); trimmed to 6 of 61 bars (full file is on the owner's Mac evidence folder).
+- `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json` — 12 representative bars of a 1200-bar all-sessions response; `_meta.trimmed` says so.
+- **How Aperture uses it:** `WebullMarketData.bars_before` sends `end_time` only (never `start_time`, so the extra bar never arrives) and omits `trading_sessions` (RTH only; any other session is refused). `data.history` pages back with `end_time` = oldest bar start; its INCOMPLETE and NO_PROGRESS refusals remain as guards should the behaviour change.
+
 ## Known SDK defects (3.0.3)
 - KD-1: streaming `SnapshotResult.close` is filled from `open`. Never use it.
 - KD-2: tick request docstring/default disagree. Use measured limits only.
@@ -107,4 +127,4 @@ Fixture: `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1.json`.
 - `/trade/calendar` works only on Production (read-only, the single allowed Production call). We keep `config/calendar/us-equity-<year>.json` with standard hours and exceptions (half days 2026-11-27 and 2026-12-24 close RTH at 13:00, POST at 17:00), cross-checked daily. Unknown or contradictory day = no trading. Next year's exceptions must be added before 1 December.
 
 ## Open broker questions (to prove by probe)
-F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; a raw bars body and a snapshot during the regular session (M1/M2 above were probed on a closed market); M4 bars with `end_time` (is it applied, inclusive or exclusive, does `count` page backwards from it, are prior sessions served in real time with `delay_minutes=0`; `data.history` refuses INCOMPLETE if it is ignored, since the adapter drops bars at or after the end); M3 L1 stream: a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), notice 1001/1002, resubscribe after a forced reconnect.
+F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; a raw bars body and a snapshot during the regular session (M1/M2 above were probed on a closed market); M3 L1 stream: a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), notice 1001/1002, resubscribe after a forced reconnect.

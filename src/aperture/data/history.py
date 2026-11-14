@@ -21,6 +21,10 @@ Refusals (`HistoryUnavailable`, one `HistoryCause`), never a silent partial answ
 - OUTSIDE_SESSION: a bar inside the window starts outside every wanted regular session;
 - CONFLICT: two different bars for the same symbol and minute.
 
+Webull behaviour (probe M4, docs/webull-facts.md): end_time is exclusive and count pages back
+without duplicates from end_time = oldest bar start; three months back were served. The
+NO_PROGRESS and INCOMPLETE refusals stay as guards, not as expected outcomes.
+
 A minute with no bar inside a session is not a refusal: thin symbols do not trade every minute.
 
 Cache: in memory and on disk at `<directory>/<before>/<symbol>-<sessions>.jsonl`, in the replay

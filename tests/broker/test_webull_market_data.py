@@ -358,3 +358,35 @@ def test_bars_before_refuses_other_symbols_and_naive_end():
         md.bars_before("AAA", NOW + timedelta(hours=1), 10)
     with pytest.raises(ValueError):
         md.bars_before("AAA", NOW.replace(tzinfo=None), 10)
+
+
+def recorded_meta(name: str) -> Any:
+    return json.loads((FIXTURES / name).read_text("utf-8"))["_meta"]
+
+
+def wire_start(row: dict[str, Any]) -> datetime:
+    return datetime.strptime(row["time"], "%Y-%m-%dT%H:%M:%S.%f%z")
+
+
+def test_m4_end_time_is_exclusive_so_bars_before_drops_nothing():
+    name = "stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json"
+    body, meta = recorded(name), recorded_meta(name)
+    end = datetime.fromtimestamp(meta["request"]["end_time"] / 1000, tz=UTC)
+    rows = body["result"][0]["result"]
+    assert wire_start(rows[0]) == end - timedelta(minutes=1)  # newest first, end excluded
+    regular = {"result": [dict(body["result"][0],
+                               result=[r for r in rows if r["trading_session"] == "RTH"])]}
+    md, _ = adapter(ok(regular))
+    bars = md.bars_before("AAPL", end, 1200)
+    assert len(bars) == len(regular["result"][0]["result"])  # the end filter drops nothing
+    assert bars[-1].start == end - timedelta(minutes=1)
+
+
+def test_m4_extended_sessions_are_refused_and_start_time_adds_a_bar():
+    name = "stocks_bars_list_aapl_m1_window_pre_rth.json"
+    body, meta = recorded(name), recorded_meta(name)
+    start = datetime.fromtimestamp(meta["request"]["start_time"] / 1000, tz=UTC)
+    oldest = wire_start(body["result"][0]["result"][-1])
+    assert oldest == start - timedelta(minutes=1)  # why bars_before never sends start_time
+    with pytest.raises(MalformedResponse, match="PRE"):
+        read_bars(body)  # only RTH is requested; any other session is refused

@@ -11,6 +11,8 @@ not full responses. They are what was recorded, copied unchanged from the owner'
 | `census_2026-11-11_after_hours.json` | capacity probe r16, Sandbox, 2026-11-11 22:00Z | per-field JSON type and missing counts: gainers DESC/ASC, top actives, snapshot regular and extended; extra snapshot members with one example value each |
 | `instruments_stocks_profiles_list_mixed_types.json` | probe M1, Sandbox, 2026-11-14 (body only) | `/trading/instruments/stocks/profiles/list`: `sub_category` = COMMON_STOCK (AAPL, ADRs BABA/TSM), ETF (SPY), WARRANT (GRABW, SOUNW, OPENW x2 ids) |
 | `stocks_bars_list_aapl_m1.json` | probe M2, Sandbox, 2026-11-14 (body only) | raw M1 bars: `time` "...T20:59:00.000+0000" = bar start UTC, newest first, `trading_session` RTH |
+| `stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json` | probe M4, Sandbox, 2026-11-14 (body only, 12 of 1200 bars) | `end_time` exclusive (newest bar = end - 1 min); PRE/RTH/ATH labels and boundaries; a missing PRE minute |
+| `stocks_bars_list_aapl_m1_window_pre_rth.json` | probe M4, same (6 of 61 bars) | `start_time` returns one extra bar at start - 1 min |
 | `snapshot_bars_keys.md` | owner run 2026-11-11 ~02:45Z, AAPL | snapshot regular/extended key names and types; M1 bars structure `$.result[] {delay_minutes, instrument_id, symbol, result[] {time, open, high, low, close, volume, trading_session}}` |
 
 Facts worth reading off: all screener and snapshot values are strings except `quote_time`,
@@ -18,4 +20,4 @@ Facts worth reading off: all screener and snapshot values are strings except `qu
 absent and `relative_volume_10d` is missing in 33 to 68 of 200 rows; screeners carry no provider
 time. The security type is the instrument profile's `sub_category` (probe M1).
 
-Not recorded: an L1 stream frame, any regular-session snapshot or bars.
+Not recorded: an L1 stream frame, any snapshot during the regular session.
