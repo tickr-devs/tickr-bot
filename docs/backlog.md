@@ -12,20 +12,41 @@ Out of scope for v1. Nothing here is built unless a task names it. The full orig
 
 ## Later product features
 - Several simultaneous positions (risk sharing design needs the owner first), top-up.
-- Extended hours (needs stop behaviour in PRE/POST proven), half days.
-- Short selling (needs borrow/SSR facts).
+- Extended hours (needs stop behaviour in PRE/POST proven), half days. Old-tracker answer, reconfirm with the owner when this starts: limit orders only in PRE/POST, smaller size, hard flatten before the session ends, no entries on stream or broker loss (old Q118, #020-12).
+- Short selling (needs borrow/SSR facts). Old-tracker idea: Webull is the authority (no own SSR rule); record `shortable` as read and map short-sell rejection texts to typed causes (old Q107, #158).
 - Risk as percent of equity.
 - Loss locks (stop-out streak, cooldown) if the owner wants them.
-- Limit-exit chase before market exit.
-- Per-variant evidence, stop-overshoot measurement, missed-moves "trade of the day".
+- Limit-exit chase before market exit. Old-tracker answer, reconfirm with the owner when this starts: SELL LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from the first reference, then MARKET in the regular session (old Q22, Q110).
+- Per-variant evidence, stop-overshoot measurement, missed-moves "trade of the day". For overshoot: read trade prints (`ticks/list`) after the session for symbols with own fills, since Webull triggers stops on the last trade (old #087).
 - Spike-entry setup block (owner wants it back as its own block; values open).
 - Account page completeness (balances, buying power, all broker fields), fee evidence, gRPC trade events.
 - Production readiness: authorization record form, readiness checklist, enabling day.
 - Store maintenance (archive/compact closed days).
 
+## From the old bot's tracker (reviewed 2026-11-14)
+Ideas from the frozen `Trading` tracker (open and closed tasks) that Aperture does not have yet; old numbers in brackets. Old-tracker answers are not owner decisions until recorded in `docs/decisions.md`.
+
+Strategy and research:
+- **No-progress exit** as a strategy version: close when price has not moved X R in favour within N minutes; X and N were never chosen (old Q43); judge it by replay and observers first (old #083).
+- **Trailing values to start from** when the trailing stop is built: stop = best price since entry minus 1.5 ATR, at least the fill price after +1.0 R, only tightens; provisional, never confirmed (old #153-34, Q10).
+- **Trigger confirmation**: two consecutive executable quotes through the trigger before ENTER, against one-quote flicker entries (old trading review of #153).
+- **Acceleration check** (price velocity, dollar volume per minute) as a strategy rule, kept only if recorded days show it helps (old #153-33, ADR 0013).
+- **Screener source and rank vs outcome**: do the list (gainers/losers/top actives) or the rank predict the move? Study on recorded days (old Q46).
+- **Per-check refusal table**: decisions already record the first failed check and the refusal cause, and the research report and advisor evidence count them; missing is a per-day, per-setup table in the research CLI (old #085, product-spec Q25).
+- **Quote latency report** from capture files (receipt minus provider time by symbol and hour), plus the stream notice 1001 counters `drop`/`rtt`/`sent`: the adapter recognises notice 1001 but drops these counters today (old #094, #028).
+
+Broker and safety features:
+- **Tradability check before entry**: instrument profile `status` (seen OC/CO/NT, ignored today) and trade-instrument `trade_policy`/`forbid_reason` (CLOSE_ONLY, DENIED, HALTED) refuse entries with a typed cause and never block exits; first probe how a halt shows in snapshot, profile and stream (old #158).
+- **Webull support questions** (owner): is there a documented Sandbox calendar endpoint; which real-time entitlement applies to Sandbox L1 (old #080).
+
+Operator and app:
+- **`explain SYMBOL`** command and API read: the latest decision for a symbol with every check (measured vs threshold) and the admission cause (old #153-18).
+- **App screens from the old dashboard design**: watching-closely list with the decisive check and quote age; size with its binding constraint ("Risk" or "Position cap"); risk room left today; performance in R (expectancy, win rate, profit factor, drawdown); signals not taken (old #154, #216, #140-26).
+
 ## Open owner questions (ask when they start blocking)
 - Manual trades in the bot's account: forbidden by convention and fenced (recommended) or ignored?
-- Position that cannot close before the close (halt): keep overnight and close at the first RTH opportunity (recommended)?
+- Position that cannot close before the close, or a halt with a position open: keep the resting stop and report, send no flatten, cancel or replace into the halted book, keep overnight if needed and close at the first RTH opportunity (recommended; matches old-tracker answer Q108)?
 - What counts as "Sandbox proved the strategy" before Production is considered.
 - Quote capture retention days and disk allocation (decide after one measured day).
 - Missing relative-volume history for a new listing: refuse (recommended) or pass.
+- Phone alert before the iOS app: is a simple push channel needed before unattended trading days, or are macOS notifications enough until then (old #147, product-spec Q7)?
