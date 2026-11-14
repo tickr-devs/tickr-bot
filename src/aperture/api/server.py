@@ -30,6 +30,9 @@ from aperture.api.contract import (
     ContractError,
     ErrorV1,
     PendingCommandsV1,
+    RiskSettings,
+    SessionSettings,
+    SettingsV1,
     StatusResponseV1,
 )
 from aperture.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
@@ -59,6 +62,7 @@ class ApiSettings:
     max_request_body_bytes: int
     max_pending_commands: int
     history: HistoryPaths
+    shown: SettingsV1  # served at GET /settings
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -83,6 +87,30 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         max_request_body_bytes=api.max_request_body_bytes,
         max_pending_commands=api.max_pending_commands,
         history=HistoryPaths.from_config(cfg),
+        shown=shown_settings(cfg),
+    )
+
+
+def shown_settings(cfg: Config) -> SettingsV1:
+    """The config numbers clients show, exactly as loaded."""
+    risk, session = cfg.risk, cfg.session
+    return SettingsV1(
+        environment=cfg.environment_name,
+        active_strategy=cfg.strategy.active,
+        observers=tuple(cfg.strategy.observers),
+        risk=RiskSettings(
+            planned_loss_usd=Decimal(risk.planned_loss_usd),
+            position_notional_cap_usd=Decimal(risk.position_notional_cap_usd),
+            max_daily_loss_usd=Decimal(risk.max_daily_loss_usd),
+            max_open_positions=risk.max_open_positions,
+            max_quote_age_seconds=Decimal(risk.max_quote_age_seconds)),
+        session=SessionSettings(
+            timezone=session.timezone,
+            last_entry_minutes_before_close=session.last_entry_minutes_before_close,
+            flatten_minutes_before_close=session.flatten_minutes_before_close,
+            half_days_enabled=session.half_days_enabled),
+        status_stale_seconds=cfg.api.status_stale_seconds,
+        poll_seconds=cfg.api.poll_seconds,
     )
 
 
@@ -157,7 +185,7 @@ _ERROR_CODES = {
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
     "internal": 500, "unavailable": 503,
 }
-GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars")
+GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings")
 DAY_PREFIX = "/days/"
 
 
@@ -260,6 +288,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/schema":
                 self._json(200, {name: contract.json_schema(cls)
                                  for name, cls in contract.SCHEMA_TYPES.items()})
+            elif path == "/settings":
+                self._json(200, self.server.settings.shown)
             elif path in COMMAND_ROUTES:
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
             elif path == "/days" or path.startswith(DAY_PREFIX) or path == "/bars":

@@ -319,6 +319,42 @@ class BarsV1:
     api_version: int = _const(API_VERSION)
 
 
+# ---------------------------------------------------------------- settings (read-only)
+
+
+@dataclass(frozen=True)
+class RiskSettings:
+    planned_loss_usd: Decimal
+    position_notional_cap_usd: Decimal
+    max_daily_loss_usd: Decimal
+    max_open_positions: int
+    max_quote_age_seconds: Decimal
+
+
+@dataclass(frozen=True)
+class SessionSettings:
+    timezone: str
+    last_entry_minutes_before_close: int
+    flatten_minutes_before_close: int
+    half_days_enabled: bool
+
+
+@dataclass(frozen=True)
+class SettingsV1:
+    """GET /settings: the numbers from config/bot.toml that clients show (limits, session
+    times). Read-only, as the API process loaded them at its start; changing them means editing
+    the file and restarting."""
+
+    environment: str
+    active_strategy: str
+    observers: tuple[str, ...]
+    risk: RiskSettings
+    session: SessionSettings
+    status_stale_seconds: Decimal
+    poll_seconds: Decimal
+    api_version: int = _const(API_VERSION)
+
+
 SCHEMA_TYPES: dict[str, type] = {
     "status-v1": StatusV1,
     "command-v1": CommandV1,
@@ -329,6 +365,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "days-v1": DaysV1,
     "day-v1": DayV1,
     "bars-v1": BarsV1,
+    "settings-v1": SettingsV1,
 }
 
 

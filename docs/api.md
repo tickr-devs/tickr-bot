@@ -42,6 +42,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first. |
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
+| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}`. `202` `command-accepted-v1`. |

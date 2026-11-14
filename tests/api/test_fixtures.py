@@ -27,6 +27,9 @@ from aperture.api.contract import (
     DayV1,
     ErrorV1,
     PendingCommandsV1,
+    RiskSettings,
+    SessionSettings,
+    SettingsV1,
     StatusResponseV1,
 )
 
@@ -75,6 +78,10 @@ def documents() -> dict[str, object]:
                      T0 + timedelta(minutes=20), T0 + timedelta(minutes=48), "strategy_exit",
                      None, Decimal("50"), Decimal("4.10"))),
             Decimal("2.50"), ("ABCD", "WXYZ")),
+        "settings-v1": SettingsV1(
+            "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
+            RiskSettings(Decimal("50"), Decimal("2500"), Decimal("300"), 1, Decimal("5")),
+            SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL),
         "day-v1.empty": DayV1("sandbox", DAY - timedelta(days=3), (), Decimal("0"), ()),
         "bars-v1": BarsV1("sandbox", "ABCD", DAY, tuple(
             BarV1(T0 + timedelta(minutes=i), Decimal(o), Decimal(h), Decimal(lo), Decimal(c),

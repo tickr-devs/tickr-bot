@@ -295,6 +295,21 @@ def test_status_page(api):
     assert not re.search(r"<script[^>]+src=", page)  # no external scripts
 
 
+def test_settings_endpoint_shows_the_loaded_config(api, settings):
+    server, _ = api
+    resp, payload = request(server, "GET", "/settings")
+    assert resp.status == 200
+    body = doc(payload)
+    assert errors(schema("settings-v1"), body) == []
+    cfg = config.load(ROOT / "config" / "bot.toml")
+    assert body["risk"]["max_daily_loss_usd"] == str(cfg.risk.max_daily_loss_usd)
+    assert body["risk"]["max_open_positions"] == cfg.risk.max_open_positions
+    assert body["session"]["flatten_minutes_before_close"] == (
+        cfg.session.flatten_minutes_before_close)
+    assert body["active_strategy"] == cfg.strategy.active
+    assert request(server, "POST", "/settings", {})[0].status == 405
+
+
 def test_schema_endpoint(api):
     server, _ = api
     body = doc(request(server, "GET", "/schema")[1])
