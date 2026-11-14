@@ -106,6 +106,9 @@ class StubEvaluator:
 
 class StubMarket:
     def __init__(self) -> None:
+        from aperture.runtime.market import StreamInbox
+
+        self.inbox = StreamInbox()
         self.watch: set[str] = set()
         self.discovery = None
         self.ticks = 0

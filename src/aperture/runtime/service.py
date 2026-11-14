@@ -228,6 +228,18 @@ class Service:
                 self.engine.request_exit(trade.trade_id, "session-flatten")
         self.day_end.check(self._flatten_at, now)
 
+    # --- working entries -------------------------------------------------------------------
+
+    def _guard_entries(self) -> None:
+        """A working entry is cancelled once its quote leaves the price window or goes stale,
+        and at the last-entry time (spec 9). Needs the market's quotes, so only with one."""
+        from aperture.runtime.entries import guard_entries  # entries imports this module
+
+        if self.market is None:
+            return
+        guard_entries(self.engine, self.config, self.calendar, self.market.inbox.latest,
+                      self.now())
+
     # --- strategy --------------------------------------------------------------------------
 
     def _evaluate(self) -> None:
@@ -413,6 +425,7 @@ class Service:
             self._observe(reconcile=due)
             if self.market is not None:
                 self.market.tick()  # after the engine's broker work of this pass
+                self._guard_entries()
             self._evaluate()
             if due:
                 last_reconcile = monotonic()

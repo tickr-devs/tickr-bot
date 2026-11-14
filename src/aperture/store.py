@@ -117,9 +117,15 @@ def _schema_v3(db: sqlite3.Connection) -> None:
     db.execute("ALTER TABLE trades ADD COLUMN stop_percent_below_fill TEXT")
 
 
+def _schema_v4(db: sqlite3.Connection) -> None:
+    # Bottom of the strategy's entry price window (NULL: none given, e.g. a manual trade); a
+    # resting entry is cancelled once the ask leaves the window (spec 9).
+    db.execute("ALTER TABLE trades ADD COLUMN entry_low_price TEXT")
+
+
 # Forward-only migrations. Never edit a released entry; append a new one.
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
-    _schema_v1, _schema_v2, _schema_v3)
+    _schema_v1, _schema_v2, _schema_v3, _schema_v4)
 
 
 def _json_default(value: Any) -> Any:

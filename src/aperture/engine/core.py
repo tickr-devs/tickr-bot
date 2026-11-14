@@ -156,6 +156,7 @@ class TradeRow:
     entry_limit_price: Decimal
     stop_price: Decimal
     stop_percent_below_fill: Decimal | None
+    entry_low_price: Decimal | None
     planned_loss_usd: Decimal
     exit_requested: str | None
     stop_failures: int
@@ -187,6 +188,7 @@ def _trade(row: Any) -> TradeRow:
         entry_limit_price=Decimal(row["entry_limit_price"]),
         stop_price=Decimal(row["stop_price"]),
         stop_percent_below_fill=_dec(row["stop_percent_below_fill"]),
+        entry_low_price=_dec(row["entry_low_price"]),
         planned_loss_usd=Decimal(row["planned_loss_usd"]),
         exit_requested=row["exit_requested"], stop_failures=row["stop_failures"],
         last_stop_failure_at=row["last_stop_failure_at"],
@@ -303,6 +305,20 @@ class Engine:
                     asked += 1
         return asked
 
+    def cancel_entry(self, trade_id: str, cause: str) -> bool:
+        """Cancel this trade's working entry (never its stops). The cause is journaled once
+        per entry order; later calls only repeat the cancel decision, which `_cancel` allows
+        again only after Detail showed the order still working. A fill before the cancel
+        lands becomes a protected position as usual. True if an entry was working."""
+        live = [o for o in self.orders(trade_id) if o.leg is Leg.ENTRY and o.live]
+        for order in live:
+            if not self.store.journal("entry-cancel", order.client_order_id):
+                with self.store.transaction():
+                    self.store.append("entry-cancel", {"cause": cause},
+                                      key=order.client_order_id, run_id=self.run_id)
+            self._cancel(order)
+        return bool(live)
+
     def fence_rows(self) -> list[tuple[str, str, str]]:
         """(name, cause, set_at UTC ISO) of every fence, oldest first."""
         return [(r["name"], r["cause"], r["set_at"]) for r in
@@ -342,12 +358,15 @@ class Engine:
 
     def open_trade(self, symbol: str, quantity: Decimal, limit_price: Decimal,
                    stop_price: Decimal, planned_loss_usd: Decimal,
-                   stop_percent_below_fill: Decimal | None = None) -> str:
+                   stop_percent_below_fill: Decimal | None = None,
+                   entry_low_price: Decimal | None = None) -> str:
         """Record and send a LIMIT BUY entry. Refuses (EntryRefused) instead of guessing.
 
         With `stop_percent_below_fill`, the stop is re-derived from the first observed average
         fill price (rounded down to the cent) before the first stop is placed; `stop_price`
-        is the bound computed from the limit and is never loosened."""
+        is the bound computed from the limit and is never loosened. `entry_low_price` is the
+        bottom of the strategy's price window, kept so a resting entry can be cancelled once
+        the quote leaves the window (`cancel_entry`)."""
         gate = self.gate()
         if not gate.open:
             raise EntryRefused(f"trading gate closed: {gate.cause}")
@@ -360,17 +379,20 @@ class Engine:
             raise EntryRefused("quantity must be a positive whole number")
         if not ZERO < stop_price < limit_price:
             raise EntryRefused("stop must be above zero and below the entry limit")
+        if entry_low_price is not None and not stop_price < entry_low_price <= limit_price:
+            raise EntryRefused("window bottom must be above the stop and at most the limit")
 
         with self.store.transaction():
             trade_id = f"t{self.store.next_counter('trade')}"
             self.store.execute(
                 "INSERT INTO trades(trade_id, run_id, symbol, state, entry_quantity, "
                 "entry_limit_price, stop_price, stop_percent_below_fill, planned_loss_usd, "
-                "opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "opened_at, entry_low_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (trade_id, self.run_id, symbol, TradeState.OPENING, str(quantity),
                  str(limit_price), str(stop_price),
                  None if stop_percent_below_fill is None else str(stop_percent_below_fill),
-                 str(planned_loss_usd), self.store.stamp()))
+                 str(planned_loss_usd), self.store.stamp(),
+                 None if entry_low_price is None else str(entry_low_price)))
             self.store.append("trade-opened", {
                 "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
                 "stop_price": stop_price, "planned_loss_usd": planned_loss_usd},

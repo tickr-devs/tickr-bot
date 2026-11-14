@@ -23,7 +23,7 @@ from aperture.data.base import MarketData, MarketDataError, QuoteListener
 from aperture.data.capture import CaptureWriter
 from aperture.data.discovery import Candidate, DiscoverySettings, discover
 from aperture.data.health import FanOut, StreamHealth, StreamState
-from aperture.engine.core import Engine
+from aperture.engine.core import Engine, Leg
 from aperture.types import Quote
 
 STREAM_TRANSPORT = "stream-transport"
@@ -146,6 +146,11 @@ class MarketRuntime:
                 symbols.add(trade.symbol)
         return symbols
 
+    def _entry_symbols(self) -> set[str]:
+        """Symbols with a working entry: their quotes decide whether it may keep resting."""
+        return {o.symbol for o in self.engine.orders()
+                if o.leg is Leg.ENTRY and o.live}
+
     def _candidate_symbols(self) -> set[str]:
         # Only on a live transport: a subscribe while down is queued silently and sent by the
         # next connect's resubscribe of the full set, where a refusal cannot be rolled back.
@@ -161,7 +166,7 @@ class MarketRuntime:
         Candidates are kept only while the transport is up, and go in their own request: a
         refusal (the per-connection symbol limit is unproven) never touches the position's
         subscription, and candidates then stay off for `candidate_retry_seconds`."""
-        essential = self._position_symbols() | self.watch
+        essential = self._position_symbols() | self._entry_symbols() | self.watch
         candidates = self._candidate_symbols() - essential
         desired = essential | candidates
         removed = self.subscribed - desired
