@@ -1,0 +1,145 @@
+# Aperture platform settings. Every key has a comment: what it is, its unit, who reads it.
+# Strategy values live in strategies/<name>/strategy.toml. Secrets never live here: only the
+# NAMES of the environment variables that hold them.
+
+[run]
+# Active environment; must be a table under [environments]; read by config.load and the trading gate.
+environment = "sandbox"
+# Runtime data folder (database, capture files, lock), relative to the repo root; read by runtime and store.
+data_dir = "data"
+# Seconds a database write waits for another connection's write lock before failing; read by the store.
+database_busy_timeout_seconds = 5
+
+[strategy]
+# Active strategy name = folder under strategies/; its decisions may reach the safety layer.
+active = "price-action-v1"
+# Observer strategy names: they decide on the same data but never trade (empty in v1); read by runtime.
+observers = []
+
+[risk]
+# Planned loss per trade in USD (owner 2026-11-07); read by the strategy for sizing and by safety for the check.
+planned_loss_usd = 50
+# Maximum notional per position in USD (owner 2026-10-31); read by safety.
+position_notional_cap_usd = 2500
+# Daily loss ceiling in USD, gross: realized loss + open reservations + new planned loss (owner 2026-11-14); read by safety.
+max_daily_loss_usd = 300
+# Maximum simultaneous open positions (v1 supports 1); read by safety.
+max_open_positions = 1
+# Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.
+max_quote_age_seconds = 5
+
+[session]
+# Market time zone for all session times; read by the calendar and the scheduler.
+timezone = "America/New_York"
+# Calendar file with standard hours and exceptions, relative to the repo root; read by the calendar.
+calendar_file = "config/calendar/us-equity-2026.json"
+# Last entry this many minutes before the regular close (15:45 ET on a normal day); read by safety.
+last_entry_minutes_before_close = 15
+# All positions closed this many minutes before the regular close (15:55 ET on a normal day); read by runtime.
+flatten_minutes_before_close = 5
+# Trade on half days: false = no trading on half days; read by safety.
+half_days_enabled = false
+
+[orders]
+# Prefix of bot client order ids; read by orders and reconciliation to recognise own orders.
+client_order_id_prefix = "ap-"
+# Prefix of probe client order ids; leftovers with it block the bot start; read by runtime.
+probe_client_order_id_prefix = "probe-"
+# Maximum client order id length in characters (Webull US stock limit); read by orders.
+client_order_id_max_length = 32
+# Seconds between Detail polls of a working order; read by orders (must fit the request budget).
+detail_poll_seconds = 3
+# Extra attempts to place a rejected protective stop before exiting the position; read by protection.
+stop_retry_attempts = 2
+# Seconds between protective stop attempts; read by protection.
+stop_retry_spacing_seconds = 3
+# Seconds between reconciliation passes (positions + open orders); read by runtime.
+reconcile_interval_seconds = 10
+# Maximum age in seconds of the last broker read before entries are blocked; read by safety.
+broker_read_max_age_seconds = 30
+
+[probe]
+# Shares per probe order (owner 2026-11-14); read by the probe command.
+quantity = 1
+# Maximum share price in USD for a probe symbol; read by the probe command.
+max_price_usd = 50
+# Probe entry limit = ask + this many USD; read by the probe command.
+entry_offset_usd = 0.01
+# Probe stop distance below the fill price, percent; read by the probe command.
+stop_percent_below_fill = 2.0
+# Maximum planned loss of a probe in USD; read by the probe command.
+max_loss_usd = 5
+# Earliest probe start, New York time HH:MM; read by the probe command.
+window_start = "10:00"
+# Latest probe start, New York time HH:MM; read by the probe command.
+window_end = "15:30"
+
+[api]
+# Local API bind address; loopback only; read by the api server.
+host = "127.0.0.1"
+# Local API port; read by the api server and the status screen.
+port = 8766
+
+[environments.sandbox]
+# May this process send trading requests in this environment; read by the trading gate.
+trading_enabled = true
+# Trading additionally requires a valid owner authorization file; read by the trading gate.
+requires_owner_authorization = false
+# Owner authorization file, relative to the repo root (empty = none); read by the trading gate.
+authorization_file = ""
+# HTTPS API host (Webull docs); read by the broker adapter and the host allowlist.
+http_host = "api.sandbox.webull.com"
+# HTTPS port; read by the broker adapter.
+http_port = 443
+# MQTT quote-stream host; read by the market-data stream and the host allowlist.
+mqtt_host = "data-api.sandbox.webull.com"
+# MQTT port (TLS); read by the market-data stream.
+mqtt_port = 1883
+# gRPC order-event host (not used in v1); read by the host allowlist.
+events_host = "events-api.sandbox.webull.com"
+# gRPC port; read by the host allowlist.
+events_port = 443
+# Name of the env variable holding the app key; read by the broker adapter (presence only elsewhere).
+app_key_variable = "WEBULL_SANDBOX_APP_KEY"
+# Name of the env variable holding the app secret; read by the broker adapter (presence only elsewhere).
+app_secret_variable = "WEBULL_SANDBOX_APP_SECRET"
+# Name of the env variable holding the account id; read by the broker adapter (presence only elsewhere).
+account_variable = "WEBULL_SANDBOX_ACCOUNT_ID"
+# Token folder for this environment, relative to data_dir; read by the broker adapter.
+token_dir = "webull-token-sandbox"
+# Request budget per route per 60 seconds (Webull Sandbox limit); read by the request budget.
+requests_per_route_per_minute = 30
+# Seconds a route pauses after an HTTP 429; read by the request budget.
+rate_limit_cooldown_seconds = 60
+
+[environments.production]
+# May this process send trading requests in this environment; false until the owner enables Production.
+trading_enabled = false
+# Trading additionally requires a valid owner authorization file; read by the trading gate.
+requires_owner_authorization = true
+# Owner authorization file, relative to the repo root; created by the owner, never committed.
+authorization_file = "authorization/production.toml"
+# HTTPS API host (Webull SDK); read by the broker adapter and the host allowlist.
+http_host = "api.webull.com"
+# HTTPS port; read by the broker adapter.
+http_port = 443
+# MQTT quote-stream host; read by the market-data stream and the host allowlist.
+mqtt_host = "data-api.webull.com"
+# MQTT port (TLS); read by the market-data stream.
+mqtt_port = 1883
+# gRPC order-event host (not used in v1); read by the host allowlist.
+events_host = "events-api.webull.com"
+# gRPC port; read by the host allowlist.
+events_port = 443
+# Name of the env variable holding the app key; read by the broker adapter (presence only elsewhere).
+app_key_variable = "WEBULL_APP_KEY"
+# Name of the env variable holding the app secret; read by the broker adapter (presence only elsewhere).
+app_secret_variable = "WEBULL_APP_SECRET"
+# Name of the env variable holding the account id; read by the broker adapter (presence only elsewhere).
+account_variable = "WEBULL_ACCOUNT_ID"
+# Token folder for this environment, relative to data_dir; read by the broker adapter.
+token_dir = "webull-token-production"
+# Request budget per route per 60 seconds: the strictest documented Production route (accounts, 10 per 30 s; docs, unverified) until per-route keys exist; read by the request budget.
+requests_per_route_per_minute = 20
+# Seconds a route pauses after an HTTP 429; read by the request budget.
+rate_limit_cooldown_seconds = 60
