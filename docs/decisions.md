@@ -4,6 +4,7 @@ Newest first. Only decisions that are in force. Each line: date, decision, where
 
 | Date | Decision | Applies to |
 |---|---|---|
+| 2026-11-14 | The ~15k-line product-code ceiling for v1 is lifted: work continues past it. Size stays a warning sign, reported in PRs, not a stop. | CLAUDE.md |
 | 2026-11-14 | Phone alert channel: iMessage to the owner himself, sent by Messages.app on the bot's Mac. Every alert goes to both the Mac notification and iMessage. The address is personal data: only the name of its environment variable is in config. | runtime.alerts, config `alerts` |
 | 2026-11-14 | No ETFs and no warrants; no hardcoded symbol lists. Screener rows carry no security type, so the Webull adapter looks the type up per symbol in the instrument profile (`/trading/instruments/stocks/profiles/list`), cached per New York day; only `allowed_security_types` pass, unknown type = refused. US-listed foreign issuers (ADRs) are not excluded: the universe filter is US exchange + USD, never the issuer's country. Proven 2026-11-14 (probe M1): the type is `sub_category`, ADRs are COMMON_STOCK, identity is the instrument_id. | config `market_data`, data.discovery, broker.webull |
 | 2026-11-14 | The strategy computes the position quantity: min(floor(planned loss / per-share risk), floor(notional cap / entry window top)), below 1 share = refuse; returned in `Decision.quantity`. The platform checks it against its own `[risk]` limits and refuses on breach. | strategy, spec-v1 section 5 |

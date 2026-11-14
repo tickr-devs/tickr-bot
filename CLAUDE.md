@@ -34,5 +34,5 @@ Enforced by `apps/scripts/check_swift_rules.py` in the `swift-rules` CI job on e
 - No evidence packets, receipts, trackers or design tables. The PR description says what changed, how it was tested, and what is left.
 - Never weaken a test, raise a timeout or add a retry to make CI pass.
 - Code that talks to a real broker is verified by the owner on his Mac; cloud agents test against `broker/fake.py` and recorded responses in `tests/fixtures/`.
-- Size is a warning sign: if v1 grows past ~15k lines of product code, stop and ask why.
+- Size is a warning sign: keep product code lean and every PR small. The owner lifted the ~15k-line v1 ceiling on 2026-11-14 (it is no longer a stop-and-ask point), so measure growth and say in the PR when a change adds a lot.
 - Write code, comments, commits and docs in English. The owner reads Russian in chat.
