@@ -1,0 +1,91 @@
+# Strategy "price-action-v2": price-action-v1 plus trigger confirmation and a no-progress exit
+# (backlog, "Strategy and research"). A candidate for observers, replay and research decide/diff;
+# not the active strategy. Every v1 section below keeps the v1 version 1 values. Changing any
+# value means a new `version`.
+
+[strategy]
+# Strategy name; must equal this folder name; recorded with every decision.
+name = "price-action-v2"
+# Strategy version; bump on any value change; recorded with every decision and trade.
+version = "1"
+
+[indicators]
+# Fast exponential moving average length in completed M1 closes.
+fast_ema_period = 9
+# Slow exponential moving average length in completed M1 closes.
+slow_ema_period = 20
+# Average true range (Wilder) length in completed M1 bars.
+atr_period = 14
+# Number of prior sessions averaged for relative cumulative volume.
+relative_volume_sessions = 5
+# Minimum relative cumulative volume (current / average of prior sessions at the same minute).
+minimum_relative_volume = 2.0
+# Missing prior-session history for relative volume: true = refuse with a cause.
+refuse_when_relative_volume_unavailable = true
+# Warm-up: EMA and ATR need this many periods of completed M1 bars (prior sessions included)
+# before any decision, so the first-value EMA seed has decayed. Multiple of each period.
+# Read by price_action_v1 (history check). ATR spans overnight gaps between sessions.
+warmup_period_multiple = 10
+
+[breakout]
+# Prior completed M1 bars whose highest high must be broken; trigger = that high, invalidation = their lowest low.
+lookback_bars = 5
+
+[continuation]
+# Impulse bars before the base.
+impulse_bars = 2
+# Base bars after the impulse.
+base_bars = 3
+# Minimum impulse size in ATR multiples.
+minimum_impulse_atr = 1.0
+# Maximum base high-low range in ATR multiples.
+maximum_base_range_atr = 1.0
+# Maximum distance of the last close below the trigger, in ATR multiples, to arm a setup before
+# the break. Read by BOTH setups: continuation (below the base high) and breakout (below the
+# lookback high).
+maximum_pre_breakout_distance_atr = 1.0
+
+[entry]
+# Price window above the trigger in ATR multiples; beyond it the entry is missed, never chased.
+entry_extension_max_atr = 1.0
+# Cost rule: round trip (2 x spread) divided by ATR must not exceed this.
+max_round_trip_atr_ratio = 0.25
+# Cost rule: round trip divided by per-share structural risk must not exceed this.
+max_round_trip_risk_ratio = 0.20
+# Minimum stop distance in spreads (the larger of this and the percent rule applies).
+minimum_stop_spreads = 3
+# Minimum stop distance in percent of price.
+minimum_stop_percent = 0.5
+# Slippage reserve per side per leg in ATR multiples, added to per-share risk for sizing.
+slippage_reserve_atr = 0.05
+
+[liquidity]
+# Strategy thresholds, read by price_action_v1. Discovery applies its own platform floor from
+# config/bot.toml [market_data]; the two are edited independently and the stricter one decides.
+# Regular session: maximum (ask - bid) / mid.
+max_spread_ratio = 0.015
+# Regular session: minimum current-session dollar volume (sum of close x volume of completed minutes), USD.
+min_dollar_volume_usd = 5000000
+
+[sizing]
+# Planned loss per trade the quantity is sized for, USD. Read by price_action_v1:
+# quantity = floor(planned_loss_usd / risk per share). Must not exceed the platform limit in
+# config/bot.toml [risk]; the platform refuses a decision that breaches its limits.
+planned_loss_usd = 50
+# Maximum position notional the quantity is capped at, USD (quantity x top of entry window).
+# Read by price_action_v1. Must not exceed the platform notional cap in config/bot.toml [risk].
+max_position_notional_usd = 2500
+
+[confirmation]
+# PROVISIONAL, not chosen by the owner (old Q43 left it open): consecutive evaluations (one per
+# completed minute) whose ask is executable through the trigger before ENTER, count.
+# Read by price_action_v2; 1 = v1 behaviour.
+confirmation_quotes = 2
+
+[no_progress]
+# PROVISIONAL, not chosen by the owner (old Q43 left X and N open): X, the favourable move in R
+# (entry - stop at entry) the best high since entry must reach; read by price_action_v2.
+minimum_progress_r = 0.5
+# PROVISIONAL, not chosen by the owner (old Q43): N, minutes after entry at which a position
+# that has not reached minimum_progress_r is exited; read by price_action_v2.
+window_minutes = 15

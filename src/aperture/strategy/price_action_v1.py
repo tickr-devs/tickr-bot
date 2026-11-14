@@ -184,8 +184,9 @@ class Settings:
         )
 
 
-def parse_settings(values: Mapping[str, Any]) -> Settings:
-    """Validate the parsed strategy.toml. Unknown, missing or mistyped keys raise ValueError."""
+def parse_settings(values: Mapping[str, Any], name: str = NAME) -> Settings:
+    """Validate the parsed strategy.toml. Unknown, missing or mistyped keys raise ValueError.
+    `name` is the strategy name the file must carry (a derived strategy passes its own)."""
     if not isinstance(values, Mapping):
         raise ValueError("strategy values must be a table")
     unknown = sorted(set(values) - set(_SCHEMA))
@@ -207,8 +208,8 @@ def parse_settings(values: Mapping[str, Any]) -> Settings:
             except ValueError as exc:
                 raise ValueError(f"[{section}] {key} {exc}") from None
     settings = Settings(**flat)
-    if settings.name != NAME:
-        raise ValueError(f"[strategy] name must be {NAME!r}")
+    if settings.name != name:
+        raise ValueError(f"[strategy] name must be {name!r}")
     if settings.fast_ema_period >= settings.slow_ema_period:
         raise ValueError("[indicators] fast_ema_period must be below slow_ema_period")
     return settings

@@ -15,7 +15,7 @@ active = "price-action-v1"
 observers = ["price-action-v1-lookback8"]      # folders under strategies/
 
 [observers]
-strategy_modules = ["price-action-v1=aperture.strategy.price_action_v1"]
+strategy_modules = ["price-action-v1=aperture.strategy.price_action_v1", "price-action-v2=aperture.strategy.price_action_v2"]
 max_observers = 4
 max_evaluation_seconds = 0.5
 decisions_dir = "decisions"
@@ -27,6 +27,41 @@ a new folder with the same name and a new version (owner rule: changing a value 
 version). Every identity (name + version) must be distinct, the active one included. Setup
 problems are refused with one cause (`ObserverError`): missing folder, unknown module, values
 refused by the strategy, duplicate identity, more than `max_observers`.
+
+## Candidate: price-action-v2
+
+`strategies/price-action-v2/` is price-action-v1 (same values) plus two backlog rules, in
+`src/aperture/strategy/price_action_v2.py`. New rules need new code, so it is a new strategy
+name with its own module (already mapped in `strategy_modules`), not a value variant of v1.
+It is not active and not an observer by default.
+
+- **Trigger confirmation** (`[confirmation] confirmation_quotes`): v1's ENTER stands only after
+  that many consecutive minute evaluations of the symbol, in the same session, had an
+  executable ask through the trigger (inside the price window); before that the decision is
+  WATCH with `trigger_confirmation` as its cause. A quote not through, or no quote, resets.
+- **No-progress exit** (`[no_progress] minimum_progress_r` = X, `window_minutes` = N): with a
+  position, EXIT once N minutes have passed since the first bar seen with it and the best high
+  since then is below entry + X R (R = entry - stop); otherwise HOLD. Observers never see a
+  position, so as an observer only the confirmation rule shows; replay and `research decide`
+  simulate both.
+
+X, N and the count are provisional (the owner never chose them, old Q43). The counts live in
+the strategy instance's memory and restart at zero after a bot restart.
+
+Enable as an observer: `observers = ["price-action-v2"]` in `config/bot.toml [strategy]`.
+Compare offline without enabling anything:
+
+```
+python -m aperture.replay --bars <days> --strategy aperture.strategy.price_action_v2 \
+  --values strategies/price-action-v2/strategy.toml --out out/replay-v2
+python -m aperture.research decide --bars <days> --strategy aperture.strategy.price_action_v2 \
+  --values strategies/price-action-v2/strategy.toml --out out/v2
+python -m aperture.research diff --baseline <v1 decisions.jsonl> \
+  --candidate out/v2/decisions.jsonl --settings config/research.toml --out out/diff
+```
+
+To change a value, copy the folder and bump `version`. Making it the active strategy is an
+owner decision (`[strategy] active`), not something this candidate does.
 
 ## Engine wiring (to do in the engine, not here)
 
