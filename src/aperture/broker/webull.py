@@ -651,9 +651,13 @@ BARS_TIMESPAN_M1 = "M1"
 DIRECTION_GAINERS = "DESC"
 DIRECTION_LOSERS = "ASC"
 MILLISECONDS_PER_SECOND = 1000
-# Candidate security-type keys of an instrument profile row, read in this order. UNPROVEN: no
-# profile response has been recorded (probe M1). None present = type unknown = refused later.
-SECURITY_TYPE_KEYS = ("security_type", "instrument_type", "sub_category", "type")
+# Security type of an instrument profile row (probe M1, 2026-11-14): COMMON_STOCK, ETF, WARRANT;
+# ADRs are COMMON_STOCK. `category` is US_STOCK for all of them and is not the type.
+SECURITY_TYPE_KEY = "sub_category"
+# Bar `time` wire format (probe M2): "2026-11-13T20:59:00.000+0000", UTC, the bar's START.
+BAR_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
+# Bars are requested for the regular session only (the default); any other session is refused.
+BAR_SESSION_REGULAR = "RTH"
 
 
 def epoch_ms_to_utc(value: Any, where: str) -> datetime:
@@ -665,17 +669,16 @@ def epoch_ms_to_utc(value: Any, where: str) -> datetime:
 
 
 def _bar_time(value: Any, where: str) -> datetime:
-    """Bar `time`: its wire format is UNPROVEN (no raw bars body recorded). Accept epoch ms or
-    ISO-8601 with an explicit offset; refuse anything else rather than guess a time zone."""
-    if isinstance(value, str) and not value.strip().isdigit():
-        try:
-            parsed = datetime.fromisoformat(value.strip())
-        except ValueError:
-            raise MalformedResponse(f"{where}: unsupported time {value!r}") from None
-        if parsed.tzinfo is None or parsed.utcoffset() is None:
-            raise MalformedResponse(f"{where}: time without an offset {value!r}")
-        return parsed.astimezone(UTC)
-    return epoch_ms_to_utc(value, where)
+    """Bar `time` -> aware UTC bar start, exactly in the probed format; anything else refused."""
+    if not isinstance(value, str):
+        raise MalformedResponse(f"{where}: expected a string, got {type(value).__name__}")
+    try:
+        parsed = datetime.strptime(value.strip(), BAR_TIME_FORMAT)
+    except ValueError:
+        raise MalformedResponse(f"{where}: unsupported time {value!r}") from None
+    if parsed.second or parsed.microsecond:
+        raise MalformedResponse(f"{where}: not on a whole minute {value!r}")
+    return parsed.astimezone(UTC)
 
 
 def read_screener(body: Any, kind: ScreenerKind) -> list[ScreenerRow]:
@@ -696,19 +699,34 @@ def read_screener(body: Any, kind: ScreenerKind) -> list[ScreenerRow]:
     return rows
 
 
-def read_profiles(body: Any) -> dict[str, str | None]:
-    """Instrument profile rows -> {symbol: security type or None}. Shape UNPROVEN (probe M1):
-    rows bare or under `data`; the type is the first present key of SECURITY_TYPE_KEYS."""
-    types: dict[str, str | None] = {}
+@dataclass(frozen=True)
+class Profile:
+    instrument_id: str
+    symbol: str
+    security_type: str | None
+
+
+def read_profiles(body: Any) -> dict[str, Profile]:
+    """Instrument profile rows (`{data: [...]}`, probe M1) -> {instrument_id: Profile}.
+
+    Identity is the instrument_id: one symbol may return several rows (OPENW returned a stale
+    and a current id), and the caller matches the screener row's id, never the first symbol hit.
+    A row without `sub_category` has an unknown type (None)."""
+    profiles: dict[str, Profile] = {}
     for index, item in enumerate(_unwrap_list(body, "profiles")):
         where = f"profiles[{index}]"
-        symbol = str(_require(item, "symbol", where))
-        found = next((str(item[k]) for k in SECURITY_TYPE_KEYS if _optional(item, k) is not None),
-                     None)
-        if symbol in types and types[symbol] != found:
-            raise MalformedResponse(f"{where}: {symbol} listed twice with different types")
-        types[symbol] = found
-    return types
+        profile = Profile(
+            instrument_id=str(_require(item, "instrument_id", where)),
+            symbol=str(_require(item, "symbol", where)),
+            security_type=(None if _optional(item, SECURITY_TYPE_KEY) is None
+                           else str(item[SECURITY_TYPE_KEY])),
+        )
+        previous = profiles.get(profile.instrument_id)
+        if previous is not None and previous != profile:
+            raise MalformedResponse(f"{where}: instrument {profile.instrument_id} listed twice "
+                                    "with different contents")
+        profiles[profile.instrument_id] = profile
+    return profiles
 
 
 def read_snapshot(body: Any, receipt_time: datetime) -> list[Quote]:
@@ -740,7 +758,9 @@ def read_snapshot(body: Any, receipt_time: datetime) -> list[Quote]:
 
 def read_bars(body: Any) -> list[Bar]:
     """Bars body `{result: [{delay_minutes, instrument_id, symbol, result: [bar...]}]}` -> bars,
-    oldest first per symbol. Any series with delay_minutes != 0 raises DelayedData."""
+    oldest first per symbol (the wire order is newest first, probe M2). Any series with
+    delay_minutes != 0 raises DelayedData; a bar outside the regular session is refused. The
+    last regular bar (15:59 ET) includes the closing auction volume."""
     if not isinstance(body, Mapping):
         raise MalformedResponse("bars: expected an object with 'result'")
     series = body.get("result")
@@ -764,6 +784,9 @@ def read_bars(body: Any) -> list[Bar]:
         own = []
         for number, row in enumerate(rows):
             at = f"{where}.result[{number}]"
+            session = str(_require(row, "trading_session", at))
+            if session != BAR_SESSION_REGULAR:
+                raise MalformedResponse(f"{at}: trading_session {session!r} not requested")
             own.append(Bar(
                 symbol=symbol,
                 start=_bar_time(_require(row, "time", at), f"{at}.time"),
@@ -810,7 +833,7 @@ class WebullMarketData:
         if profile_symbols_per_request < 1:
             raise AdapterConfigError("profile_symbols_per_request must be at least 1")
         self._profile_chunk = profile_symbols_per_request
-        self._types: dict[str, str | None] = {}
+        self._types: dict[str, tuple[str, str]] = {}  # instrument_id -> (symbol, type)
         self._types_day: date | None = None
         self._transport = transport
         self._budget = budget
@@ -844,23 +867,30 @@ class WebullMarketData:
         return self._with_types(read_screener(body, kind))
 
     def _with_types(self, rows: list[ScreenerRow]) -> list[ScreenerRow]:
-        """Fill each row's security type from the instrument profile, cached per New York day.
+        """Fill each row's security type from the instrument profile with the SAME instrument_id,
+        cached per New York day by instrument_id.
 
-        A budget refusal (RateLimited) propagates so the caller shows it; rows the profile does
-        not mention, or that state no type, keep None and are refused by discovery."""
+        A budget refusal (RateLimited) propagates so the caller shows it. A row whose id the
+        profile did not return, whose profile names another symbol, or that states no type keeps
+        None (refused by discovery) and is asked again on the next pass."""
         today = ny_date_of(self._utc_now())
         if self._types_day != today:
             self._types, self._types_day = {}, today
-        missing = list(dict.fromkeys(r.symbol for r in rows if r.symbol not in self._types))
+        missing = list(dict.fromkeys(r.symbol for r in rows if r.instrument_id not in self._types))
         for start in range(0, len(missing), self._profile_chunk):
             chunk = missing[start:start + self._profile_chunk]
             found = read_profiles(self._read(Route.PROFILES, {
                 "symbols": ",".join(chunk), "category": self._category}))
-            for symbol in chunk:
-                if found.get(symbol) is not None:
-                    self._types[symbol] = found[symbol]
-        # Only stated types are cached; an unknown one is asked again on the next pass.
-        return [replace(r, security_type=self._types.get(r.symbol)) for r in rows]
+            for profile in found.values():
+                if profile.security_type is not None and profile.symbol in chunk:
+                    self._types[profile.instrument_id] = (profile.symbol, profile.security_type)
+
+        def typed(row: ScreenerRow) -> ScreenerRow:
+            known = self._types.get(row.instrument_id)
+            same = known is not None and known[0] == row.symbol
+            return replace(row, security_type=known[1] if same else None)
+
+        return [typed(r) for r in rows]
 
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
         body = self._read(Route.SNAPSHOT, {
@@ -958,6 +988,7 @@ class StreamSession:
         self._utc_now = utc_now
         self._on_error = on_error
         self._lock = threading.Lock()
+        self._sync_lock = threading.RLock()  # one _sync at a time: no duplicate subscribe POSTs
         self._symbols: set[str] = set()
         self._sent: set[str] = set()  # subscribed on the current connection
         self._listener: QuoteListener | None = None
@@ -1002,6 +1033,10 @@ class StreamSession:
 
     def _sync(self) -> bool:
         """Send until the broker set equals the desired set. True once in sync (then up)."""
+        with self._sync_lock:
+            return self._sync_locked()
+
+    def _sync_locked(self) -> bool:
         while True:
             with self._lock:
                 if not self._connected:
@@ -1029,28 +1064,36 @@ class StreamSession:
             self._symbols.update(symbols)
             up = self._up
         if up:
-            self._sync()
+            self._sync_or_reconnect(raise_error=True)
 
     def unsubscribe(self, symbols: Iterable[str]) -> None:
         with self._lock:
             self._symbols.difference_update(symbols)
             up = self._up
         if up:
-            self._sync()
+            self._sync_or_reconnect(raise_error=True)
 
-    # -- calls from the provider thread
-    def on_connected(self) -> None:
-        with self._lock:
-            self._connected, self._up, self._sent = True, False, set()
+    def _sync_or_reconnect(self, raise_error: bool) -> bool:
+        """Sync; on failure mark the transport down (cause reported), call on_error and ask
+        for a reconnect, whose resubscribe sends the full set again. True when in sync."""
         try:
-            self._sync()
-        except Exception as exc:  # noqa: BLE001 - budget, HTTP or SDK failure while subscribing
+            return self._sync()
+        except Exception as exc:  # noqa: BLE001 - budget, HTTP or SDK failure while (un)subscribing
             with self._lock:
                 self._connected = self._up = False
             self._notify(False, f"resubscribe failed ({type(exc).__name__}); reconnecting")
             self._on_error("subscribe", exc)
             if self._reconnect is not None:
                 self._reconnect()
+            if raise_error:
+                raise
+            return False
+
+    # -- calls from the provider thread
+    def on_connected(self) -> None:
+        with self._lock:
+            self._connected, self._up, self._sent = True, False, set()
+        if not self._sync_or_reconnect(raise_error=False):
             return
         with self._lock:
             count = len(self._sent)

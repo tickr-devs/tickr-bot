@@ -121,16 +121,18 @@ status_recent_commands = 10
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).
 discovery_interval_seconds = 60
-# Exchange codes allowed in discovery: US exchanges (owner 2026-10-16; Webull screener `exchange_code`); the issuer's
-# country is not filtered, so US-listed foreign companies (ADRs) pass; read by data.discovery.
-allowed_exchanges = ["NMS", "NAS", "NSQ", "NYS", "ASE"]
+# Exchange codes allowed in discovery: US exchanges (owner 2026-10-16; Webull `exchange_code`; probe M1 saw NYSE as "NYSE",
+# Nasdaq as "NSQ"/"NMS", NYSE Arca as "PSE"). ETFs and warrants are excluded by security type below, never by exchange,
+# so Arca-listed common stocks pass. The issuer's country is not filtered, so US-listed foreign companies (ADRs) pass;
+# read by data.discovery.
+allowed_exchanges = ["NMS", "NAS", "NSQ", "NYS", "NYSE", "ASE", "PSE"]
 # Currencies allowed in discovery (screener `currency`); read by data.discovery.
 allowed_currencies = ["USD"]
 # Webull `category` sent with every screener, snapshot, bars and instrument-profile request; read by broker.webull market data.
 screener_category = "US_STOCK"
 # Security types allowed, as named by Webull's instrument profile (owner 2026-11-14: no ETFs, no warrants; ADRs on US
-# exchanges are fine). The profile's type field and values are UNPROVEN until the stage-0 probe; a row whose type is
-# unknown is refused. Read by data.discovery.
+# exchanges are fine). Probe M1 proved the profile field `sub_category` (COMMON_STOCK, ETF, WARRANT; ADRs are
+# COMMON_STOCK); a row whose type is unknown is refused. Read by data.discovery.
 allowed_security_types = ["COMMON_STOCK"]
 # Symbols per instrument-profile request (security type lookup, cached per symbol per New York day; limit unverified);
 # read by broker.webull market data.

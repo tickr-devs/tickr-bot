@@ -60,9 +60,40 @@ Not usable for US accounts: per-execution list (HK only), position details (JP o
 - Snapshot (`/market-data/stocks/snapshots/list`, up to 100 symbols): strings except `last_trade_time`, `quote_time` (epoch ms numbers); keys include `ask, ask_size, bid, bid_size, price, volume, open, high, low, pre_close, trade_status, list_status, quote_time, last_trade_time`; `extend_hour_*` with `extend_hour_required` (sometimes missing in PRE); `trade_status` seen `ATH`, `CLS`; on weekends returns HTTP 200 with Friday's quote.
 - Bars (POST `/market-data/stocks/bars/list`): 20 symbols per request (docs); count max 1200 (SDK) vs 1650 (docs), request at most 1200; shape `result[] {delay_minutes, instrument_id, symbol, result[] {time, open, high, low, close, volume, trading_session}}`; unadjusted; default RTH only. `delay_minutes` reveals delayed data.
 - L1 stream: MQTT + POST `/market-data/streaming/subscribe`; protobuf, all-string fields: `Quote {basic{symbol, instrument_id, timestamp ms, trading_session}, asks[], bids[]}`; `notice` JSON 1001 (status), 1002 (entitlement pre-empted). The SDK reconnects every 10 s forever but does NOT resubscribe; the adapter must resubscribe the full set on every connect.
-- Categories (SDK `webull/data/common/category.py`): US_STOCK, US_OPTION, HK_STOCK, US_ETF, HK_ETF, CN_STOCK, US_CRYPTO, US_FUTURES, US_EVENT, HK_FUTURES. Screeners take `category` (docstring: "Enum values: US_STOCK"). ETFs have their own category, but that a US_STOCK screener never lists ETFs or warrants is UNPROVEN. No screener or snapshot row states a security type (fixtures `market_data/`); the adapter looks it up in the instrument profile (probe M1).
-- Bars request (SDK): `symbols, category, timespan (M1...), count`, optional `real_time_required` (default off: only finalized minute bars), `trading_sessions`, `start_time`/`end_time` in epoch ms. Bar `time` wire format and whether it is the bar start: UNPROVEN (no raw bars body recorded); the reader accepts epoch ms or ISO-8601 with an offset and treats it as the start.
+- Categories (SDK `webull/data/common/category.py`): US_STOCK, US_OPTION, HK_STOCK, US_ETF, HK_ETF, CN_STOCK, US_CRYPTO, US_FUTURES, US_EVENT, HK_FUTURES. Screeners take `category` (docstring: "Enum values: US_STOCK"). ETFs have their own category, but that a US_STOCK screener never lists ETFs or warrants is UNPROVEN. No screener or snapshot row states a security type (fixtures `market_data/`); the adapter looks it up in the instrument profile `sub_category` (M1 below).
+- Bars request (SDK): `symbols, category, timespan (M1...), count`, optional `real_time_required` (default off: only finalized minute bars), `trading_sessions`, `start_time`/`end_time` in epoch ms. Bar `time` format: see M2 below.
 - Parse all prices and quantities with `Decimal`, never float.
+
+## M1 — security type in instrument profiles (probed 2026-11-14, Sandbox, read-only)
+
+Route: `GET /trading/instruments/stocks/profiles/list` (SDK `list_instruments`, version v3), `category=US_STOCK`.
+
+- `category` is `US_STOCK` for every row, including the ETF and warrants. It is not the security type.
+- The security type is `sub_category`:
+  - AAPL (common stock): `COMMON_STOCK`
+  - SPY (ETF): `ETF` (ETF rows also carry `crypto_etf`, `single_stock_etf`, `etf_leveraged_factor`)
+  - GRABW, SOUNW, OPENW (warrants): `WARRANT`
+  - TSM and BABA (ADRs): `COMMON_STOCK` — Webull does not mark ADRs (ADRs are allowed by the owner, so no ADR filter is needed).
+- One symbol can return more than one row: OPENW returned two `instrument_id`s (one `status=NT`, one `status=CO`). Identity must be by `instrument_id`, and a symbol with several rows must be resolved (or refused), not taken first-match.
+- `status` values seen: `OC` (AAPL, SPY, TSM, BABA), `CO` (warrants), `NT` (stale OPENW row). Meaning not documented; treat as unverified.
+- Warrant rows: `marginable=false`, `shortable=false`, `fractionable=false`, margin fields `1.0`; the `NT` row omits margin fields entirely (optional fields).
+- `exchange_code` values seen: `NSQ`, `NYSE`, `PSE` (SPY), `NMS` (SOUNW).
+- Numbers are decimal strings (`"0.2500000000"`).
+
+Fixture: `tests/fixtures/webull/market_data/instruments_stocks_profiles_list_mixed_types.json`.
+
+## M2 — M1 bar timestamp format (probed 2026-11-14, Sandbox, read-only)
+
+Route: SDK `get_history_bar("AAPL","US_STOCK","M1",count=5)` → `POST /market-data/stocks/bars/list` (v3; market-data read, not trading).
+
+- Envelope: `{"result":[{"symbol","instrument_id","delay_minutes","result":[bars]}]}`; `delay_minutes=0`.
+- Bar `time`: ISO-8601 string with millisecond precision and a `+0000` offset (no colon), e.g. `"2026-11-13T20:59:00.000+0000"`. Parse with `strptime(..., "%Y-%m-%dT%H:%M:%S.%f%z")` (verified); `datetime.fromisoformat` accepts it on Python 3.14, rejects it on 3.9.
+- Order: newest first.
+- The label is the bar start: the last RTH bar of Friday 2026-11-13 is `20:59` UTC = 15:59 ET. Its volume (6,884,218 vs ~200k for neighbours) includes the closing auction.
+- Each bar has `trading_session` (`RTH` here; `PRE`/`ATH` are the other requested values in the old bot).
+- OHLC and volume are decimal strings.
+
+Fixture: `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1.json`.
 
 ## Known SDK defects (3.0.3)
 - KD-1: streaming `SnapshotResult.close` is filled from `open`. Never use it.
@@ -76,4 +107,4 @@ Not usable for US accounts: per-execution list (HK only), position details (JP o
 - `/trade/calendar` works only on Production (read-only, the single allowed Production call). We keep `config/calendar/us-equity-<year>.json` with standard hours and exceptions (half days 2026-11-27 and 2026-12-24 close RTH at 13:00, POST at 17:00), cross-checked daily. Unknown or contradictory day = no trading. Next year's exceptions must be added before 1 December.
 
 ## Open broker questions (to prove by probe)
-F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; M1 (instrument profile `/trading/instruments/stocks/profiles/list` for a common stock, an ETF, a warrant and an ADR: which field names the security type and its values); M2 raw bars body during RTH (`time` format, start or end of the bar), a regular-session snapshot; M3 L1 stream: a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), notice 1001/1002, resubscribe after a forced reconnect.
+F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; a raw bars body and a snapshot during the regular session (M1/M2 above were probed on a closed market); M3 L1 stream: a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), notice 1001/1002, resubscribe after a forced reconnect.

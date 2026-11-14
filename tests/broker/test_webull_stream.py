@@ -279,3 +279,16 @@ def test_sdk_stream_reconnects_after_the_loop_ends(tmp_path, monkeypatch):
     assert runs == [False, False]
     assert [d for _, d in rec.transport] == ["stream loop stopped (RuntimeError)",
                                              "stream loop exited"]
+
+
+def test_subscribe_failure_while_up_marks_down_reconnects_and_raises():
+    s, sent, errors, budget = session(limit=1)
+    rec = Recorder()
+    s.subscribe(["AAA"], rec)
+    s.on_connected()  # uses the only subscribe slot
+    with pytest.raises(RateLimited):
+        s.subscribe(["BBB"], rec)
+    assert not s.up and sent[-1] == ("reconnect", [])
+    assert rec.transport[-1] == (False, "resubscribe failed (BudgetExhausted); reconnecting")
+    assert [w for w, _ in errors] == ["subscribe"]
+    assert s.symbols == {"AAA", "BBB"}  # kept: the next connect sends the full set

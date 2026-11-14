@@ -32,6 +32,7 @@ from aperture.broker.webull import (
     read_snapshot,
 )
 from aperture.data.base import DelayedData, MarketData, MarketDataError, ScreenerKind
+from aperture.data.discovery import DiscoverySettings, merge, universe_cause
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "webull" / "market_data"
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,7 +47,7 @@ def screener_keys() -> list[str]:
 
 def screener_row(symbol: str, **overrides: str) -> dict[str, str]:
     row = {k: "1.5" for k in screener_keys()}
-    row.update(symbol=symbol, instrument_id=f"9{len(symbol)}{symbol}", exchange_code="NSQ",
+    row.update(symbol=symbol, instrument_id=iid(symbol), exchange_code="NSQ",
                currency="USD", name=f"{symbol} Inc")
     row.update(overrides)
     return row
@@ -63,8 +64,24 @@ def snapshot_row(symbol: str, **overrides: Any) -> dict[str, Any]:
 
 def bar_row(minute: int) -> dict[str, Any]:
     start = NOW + timedelta(minutes=minute)
-    return {"time": int(start.timestamp() * 1000), "open": "10", "high": "10.5", "low": "9.9",
-            "close": "10.2", "volume": "1200", "trading_session": "RTH"}
+    return {"time": start.strftime("%Y-%m-%dT%H:%M:%S.000+0000"), "open": "10", "high": "10.5",
+            "low": "9.9", "close": "10.2", "volume": "1200", "trading_session": "RTH"}
+
+
+def iid(symbol: str) -> str:
+    return f"9{len(symbol)}{symbol}"
+
+
+def profile(symbol: str, sub_category: str | None = "COMMON_STOCK", instrument_id: str = ""):
+    row = {"symbol": symbol, "instrument_id": instrument_id or iid(symbol),
+           "category": "US_STOCK", "status": "OC"}
+    if sub_category is not None:
+        row["sub_category"] = sub_category
+    return row
+
+
+def recorded(name: str) -> Any:
+    return json.loads((FIXTURES / name).read_text("utf-8"))["body"]
 
 
 class Scripted:
@@ -122,13 +139,12 @@ def test_read_screener_refuses_missing_identity(missing):
 def test_screener_routes_params_and_profile_types():
     md, transport = adapter(
         ok([screener_row("AAA"), screener_row("ETFX")]),
-        ok([{"symbol": "AAA", "instrument_type": "COMMON_STOCK"},
-            {"symbol": "ETFX", "instrument_type": "ETF"}]),
+        ok({"data": [profile("AAA"), profile("ETFX", "ETF")]}),
         ok([screener_row("AAA")]),
         ok([screener_row("NEW")]),
-        ok({"data": [{"symbol": "NEW"}]}),
+        ok({"data": [profile("NEW", None)]}),
         ok([screener_row("NEW")]),
-        ok([{"symbol": "NEW", "security_type": "COMMON_STOCK"}]),
+        ok({"data": [profile("NEW")]}),
     )
     gainers = md.screener(ScreenerKind.GAINERS)
     assert [r.security_type for r in gainers] == ["COMMON_STOCK", "ETF"]
@@ -152,11 +168,10 @@ def test_profile_cache_resets_on_a_new_new_york_day_and_chunks():
     clock = {"now": NOW}
     md, transport = adapter(
         ok([screener_row("A"), screener_row("B"), screener_row("C")]),
-        ok([{"symbol": "A", "security_type": "COMMON_STOCK"},
-            {"symbol": "B", "security_type": "COMMON_STOCK"}]),
-        ok([{"symbol": "C", "security_type": "COMMON_STOCK"}]),
+        ok({"data": [profile("A"), profile("B")]}),
+        ok({"data": [profile("C")]}),
         ok([screener_row("A")]),
-        ok([{"symbol": "A", "security_type": "WARRANT"}]),
+        ok({"data": [profile("A", "WARRANT")]}),
         now=lambda: clock["now"], chunk=2,
     )
     md.screener(ScreenerKind.GAINERS)
@@ -175,7 +190,57 @@ def test_profile_budget_refusal_is_visible():
 
 def test_read_profiles_refuses_contradictions():
     with pytest.raises(MalformedResponse, match="twice"):
-        read_profiles([{"symbol": "A", "type": "X"}, {"symbol": "A", "type": "Y"}])
+        read_profiles({"data": [profile("A"), profile("A", "ETF")]})
+    with pytest.raises(MalformedResponse, match="instrument_id"):
+        read_profiles({"data": [{"symbol": "A", "sub_category": "COMMON_STOCK"}]})
+
+
+def test_recorded_profiles_types_and_multi_row_symbol():
+    profiles = read_profiles(recorded("instruments_stocks_profiles_list_mixed_types.json"))
+    by_symbol: dict[str, list[str | None]] = {}
+    for p in profiles.values():
+        by_symbol.setdefault(p.symbol, []).append(p.security_type)
+    assert by_symbol == {"AAPL": ["COMMON_STOCK"], "BABA": ["COMMON_STOCK"],
+                         "TSM": ["COMMON_STOCK"], "SPY": ["ETF"], "GRABW": ["WARRANT"],
+                         "SOUNW": ["WARRANT"], "OPENW": ["WARRANT", "WARRANT"]}
+    assert {"950176123", "951011795"} <= set(profiles)
+
+
+def test_recorded_profiles_admit_common_stock_and_adrs_only():
+    body = recorded("instruments_stocks_profiles_list_mixed_types.json")
+    rows = [screener_row(p["symbol"], instrument_id=p["instrument_id"],
+                         exchange_code=p["exchange_code"])
+            for p in body["data"] if p["status"] != "NT"]
+    md, _ = adapter(ok(rows), ok(body))
+    typed = md.screener(ScreenerKind.GAINERS)
+    cfg = config.load(ROOT / "config" / "bot.toml")
+    settings = DiscoverySettings.from_config(cfg)
+    instruments, _ = merge(typed)
+    admitted = sorted(i.symbol for i in instruments if universe_cause(i, settings) is None)
+    assert admitted == ["AAPL", "BABA", "TSM"]  # ETF and warrants refused, ADRs pass
+
+
+@pytest.mark.parametrize(("security_type", "admitted"), [("COMMON_STOCK", True), ("ETF", False)])
+def test_nyse_arca_listing_is_judged_by_type_not_exchange(security_type, admitted):
+    md, _ = adapter(ok([screener_row("ARCA", exchange_code="PSE")]),
+                    ok({"data": [profile("ARCA", security_type)]}))
+    cfg = config.load(ROOT / "config" / "bot.toml")
+    settings = DiscoverySettings.from_config(cfg)
+    instruments, _ = merge(md.screener(ScreenerKind.GAINERS))
+    cause = universe_cause(instruments[0], settings)
+    assert (cause is None) is admitted
+
+
+def test_multi_row_symbol_resolved_by_the_screener_instrument_id():
+    md, _ = adapter(
+        ok([screener_row("OPENW", instrument_id="951011795"), screener_row("X")]),
+        ok({"data": [profile("OPENW", "WARRANT", "950176123"),
+                     profile("OPENW", "COMMON_STOCK", "951011795"),
+                     profile("X", "COMMON_STOCK", "other-id")]}),
+    )
+    rows = md.screener(ScreenerKind.GAINERS)
+    assert rows[0].security_type == "COMMON_STOCK"  # matched by id, not first symbol hit
+    assert rows[1].security_type is None  # profile id differs from the screener id: refused
 
 
 def test_read_snapshot_uses_quote_time_and_receipt_time():
@@ -220,11 +285,19 @@ def test_snapshot_refuses_symbols_not_requested():
         md.snapshot(["AAA"])
 
 
+def test_recorded_bars_newest_first_become_oldest_first_starts():
+    bars = read_bars(recorded("stocks_bars_list_aapl_m1.json"))
+    assert [b.start.strftime("%H:%M") for b in bars] == ["20:55", "20:56", "20:57", "20:58",
+                                                          "20:59"]
+    last = bars[-1]  # 15:59 New York: the bar START, closing auction volume included
+    assert last.start == datetime(2026, 11, 13, 20, 59, tzinfo=UTC)
+    assert (last.open, last.close, last.volume) == (D("356.19"), D("356.27"), D(6884218))
+    assert {b.symbol for b in bars} == {"AAPL"}
+
+
 def test_read_bars_time_formats():
-    iso = dict(bar_row(0), time="2026-11-13T10:00:00-05:00")
-    bars = read_bars({"result": [{"delay_minutes": "0", "symbol": "A", "result": [iso]}]})
-    assert bars[0].start == NOW
-    for bad in ["2026-11-13T10:00:00", "yesterday", 1.5]:
+    for bad in ["2026-11-13T10:00:00", "2026-11-13T15:00:00-05:00", "2026-11-13T20:59:30.000+0000",
+                "yesterday", 1794431115431, 1.5]:
         with pytest.raises(MalformedResponse):
             read_bars({"result": [{"delay_minutes": 0, "symbol": "A",
                                    "result": [dict(bar_row(0), time=bad)]}]})
@@ -242,6 +315,9 @@ def test_read_bars_refuses_delayed_and_malformed():
     with pytest.raises(MalformedResponse, match="close"):
         read_bars({"result": [{"delay_minutes": 0, "symbol": "A",
                                "result": [{k: v for k, v in bar_row(0).items() if k != "close"}]}]})
+    with pytest.raises(MalformedResponse, match="trading_session"):
+        read_bars({"result": [{"delay_minutes": 0, "symbol": "A",
+                               "result": [dict(bar_row(0), trading_session="PRE")]}]})
 
 
 def test_http_error_is_a_typed_read_failure():
@@ -259,5 +335,5 @@ def test_stream_not_implemented_is_refused():
 def test_from_config_uses_market_data_section():
     cfg = config.load(ROOT / "config" / "bot.toml")
     md = market_data_from_config(cfg, transport=Scripted(
-        ok([screener_row("A")]), ok([{"symbol": "A", "security_type": "COMMON_STOCK"}])))
+        ok([screener_row("A")]), ok({"data": [profile("A")]})))
     md.screener(ScreenerKind.GAINERS)
