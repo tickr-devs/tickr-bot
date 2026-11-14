@@ -4,6 +4,7 @@ Newest first. Only decisions that are in force. Each line: date, decision, where
 
 | Date | Decision | Applies to |
 |---|---|---|
+| 2026-11-14 | The strategy computes the position quantity: min(floor(planned loss / per-share risk), floor(notional cap / entry window top)), below 1 share = refuse; returned in `Decision.quantity`. The platform checks it against its own `[risk]` limits and refuses on breach. | strategy, spec-v1 section 5 |
 | 2026-11-14 | Rewrite in this new repository from scratch; the old `Trading` project is frozen and used as a read-only reference. Port knowledge (broker facts, recorded responses, config values), not code. | everything |
 | 2026-11-14 | First release scope: one active strategy, regular session only, long only, one open position, no trailing stop, minimal status screen. | spec-v1 |
 | 2026-11-14 | Bot is a headless service exposing state and commands through a small local API (127.0.0.1). Next UI stage: native macOS app in SwiftUI, later iOS with push notifications. The old web dashboard is not ported. | spec-v1, backlog |

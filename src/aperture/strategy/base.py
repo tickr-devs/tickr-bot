@@ -55,6 +55,9 @@ class Decision:
     entry_high: Decimal | None = None
     stop: Decimal | None = None
     setup: str | None = None
+    quantity: Decimal | None = None
+    """Whole shares the strategy sized for (set on ENTER); the platform checks it against
+    its own limits and refuses on breach."""
 
     @property
     def decisive(self) -> Check | None:
