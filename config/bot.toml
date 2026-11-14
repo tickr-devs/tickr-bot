@@ -111,6 +111,20 @@ token_dir = "webull-token-sandbox"
 requests_per_route_per_minute = 30
 # Seconds a route pauses after an HTTP 429; read by the request budget.
 rate_limit_cooldown_seconds = 60
+# Webull region id passed to the SDK client; read by the broker adapter.
+region_id = "us"
+# Seconds to wait for a TCP/TLS connection to the HTTP API; read by the broker adapter.
+http_connect_timeout_seconds = 5
+# Seconds to wait for an HTTP response after connecting; read by the broker adapter.
+http_read_timeout_seconds = 10
+# Seconds the SDK waits for the owner to approve a new token in the Webull app; read by the broker adapter.
+token_check_duration_seconds = 300
+# Seconds between token approval checks while waiting; read by the broker adapter.
+token_check_interval_seconds = 5
+# Maximum pages read when listing open orders; more pages = refuse as incomplete; read by the broker adapter.
+open_orders_max_pages = 20
+# Route-specific limits "<route path>" = [requests, window seconds]; empty = every route uses requests_per_route_per_minute; read by the request budget.
+route_limits = {}
 
 [environments.production]
 # May this process send trading requests in this environment; false until the owner enables Production.
@@ -143,3 +157,17 @@ token_dir = "webull-token-production"
 requests_per_route_per_minute = 20
 # Seconds a route pauses after an HTTP 429; read by the request budget.
 rate_limit_cooldown_seconds = 60
+# Webull region id passed to the SDK client; read by the broker adapter.
+region_id = "us"
+# Seconds to wait for a TCP/TLS connection to the HTTP API; read by the broker adapter.
+http_connect_timeout_seconds = 5
+# Seconds to wait for an HTTP response after connecting; read by the broker adapter.
+http_read_timeout_seconds = 10
+# Seconds the SDK waits for the owner to approve a new token in the Webull app; read by the broker adapter.
+token_check_duration_seconds = 300
+# Seconds between token approval checks while waiting; read by the broker adapter.
+token_check_interval_seconds = 5
+# Maximum pages read when listing open orders; more pages = refuse as incomplete; read by the broker adapter.
+open_orders_max_pages = 20
+# Route-specific limits "<route path>" = [requests, window seconds] (docs, unverified; never assume the looser value); read by the request budget.
+route_limits = { "/trading/accounts/list" = [10, 30], "/trading/orders/get" = [2, 2], "/trading/orders/open-orders/list" = [2, 2], "/trading/assets/positions/list" = [2, 2], "/trading/orders/place" = [600, 60], "/trading/orders/cancel" = [600, 60] }

@@ -203,3 +203,17 @@ def test_cli_status_with_run(tmp_path, capsys):
     assert main(["--config", str(path), "status"]) == 0
     out = capsys.readouterr().out
     assert "1 runs" in out and "still open" in out
+
+
+def test_route_limits_parsed():
+    cfg = config.load(BOT)
+    gated = next(e for e in cfg.environments.values() if e.requires_owner_authorization)
+    assert gated.route_limits["/trading/orders/get"] == (2, config.Decimal(2))
+
+
+@pytest.mark.parametrize("bad", ["[0, 30]", "[10]", '["10", 30]', "[10, -1]", "5"])
+def test_bad_route_limit_refused(tmp_path, bad):
+    new = f'route_limits = {{ "/x" = {bad} }}'
+    text = BOT.read_text("utf-8").replace("route_limits = {}", new, 1)
+    with pytest.raises(config.ConfigError, match="route_limits"):
+        config.load(_copy(tmp_path, text))

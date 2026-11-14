@@ -98,6 +98,13 @@ class EnvironmentConfig:
     token_dir: str
     requests_per_route_per_minute: int
     rate_limit_cooldown_seconds: Decimal
+    region_id: str
+    http_connect_timeout_seconds: int
+    http_read_timeout_seconds: int
+    token_check_duration_seconds: int
+    token_check_interval_seconds: int
+    open_orders_max_pages: int
+    route_limits: dict[str, tuple[int, Decimal]]
 
     @property
     def hosts(self) -> frozenset[str]:
@@ -159,6 +166,19 @@ def _coerce(where: str, value: Any, target: Any) -> Any:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             raise ConfigError(f"{where}: expected a list of strings, got {value!r}")
         return tuple(value)
+    if target == dict[str, tuple[int, Decimal]]:
+        if not isinstance(value, dict):
+            raise ConfigError(f"{where}: expected a table of route limits, got {value!r}")
+        limits: dict[str, tuple[int, Decimal]] = {}
+        for route, pair in value.items():
+            if (not isinstance(pair, list) or len(pair) != 2
+                    or isinstance(pair[0], bool) or not isinstance(pair[0], int)
+                    or isinstance(pair[1], bool) or not isinstance(pair[1], int | float)
+                    or pair[0] <= 0 or pair[1] <= 0):
+                raise ConfigError(
+                    f"{where} {route!r}: expected [requests > 0, window seconds > 0], got {pair!r}")
+            limits[route] = (pair[0], Decimal(str(pair[1])))
+        return limits
     raise ConfigError(f"{where}: unsupported type {target!r}")  # pragma: no cover
 
 
