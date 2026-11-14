@@ -32,7 +32,6 @@ Strategy and research:
 - **Trigger confirmation**: two consecutive executable quotes through the trigger before ENTER, against one-quote flicker entries (old trading review of #153).
 - **Acceleration check** (price velocity, dollar volume per minute) as a strategy rule, kept only if recorded days show it helps (old #153-33, ADR 0013).
 - **Screener source and rank vs outcome**: do the list (gainers/losers/top actives) or the rank predict the move? Study on recorded days (old Q46).
-- **Per-check refusal table**: decisions already record the first failed check and the refusal cause, and the research report and advisor evidence count them; missing is a per-day, per-setup table in the research CLI (old #085, product-spec Q25).
 - **Quote latency report** from capture files (receipt minus provider time by symbol and hour), plus the stream notice 1001 counters `drop`/`rtt`/`sent`: the adapter recognises notice 1001 but drops these counters today (old #094, #028).
 
 Broker and safety features:

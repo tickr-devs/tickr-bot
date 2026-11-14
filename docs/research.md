@@ -1,4 +1,4 @@
-# Signal research: outcomes, what-if, version diff
+# Signal research: outcomes, what-if, version diff, refusals
 
 `aperture.research` answers these questions offline, from captured M1 bars (the bar JSONL format
 of `docs/replay.md`) and recorded decisions. It never trades. The bot imports only its record
@@ -10,6 +10,7 @@ format (`records.py`), through the observers (`docs/observers.md`).
 | `whatif` | What if we had entered on an ENTER that was refused or never evaluated? | `simulated` |
 | `decide` + `diff` | What would another strategy version have decided over the same day? | (decisions) |
 | `observers` | How did the live observer versions do against the active one today? | `simulated` |
+| `refusals` | Per day and setup: which check refused first, which platform causes, how many entries? | (counts) |
 
 Outcomes are price moves, never called profit. What-if results are simulated with the replay's
 conservative fill model and prove nothing about real fills.
@@ -124,6 +125,26 @@ close, so quote-dependent checks (spread, cost rule) can differ for that reason 
 
 Hold-out rule (`docs/advisor.md`): when the candidate version was tuned on some days, a `diff`
 or `whatif` over those days says nothing about the change; run it on other days.
+
+## refusals: per-day, per-setup refusal table
+
+```
+python -m aperture.research refusals --decisions decisions.jsonl \
+  [--strategy price-action-v1:1] --settings config/research.toml --out out/refusals
+```
+
+Counts recorded decisions per session date (in `session_timezone`), strategy, version, role
+and setup; nothing is replayed. Each row has a `kind`, a `name` and a `count`:
+
+- `first_failed_check`: IGNORE and WATCH decisions whose first failed check is `name` (the
+  same count as the advisor evidence; decisions where every check passed are not counted);
+- `platform_refusal`: ENTERs refused at admission, `name` = `refusal_cause`;
+- `enter`: ENTERs by admission, `name` = `taken`, `refused` or `not_evaluated`.
+
+`setup` is empty when the decision named none (for price-action-v1: no setup armed). Rows are
+sorted by day, strategy, version, role, setup, kind, then count (largest first). HOLD and EXIT
+are not counted. Outputs: `refusals.csv` (one row per count, long format, easy to pivot in a
+spreadsheet) and `refusals_summary.json` (days, rows, totals by kind).
 
 ## Settings
 

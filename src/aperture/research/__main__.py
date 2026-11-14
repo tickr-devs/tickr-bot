@@ -17,7 +17,7 @@ from aperture.replay.__main__ import session_clock, strategy_factory
 from aperture.replay.bars import load_bars
 from aperture.replay.errors import ReplayError
 from aperture.replay.settings import load_settings
-from aperture.research import compare, observer_report, report
+from aperture.research import compare, observer_report, refusals, report
 from aperture.research.errors import ResearchError
 from aperture.research.outcomes import outcomes
 from aperture.research.records import load_records, write_records
@@ -73,6 +73,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--candidate-strategy", help="NAME or NAME:VERSION to keep from candidate")
     p.add_argument("--settings", type=Path, required=True, help="research TOML (time zone)")
     p.add_argument("--out", type=Path, required=True, help="output directory")
+
+    p = sub.add_parser("refusals", help="per day and setup: first failed checks, refusals, entries")
+    p.add_argument("--decisions", type=Path, nargs="+", required=True, help="decision JSONL")
+    p.add_argument("--strategy", help="NAME or NAME:VERSION to keep")
+    p.add_argument("--settings", type=Path, required=True, help="research TOML (time zone)")
+    p.add_argument("--out", type=Path, required=True, help="output directory")
     return parser
 
 
@@ -99,6 +105,11 @@ def _run(args: argparse.Namespace) -> dict:
             settings.session_timezone,
         )
         return report.write_diff(result, args.out, settings.output_decimal_places)
+    if args.command == "refusals":
+        settings = load_research_settings(args.settings)
+        rows = refusals.table(_filter(load_records(args.decisions), args.strategy),
+                              settings.session_timezone)
+        return report.write_refusals(rows, args.out, settings.output_decimal_places)
     replay_settings = load_settings(args.replay_settings)
     clock_for = session_clock(args.config)
     places = replay_settings.output_decimal_places
