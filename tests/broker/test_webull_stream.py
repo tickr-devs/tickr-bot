@@ -146,7 +146,7 @@ def test_subscribe_racing_with_connect_is_sent_before_up():
 
     s.bind(send, lambda syms: sent.append(("unsub", syms)), lambda: None)
     s.on_connected()
-    assert sent == [("sub", ["AAA"]), ("sub", ["BBB"]), ("unsub", ["AAA"])]
+    assert sent == [("sub", ["AAA"]), ("unsub", ["AAA"]), ("sub", ["BBB"])]  # freed slot first
     assert s.up and rec.transport == [(True, "connected, 1 symbol(s) subscribed")]
 
 
@@ -389,3 +389,49 @@ def test_sdk_stream_maps_417_to_subscription_limit(tmp_path, monkeypatch):
     with pytest.raises(SubscriptionLimit):
         stream.subscribe(["BBB"], listener)
     assert not s.up and s.symbols == {"AAA"}
+
+
+class CappedProvider:
+    """Counts the current subscribed set like Webull (probes M3/M3b) and refuses past `cap`."""
+
+    def __init__(self, cap: int) -> None:
+        self.cap = cap
+        self.live: set[str] = set()
+        self.calls: list = []
+
+    def subscribe(self, symbols):
+        self.calls.append(("sub", list(symbols)))
+        if len(self.live | set(symbols)) > self.cap:
+            raise subscribe_error(ProviderLimit(), symbols, self.cap)
+        self.live.update(symbols)
+
+    def unsubscribe(self, symbols):
+        self.calls.append(("unsub", list(symbols)))
+        self.live.difference_update(symbols)
+
+
+def test_m3b_recorded_unsubscribe_frees_slots():
+    events = json.loads((FIXTURES / "streaming_subscribe_slot_reuse.json").read_text("utf-8"))
+    steps = {e["label"]: e for e in events["events"] if e["kind"] == "step"}
+    assert all(e["ok"] and e["http_status"] == 200 for e in steps.values())
+    assert steps["1-subscribe-100"]["count"] == 100
+    assert steps["3-subscribe-20-new-after-explicit-unsubscribe"]["ok"]
+    assert steps["5-subscribe-100-new-after-unsubscribe-all"]["count"] == 100
+
+
+def test_rotation_at_the_cap_unsubscribes_before_subscribing():
+    s, _, errors, _ = session(max_symbols=3)
+    provider = CappedProvider(3)
+    s.bind(provider.subscribe, provider.unsubscribe, lambda: None)
+    rec = Recorder()
+    s.subscribe(["A", "B", "C"], rec)
+    s.on_connected()
+    s.unsubscribe(["A"])
+    s.subscribe(["D"], rec)  # rotation within one connection, full all the time
+    assert provider.live == {"B", "C", "D"} and s.up and errors == []
+    # Both directions in one sync (e.g. a resync after a race): the freed slot comes first.
+    with s._lock:
+        s._symbols = {"C", "D", "E"}
+    assert s._sync()
+    assert provider.calls[-2:] == [("unsub", ["B"]), ("sub", ["E"])]
+    assert provider.live == {"C", "D", "E"}

@@ -129,7 +129,22 @@ One MQTT session; QUOTE subscribes via `POST /market-data/streaming/subscribe` (
 - Not tested: the number of concurrent connections per App Key (docs claim ≤5) and whether two connections give 2 × 100.
 
 Fixture: `tests/fixtures/webull/market_data/streaming_subscribe_capacity_ramp.json` (event log of the ramp; the universe filter excluded BK, EA, FI, MMC as ambiguous or not `COMMON_STOCK`/`OC`).
-- **How Aperture uses it:** `[market_data] stream_max_symbols` (100, never above) caps one connection; `StreamSession` refuses a subscribe that would pass it before sending (`SubscriptionLimit`). A provider 417 `TOO_MANY_SYMBOLS_SUBSCRIPTION` under our cap means Webull counts differently (for example an unsubscribe that does not free a slot): the refused symbols are taken back out, the transport is reported down and a reconnect is requested (a fresh connection resets the count), and `SubscriptionLimit` is raised. `stream_reserved_symbols` keeps slots free of discovery candidates for the position and WATCH symbols.
+- **How Aperture uses it:** `[market_data] stream_max_symbols` (100, never above) caps one connection; `StreamSession` refuses a subscribe that would pass it before sending (`SubscriptionLimit`). A provider 417 `TOO_MANY_SYMBOLS_SUBSCRIPTION` under our cap would mean Webull counts differently (not expected since M3b; fallback only): the refused symbols are taken back out, the transport is reported down and a reconnect is requested (a fresh connection resets the count), and `SubscriptionLimit` is raised. `stream_reserved_symbols` keeps slots free of discovery candidates for the position and WATCH symbols.
+
+## M3b — unsubscribe frees slots (probed 2026-11-14, Sandbox, read-only, market closed)
+
+One MQTT session, `MarketDataStreaming.subscribe/unsubscribe`, QUOTE, US_STOCK. Every step returned HTTP 200 with an empty body:
+1. subscribe 100 symbols in **one** request (accepted on a fresh connection);
+2. unsubscribe 20 of them by explicit list (`unsubscribe_all=false`);
+3. subscribe 20 new symbols → **accepted** (no `417 TOO_MANY_SYMBOLS_SUBSCRIPTION`): explicit unsubscribe frees slots;
+4. `unsubscribe_all=true` (symbols, category and sub_types omitted) → accepted;
+5. subscribe 100 symbols not currently subscribed (92 never used on this session) → **accepted**: `unsubscribe_all` frees all 100;
+6. unsubscribe those 100 explicitly → accepted.
+
+So the 100-symbol cap is on the current subscribed set per session, not on total symbols ever subscribed. Rotation inside one connection is possible. Not re-probed: a fresh 417 at the boundary after reuse (e.g. a 101st symbol after step 3); quote flow (market closed).
+
+Fixture: `tests/fixtures/webull/market_data/streaming_subscribe_slot_reuse.json`.
+- **How Aperture uses it:** `StreamSession` counts the current desired set against `stream_max_symbols` and sends unsubscribes before subscribes, so candidates rotate on one connection. The reconnect on a provider 417 under our cap stays only as a fallback.
 
 ## Known SDK defects (3.0.3)
 - KD-1: streaming `SnapshotResult.close` is filled from `open`. Never use it.
@@ -143,4 +158,4 @@ Fixture: `tests/fixtures/webull/market_data/streaming_subscribe_capacity_ramp.js
 - `/trade/calendar` works only on Production (read-only, the single allowed Production call). We keep `config/calendar/us-equity-<year>.json` with standard hours and exceptions (half days 2026-11-27 and 2026-12-24 close RTH at 13:00, POST at 17:00), cross-checked daily. Unknown or contradictory day = no trading. Next year's exceptions must be added before 1 December.
 
 ## Open broker questions (to prove by probe)
-F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; a raw bars body and a snapshot during the regular session (M1/M2 above were probed on a closed market); L1 stream: does an unsubscribe free a slot on the same connection (runtime rotates candidates all day); during RTH (M3 second half): a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), do quotes flow for all 100 symbols, notice 1002, resubscribe after a forced reconnect.
+F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; a raw bars body and a snapshot during the regular session (M1/M2 above were probed on a closed market); L1 stream: a 417 at the boundary after slot reuse (101st symbol after a rotation); during RTH (M3 second half): a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), do quotes flow for all 100 symbols, notice 1002, resubscribe after a forced reconnect.

@@ -1028,8 +1028,9 @@ class StreamSession:
     - Disconnect, entitlement pre-emption (notice 1002) and a stopped loop report "down".
     - At most `max_symbols` symbols per connection (probe M3: 100, cumulative). A subscribe()
       that would pass it raises SubscriptionLimit before anything is sent, without reconnecting.
-      A provider refusal of the same kind (HTTP 417) while under our cap means the provider
-      counts differently (for example an unsubscribe that does not free a slot, untested in M3):
+      Slots are counted on the current set, as Webull does (probe M3b: an unsubscribe frees its
+      slots), so candidates rotate on one connection. A provider refusal of the same kind (HTTP
+      417) while under our cap is therefore unexpected and only a fallback is kept for it:
       its symbols are taken back out and it is handled like any failed subscribe (transport
       down, reconnect, so a fresh connection resets the count), then SubscriptionLimit raises.
     """
@@ -1099,14 +1100,16 @@ class StreamSession:
                 if not pending and not stale:
                     self._up = True
                     return True
-            if pending:
-                self._send(True, pending)
-                with self._lock:
-                    self._sent.update(pending)
+            # Unsubscribe first: the provider cap is on the current set (probe M3b), so freed
+            # slots must be free before the new symbols arrive.
             if stale:
                 self._send(False, stale)
                 with self._lock:
                     self._sent.difference_update(stale)
+            if pending:
+                self._send(True, pending)
+                with self._lock:
+                    self._sent.update(pending)
 
     # -- calls from the bot
     def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:

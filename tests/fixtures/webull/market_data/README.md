@@ -14,6 +14,7 @@ not full responses. They are what was recorded, copied unchanged from the owner'
 | `stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json` | probe M4, Sandbox, 2026-11-14 (body only, 12 of 1200 bars) | `end_time` exclusive (newest bar = end - 1 min); PRE/RTH/ATH labels and boundaries; a missing PRE minute |
 | `stocks_bars_list_aapl_m1_window_pre_rth.json` | probe M4, same (6 of 61 bars) | `start_time` returns one extra bar at start - 1 min |
 | `streaming_subscribe_capacity_ramp.json` | probe M3, Sandbox, 2026-11-14 (event log, market closed) | stream subscribe ramp 5 → 100 accepted (empty 200), 150 refused with HTTP 417 `TOO_MANY_SYMBOLS_SUBSCRIPTION`; notice 1001 `{drop, rtt, sent}` |
+| `streaming_subscribe_slot_reuse.json` | probe M3b, Sandbox, 2026-11-14 (event log, market closed) | 100 in one subscribe accepted; explicit unsubscribe of 20 frees 20 slots; `unsubscribe_all` frees all; the cap is on the current set |
 | `snapshot_bars_keys.md` | owner run 2026-11-11 ~02:45Z, AAPL | snapshot regular/extended key names and types; M1 bars structure `$.result[] {delay_minutes, instrument_id, symbol, result[] {time, open, high, low, close, volume, trading_session}}` |
 
 Facts worth reading off: all screener and snapshot values are strings except `quote_time`,
