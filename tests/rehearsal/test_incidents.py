@@ -125,28 +125,36 @@ def test_the_broker_refuses_the_stop_and_the_close(tmp_path, monkeypatch):
     assert not any("protection restored" in text for _, text in shown)
 
 
-def test_the_daily_loss_ceiling_stops_new_entries(tmp_path, monkeypatch):
+def test_near_the_daily_ceiling_trades_shrink_then_stop(tmp_path, monkeypatch):
+    """Owner decision 2026-11-14: near the ceiling a trade is sized down to the room left;
+    below `min_daily_room_usd` entries stop and status says so."""
     r = Rehearsal(tmp_path, monkeypatch)
 
     def hm(minute: int) -> str:
         return f"{minute // 60:02d}:{minute % 60:02d}"
 
-    names = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+    names = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG"]
     for i, symbol in enumerate(names):
         start = 9 * 60 + 30 + 40 * i  # one breakout every 40 minutes, each collapses
         r.world.add_symbol(symbol, build_day(symbol, DAY, D(20), D(3000), [
             (hm(start), hm(start + 15), D("24.50"), D(200000)),
             (hm(start + 25), hm(start + 26), D(19), HOT)]), history(symbol, D(20)))
     seen = {}
-    r.at("13:10", lambda: seen.setdefault("status", r.status()))
-    assert r.run_until("13:20") == 0
-    assert causes(r) == ["stopped-out"] * 5
+    r.at("13:10", lambda: seen.setdefault("status", r.status()))  # FFF held
+    assert r.run_until("14:00") == 0
+    trades = r.trades()
+    assert [t["symbol"] for t in trades] == names[:6]  # GGG: no room left
+    assert causes(r) == ["stopped-out"] * 6
+    risk = r.config.risk
+    full, small = trades[0], trades[5]
+    realized_before_fff = sum(t.result_gross_usd for t in r.status().trades_today[:5])
+    room = risk.max_daily_loss_usd + realized_before_fff
+    assert D(small["planned_loss_usd"]) <= room < risk.planned_loss_usd
+    assert D(small["entry_quantity"]) < D(full["entry_quantity"])
     block = seen["status"].entry_block
     assert block is not None and block.cause == "daily_ceiling"  # the app does not say "open"
-    ceiling = r.config.risk.max_daily_loss_usd
-    result = r.status().result_today_gross_usd
-    assert -ceiling < result < -ceiling + r.config.risk.planned_loss_usd
-    refused = [d for d in r.decisions() if d["symbol"] == "FFF" and d["verdict"] == "ENTER"]
-    assert refused and all(d["admission"] == "refused" for d in refused)
-    assert all("DAILY_CEILING" in str(d) for d in refused)
-    assert "FFF" not in {s for _, s, *_ in r.world.exchange.fills}
+    assert "GGG" not in {s for _, s, *_ in r.world.exchange.fills}
+    # GGG's breakout is still an ENTER; the platform refuses it with the typed cause.
+    ggg = [d for d in r.decisions() if d["symbol"] == "GGG" and d["verdict"] == "ENTER"]
+    assert ggg and all(d["admission"] == "refused" for d in ggg)
+    assert all(d["refusal_cause"].startswith("DAILY_CEILING") for d in ggg)

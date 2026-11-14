@@ -17,6 +17,7 @@ from aperture.data.history import HistoryReader, HistorySettings, HistoryUnavail
 from aperture.engine.core import Engine
 from aperture.observers.log import DecisionLog
 from aperture.research.records import load_records
+from aperture.runtime import evaluation
 from aperture.runtime.entries import EntryDesk
 from aperture.runtime.evaluation import (
     EVALUATION_STOPPED,
@@ -254,3 +255,19 @@ def test_a_failed_history_read_stops_the_minute_and_is_retried(tmp_path, error):
     rig.now += timedelta(minutes=1)
     rig.evaluator.tick(["ABC"])
     assert [c.symbol for c in rig.strategy.seen] == ["ABC"]
+
+
+@pytest.mark.parametrize(("room", "budget"), [
+    (None, None),                                  # money unknown: admission refuses it
+    (CFG.risk.min_daily_room_usd - D("0.01"), None),  # below the minimum: admission refuses
+    (CFG.risk.min_daily_room_usd, CFG.risk.min_daily_room_usd),
+    (D(120), D(120)),
+])
+def test_the_strategy_sizes_into_the_daily_room_only_above_the_minimum(tmp_path, monkeypatch,
+                                                                       room, budget):
+    monkeypatch.setattr(evaluation, "daily_loss_room", lambda engine, config, now: room)
+    rig = Rig(tmp_path)
+    rig.symbol("ABC")
+    rig.evaluator.tick(["ABC"])
+    (context,) = rig.strategy.seen
+    assert context.loss_budget_usd == budget

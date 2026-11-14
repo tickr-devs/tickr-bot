@@ -499,3 +499,21 @@ def test_decision_at_t_ignores_bars_after_t(scenario):
         again = s.evaluate(ctx(corrupted[: t + 1], GOOD_QUOTE, prior))
         assert again == clean
         assert corrupted == snapshot
+
+
+def test_quantity_shrinks_to_the_daily_loss_budget():
+    """Owner decision 2026-11-14: near the daily ceiling, size down to the room left."""
+    def sized(budget):
+        context = SymbolContext(SYMBOL, BREAKOUT_BARS, prior_sessions(), GOOD_QUOTE, None,
+                                budget)
+        return make().evaluate(context)
+
+    # sizing risk 0.704: a 20 USD budget -> floor(28.4) = 28 shares instead of 71
+    small = sized(d(20))
+    assert small.verdict == Verdict.ENTER and quantity(small) == d(28)
+    assert "daily_loss_budget_usd" in rules(small)
+    # a budget at or above the strategy's own planned loss changes nothing
+    assert quantity(sized(d(50))) == d(71) and "daily_loss_budget_usd" not in rules(sized(d(50)))
+    assert quantity(sized(None)) == d(71)
+    # no room: refused with the quantity rule, never a negative or zero order
+    assert_refused(sized(d(0)), Verdict.IGNORE, "quantity")

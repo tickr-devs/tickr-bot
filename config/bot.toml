@@ -25,6 +25,10 @@ planned_loss_usd = 50
 position_notional_cap_usd = 2500
 # Daily loss ceiling in USD: today's NET realized loss (wins offset losses) + open reservations + new planned loss (owner 2026-11-14); read by safety.
 max_daily_loss_usd = 300
+# Smallest daily-loss room a new trade is sized into, USD: near the ceiling a trade is sized down to the room left
+# (owner 2026-11-14), but below this room entries stop and status says "daily ceiling" (a smaller trade is not worth
+# its costs; owner confirmed 2026-11-14); read by runtime.entries (strategy loss budget and status).
+min_daily_room_usd = 10
 # Maximum simultaneous open positions (v1 supports 1); read by safety.
 max_open_positions = 1
 # Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.

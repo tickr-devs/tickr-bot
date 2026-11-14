@@ -27,6 +27,7 @@ def check_daily(
     open_reservations_usd: Decimal | None,
     new_planned_loss_usd: Decimal,
     max_daily_loss_usd: Decimal,
+    min_daily_room_usd: Decimal,
 ) -> DailyCheck:
     if realized_loss_usd is None or open_reservations_usd is None:
         missing = [name for name, value in (("realized loss", realized_loss_usd),
@@ -40,6 +41,12 @@ def check_daily(
         if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
             return DailyCheck(False, AdmissionCause.DAILY_MONEY_INVALID,
                               f"{name} {value} must be a finite amount >= 0")
+    room = max_daily_loss_usd - realized_loss_usd - open_reservations_usd
+    if room < min_daily_room_usd:
+        return DailyCheck(False, AdmissionCause.DAILY_CEILING,
+                          f"room {room} = ceiling {max_daily_loss_usd} - realized "
+                          f"{realized_loss_usd} - reserved {open_reservations_usd} is below "
+                          f"min_daily_room_usd {min_daily_room_usd}")
     total = realized_loss_usd + open_reservations_usd + new_planned_loss_usd
     detail = (f"realized {realized_loss_usd} + reserved {open_reservations_usd} + "
               f"new {new_planned_loss_usd} = {total} vs ceiling {max_daily_loss_usd}")

@@ -45,24 +45,31 @@ def test_check_size_refusals():
 
 
 def test_daily_rule():
-    ok = check_daily(D(100), D(50), D(50), D(300))
+    ok = check_daily(D(100), D(50), D(50), D(300), D(0))
     assert ok.ok and ok.total_usd == D(200)
-    assert check_daily(D(250), D(0), D(50), D(300)).ok
-    over = check_daily(D(250), D("0.01"), D(50), D(300))
+    assert check_daily(D(250), D(0), D(50), D(300), D(0)).ok
+    over = check_daily(D(250), D("0.01"), D(50), D(300), D(0))
     assert over.cause is C.DAILY_CEILING and over.total_usd == D("300.01")
 
 
+def test_daily_room_below_the_minimum_is_the_ceiling():
+    # 300 - 280 - 11 = 9 USD of room, below the 10 USD minimum: refused even for a 1 USD trade.
+    short = check_daily(D(280), D(11), D(1), D(300), D(10))
+    assert short.cause is C.DAILY_CEILING and "min_daily_room_usd" in short.detail
+    assert check_daily(D(280), D(10), D(10), D(300), D(10)).ok
+
+
 def test_daily_unknown_money_is_never_zero():
-    assert check_daily(None, D(0), D(1), D(300)).cause is C.DAILY_MONEY_UNKNOWN
-    assert check_daily(D(0), None, D(1), D(300)).cause is C.DAILY_MONEY_UNKNOWN
-    both = check_daily(None, None, D(1), D(300))
+    assert check_daily(None, D(0), D(1), D(300), D(0)).cause is C.DAILY_MONEY_UNKNOWN
+    assert check_daily(D(0), None, D(1), D(300), D(0)).cause is C.DAILY_MONEY_UNKNOWN
+    both = check_daily(None, None, D(1), D(300), D(0))
     assert "realized loss" in both.detail and "open reservations" in both.detail
 
 
 @pytest.mark.parametrize("bad", [D(-1), D("NaN"), D("Infinity"), 0.0])
 def test_daily_invalid_money(bad):
-    assert check_daily(bad, D(0), D(1), D(300)).cause is C.DAILY_MONEY_INVALID
-    assert check_daily(D(0), D(0), bad, D(300)).cause is C.DAILY_MONEY_INVALID
+    assert check_daily(bad, D(0), D(1), D(300), D(0)).cause is C.DAILY_MONEY_INVALID
+    assert check_daily(D(0), D(0), bad, D(300), D(0)).cause is C.DAILY_MONEY_INVALID
 
 
 def test_deadlines_normal_day():

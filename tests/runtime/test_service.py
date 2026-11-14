@@ -472,13 +472,13 @@ def test_status_blocks_entries_when_the_daily_room_is_below_one_trade(tmp_path):
     bot.engine.recover()
     bot.service.state = api.BotState.RUNNING
     assert bot.service.status().entry_block is None
-    # One losing trade today that leaves less room than one planned loss.
+    # One losing trade today that leaves less room than min_daily_room_usd.
     t = bot.engine.open_trade("ABC", D(10), D(40), D(30), D(100))
     (entry,) = bot.engine.orders(t)
     broker.fill(entry.client_order_id, D(10), D(40))
     bot.engine.step()  # stop placed
     bot.engine.step()  # stop verified
-    lose = (CFG.risk.max_daily_loss_usd - CFG.risk.planned_loss_usd) / 10 + 1
+    lose = (CFG.risk.max_daily_loss_usd - CFG.risk.min_daily_room_usd) / 10 + 1
     bot.engine.request_exit(t, "test")
     for _ in range(8):
         bot.engine.step()

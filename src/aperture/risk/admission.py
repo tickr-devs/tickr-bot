@@ -33,6 +33,8 @@ class AdmissionLimits:
     planned_loss_usd: Decimal
     position_notional_cap_usd: Decimal
     max_daily_loss_usd: Decimal
+    min_daily_room_usd: Decimal
+    """Below this room left under the daily ceiling no new entry is admitted."""
     max_open_positions: int
     max_quote_age_seconds: Decimal
     max_clock_skew_seconds: Decimal
@@ -52,6 +54,7 @@ class AdmissionLimits:
             planned_loss_usd=risk.planned_loss_usd,
             position_notional_cap_usd=risk.position_notional_cap_usd,
             max_daily_loss_usd=risk.max_daily_loss_usd,
+            min_daily_room_usd=risk.min_daily_room_usd,
             max_open_positions=risk.max_open_positions,
             max_quote_age_seconds=risk.max_quote_age_seconds,
             max_clock_skew_seconds=risk.max_clock_skew_seconds,
@@ -285,7 +288,7 @@ def _check_money(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
         return _refuse(size.cause, size.detail)
     assert size.planned_loss_usd is not None
     daily = check_daily(i.realized_loss_today_usd, i.open_reservations_usd,
-                        size.planned_loss_usd, lim.max_daily_loss_usd)
+                        size.planned_loss_usd, lim.max_daily_loss_usd, lim.min_daily_room_usd)
     if not daily.ok:
         assert daily.cause is not None
         return _refuse(daily.cause, daily.detail)

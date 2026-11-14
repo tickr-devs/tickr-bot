@@ -361,23 +361,20 @@ class Service:
         return NOT_WIRED if self.evaluator is None else None
 
     def _daily_money_block(self) -> api.EntryBlock | None:
-        """Entries the daily ceiling would refuse anyway: today's net realized loss plus open
-        reservations leave less room than the planned loss of one trade (spec 7, check 6).
-        Admission still decides each entry; this only keeps the status honest."""
-        from aperture.runtime.entries import realized_loss_today  # entries imports this module
+        """Entries the daily ceiling refuses anyway: the room left is below
+        `[risk] min_daily_room_usd` (spec 7, check 6), or today's money is unknown. Above it a
+        trade is sized down to the room. Admission still decides each entry."""
+        from aperture.runtime.entries import daily_loss_room  # entries imports this module
 
-        risk = self.config.risk
-        loss = realized_loss_today(self.engine, self.now())
-        if loss is None:
+        room = daily_loss_room(self.engine, self.config, self.now())
+        if room is None:
             return api.EntryBlock("daily_money_unknown",
                                   "A trade closed today has fills without a known price.")
-        reserved = sum((t.planned_loss_usd for t in self.engine.trades()), ZERO)
-        room = risk.max_daily_loss_usd - loss - reserved
-        if room < risk.planned_loss_usd:
+        risk = self.config.risk
+        if room < risk.min_daily_room_usd:
             return api.EntryBlock("daily_ceiling",
-                                  f"Daily loss room {room} USD (ceiling {risk.max_daily_loss_usd}"
-                                  f", net realized loss {loss}, reserved {reserved}) is below "
-                                  f"the planned loss of one trade, {risk.planned_loss_usd} USD.")
+                                  f"Daily loss ceiling {risk.max_daily_loss_usd} USD: less than "
+                                  f"{risk.min_daily_room_usd} USD of room left today.")
         return None
 
     def _stop(self, trade: TradeRow, stops: list[OrderRow]) -> api.Stop:

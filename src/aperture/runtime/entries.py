@@ -111,6 +111,17 @@ def realized_loss_today(engine: Engine, now: datetime) -> Decimal | None:
     return max(-net, ZERO)
 
 
+def daily_loss_room(engine: Engine, config: Config, now: datetime) -> Decimal | None:
+    """Room the daily loss ceiling leaves for one new trade's planned loss: ceiling minus
+    today's net realized loss minus open reservations (spec 7, check 6); may be negative.
+    None when today's money is unknown."""
+    loss = realized_loss_today(engine, now)
+    if loss is None:
+        return None
+    reserved = sum((t.planned_loss_usd for t in engine.trades()), ZERO)
+    return config.risk.max_daily_loss_usd - loss - reserved
+
+
 def last_loss_at(engine: Engine, symbol: str, now: datetime) -> datetime | None:
     """Close time of the latest trade in `symbol` closed today (New York date) at a loss; a
     closed trade with fills whose prices are unknown counts as a loss (the stricter answer)."""

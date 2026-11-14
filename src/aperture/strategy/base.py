@@ -84,6 +84,11 @@ class SymbolContext:
     prior_sessions: Sequence[Sequence[Bar]] = field(default_factory=tuple)
     quote: Quote | None = None
     position: PositionView | None = None
+    loss_budget_usd: Decimal | None = None
+    """Most a new trade may plan to lose today: the room the platform's daily loss ceiling
+    leaves (owner decision 2026-11-14: near the ceiling, size down to fit). None = no
+    platform cap (replay, research). A strategy sizes on the smaller of this and its own
+    planned loss; the platform still checks the ceiling on admission."""
 
 
 class Strategy(Protocol):

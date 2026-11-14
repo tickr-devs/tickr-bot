@@ -102,6 +102,14 @@ def test_cooldown_turned_off_loads(tmp_path):
     assert AdmissionLimits.from_config(cfg).symbol_cooldown_minutes_after_loss is None
 
 
+@pytest.mark.parametrize("value", ["-1", "300", "301"])
+def test_min_daily_room_must_sit_below_the_ceiling(tmp_path, value):
+    text = re.sub(r"(?m)^min_daily_room_usd = \S+", f"min_daily_room_usd = {value}",
+                  BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="min_daily_room_usd"):
+        config.load(_copy(tmp_path, text))
+
+
 def test_unknown_environment_refused(tmp_path):
     text = re.sub(r'(?m)^environment = ".*"', 'environment = "staging"', BOT.read_text("utf-8"))
     with pytest.raises(config.ConfigError, match="not one of"):

@@ -414,8 +414,14 @@ class PriceActionV1:
                 "entry_high - stop + spread + 2 legs x slippage reserve",
             )
         )
-        # Quantity: whole shares within the planned loss and the notional cap.
-        by_loss = (s.planned_loss_usd / sizing_risk).to_integral_value(rounding=ROUND_FLOOR)
+        # Quantity: whole shares within the planned loss and the notional cap. Near the
+        # platform's daily ceiling the planned loss shrinks to the room it leaves.
+        planned_loss = s.planned_loss_usd
+        if context.loss_budget_usd is not None and context.loss_budget_usd < planned_loss:
+            planned_loss = max(context.loss_budget_usd, ZERO)
+            checks.append(_check("daily_loss_budget_usd", planned_loss, "<", s.planned_loss_usd,
+                                 "sized down to the room the daily loss ceiling leaves"))
+        by_loss = (planned_loss / sizing_risk).to_integral_value(rounding=ROUND_FLOOR)
         by_notional = (s.max_position_notional_usd / entry_high).to_integral_value(
             rounding=ROUND_FLOOR
         )
@@ -426,7 +432,7 @@ class PriceActionV1:
                 quantity,
                 ">=",
                 ONE,
-                f"min(floor(planned loss / risk) = {by_loss}, "
+                f"min(floor(planned loss {planned_loss} / risk) = {by_loss}, "
                 f"floor(notional cap / entry_high) = {by_notional})",
             )
         )
