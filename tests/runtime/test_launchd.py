@@ -92,3 +92,24 @@ def test_bad_runtime_values_refused(config_path, key, value, match):
     cfg = config_module.load(config_path)
     with pytest.raises(config_module.ConfigError, match=match):
         launchd.schedule(cfg.runtime)
+
+
+@pytest.mark.parametrize("drain,match", [
+    ("90", "shutdown_deadline_seconds"),    # equal to stop_alert_after_seconds
+    ("100", "shutdown_deadline_seconds"),   # above it
+    ("0", "shutdown_deadline_seconds"),
+])
+def test_engine_drain_must_end_before_supervisor_alert(config_path, drain, match):
+    text = re.sub(r"(?m)^shutdown_deadline_seconds = .*$", f"shutdown_deadline_seconds = {drain}",
+                  config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    cfg = config_module.load(config_path)
+    with pytest.raises(config_module.ConfigError, match=match):
+        launchd.check_shutdown_deadlines(cfg)
+
+
+def test_repository_deadlines_are_ordered(config_path):
+    cfg = config_module.load(config_path)
+    launchd.check_shutdown_deadlines(cfg)
+    assert (0 < cfg.orders.shutdown_deadline_seconds < cfg.runtime.stop_alert_after_seconds
+            < cfg.runtime.bot_exit_timeout_seconds)

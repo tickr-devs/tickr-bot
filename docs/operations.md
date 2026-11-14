@@ -59,7 +59,8 @@ Every run prints JSON lines (`"record": "preflight" | "alert" | "bot-exit"`) to 
 
 ## Preflight checks
 
-1. Config valid: loads, every key commented, active strategy file present, launchd schedule valid.
+1. Config valid: loads, every key commented, active strategy file present, launchd schedule valid,
+   and `[orders] shutdown_deadline_seconds` < `stop_alert_after_seconds` < `bot_exit_timeout_seconds`.
 2. Data folder exists; free disk on it at least `[runtime] min_free_disk_mb`.
 3. Calendar knows today (New York date).
 4. Credential variables named in the active `[environments.*]` table are set. Only the names are

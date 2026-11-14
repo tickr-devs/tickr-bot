@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from aperture.config import ConfigError, RuntimeConfig
+from aperture.config import Config, ConfigError, RuntimeConfig
 
 TEMPLATE_SUFFIX = ".plist.template"
 _PLACEHOLDER = re.compile(r"\{\{([A-Z_]+)\}\}")
@@ -67,6 +67,19 @@ def schedule(runtime: RuntimeConfig) -> Schedule:
     if runtime.min_free_disk_mb <= 0:
         raise ConfigError("[runtime] min_free_disk_mb must be positive")
     return Schedule(preflight=preflight, bot=bot, weekdays=tuple(days))
+
+
+def check_shutdown_deadlines(config: Config) -> None:
+    """Refuse unless the engine drain ends before the supervisor alert, which ends before SIGKILL:
+    0 < [orders] shutdown_deadline_seconds < [runtime] stop_alert_after_seconds
+      < [runtime] bot_exit_timeout_seconds."""
+    schedule(config.runtime)
+    drain = config.orders.shutdown_deadline_seconds
+    alert_after = config.runtime.stop_alert_after_seconds
+    if not 0 < drain < alert_after:
+        raise ConfigError(
+            f"[orders] shutdown_deadline_seconds ({drain}) must be positive and below "
+            f"[runtime] stop_alert_after_seconds ({alert_after})")
 
 
 def _calendar_xml(at: LocalTime, weekdays: tuple[int, ...]) -> str:

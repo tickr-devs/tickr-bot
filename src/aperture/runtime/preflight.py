@@ -24,7 +24,7 @@ from pathlib import Path
 
 from aperture import config as config_module
 from aperture.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
-from aperture.runtime.launchd import schedule
+from aperture.runtime.launchd import check_shutdown_deadlines
 
 STRATEGY_FILE = "strategy.toml"
 STRATEGIES_DIR = "strategies"
@@ -125,7 +125,7 @@ def _load_config(path: Path) -> tuple[config_module.Config | None, Check]:
             raise config_module.ConfigError(f"active strategy file missing: {strategy}")
         if config_module.uncommented_keys(strategy.read_text("utf-8")):
             raise config_module.ConfigError(f"{strategy} has keys without a comment")
-        schedule(cfg.runtime)
+        check_shutdown_deadlines(cfg)
     except (OSError, UnicodeDecodeError, config_module.ConfigError) as exc:
         return None, Check(CheckName.CONFIG, False, str(exc), PreflightCause.CONFIG_INVALID)
     return cfg, Check(CheckName.CONFIG, True, f"{path} digest {cfg.digest[:12]}")

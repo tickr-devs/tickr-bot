@@ -127,3 +127,12 @@ def test_bad_schedule_is_invalid_config(config_path):
     result = _run(config_path, {})
     assert result.cause is PreflightCause.CONFIG_INVALID
     assert "before bot_start_local" in result.summary()
+
+
+def test_drain_deadline_after_supervisor_alert_is_invalid_config(config_path):
+    text = re.sub(r"(?m)^shutdown_deadline_seconds = .*$", "shutdown_deadline_seconds = 95",
+                  config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    result = _run(config_path, {})
+    assert result.cause is PreflightCause.CONFIG_INVALID
+    assert "shutdown_deadline_seconds" in result.summary()
