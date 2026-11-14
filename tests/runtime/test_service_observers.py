@@ -61,7 +61,7 @@ class Market:
     watch: set[str] = set()
     discovery = None
 
-    def tick(self) -> None:
+    def tick(self, *, discover: bool = True) -> None:
         pass
 
     def freshness(self, last_broker_read_at):

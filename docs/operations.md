@@ -148,6 +148,20 @@ settings) or schedule a wake before the preflight time, for example
 `[alerts] dedupe_window_seconds` is shown once; every occurrence is still recorded (in the bot's
 journal, or in the job log for these commands).
 
+## Fill to stop
+
+While a trade has an entry working, filled shares not yet covered by a stop that Detail shows
+working, or an exit in progress, the bot does no discovery and runs no strategy: each pass is
+only the Detail and positions reads and the protection step. One `evaluation-skipped` row marks
+the start of each such stretch. A pass whose market upkeep, discovery and strategy took longer
+than `[runtime] evaluation_budget_seconds` journals `evaluation-slow`.
+
+Each trade that had a fill gets one `protection-latency` row: `fill_observed_at` (first Detail
+showing filled shares), `stop_sent_at`, `stop_verified_at`, `observed_to_sent_seconds` and
+`observed_to_verified_seconds`. Webull Detail has no fill time, so fill -> fill observed is not
+measured (`fill_to_observed_seconds` is null). Only the first fill of a trade is measured.
+`closed_before_verified` is true when the trade closed before any stop was seen working.
+
 ## End of the day
 
 `[session] flatten_grace_seconds` after the flatten time (15:55 ET on a normal day), the bot

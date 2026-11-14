@@ -252,6 +252,10 @@ preflight_start_local = "08:30"
 bot_start_local = "09:00"
 # launchd weekdays for the preflight and bot jobs (1 = Monday ... 5 = Friday); the calendar still decides; read by runtime.launchd.
 launch_weekdays = [1, 2, 3, 4, 5]
+# Seconds one loop pass may spend on market upkeep, discovery and the strategy before an
+# evaluation-slow journal row (the next Detail read waits for it; keep it near
+# [orders] detail_poll_seconds); read by runtime.service.
+evaluation_budget_seconds = 3
 
 [alerts]
 # Same alert (kind + text) repeated within this many seconds is not shown again (still returned for the journal); read by runtime.alerts.

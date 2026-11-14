@@ -167,13 +167,26 @@ def test_enter_goes_through_the_desk_and_every_decision_is_recorded(tmp_path):
     rig.symbol("ABC")
     rig.symbol("XYZ")
     rig.strategy.verdicts["ABC"] = Verdict.ENTER
-    rig.evaluator.tick(["ABC", "XYZ"])
+    rig.evaluator.tick(["XYZ", "ABC"])  # the ENTER comes last: see the next test
     (trade,) = rig.engine.trades()
     assert trade.symbol == "ABC"
     rig.evaluator.desk.log.close()
     records = load_records([rig.dir / MONDAY.isoformat() / "decisions.jsonl"])
-    assert [(r.symbol, r.admission) for r in records] == [("ABC", "taken"),
-                                                          ("XYZ", "not_applicable")]
+    assert [(r.symbol, r.admission) for r in records] == [("XYZ", "not_applicable"),
+                                                          ("ABC", "taken")]
+
+
+@pytest.mark.skipif(not GATE_OPEN, reason="the configured trading gate is closed")
+def test_an_entry_sent_drops_the_rest_of_the_minute_so_its_fill_is_seen_first(tmp_path):
+    rig = Rig(tmp_path)
+    rig.symbol("ABC")
+    rig.symbol("XYZ")
+    rig.strategy.verdicts["ABC"] = Verdict.ENTER
+    rig.evaluator.tick(["ABC", "XYZ"])
+    assert [c.symbol for c in rig.strategy.seen] == ["ABC"]  # XYZ waits for the next minute
+    (stopped,) = rig.store.journal(EVALUATION_STOPPED)
+    assert stopped.body["stage"] == "protect-first" and stopped.body["symbol"] == "ABC"
+    assert stopped.body["cause"].endswith("entry working")
 
 
 def test_a_strategy_exception_is_journaled_and_other_symbols_go_on(tmp_path):

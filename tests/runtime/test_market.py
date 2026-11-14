@@ -143,6 +143,14 @@ def test_discovery_runs_on_its_interval_in_the_session(tmp_path):
     assert rig.market.discovery is not None
 
 
+def test_discovery_waits_while_protection_needs_the_loop(tmp_path):
+    rig = Rig(tmp_path)
+    rig.market.tick(discover=False)
+    assert rig.source.calls == [] and rig.store.journal(DISCOVERY) == []
+    rig.market.tick()  # due at once once allowed again
+    assert len(rig.store.journal(DISCOVERY)) == 1
+
+
 def test_discovery_never_runs_outside_the_session(tmp_path):
     rig = Rig(tmp_path, now=SATURDAY)
     rig.market.tick()

@@ -7,7 +7,10 @@ from `MarketData.bars`, the prior sessions from `HistoryReader` (once per symbol
 cached). A history refusal is not an error here: the strategy gets no prior sessions and
 refuses with its own cause, and the decision is recorded like any other. A budget refusal,
 delayed data or a failed read stops the remaining symbols for this minute (journaled); a
-strategy exception is journaled and that symbol skipped. Nothing here ever ends the trading loop.
+strategy exception is journaled and that symbol skipped. As soon as a decision leaves an order
+needing the loop (an entry sent, an exit asked; runtime/protection.py), the rest of the minute
+is dropped (journaled), so the fill and its stop are not kept waiting behind more reads.
+Nothing here ever ends the trading loop.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from aperture.data.history import HistoryReader, HistoryUnavailable, SessionHist
 from aperture.engine.core import Engine, Leg
 from aperture.runtime.entries import EntryDesk
 from aperture.runtime.market import StreamInbox
+from aperture.runtime.protection import busy
 from aperture.strategy.base import PositionView, Strategy, SymbolContext, Verdict
 from aperture.types import Bar
 
@@ -110,6 +114,12 @@ class Evaluator:
                                                        "error": error})
                     return
                 self._evaluate(symbol, own, history, positions.get(symbol), now)
+                cause = busy(self.engine)
+                if cause is not None:  # an entry or exit just went out: protect it first
+                    self._journal(EVALUATION_STOPPED, {"bar_start": bar_start.isoformat(),
+                                                       "stage": "protect-first",
+                                                       "symbol": symbol, "cause": cause})
+                    return
 
     def _history(self, symbol: str, today: date) -> tuple[str | None, SessionHistory | None]:
         """(error type, prior sessions). History None when refused (recorded once a day); an

@@ -124,11 +124,14 @@ class MarketRuntime:
 
     # --- one pass, called by the service after the engine's broker work ---------------------
 
-    def tick(self) -> None:
+    def tick(self, *, discover: bool = True) -> None:
+        """`discover=False` while protection needs the loop (runtime/protection.py): the
+        stream, subscriptions and the stream-loss exit still run; discovery waits."""
         self._journal_stream_events()
         self._sync_subscriptions()  # new candidates: on the next pass, a second later
         self._exit_on_stream_loss()
-        self._discover_if_due()
+        if discover:
+            self._discover_if_due()
 
     def _journal_stream_events(self) -> None:
         events = self.inbox.take_events()

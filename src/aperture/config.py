@@ -163,6 +163,7 @@ class RuntimeConfig:
     preflight_start_local: str
     bot_start_local: str
     launch_weekdays: tuple[int, ...]
+    evaluation_budget_seconds: Decimal
 
 
 @dataclass(frozen=True)

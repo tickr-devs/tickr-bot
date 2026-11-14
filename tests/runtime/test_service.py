@@ -112,9 +112,11 @@ class StubMarket:
         self.watch: set[str] = set()
         self.discovery = None
         self.ticks = 0
+        self.discovers: list[bool] = []
 
-    def tick(self) -> None:
+    def tick(self, *, discover: bool = True) -> None:
         self.ticks += 1
+        self.discovers.append(discover)
 
     def freshness(self, last_broker_read_at):
         return api.Freshness(last_broker_read_at, None, api.StreamHealth.OFF)

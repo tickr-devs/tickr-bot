@@ -26,6 +26,7 @@ from aperture.engine.loop import drain
 from aperture.engine.manual import flatten_deadline
 from aperture.runtime.alerts import AlertKind
 from aperture.runtime.dayend import DayEnd
+from aperture.runtime.protection import LatencyLog, busy
 
 if TYPE_CHECKING:
     from aperture.observers.runner import ObserverSet
@@ -42,6 +43,9 @@ OBSERVER_FAILURE = "observer-failure"
 OBSERVERS_STOPPED = "observers-stopped"
 OBSERVERS_NOT_LOADED = "observers-not-loaded"
 EVALUATION_FAILED = "evaluation-failed"
+EVALUATION_SKIPPED = "evaluation-skipped"  # one row per protect-first episode
+EVALUATION_SLOW = "evaluation-slow"
+LATENCY_FAILED = "protection-latency-failed"
 STRATEGY_NOT_LOADED = "strategy-not-loaded"
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
@@ -113,6 +117,8 @@ class Service:
         self._flatten_at: datetime | None = None
         self._flatten_passed = False  # the flatten time of _flatten_day has been reached
         self.day_end = DayEnd(engine, calendar, watch)
+        self.latency: LatencyLog | None = LatencyLog(engine)
+        self._skipping: str | None = None  # cause of the current protect-first episode
 
     # --- commands --------------------------------------------------------------------------
 
@@ -219,6 +225,50 @@ class Service:
                       self.now())
 
     # --- strategy --------------------------------------------------------------------------
+
+    def _record_latency(self) -> None:
+        """Fill-to-stop timing rows. A measurement never ends the trading loop: on an error it
+        is journaled once and switched off for the run."""
+        if self.latency is None:
+            return
+        try:
+            self.latency.record()
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            self.latency = None
+            with self.engine.store.transaction():
+                self.engine.store.append(LATENCY_FAILED, {"error": type(exc).__name__,
+                                                          "detail": str(exc)},
+                                         run_id=self.engine.run_id)
+
+    def _protect_first(self) -> bool:
+        """True when strategy work may run this pass: no entry working, every fill covered by
+        a verified stop, no exit in progress (runtime/protection.py). The first pass of each
+        episode that holds it back is journaled once with its cause."""
+        cause = busy(self.engine)
+        if cause is not None and self._skipping is None and self.evaluator is not None:
+            with self.engine.store.transaction():
+                self.engine.store.append(EVALUATION_SKIPPED, {"cause": cause},
+                                         run_id=self.engine.run_id)
+        self._skipping = cause
+        return cause is None
+
+    def _strategy_pass(self, monotonic: Callable[[], float]) -> None:
+        """Market upkeep and the entry guard every pass; discovery and the strategy only when
+        protection allows, timed against `[runtime] evaluation_budget_seconds`."""
+        allowed = self._protect_first()
+        started = monotonic()
+        if self.market is not None:
+            self.market.tick(discover=allowed)  # after the engine's broker work of this pass
+            self._guard_entries()  # every pass: it protects a working entry
+        if not allowed:
+            return
+        self._evaluate()
+        spent = monotonic() - started
+        budget = float(self.config.runtime.evaluation_budget_seconds)
+        if spent > budget:
+            with self.engine.store.transaction():
+                self.engine.store.append(EVALUATION_SLOW, {"seconds": spent, "budget": budget},
+                                         run_id=self.engine.run_id)
 
     def _evaluate(self) -> None:
         """The active strategy on the latest completed minute; its WATCH set feeds the L1
@@ -401,10 +451,8 @@ class Service:
             sleep(float(orders.detail_poll_seconds))
             due = monotonic() - last_reconcile >= float(orders.reconcile_interval_seconds)
             self._observe(reconcile=due)
-            if self.market is not None:
-                self.market.tick()  # after the engine's broker work of this pass
-                self._guard_entries()
-            self._evaluate()
+            self._record_latency()
+            self._strategy_pass(monotonic)
             if due:
                 last_reconcile = monotonic()
         self.state = api.BotState.STOPPING
