@@ -102,7 +102,8 @@ def test_queue_overflow_switches_observers_off_with_one_alert(tmp_path):
         bot.service._evaluate()  # A runs (blocked), B waits in the queue, C overflows
         assert bot.service.observers is None
         (stopped,) = bot.store.journal(service.OBSERVERS_STOPPED)
-        assert stopped.body == {"finished": False}  # the hung observer did not finish
+        # The hung observer did not finish.
+        assert stopped.body == {"error": "queue-full", "finished": False}
         failures = bot.store.journal(service.OBSERVER_FAILURE)
         assert any("queue full" in f.body["cause"] for f in failures)
         alerts = [a.body for a in bot.store.journal(ALERT)]
@@ -111,3 +112,18 @@ def test_queue_overflow_switches_observers_off_with_one_alert(tmp_path):
         assert len(bot.store.journal(ALERT)) == 1
     finally:
         gate.set()
+
+
+def test_an_error_in_the_hook_switches_observers_off_and_the_loop_goes_on(tmp_path):
+    bot, observers = wire(tmp_path, Observer(), ["ABC"])
+
+    def broken(context, at):
+        raise RuntimeError("hook bug")
+
+    observers.on_evaluation = broken  # type: ignore[method-assign]
+    bot.service._evaluate()
+    assert bot.service.observers is None
+    (stopped,) = bot.store.journal(service.OBSERVERS_STOPPED)
+    assert stopped.body["error"] == "RuntimeError"
+    assert [a.body["kind"] for a in bot.store.journal(ALERT)] == [
+        AlertKind.OBSERVERS_STOPPED.value]

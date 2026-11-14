@@ -235,12 +235,16 @@ def _clear_fence(args: argparse.Namespace) -> int:
 
 def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
                inbox: StreamInbox, calendar: SessionCalendar | None,
-               last_broker_read_at: Callable[[], datetime | None]
+               last_broker_read_at: Callable[[], datetime | None],
+               observers_refused: Callable[[str], None]
                ) -> tuple[Evaluator, ObserverSet] | None:
     """The active strategy wired to the entry desk, and the observers fed the same contexts
     (both write one decision log). None (entries off, status says why) when there is no
-    trading calendar: entries are refused without one anyway."""
+    trading calendar: entries are refused without one anyway. Observers that cannot be
+    loaded are reported to `observers_refused` and left out: a shadow strategy never stops
+    trading."""
     from aperture.data.history import HistoryReader
+    from aperture.observers.errors import ObserverError
     from aperture.observers.loader import load_observers, load_strategy, parse_modules
     from aperture.observers.log import DecisionLog
     from aperture.observers.runner import ObserverSet
@@ -257,7 +261,12 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     evaluator = Evaluator(engine, cfg, source, strategy=loaded.strategy, desk=desk,
                           history=HistoryReader.from_config(cfg, source, calendar),
                           inbox=inbox, calendar=calendar, now=NOW)
-    observers = ObserverSet(load_observers(cfg), log, cfg.observers.max_evaluation_seconds,
+    try:
+        shadows = load_observers(cfg)
+    except ObserverError as exc:
+        observers_refused(str(exc))
+        shadows = ()
+    observers = ObserverSet(shadows, log, cfg.observers.max_evaluation_seconds,
                             cfg.observers.queue_size)
     return evaluator, observers
 
@@ -276,7 +285,7 @@ def _run(path: Path) -> int:
     from aperture.data.health import StreamHealth
     from aperture.observers.errors import ObserverError
     from aperture.runtime import service
-    from aperture.runtime.alerts import Alerter
+    from aperture.runtime.alerts import Alerter, AlertKind
     from aperture.runtime.market import MarketRuntime, StreamInbox
     from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
     from aperture.runtime.watch import Watch
@@ -308,11 +317,18 @@ def _run(path: Path) -> int:
                                    health=StreamHealth.from_config(cfg), inbox=inbox,
                                    capture=capture, calendar=calendar, now=NOW,
                                    monotonic=time.monotonic)
+            watch = Watch(engine, cfg, alerter, NOW)
+
+            def observers_refused(cause: str) -> None:
+                with store.transaction():
+                    store.append(service.OBSERVERS_NOT_LOADED, {"cause": cause}, run_id=run_id)
+                watch.alert(AlertKind.OBSERVERS_STOPPED, f"observers not loaded: {cause}")
+
             entries_off = None
             evaluator, observers = None, None
             try:
                 wired = _evaluator(cfg, engine, adapters.market, inbox, calendar,
-                                   lambda: bot.last_broker_read_at)
+                                   lambda: bot.last_broker_read_at, observers_refused)
             except ObserverError as exc:  # the bot still protects and exits; no entries
                 wired, entries_off = None, str(exc)
                 with store.transaction():
@@ -323,8 +339,7 @@ def _run(path: Path) -> int:
             bot = service.Service(engine, now=NOW, calendar=calendar, strategy=strategy,
                                   paths=service.ServicePaths.from_config(cfg), market=market,
                                   evaluator=evaluator, entries_off=entries_off,
-                                  observers=observers,
-                                  watch=Watch(engine, cfg, alerter, NOW))
+                                  observers=observers, watch=watch)
             market.bind()
             adapters.start_stream()
             clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP)

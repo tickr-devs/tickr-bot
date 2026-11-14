@@ -326,6 +326,24 @@ def test_cli_run_without_a_loadable_strategy_protects_but_never_enters(tmp_path,
     store.close()
 
 
+def test_cli_run_with_a_broken_observer_keeps_entries_on(tmp_path, monkeypatch):
+    bot_toml = copy_config(tmp_path)
+    bot_toml.write_text(bot_toml.read_text().replace("observers = []",
+                                                     'observers = ["missing-folder"]', 1))
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    database, _ = cli.data_paths(config.load(bot_toml))
+    store = Store.open(database, busy_timeout_seconds=0)
+    (row,) = store.journal(service.OBSERVERS_NOT_LOADED)
+    assert "missing-folder" in row.body["cause"]
+    assert store.journal(service.STRATEGY_NOT_LOADED) == []
+    assert [a.body["kind"] for a in store.journal("alert")] == ["observers-stopped"]
+    store.close()
+
+
 def test_strategy_not_loaded_is_the_block_reason(tmp_path):
     bot = Bot(tmp_path)
     bot.engine.recover()

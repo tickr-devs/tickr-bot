@@ -38,6 +38,7 @@ COMMAND_FILE_REFUSED = "command-file-refused"
 COMMAND_EFFECT = "command-effect"
 OBSERVER_FAILURE = "observer-failure"
 OBSERVERS_STOPPED = "observers-stopped"
+OBSERVERS_NOT_LOADED = "observers-not-loaded"
 EVALUATION_FAILED = "evaluation-failed"
 STRATEGY_NOT_LOADED = "strategy-not-loaded"
 NOT_WIRED = api.EntryBlock("entries_not_wired",
@@ -240,10 +241,24 @@ class Service:
     def _feed_observers(self) -> None:
         """The contexts the active strategy just saw go to the observers, after all broker
         work of this pass. Failures are journaled every pass. A full queue (a hung observer)
-        switches the observers off for the run, with one alert; trading goes on."""
+        or any error here switches the observers off for the run, with one alert; trading
+        goes on."""
         observers, evaluator = self.observers, self.evaluator
         if observers is None or evaluator is None:
             return
+        try:
+            overflow = self._hand_over(observers, evaluator)
+        except Exception as exc:  # noqa: BLE001 - observers never end the trading loop
+            self._stop_observers(observers, {"error": type(exc).__name__, "detail": str(exc)},
+                                 f"observer hook failed ({type(exc).__name__}): observers "
+                                 "switched off for this run")
+            return
+        if overflow:
+            self._stop_observers(observers, {"error": "queue-full"},
+                                 "observer queue full: observers switched off for this run")
+
+    def _hand_over(self, observers: ObserverSet, evaluator: Evaluator) -> bool:
+        """Queue this pass's contexts and journal worker failures; True on queue overflow."""
         overflow = False
         at = evaluator.evaluated_at
         if at is not None:
@@ -251,23 +266,28 @@ class Service:
                 if observers.on_evaluation(context, at):
                     overflow = True
                     break
-        store = self.engine.store
         failures = observers.take_failures()
         if failures:
+            store = self.engine.store
             with store.transaction():
                 for f in failures:
                     store.append(OBSERVER_FAILURE, {"folder": f.folder, "identity": f.identity,
                                                     "at": f.at.isoformat(), "cause": f.cause},
                                  run_id=self.engine.run_id)
-        if not overflow:
-            return
+        return overflow
+
+    def _stop_observers(self, observers: ObserverSet, body: dict[str, object],
+                        text: str) -> None:
         self.observers = None
-        finished = observers.close(float(self.config.observers.max_evaluation_seconds))
-        with store.transaction():
-            store.append(OBSERVERS_STOPPED, {"finished": finished}, run_id=self.engine.run_id)
+        try:
+            finished = observers.close(float(self.config.observers.max_evaluation_seconds))
+        except Exception:  # noqa: BLE001 - the set is dropped either way
+            finished = False
+        with self.engine.store.transaction():
+            self.engine.store.append(OBSERVERS_STOPPED, {**body, "finished": finished},
+                                     run_id=self.engine.run_id)
         if self.watch is not None:
-            self.watch.alert(AlertKind.OBSERVERS_STOPPED,
-                             "observer queue full: observers switched off for this run")
+            self.watch.alert(AlertKind.OBSERVERS_STOPPED, text)
 
     # --- status ----------------------------------------------------------------------------
 
