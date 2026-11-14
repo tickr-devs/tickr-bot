@@ -95,6 +95,50 @@ def test_entries_not_wired_is_the_block_reason_while_running(tmp_path):
                                          f"Trading gate closed: {gate.cause}."))
 
 
+class StubEvaluator:
+    def __init__(self) -> None:
+        self.watch = {"WAT"}
+        self.calls: list[list[str]] = []
+
+    def tick(self, candidates):
+        self.calls.append(list(candidates))
+
+
+class StubMarket:
+    def __init__(self) -> None:
+        self.watch: set[str] = set()
+        self.discovery = None
+        self.ticks = 0
+
+    def tick(self) -> None:
+        self.ticks += 1
+
+    def freshness(self, last_broker_read_at):
+        return api.Freshness(last_broker_read_at, None, api.StreamHealth.OFF)
+
+
+def test_with_an_evaluator_the_loop_runs_the_strategy_and_entries_are_open(tmp_path):
+    from aperture.runtime.market import DiscoveryState
+
+    bot = Bot(tmp_path)
+    market, evaluator = StubMarket(), StubEvaluator()
+    bot.service.market, bot.service.evaluator = market, evaluator  # type: ignore[assignment]
+    bot.engine.recover()
+    bot.service.state = api.BotState.RUNNING
+    if config.trading_gate(CFG).open:
+        assert bot.service.status().entry_block is None
+    bot.run(1)
+    assert evaluator.calls == [[]] and market.watch == {"WAT"}
+
+    class Candidate:
+        class instrument:
+            symbol = "CAN"
+
+    market.discovery = DiscoveryState(bot.now, "x", (Candidate(),))  # type: ignore[arg-type]
+    bot.run(1)
+    assert evaluator.calls[-1] == ["CAN"] and market.ticks == 2
+
+
 def test_later_entry_stop_command_wins_and_off_clears_only_that_fence(tmp_path):
     bot = Bot(tmp_path)
     bot.broker.add_foreign_position("XYZ", D(1), D(5))
@@ -263,6 +307,48 @@ def test_cli_run_stops_on_sigterm(tmp_path, monkeypatch):
     store = Store.open(database, busy_timeout_seconds=0)
     assert store.last_run()["end_cause"] == "stopped (SIGTERM)"
     store.close()
+
+
+def test_cli_run_without_a_loadable_strategy_protects_but_never_enters(tmp_path, monkeypatch):
+    bot_toml = copy_config(tmp_path)
+    strategy_toml = tmp_path / "strategies" / CFG.strategy.active / "strategy.toml"
+    strategy_toml.write_text(strategy_toml.read_text().replace(
+        "relative_volume_sessions = 5", "relative_volume_sessions = -5"))
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    database, _ = cli.data_paths(config.load(bot_toml))
+    store = Store.open(database, busy_timeout_seconds=0)
+    (row,) = store.journal(service.STRATEGY_NOT_LOADED)
+    assert "relative_volume_sessions" in row.body["cause"]
+    store.close()
+
+
+def test_strategy_not_loaded_is_the_block_reason(tmp_path):
+    bot = Bot(tmp_path)
+    bot.engine.recover()
+    bot.service.state = api.BotState.RUNNING
+    bot.service.entries_off = "values refused"
+    if config.trading_gate(CFG).open:
+        assert bot.service.status().entry_block == api.EntryBlock(
+            "strategy_not_loaded", "Active strategy not loaded: values refused")
+
+
+def test_an_evaluation_exception_is_journaled_and_the_loop_goes_on(tmp_path):
+    bot = Bot(tmp_path)
+
+    class Broken(StubEvaluator):
+        def tick(self, candidates):
+            raise KeyError("bug")
+
+    bot.service.market = StubMarket()  # type: ignore[assignment]
+    bot.service.evaluator = Broken()  # type: ignore[assignment]
+    assert bot.run(2)
+    rows = bot.store.journal(service.EVALUATION_FAILED)
+    assert len(rows) == 2 and rows[0].body["error"] == "KeyError"
+    assert bot.service.market.watch == {"WAT"}
 
 
 def test_cancel_own_orders_journaled_but_not_applied_is_finished_on_replay(tmp_path):

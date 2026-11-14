@@ -3,7 +3,7 @@ health, discovery on its interval, and the market exit when the stream is lost w
 
 Stream callbacks arrive on the provider's thread. They only touch `StreamInbox` (a lock and a
 few dicts); everything that writes the database happens on the trading loop in `tick()`.
-Strategy evaluation is not wired here yet: it needs multi-session bar history.
+Strategy evaluation is `runtime.evaluation`; the service copies its WATCH set into `watch`.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ class MarketRuntime:
         self.listener = FanOut(*listeners, on_error=inbox.on_listener_error)
         self.settings = DiscoverySettings.from_config(config)
         self.subscribed: set[str] = set()
-        self.watch: set[str] = set()  # symbols the strategy is watching (wired later)
+        self.watch: set[str] = set()  # the strategy's WATCH symbols, set by the service
         self.discovery: DiscoveryState | None = None
         self._next_discovery = monotonic()
         self._started = now()

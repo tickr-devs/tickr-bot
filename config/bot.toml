@@ -167,6 +167,10 @@ history_max_pages_per_symbol = 4
 # Most calendar days walked back to find the requested prior sessions (weekends and holidays are skipped); read by
 # data.history.
 history_max_lookback_days = 14
+# Prior regular sessions the bot loop loads per symbol for the active strategy (once per symbol per New York day, then
+# cached), count; must be at least the active strategy's relative_volume_sessions or it refuses for missing history;
+# read by runtime.evaluation.
+history_sessions = 5
 # Prior-session bar cache folder relative to [run] data_dir; files go to <history_dir>/<environment>/<NY date asked
 # on>/<symbol>-<sessions>.jsonl (replay bar format); read by data.history.
 history_dir = "history"

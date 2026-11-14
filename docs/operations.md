@@ -39,9 +39,12 @@ waiting; launchd sends SIGKILL at `bot_exit_timeout_seconds`.
 protected, acts on API commands (entry-stop on/off, cancel-own-orders, flatten), asks every open
 trade to exit at the session's flatten time (at once when there is no session or no calendar),
 and writes `data/status.json` on every loop pass. On SIGTERM it cancels working entries, leaves
-stops resting and exits 0, or 5 if `shutdown_deadline_seconds` passed with work pending. It does
-not open trades on its own yet: status shows `entries_not_wired` as the entry-blocking reason
-until the strategy is wired in.
+stops resting and exits 0, or 5 if `shutdown_deadline_seconds` passed with work pending. Once per
+completed minute in the regular session it runs the active strategy on the open position's
+symbol, the strategy's WATCH symbols and the latest discovery candidates; ENTER decisions go
+through the platform risk checks before any order is sent, and every decision is written to
+`data/decisions/<environment>/<date>/decisions.jsonl`. Without a trading calendar it never opens
+a trade and status shows `entries_not_wired`.
 
 ## Exit codes
 
