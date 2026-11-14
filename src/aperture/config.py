@@ -70,6 +70,7 @@ class OrdersConfig:
     cancel_retry_attempts: int
     cancel_retry_spacing_seconds: Decimal
     max_unprotected_seconds: Decimal
+    max_exit_seconds: Decimal
     shutdown_deadline_seconds: Decimal
     reconcile_interval_seconds: Decimal
     broker_read_max_age_seconds: Decimal

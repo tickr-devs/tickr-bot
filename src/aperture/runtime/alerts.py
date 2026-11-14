@@ -82,6 +82,8 @@ class AlertKind(StrEnum):
     WATCHDOG_CANNOT_CHECK = "watchdog-cannot-check"
     # during the session the bot process is not running while the database shows an open trade.
     BOT_DOWN_WITH_OPEN_TRADE = "bot-down-with-open-trade"
+    # A closing order is still not filled [orders] max_exit_seconds after it was sent.
+    EXIT_NOT_FILLED = "exit-not-filled"
 
 
 class Delivery(StrEnum):

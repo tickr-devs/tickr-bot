@@ -79,6 +79,9 @@ cancel_retry_attempts = 2
 cancel_retry_spacing_seconds = 6
 # Seconds a position may lack a verified broker stop before the engine closes it; read by the engine.
 max_unprotected_seconds = 30
+# Seconds after a closing order's send attempt before, still not filled, it sets the
+# exit-not-filled operator fence and alert (nothing is resent); read by the engine.
+max_exit_seconds = 30
 # Seconds a SIGTERM shutdown may spend cancelling entries and protecting fills before it gives
 # up with an alert (below the supervisor's 90 s alert and launchd's 120 s cap); read by the engine loop.
 shutdown_deadline_seconds = 60

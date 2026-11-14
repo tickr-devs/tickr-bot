@@ -55,7 +55,7 @@ def test_kinds_cover_spec_section_11():
         "bot-crashed", "bot-did-not-start", "bot-did-not-stop", "preflight-failed",
         "token-needs-confirmation", "exit-refused", "observers-stopped",
         "not-flat-after-flatten", "watchdog-not-flat", "watchdog-cannot-check",
-        "bot-down-with-open-trade",
+        "bot-down-with-open-trade", "exit-not-filled",
     }
 
 

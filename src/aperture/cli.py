@@ -21,6 +21,7 @@ from aperture.calendar import CalendarRefused, SessionCalendar
 from aperture.data.base import MarketData
 from aperture.engine.core import Engine, EntryRefused
 from aperture.engine.manual import (
+    CLOSE_WAITS,
     ManualRefused,
     check_window,
     flatten_deadline,
@@ -196,10 +197,11 @@ def _drive(engine: Engine, flatten_at: datetime | None, hold: float | None) -> i
         signal.signal(signal.SIGINT, previous)
     fences = engine.fences()
     for trade_id in waiting:
-        cause = fences.get(f"exit-refused:{trade_id}", "closing order refused")
+        name = next((f"{f}:{trade_id}" for f in CLOSE_WAITS if f"{f}:{trade_id}" in fences),
+                    f"exit-refused:{trade_id}")
+        cause = fences.get(name, "closing order refused")
         print(f"trade {trade_id}: {cause}. Look in the Webull app, then "
-              f"`aperture clear-fence exit-refused:{trade_id}` and `aperture exit`.",
-              file=sys.stderr)
+              f"`aperture clear-fence {name}` and `aperture exit`.", file=sys.stderr)
     return 4 if waiting else 0
 
 

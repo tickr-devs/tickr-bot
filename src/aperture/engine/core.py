@@ -83,13 +83,14 @@ class Fence(StrEnum):
     SHUTTING_DOWN = "shutting-down"
     ENTRY_STOP = "entry-stop"  # operator command; only the entry-stop-off command clears it
     REPLACE_UNRESOLVED = "replace-unresolved"  # a stop replace whose result is not confirmed
+    EXIT_NOT_FILLED = "exit-not-filled"  # a closing order still not filled after max_exit_seconds
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
 # when their condition is gone.
 OPERATOR_FENCES = frozenset({Fence.STOP_REJECTED, Fence.EXIT_REFUSED, Fence.CANCEL_FAILED,
                              Fence.RESURRECTED, Fence.UNPROTECTED_TIMEOUT,
-                             Fence.REPLACE_UNRESOLVED})
+                             Fence.REPLACE_UNRESOLVED, Fence.EXIT_NOT_FILLED})
 
 _LEG_LETTER = {Leg.ENTRY: "e", Leg.STOP: "s", Leg.EXIT: "x"}
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
@@ -889,6 +890,12 @@ class Engine:
             self._protect(trade, stops, expected)
             return
         if any(e.live for e in exits):
+            self._watch_exit(trade, [e for e in exits if e.live])
+            return
+        if self._has_fence(Fence.EXIT_NOT_FILLED, trade.trade_id):
+            # A close that did not fill in time has ended (cancelled or expired): send no other
+            # close until the operator has looked; keep what is held under a stop meanwhile.
+            self._protect(trade, stops, max(expected, ZERO))
             return
         if held != expected or expected <= 0:
             # Positions and Detail disagree: never sell on that; keep the Detail quantity
@@ -911,6 +918,29 @@ class Engine:
             cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
                                      OrderType.MARKET, uncovered)
         self._send(cid)
+
+    def _watch_exit(self, trade: TradeRow, live_exits: list[OrderRow]) -> None:
+        """A closing order not filled `max_exit_seconds` after its send attempt (store clock,
+        the journaled attempt) gets an operator fence, which alerts. Nothing is resent,
+        cancelled or added: a halt or no buyers need the operator's eyes, not another order."""
+        if self._has_fence(Fence.EXIT_NOT_FILLED, trade.trade_id):
+            return
+        now = datetime.fromisoformat(self.store.stamp())
+        limit = float(self.config.orders.max_exit_seconds)
+        for row in live_exits:
+            attempts = self.store.journal(f"order-{SendState.ATTEMPTED}", row.client_order_id)
+            if not attempts:
+                continue  # never attempted: not at the broker
+            age = (now - datetime.fromisoformat(attempts[0].at_utc)).total_seconds()
+            if age < limit:
+                continue
+            self._set_fence(Fence.EXIT_NOT_FILLED, trade.trade_id,
+                            f"closing order {row.client_order_id} for {row.quantity} "
+                            f"{trade.symbol} not filled after {int(age)} s "
+                            f"(filled {row.filled_quantity}, state "
+                            f"{row.broker_state or row.send_state}); nothing more is sent: "
+                            "look in the Webull app (halt? no buyers?)")
+            return
 
     def _set_trade_state(self, trade: TradeRow, state: TradeState) -> None:
         with self.store.transaction():

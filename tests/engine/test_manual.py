@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from aperture import cli, config
 from aperture.broker.fake import FakeBroker
 from aperture.calendar import NEW_YORK, SessionCalendar
 from aperture.config import GateResult
-from aperture.engine.core import Engine, Leg, TradeState
+from aperture.engine.core import Engine, Fence, Leg, TradeState
 from aperture.engine.manual import ManualRefused, check_window, plan_probe, run_until_closed
 from aperture.store import Store
 
@@ -216,6 +216,45 @@ def test_refused_close_never_loops(tmp_path):
                                flatten_at=None, hold_seconds=None)
     assert waiting == [t]
     assert sends.count("MARKET") == 1
+    stops = [o for o in market.open_orders() if o.order_type == "STOP_LOSS"]
+    assert sum(o.quantity for o in stops) == D(1)
+
+
+def test_a_close_that_did_not_fill_waits_for_the_operator_never_loops(tmp_path):
+    """A halt: the close never fills; once the operator cancels it in the app the stop is back
+    and the manual run returns, with one close sent."""
+    clock = [0.0]
+
+    class Halted(Market):
+        engine: Engine
+
+        def tick(self) -> None:
+            for cid, order in list(self.orders.items()):
+                if order.state.terminal or order.order_type == "STOP_LOSS":
+                    continue
+                if order.side == "BUY":
+                    self.fill(cid, order.quantity, D(10))
+                elif f"{Fence.EXIT_NOT_FILLED}:t1" in self.engine.fences():
+                    self.cancel(cid)  # the operator cancels the stuck close in the app
+
+    market = Halted()
+    start = MONDAY_11.astimezone(UTC)
+    store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0,
+                       now=lambda: start + timedelta(seconds=clock[0]))
+    engine = Engine(store, market, CFG, "manual01", lambda: GateResult(True, "t"),
+                    clock=lambda: clock[0])
+    market.engine = engine
+    t = engine.open_trade("ABC", D(1), D(10), D("9.80"), D("0.2"))
+
+    def sleep(seconds):
+        clock[0] += seconds
+        market.tick()
+
+    waiting = run_until_closed(engine, sleep=sleep, monotonic=lambda: clock[0],
+                               now=lambda: MONDAY_11, interrupted=lambda: True,
+                               flatten_at=None, hold_seconds=None)
+    assert waiting == [t]
+    assert [r.order_type for r in market.sent].count("MARKET") == 1
     stops = [o for o in market.open_orders() if o.order_type == "STOP_LOSS"]
     assert sum(o.quantity for o in stops) == D(1)
 
