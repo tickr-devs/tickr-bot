@@ -9,9 +9,12 @@ unambiguous result changes our records:
 - the same client_order_id working, unfilled, at the new price, and no other working order in
   the symbol: the stop row takes the new price and the fence is cleared;
 - the old order terminal and unfilled, and exactly one other working unfilled SELL STOP_LOSS
-  in the symbol for the same quantity at the new price: that order is adopted as the trade's
-  stop (protection and `aperture exit` then track it); the fence stays for the operator;
-- anything else: the fence stays and nothing else changes.
+  in the symbol for the same quantity at the new price, or with no price shown (whether rows
+  carry `stop_price` is unproven): that order is adopted as the trade's stop (protection and
+  `aperture exit` then track it); the fence stays for the operator;
+- anything else: the fence stays and nothing else changes. While it stays, the engine places
+  no stop and sends no close for the trade if a working SELL that is not ours rests in the
+  symbol (`Engine._replace_blocks`), so the bot never adds a second stop to Webull's.
 """
 
 from __future__ import annotations
@@ -210,8 +213,8 @@ def _settle(engine: Engine, plan: ReplacePlan, last: OrderDetail | None,
         new = others[0]
         if (new.side is Side.SELL and new.order_type is OrderType.STOP_LOSS
                 and new.state is OrderState.ACCEPTED and new.filled_quantity == 0
-                and new.quantity == stop.quantity and new.stop_price == plan.new
+                and new.quantity == stop.quantity and new.stop_price in (plan.new, None)
                 and new.client_order_id not in known):
-            engine.adopt_replacement(stop, last, new)
+            engine.adopt_replacement(stop, last, new, plan.new)
             return Verdict.ADOPTED
     return Verdict.UNRESOLVED

@@ -786,7 +786,7 @@ class Engine:
             self._trim_stops(stops, target)
         else:
             self._clear_fence(Fence.OVER_PROTECTED, trade.trade_id)
-        if covered >= target:
+        if covered >= target or self._replace_blocks(trade, stops):
             return
         trade = self._stop_from_fill(trade, stops)
         orders = self.config.orders
@@ -804,6 +804,22 @@ class Engine:
                                      OrderType.STOP_LOSS, target - covered,
                                      stop_price=trade.stop_price)
         self._send(cid)
+
+    def _replace_blocks(self, trade: TradeRow, stops: list[OrderRow]) -> bool:
+        """A replace of this trade's stop is unresolved, so Webull may hold a new stop we do
+        not track. While open orders show a working SELL in the symbol that is not ours, or
+        cannot be read, place no stop and sell nothing: either could sell the same share
+        twice. The `replace-unresolved` fence stays for the operator."""
+        if not any(self._has_fence(Fence.REPLACE_UNRESOLVED, s.client_order_id)
+                   for s in stops):
+            return False
+        try:
+            rows = self.broker.open_orders()
+        except BrokerError:
+            return True
+        ours = {o.client_order_id for o in self.orders()}
+        return any(o.symbol == trade.symbol and o.side is Side.SELL and not o.state.terminal
+                   and o.client_order_id not in ours for o in rows)
 
     def _trim_stops(self, stops: list[OrderRow], target: Decimal) -> None:
         """Cancel whole stops that are not needed, largest first, never going below `target`:
@@ -879,6 +895,8 @@ class Engine:
             # protected until they agree (the mismatch fence is already set).
             self._protect(trade, stops, max(expected, ZERO))
             return
+        if self._replace_blocks(trade, stops):
+            return  # keep our stops; a sale could add to an untracked stop of the replace
         live_stops = [s for s in stops if s.live]
         for stop in live_stops:
             self._cancel(stop)
@@ -937,11 +955,15 @@ class Engine:
                 self._drop_replace_fence(cid, f"replace-{outcome}")
 
     def replace_confirmed(self, cid: str, stop_price: Decimal, how: dict[str, Any]) -> None:
-        """Detail and open orders showed the same order working at the new price."""
+        """Detail and open orders showed the same order working at the new price; the trade
+        takes it too, so a re-placed stop never goes back to the looser price."""
         with self.store.transaction():
             self.store.execute("UPDATE orders SET stop_price = ?, updated_at = ? "
                                "WHERE client_order_id = ?",
                                (str(stop_price), self.store.stamp(), cid))
+            self.store.execute("UPDATE trades SET stop_price = ? WHERE trade_id = "
+                               "(SELECT trade_id FROM orders WHERE client_order_id = ?)",
+                               (str(stop_price), cid))
             self.store.append("replace-confirmed", {"stop_price": stop_price, **how}, key=cid,
                               run_id=self.run_id)
             self._drop_replace_fence(cid, "replace-confirmed")
@@ -953,10 +975,12 @@ class Engine:
             self.store.append("fence-cleared", {"by": by}, key=name, run_id=self.run_id)
 
     def adopt_replacement(self, old: OrderRow, old_detail: OrderDetail,
-                          detail: OrderDetail) -> None:
+                          detail: OrderDetail, expected_stop: Decimal) -> None:
         """Webull answered the replace with a NEW order (`old_detail` shows the old one
-        terminal): track it as this trade's stop so protection and teardown see it. The
-        replace fence stays set."""
+        terminal): track it as this trade's stop so protection and teardown see it. Its stop
+        price is the one shown, or `expected_stop` when the row shows none (journaled as not
+        shown). The replace fence stays set."""
+        stop_price = expected_stop if detail.stop_price is None else detail.stop_price
         with self.store.transaction():
             self._apply_detail(old, old_detail, resurrected=False)
             self.store.execute(
@@ -966,12 +990,12 @@ class Engine:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
                 (detail.client_order_id, old.trade_id, Leg.STOP, detail.symbol, detail.side,
                  detail.order_type, str(detail.quantity),
-                 None if detail.stop_price is None else str(detail.stop_price),
-                 SendState.ACKNOWLEDGED, detail.state, str(detail.filled_quantity),
+                 str(stop_price), SendState.ACKNOWLEDGED, detail.state, str(detail.filled_quantity),
                  None if detail.average_fill_price is None else str(detail.average_fill_price),
                  detail.broker_order_id, self.store.stamp()))
             self.store.append("order-adopted", {"replaces": old.client_order_id,
-                                                "stop_price": detail.stop_price,
+                                                "stop_price": stop_price,
+                                                "stop_price_shown": detail.stop_price is not None,
                                                 "state": detail.state},
                               key=detail.client_order_id, run_id=self.run_id)
 
