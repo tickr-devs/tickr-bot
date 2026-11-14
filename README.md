@@ -15,6 +15,7 @@ pytest -q
 
 ## Apps in Xcode
 
-`open Aperture.xcworkspace` opens the operator apps and their shared package in Xcode 16+.
+`open Aperture.xcworkspace` opens the operator apps and their shared package in Xcode. The projects are kept
+current with Xcode 27.2 (the owner's version) and still open in Xcode 16 or newer.
 Scheme `Aperture macOS` runs on this Mac. The iOS app joins the workspace with its committed
 Xcode project (in progress). Details: `apps/macos/README.md`, `apps/ios/README.md`.
