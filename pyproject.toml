@@ -9,6 +9,8 @@ dependencies = []
 dev = ["pytest>=8", "ruff>=0.6"]
 # Webull OpenAPI SDK, imported only by src/aperture/broker/webull.py.
 webull = ["webull-openapi-python-sdk==3.0.3"]
+# Anthropic SDK, imported only by src/aperture/advisor/client.py (the offline advisor, never the bot).
+advisor = ["anthropic==2.8.0"]
 
 [project.scripts]
 aperture = "aperture.cli:main"

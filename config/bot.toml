@@ -177,6 +177,27 @@ queue_size = 256
 # read by observers.log.
 decisions_dir = "decisions"
 
+[advisor]
+# NAME of the environment variable holding the Anthropic API key (the SDK reads it itself; only ANTHROPIC_API_KEY works);
+# presence is checked, the value is never read, printed or stored; read by advisor.client.
+api_key_variable = "ANTHROPIC_API_KEY"
+# Claude model that writes proposals (Anthropic model id); read by advisor.client.
+model = "claude-opus-5-5"
+# Effort level for the proposal request: low, medium, high, xhigh or max; read by advisor.client.
+effort = "high"
+# Maximum output tokens of one proposal response (streamed); read by advisor.client.
+max_output_tokens = 64000
+# Seconds one proposal request may take before it fails (no retry of a failed proposal run); read by advisor.client.
+request_timeout_seconds = 900
+# Fewest recorded trading days the advisor accepts as evidence; fewer = refused; read by advisor.run.
+min_days = 5
+# Most strategy.toml values one proposal may change; more = the proposal is refused; read by advisor.proposal.
+max_changes = 3
+# Largest evidence bundle sent to the model, bytes of JSON; larger = refused, never cut; read by advisor.run.
+max_evidence_bytes = 400000
+# Proposals folder relative to [run] data_dir; one sub-folder per run; read by advisor.run.
+proposals_dir = "proposals"
+
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails; read by runtime.preflight.
 min_free_disk_mb = 2048
