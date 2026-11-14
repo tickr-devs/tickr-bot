@@ -133,7 +133,7 @@ def _run_bot(config_path: Path, command: list[str]) -> int:
 
 def _render(args: argparse.Namespace) -> int:
     cfg = config_module.load(args.config)
-    launchd.check_shutdown_deadlines(cfg)
+    launchd.check_timings(cfg)
     paths = launchd.Paths(
         repo=cfg.root, python=args.python, config=args.config.resolve(),
         env_file=args.env_file, log_dir=args.log_dir)

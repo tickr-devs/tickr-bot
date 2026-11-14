@@ -105,11 +105,20 @@ def test_engine_drain_must_end_before_supervisor_alert(config_path, drain, match
     config_path.write_text(text, "utf-8")
     cfg = config_module.load(config_path)
     with pytest.raises(config_module.ConfigError, match=match):
-        launchd.check_shutdown_deadlines(cfg)
+        launchd.check_timings(cfg)
 
 
 def test_repository_deadlines_are_ordered(config_path):
     cfg = config_module.load(config_path)
-    launchd.check_shutdown_deadlines(cfg)
+    launchd.check_timings(cfg)
     assert (0 < cfg.orders.shutdown_deadline_seconds < cfg.runtime.stop_alert_after_seconds
             < cfg.runtime.bot_exit_timeout_seconds)
+
+
+def test_flatten_grace_must_cover_a_reconcile_pass(config_path):
+    text = re.sub(r"(?m)^flatten_grace_seconds = .*$", "flatten_grace_seconds = 10",
+                  config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    cfg = config_module.load(config_path)
+    with pytest.raises(config_module.ConfigError, match="flatten_grace_seconds"):
+        launchd.check_timings(cfg)

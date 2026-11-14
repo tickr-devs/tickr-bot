@@ -143,6 +143,33 @@ settings) or schedule a wake before the preflight time, for example
 `python -m aperture.runtime alert <kind> <text>` shows one alert. Kinds (spec section 11):
 `unprotected-position`, `stop-rejected`, `unknown-order-status`, `foreign-exposure`,
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
-`bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`. The same kind and text inside
+`bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
+`exit-refused`, `observers-stopped`, `not-flat-after-flatten`. The same kind and text inside
 `[alerts] dedupe_window_seconds` is shown once; every occurrence is still recorded (in the bot's
 journal, or in the job log for these commands).
+
+## End of the day
+
+`[session] flatten_grace_seconds` after the flatten time (15:55 ET on a normal day), the bot
+checks the latest broker reads (positions and open orders read after the flatten time, never
+our records alone) and journals one `day-end` row per trading day: `broker_flat`,
+`own_positions`, `own_open_orders`, `trades_today`, `trades_closed`, `open_trades`, `agree`
+(broker positions and open orders equal what our records expect, nothing foreign) and
+`day_clean`. If the reads failed, `broker_read` is false and `day_clean` is null: the day is
+not counted as clean. Preflight refuses a grace not above `[orders] reconcile_interval_seconds`.
+The row is in the journal only; `status.json` (status-v1) has no field for it, because v1
+refuses unknown keys and adding one would be a version 2.
+
+### `not-flat-after-flatten`
+
+The broker still shows a position of ours, or an order of ours still working, after the flatten
+time plus the grace. The usual cause is a closing MARKET order that did not fill (a halt, no
+liquidity). The alert repeats every `[alerts] dedupe_window_seconds` while it lasts.
+
+1. Open the Webull app and look at the symbol named in the alert: position, working orders,
+   and whether the stock is halted.
+2. The protective stop is a DAY order: it expires at the 16:00 ET close. After that the
+   position has no broker-side stop. Close it in the Webull app before the close if you can.
+3. If it cannot be closed today, it stays overnight without a broker-side stop: decide in the
+   Webull app (sell in extended hours, or place your own stop for the next session). The bot
+   does not resolve this on its own; review the journal before the next session.

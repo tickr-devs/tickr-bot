@@ -24,6 +24,7 @@ from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeR
 from aperture.engine.loop import drain
 from aperture.engine.manual import flatten_deadline
 from aperture.runtime.alerts import AlertKind
+from aperture.runtime.dayend import DayEnd
 
 if TYPE_CHECKING:
     from aperture.observers.runner import ObserverSet
@@ -132,6 +133,8 @@ class Service:
         self.last_broker_read_at: datetime | None = None
         self._flatten_day: date | None = None
         self._flatten_at: datetime | None = None
+        self._flatten_passed = False  # the flatten time of _flatten_day has been reached
+        self.day_end = DayEnd(engine, calendar, watch)
 
     # --- commands --------------------------------------------------------------------------
 
@@ -206,18 +209,24 @@ class Service:
 
     def flatten_due(self) -> None:
         """At the session's flatten time (or at once with no usable calendar or session)
-        ask every open trade to exit through the normal path."""
+        ask every open trade to exit through the normal path; from the flatten time plus
+        grace, check by broker reads that the day ended flat (runtime/dayend.py)."""
         now = self.now()
         day = now.astimezone(NEW_YORK).date()
         if self._flatten_day != day:
             self._flatten_day = day
+            self._flatten_passed = False
             self._flatten_at = (now if self.calendar is None
                                 else flatten_deadline(self.config, self.calendar, now))
         if self._flatten_at is None or now < self._flatten_at:
             return
+        if not self._flatten_passed:
+            self._flatten_passed = True
+            self.engine.broker_view = None  # only reads from now on can show the day's end
         for trade in self.engine.trades():
             if not trade.exit_requested:
                 self.engine.request_exit(trade.trade_id, "session-flatten")
+        self.day_end.check(self._flatten_at, now)
 
     # --- strategy --------------------------------------------------------------------------
 

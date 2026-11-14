@@ -41,6 +41,9 @@ calendar_file = "config/calendar/us-equity-2026.json"
 last_entry_minutes_before_close = 15
 # All positions closed this many minutes before the regular close (15:55 ET on a normal day); read by runtime.
 flatten_minutes_before_close = 5
+# Seconds after the flatten time before broker reads must show nothing of ours left (alert not-flat-after-flatten,
+# day-end record); keep it above [orders] reconcile_interval_seconds; read by runtime.dayend.
+flatten_grace_seconds = 120
 # Trade on half days: false = no trading on half days; read by safety.
 half_days_enabled = false
 

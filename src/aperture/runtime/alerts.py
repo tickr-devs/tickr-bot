@@ -52,6 +52,8 @@ class AlertKind(StrEnum):
     TOKEN_NEEDS_CONFIRMATION = "token-needs-confirmation"
     # The observer queue overflowed: observers are switched off for the run (trading goes on).
     OBSERVERS_STOPPED = "observers-stopped"
+    # Broker reads after the flatten time (plus grace) still show our position or order.
+    NOT_FLAT_AFTER_FLATTEN = "not-flat-after-flatten"
 
 
 class Delivery(StrEnum):

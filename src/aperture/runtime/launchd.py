@@ -69,10 +69,12 @@ def schedule(runtime: RuntimeConfig) -> Schedule:
     return Schedule(preflight=preflight, bot=bot, weekdays=tuple(days))
 
 
-def check_shutdown_deadlines(config: Config) -> None:
+def check_timings(config: Config) -> None:
     """Refuse unless the engine drain ends before the supervisor alert, which ends before SIGKILL:
     0 < [orders] shutdown_deadline_seconds < [runtime] stop_alert_after_seconds
-      < [runtime] bot_exit_timeout_seconds."""
+      < [runtime] bot_exit_timeout_seconds;
+    and unless a reconcile pass fits inside the day-end grace:
+    [orders] reconcile_interval_seconds < [session] flatten_grace_seconds."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -80,6 +82,11 @@ def check_shutdown_deadlines(config: Config) -> None:
         raise ConfigError(
             f"[orders] shutdown_deadline_seconds ({drain}) must be positive and below "
             f"[runtime] stop_alert_after_seconds ({alert_after})")
+    grace = config.session.flatten_grace_seconds
+    if not config.orders.reconcile_interval_seconds < grace:
+        raise ConfigError(
+            f"[session] flatten_grace_seconds ({grace}) must be above "
+            f"[orders] reconcile_interval_seconds ({config.orders.reconcile_interval_seconds})")
 
 
 def _calendar_xml(at: LocalTime, weekdays: tuple[int, ...]) -> str:

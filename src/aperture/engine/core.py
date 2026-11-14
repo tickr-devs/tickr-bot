@@ -29,6 +29,7 @@ from aperture.types import (
     OrderRequest,
     OrderState,
     OrderType,
+    Position,
     Side,
     TimeInForce,
     TradingSession,
@@ -209,6 +210,15 @@ def _detail_priority(row: OrderRow, poll_seconds: float) -> float:
     return (row.last_detail_at or 0.0) - boost * poll_seconds
 
 
+@dataclass(frozen=True)
+class BrokerView:
+    """What one successful reconcile pass read: open orders, then positions. For reports
+    only (day end); never used to size or send anything."""
+
+    positions: tuple[Position, ...]
+    open_orders: tuple[OrderDetail, ...]
+
+
 class Engine:
     def __init__(self, store: Store, broker: Broker, config: Config, run_id: str,
                  gate: Callable[[], GateResult],
@@ -219,6 +229,9 @@ class Engine:
         self.run_id = run_id
         self.gate = gate
         self.clock = clock
+        self._positions: list[Position] | None = None  # this pass's positions read
+        # The latest reconcile's reads; None after a failed read (or when a caller drops it).
+        self.broker_view: BrokerView | None = None
 
     # --- fences ----------------------------------------------------------------------------
 
@@ -625,11 +638,14 @@ class Engine:
 
     def step(self) -> None:
         """One pass: read positions, observe orders within budget, advance every trade."""
+        self._positions = None
         try:
             positions = self.broker.positions()
         except BrokerError as exc:
+            self.broker_view = None  # the latest read failed: what the broker holds is unknown
             self._set_fence(Fence.BROKER_READ, "", f"positions read failed: {type(exc).__name__}")
             return
+        self._positions = positions
         self._clear_fence(Fence.BROKER_READ)
         held = {p.symbol: p.quantity for p in positions if p.quantity != 0}
 
@@ -975,6 +991,7 @@ class Engine:
     def reconcile(self) -> bool:
         """Compare broker open orders with our records, then step. Returns False if a read
         failed. The startup fence clears on the first success, whenever that is."""
+        self.broker_view = None
         try:
             open_orders = self.broker.open_orders()
         except BrokerError as exc:
@@ -1000,7 +1017,8 @@ class Engine:
             if fence == Fence.FOREIGN_ORDER and cid not in broker_ids:
                 self._clear_fence(Fence.FOREIGN_ORDER, cid)
         self.step()
-        if self._has_fence(Fence.BROKER_READ):
+        if self._has_fence(Fence.BROKER_READ) or self._positions is None:
             return False
+        self.broker_view = BrokerView(tuple(self._positions), tuple(open_orders))
         self._clear_fence(Fence.STARTUP_RECONCILE)
         return True
