@@ -26,6 +26,7 @@ STRATEGIES_DIR = "strategies"
 STRATEGY_FILE = "strategy.toml"
 COMMAND = "command"
 COMMAND_FILE_REFUSED = "command-file-refused"
+COMMAND_EFFECT = "command-effect"
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
@@ -95,7 +96,8 @@ class Service:
     def process_commands(self) -> None:
         """Journal, act, retire (docs/api.md). Commands run in request order, so of two
         entry-stop commands the later one wins. A command already journaled (crash before
-        retire) is retired without acting again."""
+        retire) is not acted on again, except a cancel-own-orders whose effect was not yet
+        recorded: cancelling entries is idempotent, so it is finished instead of lost."""
         store = self.engine.store
         items = api.read_commands(self.paths.inbox, self.now(),
                                   self.config.api.command_max_age_seconds)
@@ -108,6 +110,9 @@ class Service:
                                  run_id=self.engine.run_id)
             elif not self._seen(command.command_id):
                 self._act(command)
+            elif (command.kind is api.CommandKind.CANCEL_OWN_ORDERS
+                  and not self.engine.store.journal(COMMAND_EFFECT, command.command_id)):
+                self._cancel_entries(command)
             api.retire_command(item, self.paths.processed)
 
     def _record(self, command: api.CommandV1, outcome: api.CommandOutcome,
@@ -130,15 +135,12 @@ class Service:
         if kind is api.CommandKind.CANCEL_OWN_ORDERS:
             with store.transaction():
                 self._record(command, api.CommandOutcome.DONE, None)
-            asked = engine.cancel_entries()
-            with store.transaction():
-                store.append("command-effect", {"entries_cancel_requested": asked},
-                             key=command.command_id, run_id=engine.run_id)
+            self._cancel_entries(command)
             return
         # FLATTEN: through the normal exit path; refused while a close waits for the operator.
         refused = [t.trade_id for t in trades
                    if f"{Fence.EXIT_REFUSED}:{t.trade_id}" in engine.fences()]
-        with store.transaction():
+        with store.transaction():  # the record and the exit requests are one write
             if refused:
                 self._record(command, api.CommandOutcome.REFUSED,
                              f"closing order refused before for {', '.join(refused)}: "
@@ -146,9 +148,14 @@ class Service:
             else:
                 self._record(command, api.CommandOutcome.DONE,
                              None if trades else "nothing open")
-        if not refused:
-            for trade in trades:
-                engine.request_exit(trade.trade_id, "operator-flatten")
+                for trade in trades:
+                    engine.exit_request_row(trade.trade_id, "operator-flatten")
+
+    def _cancel_entries(self, command: api.CommandV1) -> None:
+        asked = self.engine.cancel_entries()
+        with self.engine.store.transaction():
+            self.engine.store.append(COMMAND_EFFECT, {"entries_cancel_requested": asked},
+                                     key=command.command_id, run_id=self.engine.run_id)
 
     # --- session timer ---------------------------------------------------------------------
 

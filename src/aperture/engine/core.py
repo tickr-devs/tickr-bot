@@ -362,15 +362,21 @@ class Engine:
     def request_exit(self, trade_id: str, cause: str) -> bool:
         """Ask for an orderly exit. Refused while a closing order of this trade was refused
         (the operator must look first), so a caller can never turn it into a send loop."""
-        if self._has_fence(Fence.EXIT_REFUSED, trade_id):
-            return False
         with self.store.transaction():
-            changed = self.store.execute(
-                "UPDATE trades SET exit_requested = ? WHERE trade_id = ? AND state != ? "
-                "AND exit_requested IS NULL", (cause, trade_id, TradeState.CLOSED))
-            if changed:
-                self.store.append("exit-requested", {"cause": cause}, key=trade_id,
-                                  run_id=self.run_id)
+            return self.exit_request_row(trade_id, cause)
+
+    def exit_request_row(self, trade_id: str, cause: str) -> bool:
+        """`request_exit` inside the caller's transaction (so an operator command and its
+        effect are one durable write)."""
+        if self.store.query("SELECT 1 FROM fences WHERE name = ?",
+                            (f"{Fence.EXIT_REFUSED}:{trade_id}",)):
+            return False
+        changed = self.store.execute(
+            "UPDATE trades SET exit_requested = ? WHERE trade_id = ? AND state != ? "
+            "AND exit_requested IS NULL", (cause, trade_id, TradeState.CLOSED))
+        if changed:
+            self.store.append("exit-requested", {"cause": cause}, key=trade_id,
+                              run_id=self.run_id)
         return bool(changed)
 
     # --- sending ---------------------------------------------------------------------------
@@ -706,9 +712,14 @@ class Engine:
             self._set_fence(Fence.QUANTITY_MISMATCH, trade.trade_id,
                             f"broker holds {held}, Detail says {expected}")
 
-        if trade.state is TradeState.EXITING:
+        if trade.state is TradeState.EXITING and not (
+                self._has_fence(Fence.SHUTTING_DOWN) and not any(e.live for e in exits)):
             self._exit_step(trade, entry, stops, exits, held, expected)
         else:
+            # Not exiting, or shutting down mid-teardown with no close working: stop tearing
+            # down and keep protection, so a drain deadline never leaves a position unstopped.
+            if trade.state is TradeState.EXITING and entry.live:
+                self._cancel(entry)
             self._protect(trade, stops, expected)
         self._watch_protection(trade, exits, expected)
 

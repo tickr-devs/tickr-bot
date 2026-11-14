@@ -79,3 +79,25 @@ def test_drain_deadline_returns_false(tmp_path):
     assert not drain(engine, sleep=sleep, monotonic=lambda: clock[0])
     assert clock[0] >= float(CFG.orders.shutdown_deadline_seconds)
     assert "shutdown-deadline" in [r.kind for r in engine.store.journal()]
+
+
+def test_drain_mid_teardown_puts_protection_back_instead_of_closing(tmp_path):
+    from aperture.engine.loop import drain
+    broker = FakeBroker()
+    engine = _engine(tmp_path, broker)
+    trade = engine.open_trade("ABC", D(2), D(10), D(9), D(1))
+    broker.fill(engine.orders(trade)[0].client_order_id, D(2), D(10))
+    for _ in range(3):
+        engine.step()
+    engine.request_exit(trade, "flatten")
+    engine.step()  # the stop is asked to cancel (the fake cancels it at once)
+    assert not [o for o in broker.open_orders() if o.order_type == "STOP_LOSS"]
+    clock = [0.0]
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    assert drain(engine, sleep=sleep, monotonic=lambda: clock[0])
+    assert not [o for o in engine.orders(trade) if o.leg is Leg.EXIT]  # no close sent
+    stops = [o for o in broker.open_orders() if o.order_type == "STOP_LOSS"]
+    assert sum(o.quantity for o in stops) == D(2)

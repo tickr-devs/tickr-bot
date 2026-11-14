@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
+import pytest
+
 from aperture import cli, config
 from aperture.api import contract as api
 from aperture.broker.fake import FakeBroker
@@ -256,3 +258,38 @@ def test_cli_run_stops_on_sigterm(tmp_path, monkeypatch):
     store = Store.open(database, busy_timeout_seconds=0)
     assert store.last_run()["end_cause"] == "stopped (SIGTERM)"
     store.close()
+
+
+def test_cancel_own_orders_journaled_but_not_applied_is_finished_on_replay(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1))
+    entry = bot.engine.orders(t)[0].client_order_id
+    cmd = bot.command(api.CommandKind.CANCEL_OWN_ORDERS)
+    with bot.store.transaction():  # crash after the record, before the cancel
+        bot.store.append(service.COMMAND, {
+            "kind": cmd.kind, "requested_at": api.format_time(cmd.requested_at),
+            "source": "test", "outcome": "done", "cause": None}, key=cmd.command_id)
+    bot.service.process_commands()
+    assert bot.broker.orders[entry].state.terminal
+    assert len(bot.store.journal(service.COMMAND)) == 1
+    assert bot.store.journal(service.COMMAND_EFFECT, cmd.command_id)
+
+
+def test_flatten_record_and_exit_request_are_one_write(tmp_path):
+    bot = Bot(tmp_path)
+    t = opened(bot)
+    bot.command(api.CommandKind.FLATTEN)
+    real = bot.engine.exit_request_row
+
+    def crash(*args):
+        real(*args)
+        raise RuntimeError("crash inside the transaction")
+
+    bot.engine.exit_request_row = crash
+    with pytest.raises(RuntimeError):
+        bot.service.process_commands()
+    assert not bot.store.journal(service.COMMAND)  # rolled back together
+    assert not bot.engine.trade(t).exit_requested
+    bot.engine.exit_request_row = real
+    bot.service.process_commands()  # file still in the inbox: acted on now
+    assert bot.engine.trade(t).exit_requested == "operator-flatten"
