@@ -24,12 +24,12 @@ from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeR
 from aperture.engine.loop import drain
 from aperture.engine.manual import flatten_deadline
 from aperture.runtime.alerts import AlertKind
-from aperture.runtime.watch import Watch
 
 if TYPE_CHECKING:
     from aperture.observers.runner import ObserverSet
     from aperture.runtime.evaluation import Evaluator
     from aperture.runtime.market import MarketRuntime
+    from aperture.runtime.watch import Watch
 
 STRATEGIES_DIR = "strategies"
 STRATEGY_FILE = "strategy.toml"

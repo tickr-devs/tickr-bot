@@ -49,6 +49,21 @@ def round_to_tick(price: Decimal) -> Decimal:
     return price.quantize(tick, rounding=ROUND_DOWN)
 
 
+def realized_loss_today(engine: Engine, now: datetime) -> Decimal | None:
+    """Today's net realized loss as a non-negative amount: wins offset losses (owner
+    decision 2026-11-14); None if a trade closed today has fills whose prices are unknown."""
+    today = now.astimezone(NEW_YORK).date()
+    for row in engine.store.query(
+            "SELECT trade_id, closed_at FROM trades WHERE closed_at IS NOT NULL"):
+        if datetime.fromisoformat(row["closed_at"]).astimezone(NEW_YORK).date() != today:
+            continue
+        for order in engine.orders(row["trade_id"]):
+            if order.filled_quantity > 0 and order.average_fill_price is None:
+                return None
+    net = sum((t.result_gross_usd for t in trades_today(engine, now)), ZERO)
+    return max(-net, ZERO)
+
+
 class EntryDesk:
     def __init__(self, engine: Engine, config: Config, *, calendar: SessionCalendar | None,
                  last_broker_read_at: Callable[[], datetime | None],
@@ -61,21 +76,6 @@ class EntryDesk:
         self.limits = AdmissionLimits.from_config(config)
 
     # --- money -----------------------------------------------------------------------------
-
-    def _realized_loss(self, now: datetime) -> Decimal | None:
-        """Today's net realized loss as a non-negative amount: wins offset losses (owner
-        decision 2026-11-14); None if a trade closed today has fills whose prices are
-        unknown."""
-        today = now.astimezone(NEW_YORK).date()
-        for row in self.engine.store.query(
-                "SELECT trade_id, closed_at FROM trades WHERE closed_at IS NOT NULL"):
-            if datetime.fromisoformat(row["closed_at"]).astimezone(NEW_YORK).date() != today:
-                continue
-            for order in self.engine.orders(row["trade_id"]):
-                if order.filled_quantity > 0 and order.average_fill_price is None:
-                    return None
-        net = sum((t.result_gross_usd for t in trades_today(self.engine, now)), ZERO)
-        return max(-net, ZERO)
 
     def _reservations(self) -> Decimal:
         return sum((t.planned_loss_usd for t in self.engine.trades()), ZERO)
@@ -123,7 +123,7 @@ class EntryDesk:
             stop_price=stop,
             setup_valid=True,  # the decision was made from the latest bar and this quote
             quote=quote,
-            realized_loss_today_usd=self._realized_loss(now),
+            realized_loss_today_usd=realized_loss_today(engine, now),
             open_reservations_usd=self._reservations(),
             entry_budget_available=engine.broker.can_place(1),
             stop_budget_available=engine.broker.can_place(1 + STOP_ORDERS_PER_ENTRY),

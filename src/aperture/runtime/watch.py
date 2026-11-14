@@ -1,5 +1,8 @@
 """Bot-side alerts (spec 11) and the daily verified database backup (spec 10).
 
+The daily ceiling alerts once per New York day, when today's net realized loss reaches
+`[risk] max_daily_loss_usd` (from then on every entry is refused for the day).
+
 Alerts come from engine fences: a fence that needs the operator alerts at once; a fence that
 clears itself alerts only after it has lasted `fence_alert_after_seconds` (a single failed read
 is not worth a notification). Each fence alerts once while it stays set. Every outcome is
@@ -18,6 +21,7 @@ from aperture.calendar import NEW_YORK
 from aperture.config import Config
 from aperture.engine.core import OPERATOR_FENCES, Engine, Fence
 from aperture.runtime.alerts import Alerter, AlertKind
+from aperture.runtime.entries import realized_loss_today
 
 ALERT = "alert"
 BACKUP = "backup"
@@ -56,6 +60,7 @@ class Watch:
         self._alerted: set[str] = set()  # fences alerted while they stay set
         self._stream_lost: set[str] = set()  # trades alerted for a stream-lost exit
         self._backup_day: date | None = None
+        self._ceiling_day: date | None = None  # day the daily ceiling was alerted
 
     def alert(self, kind: AlertKind, text: str) -> None:
         outcome = self.alerter.alert(kind, text)
@@ -83,6 +88,21 @@ class Watch:
                 self._stream_lost.add(trade.trade_id)
                 self.alert(AlertKind.STREAM_LOST_WITH_POSITION,
                            f"{trade.symbol}: L1 stream lost, closing the position")
+        self._check_daily_ceiling()
+
+    def _check_daily_ceiling(self) -> None:
+        now = self.now()
+        day = now.astimezone(NEW_YORK).date()
+        if self._ceiling_day == day:
+            return
+        loss = realized_loss_today(self.engine, now)
+        ceiling = self.config.risk.max_daily_loss_usd
+        if loss is None or loss < ceiling:
+            return  # unknown fill prices: entries are refused for that anyway (risk)
+        self._ceiling_day = day
+        self.alert(AlertKind.DAILY_CEILING_REACHED,
+                   f"net realized loss today {loss} USD reached the {ceiling} USD ceiling: "
+                   "no new entries today")
 
     # --- backup ----------------------------------------------------------------------------
 

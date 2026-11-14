@@ -14,7 +14,7 @@ from aperture.config import GateResult
 from aperture.engine.core import Engine, Fence, Leg
 from aperture.observers.log import DecisionLog
 from aperture.research.records import load_records
-from aperture.runtime.entries import EntryDesk, round_to_tick
+from aperture.runtime.entries import EntryDesk, realized_loss_today, round_to_tick
 from aperture.store import Store
 from aperture.strategy.base import Check, Decision, Verdict
 from aperture.types import Quote
@@ -138,8 +138,8 @@ def test_no_calendar_refuses(tmp_path):
 
 def test_daily_ceiling_counts_todays_realized_loss(tmp_path, monkeypatch):
     desk = Desk(tmp_path)
-    monkeypatch.setattr("aperture.runtime.entries.EntryDesk._realized_loss",
-                        lambda self, now: CFG.risk.max_daily_loss_usd)
+    monkeypatch.setattr("aperture.runtime.entries.realized_loss_today",
+                        lambda engine, now: CFG.risk.max_daily_loss_usd)
     assert desk.decide(decision()).refusal_cause.startswith("DAILY_CEILING")
 
 
@@ -167,10 +167,10 @@ def test_realized_loss_is_the_net_loss_of_the_day(tmp_path, monkeypatch):
     monkeypatch.setattr("aperture.runtime.entries.trades_today",
                         lambda engine, now: (trade(D(-20)), trade(D(5)), trade(D(-5))))
     desk = Desk(tmp_path)
-    assert desk.desk._realized_loss(NOW) == D(20)  # wins offset losses (owner 2026-11-14)
+    assert realized_loss_today(desk.engine, NOW) == D(20)  # wins offset losses (owner 2026-11-14)
     monkeypatch.setattr("aperture.runtime.entries.trades_today",
                         lambda engine, now: (trade(D(-20)), trade(D(50))))
-    assert desk.desk._realized_loss(NOW) == D(0)
+    assert realized_loss_today(desk.engine, NOW) == D(0)
 
 
 def test_record_failure_after_send_is_journaled_and_never_raises(tmp_path):

@@ -198,3 +198,41 @@ def test_over_protection_alerts_when_it_lasts(tmp_path):
     rig.clock[0] += AFTER
     rig.watch.check()
     assert rig.kinds() == [AlertKind.UNKNOWN_ORDER_STATUS]
+
+
+def test_daily_ceiling_alerts_once_per_day_when_the_net_loss_reaches_it(tmp_path, monkeypatch):
+    rig = Rig(tmp_path)
+    ceiling = CFG.risk.max_daily_loss_usd
+    loss: list[D | None] = [ceiling - 1]
+    monkeypatch.setattr("aperture.runtime.watch.realized_loss_today",
+                        lambda engine, now: loss[0])
+    rig.watch.check()
+    loss[0] = None  # fill price unknown: no claim either way
+    rig.watch.check()
+    assert rig.kinds() == []
+    loss[0] = ceiling
+    rig.watch.check()
+    rig.watch.check()
+    assert rig.kinds() == [AlertKind.DAILY_CEILING_REACHED]
+    assert f"reached the {ceiling} USD ceiling" in rig.store.journal(ALERT)[0].body["text"]
+    rig.now += timedelta(days=1)
+    rig.watch.check()
+    assert rig.kinds() == [AlertKind.DAILY_CEILING_REACHED] * 2
+
+
+def test_daily_ceiling_uses_the_real_net_result(tmp_path):
+    rig = Rig(tmp_path)
+    t = rig.engine.open_trade("ABC", D(100), D(10), D(5), D(1))
+    rig.broker.fill(rig.engine.orders(t)[0].client_order_id, D(100), D(10))
+    for _ in range(3):
+        rig.engine.step()
+    rig.engine.request_exit(t, "test")
+    for _ in range(4):
+        rig.engine.step()
+        for o in rig.broker.open_orders():
+            if o.order_type == "MARKET":
+                rig.broker.fill(o.client_order_id, D(100), D(6))  # 400 USD loss
+    assert rig.engine.trades() == []  # closed
+    rig.now = datetime.now(NEW_YORK)  # trades_today reads the close time of the engine
+    rig.watch.check()
+    assert AlertKind.DAILY_CEILING_REACHED in rig.kinds()
