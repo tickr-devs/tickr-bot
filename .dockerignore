@@ -1,0 +1,11 @@
+# Allowlist: only what the bot, preflight, watchdog and API need goes into the image.
+# Never the data folder, env files, tokens or the owner authorization file.
+*
+!pyproject.toml
+!src/
+!config/
+!strategies/
+!ops/docker/entrypoint.sh
+**/__pycache__
+**/*.pyc
+**/*.egg-info

@@ -1,0 +1,105 @@
+# Aperture on a Linux server (example). See docs/deploy-server.md before using it.
+#
+# BLOCKER: today the only alert channels are the macOS notification and iMessage (osascript).
+# On Linux preflight refuses with `alert-channel-missing`, so the bot job never starts the bot.
+# A Linux alert channel is an open owner decision.
+#
+# Run from the repo root on the server, with these host variables set (paths only, no values):
+#   APERTURE_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the build uid)
+#   APERTURE_CONFIG_HOST    absolute path of the bot.toml to run with
+#   docker compose -f ops/docker/compose.yaml build \
+#     --build-arg APERTURE_UID=$(id -u) --build-arg APERTURE_GID=$(id -g)
+#
+# Jobs, matching the launchd jobs on the Mac (docs/operations.md, "Jobs"):
+#   api        always on, restarted by Docker (launchd KeepAlive)      -> `up -d api`
+#   preflight  scheduled by the host, never restarted                   -> `run --rm preflight`
+#   bot        scheduled by the host, never restarted (crash = alert)   -> `up -d bot`
+#   watchdog   scheduled by the host, separate from the bot, never restarted -> `up -d watchdog`
+# The host scheduler (systemd timers, see the doc) starts them at the [runtime] times.
+
+name: aperture
+
+x-aperture: &aperture
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  image: aperture:local
+  # Host networking: the API's loopback bind (127.0.0.1, enforced by the API itself) is the
+  # server's loopback, never a public interface; Docker publishes no ports.
+  network_mode: host
+  # tini as PID 1: forwards SIGTERM to the supervisor and reaps children.
+  init: true
+  volumes:
+    - type: bind
+      source: ${APERTURE_CONFIG_HOST:?absolute path of bot.toml}
+      target: /app/config/bot.toml
+      read_only: true
+    - aperture-data:/app/data
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"   # rotate each job's log at 50 MB
+      max-file: "10"    # keep 10 rotated files per container
+
+# Jobs that need credentials: the env file is mounted read-only and loaded by the entrypoint
+# with `set -a; . file`, so its values never appear in `docker inspect` or in the image.
+x-with-env: &with-env
+  environment:
+    APERTURE_ENV_FILE: /run/aperture/env
+  volumes:
+    - type: bind
+      source: ${APERTURE_CONFIG_HOST:?absolute path of bot.toml}
+      target: /app/config/bot.toml
+      read_only: true
+    - type: bind
+      source: ${APERTURE_ENV_FILE_HOST:?absolute path of the env file}
+      target: /run/aperture/env
+      read_only: true
+    - aperture-data:/app/data
+    # Production only: the owner authorization file read by trading_gate(), for example
+    # ([environments.production] authorization_file = "authorization/production.toml"):
+    # - type: bind
+    #   source: /absolute/path/to/authorization
+    #   target: /app/authorization
+    #   read_only: true
+
+services:
+  api:
+    <<: *aperture
+    command: ["python", "-m", "aperture.api", "--config", "/app/config/bot.toml"]
+    restart: unless-stopped
+
+  preflight:
+    <<: [*with-env, *aperture]
+    profiles: ["jobs"]
+    command: ["python", "-m", "aperture.runtime", "--config", "/app/config/bot.toml",
+              "preflight"]
+    restart: "no"
+
+  bot:
+    <<: [*with-env, *aperture]
+    profiles: ["jobs"]
+    command: ["python", "-m", "aperture.runtime", "--config", "/app/config/bot.toml",
+              "run-bot", "--", "python", "-m", "aperture.cli", "--config",
+              "/app/config/bot.toml", "run"]
+    # Never relaunched automatically (launchd KeepAlive false): a crash alerts instead.
+    restart: "no"
+    # Seconds between SIGTERM and SIGKILL on `docker compose stop bot`: keep equal to
+    # [runtime] bot_exit_timeout_seconds in bot.toml (launchd ExitTimeOut on the Mac).
+    stop_grace_period: 120s
+    # Host PID namespace: the pid the bot writes to its lock file is a pid the watchdog (another
+    # container) can check. Without it the watchdog always sees "no live pid".
+    pid: host
+
+  watchdog:
+    <<: [*with-env, *aperture]
+    profiles: ["jobs"]
+    command: ["python", "-m", "aperture.runtime", "--config", "/app/config/bot.toml",
+              "watchdog"]
+    restart: "no"
+    pid: host
+
+volumes:
+  # The data folder ([run] data_dir): SQLite database, lock, status file, token folder,
+  # journals, captures, backups.
+  aperture-data:

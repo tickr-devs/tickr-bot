@@ -8,7 +8,10 @@ Checks, all reported, the first failure is the single cause:
    "no session today", which is not a failure;
 4. credential environment variables present: only their NAMES are checked and reported, values
    are never read beyond "set and non-empty";
-4b. the iMessage recipient variable (`[alerts] imessage_recipient_variable`) present, the same
+4b. this machine has an alert channel (`alerts.default_notifier`): today only macOS
+   (notification and iMessage through osascript). Elsewhere (a Linux server, a container) the
+   bot would run with no way to reach the owner, so the start is refused;
+4c. the iMessage recipient variable (`[alerts] imessage_recipient_variable`) present, the same
    way: it is personal data;
 5. broker token folder present;
 6. active strategy builds from its file and `[market_data] history_sessions` covers the prior
@@ -24,6 +27,7 @@ Exit codes: 0 ready, 1 failed, 2 config invalid, 3 no session today.
 from __future__ import annotations
 
 import shutil
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,7 +38,7 @@ from aperture import config as config_module
 from aperture.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from aperture.observers.errors import ObserverError
 from aperture.observers.loader import load_active
-from aperture.runtime.alerts import recipient_missing
+from aperture.runtime.alerts import default_notifier, recipient_missing
 from aperture.runtime.launchd import check_timings
 
 STRATEGY_FILE = "strategy.toml"
@@ -58,6 +62,7 @@ class PreflightCause(StrEnum):
     CALENDAR_UNKNOWN = "calendar-unknown"
     CREDENTIALS_MISSING = "credentials-missing"
     ALERT_RECIPIENT_MISSING = "alert-recipient-missing"
+    ALERT_CHANNEL_MISSING = "alert-channel-missing"
     TOKEN_DIR_MISSING = "token-dir-missing"
     TOKEN_UNUSABLE = "token-unusable"
     STRATEGY_REFUSED = "strategy-refused"
@@ -69,6 +74,7 @@ class CheckName(StrEnum):
     CALENDAR = "calendar"
     CREDENTIALS = "credentials"
     ALERT_RECIPIENT = "alert-recipient"
+    ALERT_CHANNEL = "alert-channel"
     TOKEN_DIR = "token-dir"
     TOKEN = "token"
     STRATEGY = "strategy"
@@ -216,6 +222,16 @@ def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str]
     return Check(CheckName.ALERT_RECIPIENT, True, f"set: {cfg.alerts.imessage_recipient_variable}")
 
 
+def _check_alert_channel(cfg: config_module.Config, platform: str,
+                         environ: Mapping[str, str]) -> Check:
+    if default_notifier(cfg.alerts, platform, environ) is None:
+        return Check(CheckName.ALERT_CHANNEL, False,
+                     f"no alert channel on platform {platform!r}: the Mac notification and "
+                     "iMessage need macOS (see docs/deploy-server.md)",
+                     PreflightCause.ALERT_CHANNEL_MISSING)
+    return Check(CheckName.ALERT_CHANNEL, True, f"platform {platform}")
+
+
 def _check_token_dir(cfg: config_module.Config) -> Check:
     token_dir = cfg.root / cfg.run.data_dir / cfg.environment.token_dir
     if not token_dir.is_dir():
@@ -241,16 +257,18 @@ def run_preflight(
     environ: Mapping[str, str],
     disk_free: DiskFree = _disk_free,
     token_probe: TokenProbe | None = None,
+    platform: str = sys.platform,
 ) -> PreflightResult:
     """Run every check. `now` must be timezone-aware; `environ` is usually os.environ.
-    Without `token_probe` the token check is not run."""
+    Without `token_probe` the token check is not run. `platform` picks the alert channels."""
     cfg, config_check = _load_config(config_path)
     if cfg is None:
         return PreflightResult((config_check,), session_today=False, environment=None, config=None)
     disk = _check_disk(cfg, disk_free)
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, disk, calendar, _check_credentials(cfg, environ),
-              _check_alert_recipient(cfg, environ), _check_token_dir(cfg), _check_strategy(cfg))
+              _check_alert_channel(cfg, platform, environ), _check_alert_recipient(cfg, environ),
+              _check_token_dir(cfg), _check_strategy(cfg))
     blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED
                    for c in checks)
     if token_probe is not None and session_today and not blocking:

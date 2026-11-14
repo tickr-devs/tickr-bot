@@ -70,13 +70,15 @@ Every run prints JSON lines (`"record": "preflight" | "alert" | "bot-exit"`) to 
 3. Calendar knows today (New York date).
 4. Credential variables named in the active `[environments.*]` table are set. Only the names are
    checked and reported, never the values.
-5. The iMessage recipient variable named by `[alerts] imessage_recipient_variable` is set
+5. This machine has an alert channel (cause `alert-channel-missing`): today only macOS. On
+   Linux, including Docker, the start is refused; see `docs/deploy-server.md`.
+6. The iMessage recipient variable named by `[alerts] imessage_recipient_variable` is set
    (cause `alert-recipient-missing`; blocks the start, because the phone is the alert channel
    that reaches you away from the Mac). Presence only, never the value.
-6. Broker token folder `<data_dir>/<token_dir>` exists.
-7. The active strategy builds and `[market_data] history_sessions` covers its history need. A
+7. Broker token folder `<data_dir>/<token_dir>` exists.
+8. The active strategy builds and `[market_data] history_sessions` covers its history need. A
    failure is reported, but the bot still starts with entries off so it can protect positions.
-8. Broker token usable (only when no earlier check blocks the start and today has a session):
+9. Broker token usable (only when no earlier check blocks the start and today has a session):
    the Webull SDK creates or checks the token. If Webull says it is PENDING, preflight alerts `token-needs-confirmation`
    and waits up to `[environments.*] token_check_duration_seconds` for you to approve it in the
    Webull app. INVALID, EXPIRED, not approved in time, or any other token error fails the check
@@ -283,6 +285,9 @@ is a separate process that covers this:
 - Every check and alert is one JSON line in `data/watchdog.jsonl` (`[runtime]
   watchdog_journal_file`) and in `~/Library/Logs/Aperture/watchdog.log`.
 - Exit 0: all checks clear; 1: something alerted; 2: config invalid (alert sent); 3: no session.
+- On a machine with no alert channel (not macOS) it writes a `watchdog-alert-channel-refused`
+  line (`alert-channel-missing`), still runs and journals, and never exits 0, so the scheduler
+  shows a failed job.
 - If the iMessage recipient variable is not set, the watchdog writes a
   `watchdog-alert-channel-refused` line (`alert-recipient-missing`) and still runs, alerting on
   the Mac only; every iMessage attempt records the same cause.

@@ -15,3 +15,14 @@ jobs:
       - run: pip install -e ".[dev,webull]"
       - run: ruff check .
       - run: pytest -q
+  docker:
+    # Builds the server image and checks the compose example (docs/deploy-server.md); never pushes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t aperture:ci .
+      - run: docker compose -f ops/docker/compose.yaml --profile jobs config -q
+        env:
+          APERTURE_CONFIG_HOST: /srv/aperture/etc/bot.toml
+          APERTURE_ENV_FILE_HOST: /srv/aperture/etc/env
