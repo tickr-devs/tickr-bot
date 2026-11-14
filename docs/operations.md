@@ -1,7 +1,8 @@
 # Operations on the Mac
 
 How the owner runs Aperture under launchd. Nothing here is installed from the cloud: the owner
-renders the job files, reads them, and loads them.
+renders the job files, reads them, and loads them. Manual trades and the Sandbox probe day
+(stop the bot job first) are in docs/manual-trade.md.
 
 ## Jobs
 
@@ -109,7 +110,8 @@ All checks are reported; the first failure is the recorded cause.
    **Deadline:** `APERTURE_IMESSAGE_TO` must be in this file before the first preflight run
    (08:30 Mac time on Monday with the default `[runtime] preflight_start_local`). Without it
    preflight fails with `alert-recipient-missing` and the bot job does not start the bot.
-3. Data and token folders: `mkdir -p data/<token_dir>` (see `[environments.*] token_dir`).
+3. Data and token folders: `mkdir -p data/webull-token-sandbox` (`[environments.sandbox]
+   token_dir`; `data/webull-token-production` before Production).
 4. Alerts: sign in to iMessage in the Messages app on this Mac (Messages > Settings > iMessage)
    with an Apple ID, then, after loading the env file as above, run
    `.venv/bin/python -m aperture.runtime alert preflight-failed "test"` once. You should get a
@@ -133,13 +135,14 @@ mkdir -p ~/Library/Logs/Aperture
     --log-dir ~/Library/Logs/Aperture \
     --out data/launchd
 # Read the five files in data/launchd, then:
-cp data/launchd/local.aperture.preflight.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.aperture.preflight.plist
+for job in preflight bot watchdog api test-alert; do
+  cp data/launchd/local.aperture.$job.plist ~/Library/LaunchAgents/
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.aperture.$job.plist
+done
 ```
 
-Load `local.aperture.bot.plist`, `local.aperture.watchdog.plist`, `local.aperture.api.plist` and
-`local.aperture.test-alert.plist` the same way. After changing `[runtime]` values, render again, then `launchctl bootout` and `bootstrap`
-the changed jobs.
+After changing `[runtime]` values, render again, then
+`launchctl bootout gui/$(id -u)/local.aperture.<job>` and `bootstrap` the changed jobs.
 
 ### Alerts from launchd (do this once, at the Mac)
 
