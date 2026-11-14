@@ -166,3 +166,102 @@ def test_info_plist_texts_need_a_russian_translation(tmp_path):
     }
     (tmp_path / "App" / "InfoPlist.xcstrings").write_text(json.dumps(catalog), encoding="utf-8")
     assert load().plist_violations(plist) == []
+
+
+def test_flags_outdated_apple_apis(tmp_path):
+    source = (
+        "import XCTest\n"
+        "final class Model: ObservableObject {\n"
+        "  @Published var value = 0\n"
+        "}\n"
+        "// NavigationView in a comment is fine\n"
+        "let view = NavigationView { EmptyView() }\n"
+        'Text("NavigationView in a string is fine")\n'
+        "DispatchQueue.main.async {}\n"
+        "NSApplication.shared.activate(ignoringOtherApps: true)\n"
+        "Text(title).foregroundColor(.red)\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 6, 8, 9, 10]
+
+
+def test_current_apple_apis_pass(tmp_path):
+    source = (
+        "import Testing\n"
+        "@Observable final class Model { var value = 0 }\n"
+        "let view = NavigationStack { EmptyView() }\n"
+        "NSApplication.shared.activate()\n"
+        "Text(title).foregroundStyle(.red)\n"
+    )
+    assert load().legacy_violations(write(tmp_path, source)) == []
+
+
+def test_ui_tests_may_use_xctest(tmp_path):
+    folder = tmp_path / "ApertureUITests"
+    folder.mkdir()
+    assert load().legacy_violations(write(folder, "import XCTest\n", "LaunchTests.swift")) == []
+
+
+def test_every_form_of_an_outdated_import_fails(tmp_path):
+    source = (
+        "@preconcurrency import Combine\n"
+        "public import XCTest\n"
+        "@testable import XCTest\n"
+        "import class Combine.AnyCancellable\n"
+        "@preconcurrency internal import Combine\n"
+        "import Testing\n"
+        "@testable import ApertureKit\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5]
+
+
+def test_combine_without_its_import_fails(tmp_path):
+    source = (
+        "let timer = Timer.publish(every: interval, on: .main, in: .common).autoconnect()\n"
+        "let changes = NotificationCenter.default.publisher(for: name)\n"
+        "let token = changes.sink { _ in }\n"
+        "var bag: Set<AnyCancellable> = []\n"
+        "let subject = PassthroughSubject<Int, Never>()\n"
+        "let value = CurrentValueSubject<Int, Never>(0)\n"
+        "view.onReceive(timer) { _ in }\n"
+        "for await note in NotificationCenter.default.notifications(named: name) {}\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_deprecated_swiftui_uikit_and_concurrency_calls_fail(tmp_path):
+    source = (
+        "list.navigationBarTitle(title)\n"
+        "back.edgesIgnoringSafeArea(.all)\n"
+        "button.accentColor(color)\n"
+        "field.autocapitalization(.none)\n"
+        "@Environment(\\.presentationMode) var mode\n"
+        "NavigationLink(destination: Detail(), isActive: $shown) { row }\n"
+        "view.onChange(of: value, perform: update)\n"
+        "view.animation(.easeOut)\n"
+        "let width = UIScreen.main.bounds.width\n"
+        "@UIApplicationMain final class Delegate {}\n"
+        "let group = DispatchGroup()\n"
+        "let queue = OperationQueue()\n"
+        "Thread.sleep(forTimeInterval: pause)\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == list(range(1, 14))
+
+
+def test_current_forms_of_those_calls_pass(tmp_path):
+    source = (
+        "list.navigationTitle(title)\n"
+        "back.ignoresSafeArea()\n"
+        "button.tint(color)\n"
+        "field.textInputAutocapitalization(.never)\n"
+        "@Environment(\\.dismiss) private var dismiss\n"
+        "view.onChange(of: value) { old, new in update(new) }\n"
+        "view.animation(Tokens.Motion.quick, value: value)\n"
+        "view.animation(.spring(response: response, dampingFraction: damping), value: value)\n"
+        "TimelineView(.animation(paused: reduceMotion)) { context in }\n"
+        "try await Task.sleep(for: .seconds(pause))\n"
+    )
+    assert load().legacy_violations(write(tmp_path, source)) == []
