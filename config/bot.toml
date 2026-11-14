@@ -11,6 +11,9 @@ data_dir = "data"
 database_busy_timeout_seconds = 5
 # Daily verified database backup folder, relative to data_dir; one file per NY date, only the latest kept (spec 10); read by runtime.watch.
 backups_dir = "backups"
+# Closed sessions whose capture and decision folders `aperture maintain` leaves uncompressed (today is never touched);
+# older finished days are gzipped in place; read by maintain.
+maintain_keep_sessions = 20
 
 [strategy]
 # Active strategy name = folder under strategies/; its decisions may reach the safety layer.

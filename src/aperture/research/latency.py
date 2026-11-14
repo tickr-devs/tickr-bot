@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from aperture.archive import open_text
 from aperture.research.errors import ResearchError
 
 QUOTE_KEYS = frozenset({"symbol", "bid", "ask", "bid_size", "ask_size", "provider_time",
@@ -61,7 +62,7 @@ def stats(values: Sequence[Decimal]) -> Stats:
 def _read(path: Path, keys: frozenset[str], parse: Callable[[str, dict[str, Any]], None]) -> bool:
     """Parse every complete line of a capture file. True when a last unterminated line (the
     bot may be appending right now) was left unread."""
-    with open(path, encoding="utf-8") as handle:
+    with open_text(path) as handle:  # plain or archived (.gz)
         lines = handle.readlines()
     partial = bool(lines) and not lines[-1].endswith("\n")
     if partial:

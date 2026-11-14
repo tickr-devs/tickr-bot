@@ -29,6 +29,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from aperture.archive import open_text
 from aperture.research.errors import RecordFileError
 from aperture.strategy.base import Check, Decision, Role, Verdict
 
@@ -243,7 +244,7 @@ def load_records(paths: Sequence[Path]) -> tuple[DecisionRecord, ...]:
     out: list[DecisionRecord] = []
     for path in paths:
         name = str(path)
-        with open(path, encoding="utf-8") as handle:
+        with open_text(path) as handle:  # plain or archived (.gz)
             for number, text in enumerate(handle, start=1):
                 if not text.strip():
                     continue

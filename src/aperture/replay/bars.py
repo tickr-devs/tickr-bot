@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from aperture.archive import open_text
 from aperture.replay.errors import BarFileError
 from aperture.types import Bar
 
@@ -90,7 +91,7 @@ def load_bars(paths: Iterable[Path]) -> dict[str, tuple[Bar, ...]]:
     where: dict[str, tuple[str, int]] = {}
     for path in paths:
         name = str(path)
-        with open(path, encoding="utf-8") as handle:
+        with open_text(path) as handle:  # plain or archived (.gz)
             for number, text in enumerate(handle, start=1):
                 if not text.strip():
                     continue

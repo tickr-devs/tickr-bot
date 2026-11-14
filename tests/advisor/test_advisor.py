@@ -181,6 +181,16 @@ def test_missing_day_files_and_oversized_evidence_are_refused(tmp_path):
         run(cfg, FakeClient(answer()), tmp_path)
 
 
+def test_archived_day_files_are_read(tmp_path):
+    from aperture.archive import compress
+    cfg = make_root(tmp_path)
+    for day in DAYS:
+        for path in day_files(cfg, day):
+            compress(path)
+    result = run(cfg, FakeClient(answer([("breakout", "lookback_bars", "8")])), tmp_path)
+    assert result.status is Status.PROPOSED
+
+
 def test_evidence_too_big_is_refused_not_cut(tmp_path):
     cfg = make_root(tmp_path)
     from dataclasses import replace

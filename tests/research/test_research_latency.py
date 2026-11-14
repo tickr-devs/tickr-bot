@@ -8,6 +8,7 @@ from decimal import Decimal as D
 import pytest
 from research_helpers import HERE
 
+from aperture.archive import compress
 from aperture.data.base import StreamNotice
 from aperture.data.capture import CaptureWriter
 from aperture.research.__main__ import main
@@ -66,6 +67,22 @@ def test_latency_from_capture_files_end_to_end(tmp_path, capsys):
     assert summary == {"source": "stream", "quotes": 5, "symbols": 2, "hours": 2,
                        "clock_skew_quotes": 1, "min_latency_ms": "-5.0000", "notices": 2,
                        "partial_last_lines": 1}
+
+
+def test_latency_reads_archived_capture_files(tmp_path):
+    w = CaptureWriter(tmp_path / "cap", "webull")
+    w.on_quote(quote("AAA", T0, 10))
+    w.on_notice(StreamNotice(T0, 0, 40, 3))
+    w.close()
+    day = tmp_path / "cap" / DAY
+    compress(day / "quotes.jsonl")
+    compress(day / "notices.jsonl")
+    assert main(["latency", "--quotes", str(day / "quotes.jsonl"),  # plain name, .gz on disk
+                 "--notices", str(day / "notices.jsonl.gz"), *SETTINGS,
+                 "--out", str(tmp_path / "out")]) == 0
+    rows = {(r["group"], r["key"]): r for r in _rows(tmp_path / "out" / "latency.csv")}
+    assert rows[("symbol", "AAA")]["count"] == "1"
+    assert len(_rows(tmp_path / "out" / "notices.csv")) == 1
 
 
 @pytest.mark.parametrize("name, line, cause", [

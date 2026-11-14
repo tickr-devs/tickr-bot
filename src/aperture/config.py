@@ -27,6 +27,7 @@ class RunConfig:
     data_dir: str
     database_busy_timeout_seconds: Decimal
     backups_dir: str
+    maintain_keep_sessions: int
 
 
 @dataclass(frozen=True)
@@ -353,6 +354,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError(
             f"[run] environment {run.environment!r} is not one of: {', '.join(environments)}"
         )
+    if run.maintain_keep_sessions < 1:
+        raise ConfigError("[run] maintain_keep_sessions must be at least 1 (today is always kept)")
     md: MarketDataConfig = built["market_data"]
     if md.candidate_subscriptions > md.stream_max_symbols - md.stream_reserved_symbols:
         raise ConfigError(

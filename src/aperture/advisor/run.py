@@ -24,6 +24,7 @@ from aperture.advisor.errors import AdvisorError
 from aperture.advisor.evidence import build_evidence
 from aperture.advisor.proposal import SCHEMA, Proposal, next_version, parse_reply, render_toml
 from aperture.advisor.report import render_report
+from aperture.archive import existing
 from aperture.calendar import TIMEZONE_NAME, SessionCalendar
 from aperture.config import Config
 from aperture.observers.errors import ObserverError
@@ -83,7 +84,7 @@ def run_advisor(
     for day in days:
         decisions, bars = day_files(config, day)
         for path in (decisions, bars):
-            if not path.is_file():
+            if existing(path) is None:  # plain or archived (.gz)
                 raise AdvisorError(f"{day}: missing {path}")
         decision_files.append(decisions)
         bar_files.append(bars)

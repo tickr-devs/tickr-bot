@@ -334,6 +334,26 @@ def _explain(args: argparse.Namespace) -> int:
     return 0
 
 
+def _maintain(args: argparse.Namespace) -> int:
+    """Archive finished days' capture and decision files, checkpoint the database (see
+    `aperture.maintain`). Holds the bot's lock: refused while the bot runs. Dry run unless
+    --apply. Exit 0 done, 1 an archive failed, 3 refused."""
+    from aperture import maintain
+
+    cfg = config_module.load(args.config)
+    database, lock_path = data_paths(cfg)
+    try:
+        calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    except CalendarRefused as exc:
+        raise ManualRefused(f"calendar unreadable: {exc}") from exc
+    with SingleInstanceLock(lock_path):
+        try:
+            return maintain.run(cfg, calendar, database, ny_date_of(NOW()), apply=args.apply,
+                                out=print)
+        except maintain.MaintainRefused as exc:
+            raise ManualRefused(str(exc)) from exc
+
+
 def _clear_fence(args: argparse.Namespace) -> int:
     with _engine(args.config) as engine:
         if not engine.clear_operator_fence(args.name):
@@ -532,6 +552,9 @@ def main(argv: list[str] | None = None) -> int:
     explain_parser = sub.add_parser("explain", help="read-only: the latest decision recorded "
                                     "today for a symbol, with every check")
     explain_parser.add_argument("symbol")
+    maint = sub.add_parser("maintain", help="with the bot stopped: gzip finished days' capture "
+                           "and decision files, checkpoint the database (dry run by default)")
+    maint.add_argument("--apply", action="store_true", help="act; without it only print")
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
     fence.add_argument("name")
     args = parser.parse_args(argv)
@@ -550,6 +573,8 @@ def main(argv: list[str] | None = None) -> int:
             return _check_quote(args)
         if args.command == "explain":
             return _explain(args)
+        if args.command == "maintain":
+            return _maintain(args)
         if args.command == "clear-fence":
             return _clear_fence(args)
         if args.command == "check-config":

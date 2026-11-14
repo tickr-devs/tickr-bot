@@ -17,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from aperture.api import contract as api
+from aperture.archive import existing
 from aperture.calendar import ny_date_of
 from aperture.config import Config
 from aperture.data.capture import BARS_FILE, CaptureError, read_captured_bars
@@ -136,8 +137,8 @@ class History:
         return self.paths.capture / day.isoformat() / BARS_FILE
 
     def _bars_by_symbol(self, day: date, today: date) -> dict[str, list[api.BarV1]]:
-        path = self._bars_file(day)
-        if not path.is_file():
+        path = existing(self._bars_file(day))  # plain or archived (.gz)
+        if path is None:
             return {}
         stat = path.stat()
         key = (str(path), stat.st_mtime_ns, stat.st_size, day == today)
@@ -174,7 +175,7 @@ class History:
                 wins=sum(1 for t in of_day if t.result_gross_usd > 0),
                 losses=sum(1 for t in of_day if t.result_gross_usd < 0),
                 result_gross_usd=sum((t.result_gross_usd for t in of_day), ZERO),
-                has_bars=self._bars_file(day).is_file()))
+                has_bars=existing(self._bars_file(day)) is not None))
         return api.DaysV1(environment=self.paths.environment, days=tuple(summaries))
 
     def day(self, day: date, today: date) -> api.DayV1:

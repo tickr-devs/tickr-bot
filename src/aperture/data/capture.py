@@ -29,6 +29,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import IO, Any
 
+from aperture.archive import open_text
 from aperture.calendar import ny_date_of
 from aperture.config import Config
 from aperture.data.base import ScreenerRow, StreamNotice
@@ -229,7 +230,7 @@ def read_captured_bars(captured: Path, *, open_tail: bool = False) -> CapturedBa
     """
     latest: dict[tuple[str, datetime], Bar] = {}
     duplicates = revised = 0
-    with open(captured, encoding="utf-8") as handle:
+    with open_text(captured) as handle:  # plain or archived (.gz)
         lines = handle.readlines()
     if open_tail and lines and not lines[-1].endswith("\n"):
         lines.pop()

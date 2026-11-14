@@ -17,6 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import TextIO
 
+from aperture.archive import existing, open_text
 from aperture.calendar import ny_date_of
 from aperture.config import Config
 from aperture.research.errors import RecordFileError
@@ -48,11 +49,11 @@ class DecisionLog:
         separators) cannot be this symbol's and are skipped unparsed; any other malformed line
         is a RecordFileError."""
         path = self.path(day)
-        if not path.is_file():
+        if existing(path) is None:
             return None
         latest = None
         key = '"symbol": ' + json.dumps(symbol)
-        with open(path, encoding="utf-8") as handle:
+        with open_text(path) as handle:  # plain or archived (.gz)
             for number, text in enumerate(handle, start=1):
                 if not text.endswith("\n") or key not in text:
                     continue
