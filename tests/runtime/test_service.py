@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import signal
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -38,9 +38,10 @@ class Bot:
     def __init__(self, tmp_path: Path, broker: FakeBroker | None = None,
                  now: datetime = MONDAY_11) -> None:
         self.broker = broker or Market()
-        self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
-        self.clock = [0.0]
         self.now = now
+        self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0,
+                                now=lambda: self.now)
+        self.clock = [0.0]
         self.engine = Engine(self.store, self.broker, CFG, "svc00001",
                              lambda: GateResult(True, "t"), clock=lambda: self.clock[0])
         self.paths = service.ServicePaths(tmp_path / "status.json", tmp_path / "cmd" / "inbox",
@@ -210,7 +211,6 @@ def test_flatten_command_closes_through_the_exit_path(tmp_path):
     trade = bot.engine.trade(t)
     assert trade.state is TradeState.CLOSED and trade.exit_requested == "operator-flatten"
     assert bot.broker.positions() == []
-    bot.now = datetime.now(UTC)  # closed_at is wall-clock time
     (done,) = bot.service.status().trades_today
     assert (done.quantity, done.exit_reason, done.result_gross_usd) == (
         D(2), "operator-flatten", D(0))
@@ -461,3 +461,30 @@ def test_cli_run_with_a_misbehaving_strategy_protects_but_never_enters(tmp_path,
     (row,) = store.journal(service.STRATEGY_NOT_LOADED)
     assert row.body["cause"]
     store.close()
+
+
+def test_status_blocks_entries_when_the_daily_room_is_below_one_trade(tmp_path):
+    if not config.trading_gate(CFG).open:
+        pytest.skip("the configured trading gate is closed")
+    broker = FakeBroker()
+    bot = Bot(tmp_path, broker)
+    bot.service.evaluator = object()  # type: ignore[assignment]  # entries wired
+    bot.engine.recover()
+    bot.service.state = api.BotState.RUNNING
+    assert bot.service.status().entry_block is None
+    # One losing trade today that leaves less room than one planned loss.
+    t = bot.engine.open_trade("ABC", D(10), D(40), D(30), D(100))
+    (entry,) = bot.engine.orders(t)
+    broker.fill(entry.client_order_id, D(10), D(40))
+    bot.engine.step()  # stop placed
+    bot.engine.step()  # stop verified
+    lose = (CFG.risk.max_daily_loss_usd - CFG.risk.planned_loss_usd) / 10 + 1
+    bot.engine.request_exit(t, "test")
+    for _ in range(8):
+        bot.engine.step()
+        for order in bot.engine.orders(t):
+            if order.order_type == "MARKET" and order.live:
+                broker.fill(order.client_order_id, D(10), D(40) - lose)
+    assert bot.engine.trades() == []
+    block = bot.service.status().entry_block
+    assert block is not None and block.cause == "daily_ceiling"

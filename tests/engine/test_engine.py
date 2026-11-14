@@ -608,3 +608,37 @@ def test_lost_fill_rechecks_share_the_detail_budget(store):
     b.holdings["ABC"] = Position("ABC", D(2), D(10))
     run(e, 4)
     assert has(e, Fence.RESURRECTED)
+
+
+def _stop_refused_store(store, close: str, pass_seconds: float):
+    """Entry fills, every stop is refused, passes `pass_seconds` apart; the close is scripted."""
+    retries = CFG.orders.stop_retry_attempts
+    b = FakeBroker()
+    e = make(store, b)
+    t = enter(e, "2")
+    b.fill(legs(e, t, Leg.ENTRY)[0].client_order_id, D(2), D(10))
+    b.script(*["refuse"] * (retries + 1), close)
+    for _ in range(int(float(CFG.orders.max_unprotected_seconds) / pass_seconds) + retries + 4):
+        e.clock.now += pass_seconds
+        e.step()
+    return b, e, t
+
+
+@pytest.mark.parametrize("pass_seconds", [POLL, 11.0])
+def test_unprotected_timeout_text_says_exiting_when_the_close_is_being_sent(store,
+                                                                            pass_seconds):
+    b, e, t = _stop_refused_store(store, "ack", pass_seconds)
+    text = e.fences().get(f"{Fence.UNPROTECTED_TIMEOUT}:{t}")
+    if pass_seconds > POLL:  # slow passes: the timeout comes in the pass that asks to exit
+        assert text is not None
+    if text is not None:
+        assert "exiting" in text and "Webull app" not in text
+    assert [o.order_type for o in b.sent].count(OrderType.MARKET) == 1
+
+
+def test_unprotected_timeout_text_sends_the_operator_to_the_app_when_the_close_was_refused(
+        store):
+    b, e, t = _stop_refused_store(store, "refuse", POLL)
+    assert "NO broker stop" in e.fences()[f"{Fence.EXIT_REFUSED}:{t}"]
+    text = e.fences()[f"{Fence.UNPROTECTED_TIMEOUT}:{t}"]
+    assert "closing order was refused" in text and "exiting" not in text

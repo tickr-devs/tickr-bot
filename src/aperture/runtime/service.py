@@ -352,10 +352,33 @@ class Service:
         if fences:
             name, cause, _ = fences[0]
             return api.EntryBlock(name.split(":", 1)[0].replace("-", "_"), f"{name}: {cause}")
+        money = self._daily_money_block()
+        if money is not None:
+            return money
         if self.entries_off is not None:
             return api.EntryBlock("strategy_not_loaded",
                                   f"Active strategy not loaded: {self.entries_off}")
         return NOT_WIRED if self.evaluator is None else None
+
+    def _daily_money_block(self) -> api.EntryBlock | None:
+        """Entries the daily ceiling would refuse anyway: today's net realized loss plus open
+        reservations leave less room than the planned loss of one trade (spec 7, check 6).
+        Admission still decides each entry; this only keeps the status honest."""
+        from aperture.runtime.entries import realized_loss_today  # entries imports this module
+
+        risk = self.config.risk
+        loss = realized_loss_today(self.engine, self.now())
+        if loss is None:
+            return api.EntryBlock("daily_money_unknown",
+                                  "A trade closed today has fills without a known price.")
+        reserved = sum((t.planned_loss_usd for t in self.engine.trades()), ZERO)
+        room = risk.max_daily_loss_usd - loss - reserved
+        if room < risk.planned_loss_usd:
+            return api.EntryBlock("daily_ceiling",
+                                  f"Daily loss room {room} USD (ceiling {risk.max_daily_loss_usd}"
+                                  f", net realized loss {loss}, reserved {reserved}) is below "
+                                  f"the planned loss of one trade, {risk.planned_loss_usd} USD.")
+        return None
 
     def _stop(self, trade: TradeRow, stops: list[OrderRow]) -> api.Stop:
         live = [s for s in stops if s.live]

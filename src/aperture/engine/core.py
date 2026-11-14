@@ -504,8 +504,13 @@ class Engine:
                 (TradeState.OPEN, row.trade_id))
             self.store.append("exit-refused", {"client_order_id": row.client_order_id},
                               key=row.trade_id, run_id=self.run_id)
-            self._fence_row(Fence.EXIT_REFUSED, row.trade_id,
-                            "closing order refused; protection restored, operator must look")
+            trade = self.trade(row.trade_id)
+            if trade.stop_failures > self.config.orders.stop_retry_attempts:
+                text = ("closing order refused and the stop was refused after every retry: "
+                        "NO broker stop; close the position in the Webull app")
+            else:
+                text = "closing order refused; the stop is placed again, operator must look"
+            self._fence_row(Fence.EXIT_REFUSED, row.trade_id, text)
 
     def _cancel(self, row: OrderRow) -> None:
         """One cancel decision. A new decision is allowed only after a later Detail read showed
@@ -845,9 +850,18 @@ class Engine:
         age = self._fence_age(f"{Fence.UNPROTECTED}:{trade.trade_id}") or 0.0
         exiting = trade.state is TradeState.EXITING or any(e.live for e in exits)
         if age >= float(self.config.orders.max_unprotected_seconds) and not exiting:
-            self._set_fence(Fence.UNPROTECTED_TIMEOUT, trade.trade_id,
-                            f"no verified stop for {int(age)} s; exiting")
+            # Asked every pass: refused while an earlier close waits for the operator, taken
+            # as soon as they clear that fence.
             self.request_exit(trade.trade_id, "unprotected-too-long")
+            if not self._has_fence(Fence.UNPROTECTED_TIMEOUT, trade.trade_id):
+                # From the exit-refused fence, not from request_exit's answer: that is also
+                # False when an exit was already requested earlier in this pass (stop-rejected),
+                # and telling the operator to sell by hand then would double the sale.
+                refused = self._has_fence(Fence.EXIT_REFUSED, trade.trade_id)
+                text = (f"no verified stop for {int(age)} s and the closing order was refused "
+                        "before: close the position in the Webull app" if refused else
+                        f"no verified stop for {int(age)} s; exiting")
+                self._set_fence(Fence.UNPROTECTED_TIMEOUT, trade.trade_id, text)
 
     def _exit_step(self, trade: TradeRow, entry: OrderRow, stops: list[OrderRow],
                    exits: list[OrderRow], held: Decimal, expected: Decimal) -> None:

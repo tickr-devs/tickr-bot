@@ -133,6 +133,11 @@ class World:
                 return (bar.open + (bar.close - bar.open) * fraction).quantize(CENT)
         return bars[-1].close
 
+    def change(self, symbol: str) -> Decimal:
+        """Today's change against the open, as a ratio."""
+        first = self.today[symbol][0].open
+        return (self.price(symbol) - first) / first
+
     def quote(self, symbol: str, lead: timedelta = timedelta(0)) -> Quote:
         """The quote now, or (with `lead`) where the exchange already is while the feed lags."""
         mid = self.price(symbol, lead)
@@ -200,9 +205,12 @@ class Feed(FakeMarketData):
 
     def screener(self, kind: ScreenerKind) -> list[ScreenerRow]:
         self._call("screener", [kind.value])
+        # Ranked like a gainers list: by today's change, best first (losers: worst first).
+        symbols = sorted(self.world.screeners[kind], key=self.world.change,
+                         reverse=kind is not ScreenerKind.LOSERS)
         return [ScreenerRow(kind, rank, f"id-{symbol}", symbol, "NSQ", "USD", "COMMON_STOCK",
                             {"symbol": symbol})
-                for rank, symbol in enumerate(self.world.screeners[kind], start=1)]
+                for rank, symbol in enumerate(symbols, start=1)]
 
     def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
         self._call("bars", symbols)

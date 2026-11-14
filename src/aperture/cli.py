@@ -194,10 +194,12 @@ def _drive(engine: Engine, flatten_at: datetime | None, hold: float | None) -> i
                                    notify=lambda line: print(line, file=sys.stderr))
     finally:
         signal.signal(signal.SIGINT, previous)
+    fences = engine.fences()
     for trade_id in waiting:
-        print(f"trade {trade_id}: closing order refused; the stop is back in place. Look in "
-              f"the Webull app, then `aperture clear-fence exit-refused:{trade_id}` and "
-              "`aperture exit`.", file=sys.stderr)
+        cause = fences.get(f"exit-refused:{trade_id}", "closing order refused")
+        print(f"trade {trade_id}: {cause}. Look in the Webull app, then "
+              f"`aperture clear-fence exit-refused:{trade_id}` and `aperture exit`.",
+              file=sys.stderr)
     return 4 if waiting else 0
 
 
