@@ -106,6 +106,23 @@ class MarketDataConfig:
 
 
 @dataclass(frozen=True)
+class RuntimeConfig:
+    min_free_disk_mb: int
+    supervisor_poll_seconds: Decimal
+    bot_exit_timeout_seconds: int
+    stop_alert_after_seconds: int
+    preflight_start_local: str
+    bot_start_local: str
+    launch_weekdays: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class AlertsConfig:
+    dedupe_window_seconds: Decimal
+    notification_timeout_seconds: Decimal
+
+
+@dataclass(frozen=True)
 class EnvironmentConfig:
     trading_enabled: bool
     requires_owner_authorization: bool
@@ -145,6 +162,8 @@ class Config:
     orders: OrdersConfig
     probe: ProbeConfig
     api: ApiConfig
+    runtime: RuntimeConfig
+    alerts: AlertsConfig
     market_data: MarketDataConfig
     environments: dict[str, EnvironmentConfig]
     root: Path
@@ -167,6 +186,8 @@ _SECTIONS: dict[str, type] = {
     "orders": OrdersConfig,
     "probe": ProbeConfig,
     "api": ApiConfig,
+    "runtime": RuntimeConfig,
+    "alerts": AlertsConfig,
     "market_data": MarketDataConfig,
 }
 
@@ -188,6 +209,11 @@ def _coerce(where: str, value: Any, target: Any) -> Any:
         if not isinstance(value, str):
             raise ConfigError(f"{where}: expected a string, got {value!r}")
         return value
+    if target == tuple[int, ...]:
+        if not isinstance(value, list) or not all(
+                isinstance(v, int) and not isinstance(v, bool) for v in value):
+            raise ConfigError(f"{where}: expected a list of integers, got {value!r}")
+        return tuple(value)
     if target == tuple[str, ...]:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             raise ConfigError(f"{where}: expected a list of strings, got {value!r}")

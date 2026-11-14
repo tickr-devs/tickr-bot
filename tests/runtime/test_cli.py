@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import json
+import sys
+
+from aperture import config as config_module
+from aperture.runtime import __main__ as runtime_main
+from aperture.runtime.__main__ import main
+from aperture.runtime.preflight import Check, CheckName, PreflightResult
+
+
+def _records(out: str) -> list[dict]:
+    return [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+
+
+def test_preflight_failure_alerts_and_returns_1(config_path, capsys):
+    # The copied repo has no data folder, so preflight fails on any date.
+    assert main(["--config", str(config_path), "preflight"]) == 1
+    records = _records(capsys.readouterr().out)
+    assert records[0]["record"] == "preflight" and records[0]["cause"] == "data-dir-missing"
+    assert records[1]["record"] == "alert" and records[1]["kind"] == "preflight-failed"
+
+
+def test_preflight_invalid_config_still_alerts(config_path, capsys):
+    text = config_path.read_text("utf-8").replace("[risk]", "[riskk]", 1)
+    config_path.write_text(text, "utf-8")
+    assert main(["--config", str(config_path), "preflight"]) == 2
+    records = _records(capsys.readouterr().out)
+    assert records[1]["kind"] == "preflight-failed"
+    assert records[1]["delivery"] in ("no-notifier", "shown", "failed")
+
+
+def test_run_bot_refuses_without_command(config_path, capsys):
+    assert main(["--config", str(config_path), "run-bot"]) == 2
+
+
+def test_run_bot_does_not_start_when_preflight_fails(config_path, tmp_path, capsys):
+    marker = tmp_path / "started"
+    code = main(["--config", str(config_path), "run-bot", "--", sys.executable, "-c",
+                 f"open({str(marker)!r}, 'w')"])
+    assert code == 1 and not marker.exists()
+    alert = _records(capsys.readouterr().out)[-1]
+    assert alert["kind"] == "bot-did-not-start"
+
+
+def _ready_preflight(monkeypatch, config_path):
+    cfg = config_module.load(config_path)
+    check = Check(CheckName.CONFIG, True, "ok")
+    result = PreflightResult((check,), session_today=True, environment=cfg.environment_name,
+                             config=cfg)
+    monkeypatch.setattr(runtime_main, "run_preflight", lambda *a, **k: result)
+
+
+def test_run_bot_crash_alerts_and_is_not_relaunched(config_path, monkeypatch, tmp_path, capsys):
+    _ready_preflight(monkeypatch, config_path)
+    counter = tmp_path / "runs"
+    code = main(["--config", str(config_path), "run-bot", "--", sys.executable, "-c",
+                 f"open({str(counter)!r}, 'a').write('x'); raise SystemExit(7)"])
+    assert code == 7 and counter.read_text() == "x"
+    records = _records(capsys.readouterr().out)
+    assert records[-2]["record"] == "bot-exit" and records[-2]["return_code"] == 7
+    assert records[-1]["kind"] == "bot-crashed"
+
+
+def test_run_bot_clean_exit(config_path, monkeypatch, capsys):
+    _ready_preflight(monkeypatch, config_path)
+    assert main(["--config", str(config_path), "run-bot", "--", sys.executable, "-c",
+                 "pass"]) == 0
+    assert _records(capsys.readouterr().out)[-1]["record"] == "bot-exit"
+
+
+def test_alert_command(config_path, capsys):
+    assert main(["--config", str(config_path), "alert", "bot-crashed", "test"]) == 0
+    record = _records(capsys.readouterr().out)[0]
+    assert record["kind"] == "bot-crashed" and record["text"] == "test"
+
+
+def test_render_launchd(config_path, repo, tmp_path, capsys):
+    out = tmp_path / "plists"
+    assert main(["--config", str(config_path), "render-launchd", "--python", "/x/python",
+                 "--env-file", "/x/env", "--log-dir", "/x/logs", "--out", str(out)]) == 0
+    assert len(list(out.glob("*.plist"))) == 3

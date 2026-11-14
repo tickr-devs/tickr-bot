@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Aperture bot: started before the open on configured weekdays; preflight runs again first.
+     Never relaunched automatically: KeepAlive is false and a crash raises an alert instead.
+     launchd stops it with SIGTERM and waits ExitTimeOut seconds for a clean close.
+     Rendered by `python -m aperture.runtime render-launchd`; see docs/operations.md. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.aperture.bot</string>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; . "$0"; set +a; exec "$1" -m aperture.runtime --config "$2" run-bot -- "$1" -m aperture.cli --config "$2" run</string>
+    <string>{{ENV_FILE}}</string>
+    <string>{{PYTHON}}</string>
+    <string>{{CONFIG}}</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  {{BOT_CALENDAR}}
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>ExitTimeOut</key>
+  <integer>{{BOT_EXIT_TIMEOUT}}</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>{{LOG_DIR}}/bot.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/bot.log</string>
+</dict>
+</plist>
