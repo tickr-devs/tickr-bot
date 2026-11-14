@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 
-from research_helpers import flat, record, research_settings, series
+from research_helpers import NY, close_at_16, flat, record, research_settings, series
 
+from aperture.calendar import CalendarCause, CalendarRefused
 from aperture.research.outcomes import outcomes, summarize
 from aperture.research.records import Admission
 from aperture.strategy.base import Verdict
@@ -23,8 +24,8 @@ ROWS = [
 BARS = series("10:00", ROWS, skip=(3,)) + series("09:30", [flat("11")], day=date(2026, 11, 11))
 
 
-def run(records, bars=BARS):
-    return outcomes(records, {"ABC": bars}, research_settings())
+def run(records, bars=BARS, close_for=close_at_16):
+    return outcomes(records, {"ABC": bars}, research_settings(), close_for)
 
 
 def by_horizon(rows):
@@ -98,3 +99,29 @@ def test_summary_groups_enter_by_admission():
     assert refused.mean_move_atr == 1
     assert (stats[("WATCH", 2)].measured, stats[("WATCH", 2)].down) == (1, 1)
     assert stats[("WATCH", 5)].measured == 0  # past the end of the session's bars
+
+
+def test_horizon_is_capped_at_the_regular_close_even_with_post_market_bars():
+    bars = series("15:57", [flat("10.0"), flat("10.1"), flat("10.2"), flat("10.3"),
+                            flat("10.4"), flat("10.5"), flat("10.6"), flat("10.7")])
+    rows = by_horizon(run([record("15:57", Verdict.WATCH)], bars))
+    assert rows[1].price == Decimal("10.1")
+    assert rows[2].price == Decimal("10.2")  # ends 16:00 exactly: last regular bar 15:59
+    assert rows[5].move is None and rows[5].cause == "horizon ends after the regular close"
+
+
+def test_half_day_close_comes_from_the_calendar():
+    def early(day):
+        return datetime.combine(day, time(10, 3), NY)
+
+    rows = by_horizon(run([record("10:01")], close_for=early))
+    assert rows[1].move is not None
+    assert rows[2].cause == "horizon ends after the regular close"
+
+
+def test_day_refused_by_the_calendar_is_a_cause():
+    def refuse(day):
+        raise CalendarRefused(CalendarCause.HOLIDAY, "closed")
+
+    rows = run([record("10:01")], close_for=refuse)
+    assert all(r.move is None and r.cause.startswith("calendar refuses 2026-11-10") for r in rows)

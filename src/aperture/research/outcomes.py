@@ -12,19 +12,22 @@ alike) and every configured horizon `h` minutes:
 - each in percent of the reference and in ATR (Wilder, `atr_period`, computed over the
   symbol's bars up to and including the decision bar, so no later bar is used).
 
-A horizon is measured only when the captured bars of the same session date reach it (some
-bar starts at or after the horizon's last minute); otherwise the row carries a cause and no
-numbers. A missing decision bar or an unavailable ATR is also a cause, never a guess.
+A horizon is measured only when it ends at or before the regular-session close of the
+decision's date (from the session calendar, so half days count; post-market bars are never
+used) and the captured bars of that date reach it (some bar starts at or after the horizon's
+last minute); otherwise the row carries a cause and no numbers. A missing decision bar or an
+unavailable ATR is also a cause, never a guess.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from aperture.calendar import CalendarRefused
 from aperture.research.records import Admission, DecisionRecord
 from aperture.research.settings import ResearchSettings
 from aperture.strategy.base import Verdict
@@ -35,6 +38,10 @@ LABEL = "observed"
 MEASURED_VERDICTS = frozenset({Verdict.WATCH, Verdict.ENTER})
 M1 = timedelta(minutes=1)
 HUNDRED = Decimal(100)
+
+CloseFor = Callable[[date], datetime]
+"""Regular-session close (aware) of an exchange date; raises CalendarRefused for a day the
+calendar refuses."""
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,7 @@ def _measure(
     horizon: int,
     series: _SymbolBars | None,
     settings: ResearchSettings,
+    close: datetime | str,
 ) -> Outcome:
     def empty(cause: str, reference=None, atr=None) -> Outcome:
         return Outcome(record, horizon, reference, atr, None, None, None, None, cause)
@@ -95,6 +103,10 @@ def _measure(
     elif atr == 0:
         atr_cause = "atr is zero"
     last_minute: datetime = record.bar_start + horizon * M1
+    if isinstance(close, str):
+        return empty(close, reference, atr)
+    if last_minute + M1 > close:
+        return empty("horizon ends after the regular close", reference, atr)
     day = series.day(i)
     reach = bisect_right(series.starts, last_minute - M1)  # first bar starting at/after it
     covered = reach < len(series.bars) and series.day(reach) == day
@@ -126,9 +138,11 @@ def outcomes(
     records: Sequence[DecisionRecord],
     bars_by_symbol: Mapping[str, Sequence[Bar]],
     settings: ResearchSettings,
+    close_for: CloseFor,
 ) -> tuple[Outcome, ...]:
     """One Outcome per (WATCH/ENTER record, horizon), in record order."""
     cache: dict[str, _SymbolBars | None] = {}
+    closes: dict[date, datetime | str] = {}
     out: list[Outcome] = []
     for record in records:
         if not measured(record):
@@ -137,8 +151,14 @@ def outcomes(
         if symbol not in cache:
             bars = bars_by_symbol.get(symbol)
             cache[symbol] = _SymbolBars(bars, settings) if bars else None
+        day = record.bar_start.astimezone(settings.session_timezone).date()
+        if day not in closes:
+            try:
+                closes[day] = close_for(day)
+            except CalendarRefused as exc:
+                closes[day] = f"calendar refuses {day.isoformat()}: {exc}"
         for horizon in settings.horizons_minutes:
-            out.append(_measure(record, horizon, cache[symbol], settings))
+            out.append(_measure(record, horizon, cache[symbol], settings, closes[day]))
     return tuple(out)
 
 

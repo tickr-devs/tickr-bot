@@ -39,7 +39,8 @@ expected to use the same writer when it records decisions; until then `decide` p
 
 ```
 python -m aperture.research outcomes --bars data/capture/.../bars.jsonl \
-  --decisions decisions.jsonl --settings config/research.toml --out out/outcomes
+  --decisions decisions.jsonl --settings config/research.toml [--config config/bot.toml] \
+  --out out/outcomes
 ```
 
 For each WATCH and ENTER record and each horizon `h` in `config/research.toml`:
@@ -53,8 +54,10 @@ For each WATCH and ENTER record and each horizon `h` in `config/research.toml`:
 - ATR = Wilder ATR(`atr_period`) over the symbol's bars up to and including the decision bar
   (history days included, no later bar).
 
-A horizon is measured only when the captured bars of the same session date reach it;
-otherwise the row has a `cause` and no numbers. Missing decision bar, missing symbol,
+A horizon is measured only when it ends at or before the regular-session close of the
+decision's date (from the calendar named by bot.toml, so half days count; post-market bars are
+never used) and the captured bars of that date reach it; otherwise the row has a `cause` and no
+numbers. A day the calendar refuses is a cause too. Missing decision bar, missing symbol,
 unavailable or zero ATR are causes too (percent stays when only ATR is missing).
 
 Outputs: `outcomes.csv` (one row per decision and horizon) and `outcomes_summary.json` (per
@@ -78,7 +81,8 @@ chased); exit at the stop, at the flatten bar's open, or at the last bar's close
 slippage; when the fill bar also reaches the stop, the stop is taken in that bar. An ENTER
 completing at or after the last entry time (or on a disabled half day) is `rejected`.
 
-Result: R per share, and USD = (exit - entry) x quantity, where quantity is `--quantity` or the
+Result: R per share, and USD = (exit - entry) x quantity, **gross**: slippage is included,
+commissions and fees are not (the config has no commission model), where quantity is `--quantity` or the
 recorded `quantity`; without either the row is `not_simulated`. Outputs: `whatif.csv` and
 `whatif_summary.json` (outcomes, admissions, trades, wins, losses, total and average R, total
 USD, exits by reason).

@@ -38,6 +38,7 @@ def test_decide_outcomes_whatif_diff_end_to_end(tmp_path, capsys):
 
     assert main(["outcomes", "--bars", bars, "--decisions", v1,
                  "--settings", str(HERE / "research_settings.toml"),
+                 "--config", str(ROOT / "config" / "bot.toml"),
                  "--out", str(tmp_path / "o")]) == 0
     outcome_rows = _rows(tmp_path / "o" / "outcomes.csv")
     assert {r["label"] for r in outcome_rows} == {"observed"}

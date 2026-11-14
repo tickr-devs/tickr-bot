@@ -15,7 +15,8 @@ IGNORE everywhere else. The fill and exit rules are therefore the replay's rules
 - an ENTER that live admission would refuse on time alone (before the open, completing at or
   after the last entry time, a disabled half day) is `rejected` with the replay's cause.
 
-The result is in R (per share) and in USD for a quantity: the `quantity` argument when given,
+The result is in R (per share) and in USD for a quantity, gross (slippage included,
+commissions and fees not): the `quantity` argument when given,
 otherwise the quantity the strategy recorded. Without either the record is `not_simulated`.
 """
 

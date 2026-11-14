@@ -10,7 +10,8 @@ from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from aperture.calendar import CalendarRefused
+from aperture import config as bot_config
+from aperture.calendar import CalendarRefused, SessionCalendar
 from aperture.config import ConfigError
 from aperture.replay.__main__ import session_clock, strategy_factory
 from aperture.replay.bars import load_bars
@@ -45,6 +46,8 @@ def _parser() -> argparse.ArgumentParser:
     bars_and_out(p)
     p.add_argument("--decisions", type=Path, nargs="+", required=True, help="decision JSONL")
     p.add_argument("--settings", type=Path, required=True, help="research TOML")
+    p.add_argument("--config", type=Path, default=Path("config/bot.toml"),
+                   help="bot config: its calendar gives each day's regular close")
 
     p = sub.add_parser("whatif", help="simulate ENTER decisions that were not taken")
     bars_and_out(p)
@@ -78,7 +81,10 @@ def _filter(records, spec: str | None):
 def _run(args: argparse.Namespace) -> dict:
     if args.command == "outcomes":
         settings = load_research_settings(args.settings)
-        rows = outcomes(load_records(args.decisions), load_bars(args.bars), settings)
+        cfg = bot_config.load(args.config)
+        calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+        rows = outcomes(load_records(args.decisions), load_bars(args.bars), settings,
+                        lambda day: calendar.day(day).regular_close)
         return report.write_outcomes(rows, args.out, settings.output_decimal_places)
     if args.command == "diff":
         settings = load_research_settings(args.settings)

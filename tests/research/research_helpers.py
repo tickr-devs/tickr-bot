@@ -23,6 +23,11 @@ DAY = date(2026, 11, 10)
 LAST_ENTRY = time(15, 45)
 FLATTEN = time(15, 55)
 CLOCK = fixed_clock(NY, time(9, 30), LAST_ENTRY, FLATTEN)
+
+
+def close_at_16(day: date) -> datetime:
+    """Regular close 16:00 New York every day (tests only)."""
+    return datetime.combine(day, time(16), NY)
 M1 = timedelta(minutes=1)
 
 
