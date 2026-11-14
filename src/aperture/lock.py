@@ -34,6 +34,7 @@ class SingleInstanceLock:
 
     def release(self) -> None:
         if self._fd is not None:
+            os.ftruncate(self._fd, 0)  # a cleanly stopped bot leaves no pid behind
             fcntl.flock(self._fd, fcntl.LOCK_UN)
             os.close(self._fd)
             self._fd = None
@@ -44,3 +45,26 @@ class SingleInstanceLock:
 
     def __exit__(self, *exc: object) -> None:
         self.release()
+
+
+def recorded_holder(path: Path | str) -> int | None:
+    """Pid written by the current or last holder, if that process still exists.
+
+    Informational only (for status displays): it never takes the lock, so it cannot race a
+    starting bot. A crashed bot's pid may have been reused; exclusivity is still decided by
+    the lock itself in `acquire()`.
+    """
+    try:
+        text = Path(path).read_text().strip()
+    except (FileNotFoundError, UnicodeDecodeError):
+        return None
+    if not text.isdigit():
+        return None
+    pid = int(text)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        return pid  # exists, owned by another user
+    return pid

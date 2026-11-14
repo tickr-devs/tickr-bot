@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
 from aperture import config as config_module
-from aperture.lock import AlreadyRunning, SingleInstanceLock
-from aperture.store import Store
+from aperture.lock import recorded_holder
+from aperture.store import MIGRATIONS, Store
 
 DATABASE_FILE = "aperture.sqlite3"
 LOCK_FILE = "aperture.lock"
@@ -25,17 +26,22 @@ def _status(path: Path) -> int:
     database, lock_path = data_paths(cfg)
     print(f"environment: {cfg.environment_name}")
     print(f"trading gate: {'open' if gate.open else 'closed'} ({gate.cause})")
-    try:
-        with SingleInstanceLock(lock_path):
-            print("bot: not running")
-    except AlreadyRunning:
-        print("bot: running")
+    pid = recorded_holder(lock_path)
+    print("bot: not running" if pid is None else f"bot: running (pid {pid})")
     if not database.exists():
         print("database: not created yet")
         return 0
-    store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds)
     try:
-        print(f"database: schema v{store.schema_version}, {store.run_count()} runs")
+        store = Store.open_readonly(database)
+    except sqlite3.Error as exc:
+        print(f"database: unreadable ({exc})")
+        return 1
+    try:
+        version = store.schema_version
+        if version != len(MIGRATIONS):
+            print(f"database: schema v{version}, this code expects v{len(MIGRATIONS)}")
+            return 1
+        print(f"database: schema v{version}, {store.run_count()} runs")
         last = store.last_run()
         if last is not None:
             ended = last["ended_at"] or "still open"

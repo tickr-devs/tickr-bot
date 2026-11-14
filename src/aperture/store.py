@@ -109,6 +109,12 @@ class Store:
         store._migrate()
         return store
 
+    @classmethod
+    def open_readonly(cls, path: Path | str) -> Store:
+        """Read-only connection for status readers: never migrates, never writes."""
+        uri = Path(path).resolve().as_uri() + "?mode=ro"
+        return cls(sqlite3.connect(uri, uri=True, isolation_level=None))
+
     def close(self) -> None:
         self._db.close()
 

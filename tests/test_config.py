@@ -217,3 +217,36 @@ def test_bad_route_limit_refused(tmp_path, bad):
     text = BOT.read_text("utf-8").replace("route_limits = {}", new, 1)
     with pytest.raises(config.ConfigError, match="route_limits"):
         config.load(_copy(tmp_path, text))
+
+
+def test_cli_status_is_read_only(tmp_path, capsys):
+    from aperture.cli import data_paths
+    from aperture.lock import SingleInstanceLock
+    from aperture.store import Store
+    path = _copy(tmp_path)
+    cfg = config.load(path)
+    database, lock_path = data_paths(cfg)
+    Store.open(database, busy_timeout_seconds=0).close()
+    before = database.read_bytes()
+    with SingleInstanceLock(lock_path):
+        assert main(["--config", str(path), "status"]) == 0
+        assert "bot: running" in capsys.readouterr().out
+    assert database.read_bytes() == before
+
+
+def test_cli_status_refuses_schema_mismatch(tmp_path, capsys):
+    import sqlite3
+
+    from aperture.cli import data_paths
+    path = _copy(tmp_path)
+    database, _ = data_paths(config.load(path))
+    database.parent.mkdir(parents=True)
+    db = sqlite3.connect(database)
+    db.execute("PRAGMA user_version = 99")
+    db.close()
+    assert main(["--config", str(path), "status"]) == 1
+    out = capsys.readouterr().out
+    assert "expects" in out
+    db = sqlite3.connect(database)
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 99
+    db.close()
