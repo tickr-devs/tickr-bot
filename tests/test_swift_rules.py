@@ -265,3 +265,74 @@ def test_current_forms_of_those_calls_pass(tmp_path):
         "try await Task.sleep(for: .seconds(pause))\n"
     )
     assert load().legacy_violations(write(tmp_path, source)) == []
+
+
+def test_on_change_with_perform_over_several_lines_fails(tmp_path):
+    source = (
+        "view.onChange(\n"
+        "  of: value,\n"
+        "  perform: update)\n"
+        "view.onChange(of: value) { old, new in\n"
+        "  perform(new)\n"
+        "}\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [3]
+
+
+def test_combine_through_swiftui_fails(tmp_path):
+    source = (
+        "let one = Just(value)\n"
+        "let stream: AnyPublisher<Int, Never> = one.eraseToAnyPublisher()\n"
+        "one.eraseToAnyPublisher()\n"
+        "one.assign(to: &$value)\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4]
+
+
+def test_settings_below_swift_6_or_os_26_fail(tmp_path):
+    package = (
+        "// swift-tools-version:5.9\n"
+        "platforms: [.macOS(.v14), .iOS(.v26)],\n"
+        "// swift-tools-version:6.2\n"
+        "platforms: [.macOS(.v26), .iOS(.v26)],\n"
+    )
+    found = load().settings_violations(write(tmp_path, package, "Package.swift"))
+    assert [line for line, _ in found] == [1, 2]
+    project = (
+        "SWIFT_VERSION = 5.0;\n"
+        "MACOSX_DEPLOYMENT_TARGET = 14.0;\n"
+        "IPHONEOS_DEPLOYMENT_TARGET = 17.0;\n"
+        "SWIFT_VERSION = 6.0;\n"
+        "MACOSX_DEPLOYMENT_TARGET = 26.0;\n"
+        '    iOS: "17.0"\n'
+        '    SWIFT_VERSION: "6.0"\n'
+    )
+    found = load().settings_violations(write(tmp_path, project, "project.pbxproj"))
+    assert [line for line, _ in found] == [1, 2, 3, 6]
+
+
+def test_strict_concurrency_escape_hatches_fail(tmp_path):
+    source = (
+        "nonisolated(unsafe) static var cache = [String: Int]()\n"
+        "final class Box: @unchecked Sendable {}\n"
+        "@preconcurrency import Network\n"
+        "extension Model: @preconcurrency Delegate {}\n"
+        "nonisolated func read() -> Int { 0 }\n"
+        "struct Value: Sendable {}\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4]
+
+
+def test_settings_that_weaken_strict_concurrency_fail(tmp_path):
+    source = (
+        'swiftSettings: [.unsafeFlags(["-strict-concurrency=minimal"])]\n'
+        "SWIFT_STRICT_CONCURRENCY = minimal;\n"
+        '    SWIFT_STRICT_CONCURRENCY: "targeted"\n'
+        "SWIFT_STRICT_CONCURRENCY = complete;\n"
+        "// unsafeFlags are not allowed\n"
+    )
+    found = load().settings_violations(write(tmp_path, source, "project.pbxproj"))
+    assert [line for line, _ in found] == [1, 2, 3]
