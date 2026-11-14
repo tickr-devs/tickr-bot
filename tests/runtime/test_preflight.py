@@ -78,6 +78,7 @@ def test_missing_credentials_name_the_variables(config_path):
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.CREDENTIALS_MISSING
     assert name in result.summary()
+    assert "~/.config/aperture/env" in result.summary()  # says where to add it
 
 
 def test_missing_imessage_recipient_refuses_with_its_own_cause(config_path):
@@ -87,6 +88,7 @@ def test_missing_imessage_recipient_refuses_with_its_own_cause(config_path):
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.ALERT_RECIPIENT_MISSING
     assert result.blocks_start and name in result.summary()
+    assert "Apple ID" in result.summary() and "~/.config/aperture/env" in result.summary()
     assert CANARY not in json.dumps(result.journal_body()) + result.summary()
 
 

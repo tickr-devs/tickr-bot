@@ -189,13 +189,19 @@ def _check_calendar(cfg: config_module.Config, now: datetime) -> tuple[Check, bo
                  f"{today} regular {day.regular_open:%H:%M}-{day.regular_close:%H:%M} ET"), True
 
 
+ENV_FILE_HINT = ("add one NAME='value' line per missing name to the env file the launchd jobs load "
+                 "(the --env-file given to render-launchd, e.g. ~/.config/aperture/env; create it "
+                 "with chmod 600, see docs/operations.md, One-time setup, step 2)")
+
+
 def _check_credentials(cfg: config_module.Config, environ: Mapping[str, str]) -> Check:
     env = cfg.environment
     names = (env.app_key_variable, env.app_secret_variable, env.account_variable)
     # Presence only: the value is compared with "" and never stored, printed or returned.
     missing = [name for name in names if not environ.get(name)]
     if missing:
-        return Check(CheckName.CREDENTIALS, False, "not set: " + ", ".join(missing),
+        return Check(CheckName.CREDENTIALS, False,
+                     "not set: " + ", ".join(missing) + "; " + ENV_FILE_HINT,
                      PreflightCause.CREDENTIALS_MISSING)
     return Check(CheckName.CREDENTIALS, True, "set: " + ", ".join(names))
 
@@ -204,8 +210,9 @@ def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str]
     # Presence only, like the credentials: the iMessage address is personal data.
     missing = recipient_missing(cfg.alerts, environ)
     if missing is not None:
-        return Check(CheckName.ALERT_RECIPIENT, False, f"not set: {missing}",
-                     PreflightCause.ALERT_RECIPIENT_MISSING)
+        return Check(CheckName.ALERT_RECIPIENT, False,
+                     f"not set: {missing} (your iMessage phone number or Apple ID email); "
+                     + ENV_FILE_HINT, PreflightCause.ALERT_RECIPIENT_MISSING)
     return Check(CheckName.ALERT_RECIPIENT, True, f"set: {cfg.alerts.imessage_recipient_variable}")
 
 
