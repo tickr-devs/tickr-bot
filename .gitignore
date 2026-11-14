@@ -9,7 +9,7 @@ dist/
 # Runtime data, secrets and tokens never enter the repository.
 .env
 .env.*
-data/
+/data/
 *.sqlite3
 *.sqlite3-*
 authorization/

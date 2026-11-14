@@ -82,6 +82,30 @@ host = "127.0.0.1"
 # Local API port; read by the api server and the status screen.
 port = 8766
 
+[market_data]
+# Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).
+discovery_interval_seconds = 60
+# Exchange codes allowed in discovery (owner 2026-10-16; Webull screener `exchange_code`); read by data.discovery.
+allowed_exchanges = ["NMS", "NAS", "NSQ", "NYS", "ASE"]
+# Currencies allowed in discovery (screener `currency`); read by data.discovery.
+allowed_currencies = ["USD"]
+# Security types allowed (owner 2026-10-16: common stocks only); a row without a type is refused; read by data.discovery.
+allowed_security_types = ["COMMON_STOCK"]
+# Maximum snapshot spread (ask - bid) / mid for a candidate, ratio; read by data.discovery.
+max_spread_ratio = 0.015
+# Minimum current-session dollar volume (sum of close x volume of completed M1 bars), USD; read by data.discovery.
+min_session_dollar_volume_usd = 5000000
+# Symbols per snapshot request (Webull docs: at most 100); read by data.discovery.
+snapshot_symbols_per_request = 100
+# Symbols per M1 bars request (Webull docs: 20); read by data.discovery.
+bars_symbols_per_request = 20
+# M1 bars requested per symbol in discovery (one regular session = 390 minutes); read by data.discovery.
+bars_per_symbol = 390
+# Seconds without a received quote, transport up, after which a subscribed symbol is quiet; read by data.health.
+quiet_after_seconds = 5
+# Capture folder relative to [run] data_dir; files go to <capture_dir>/<environment>/<NY date>/; read by data.capture.
+capture_dir = "capture"
+
 [environments.sandbox]
 # May this process send trading requests in this environment; read by the trading gate.
 trading_enabled = true
