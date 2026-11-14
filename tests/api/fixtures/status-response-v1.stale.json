@@ -1,0 +1,75 @@
+{
+  "served_at": "2026-11-16T15:00:02.123Z",
+  "status": {
+    "written_at": "2026-11-16T15:00:00.123Z",
+    "bot_state": "running",
+    "run_id": "run-1",
+    "environment": "sandbox",
+    "trading_gate": {
+      "open": true,
+      "cause": "trading enabled by configuration"
+    },
+    "strategy": {
+      "name": "price-action-v1",
+      "version": "1"
+    },
+    "entry_stop": false,
+    "entry_block": {
+      "cause": "open_position_limit",
+      "text": "One position is already open (limit 1)."
+    },
+    "fences": [
+      {
+        "kind": "foreign_exposure",
+        "since": "2026-11-16T15:00:00.123Z",
+        "text": "A position not opened by the bot exists."
+      }
+    ],
+    "position": {
+      "symbol": "ABCD",
+      "quantity": "10",
+      "entry_price": "12.34",
+      "opened_at": "2026-11-16T15:00:00.123Z",
+      "stop": {
+        "state": "verified",
+        "price": "11.90",
+        "client_order_id": "ap-0001-s"
+      }
+    },
+    "trades_today": [
+      {
+        "symbol": "WXYZ",
+        "quantity": "20",
+        "entry_price": "5.10",
+        "exit_price": "5.02",
+        "opened_at": "2026-11-16T15:00:00.123Z",
+        "closed_at": "2026-11-16T15:00:00.123Z",
+        "exit_reason": "stop",
+        "result_gross_usd": "-1.60"
+      }
+    ],
+    "result_today_gross_usd": "-1.60",
+    "freshness": {
+      "last_broker_read_at": "2026-11-16T15:00:00.123Z",
+      "last_quote_at": null,
+      "stream": "fresh"
+    },
+    "recent_commands": [
+      {
+        "command_id": "0b6f7c1e-2f0a-4c55-9d1e-6a1d2f3e4b5c",
+        "kind": "entry-stop-on",
+        "requested_at": "2026-11-16T15:00:00.123Z",
+        "processed_at": "2026-11-16T15:00:00.123Z",
+        "outcome": "done",
+        "cause": null
+      }
+    ],
+    "schema_version": 1
+  },
+  "age_seconds": "42.500",
+  "stale": true,
+  "unavailable_cause": null,
+  "summary": "Bot status is 42.500 s old: the bot may be down. Do not trust the rest of this page.",
+  "poll_seconds": "3",
+  "api_version": 1
+}

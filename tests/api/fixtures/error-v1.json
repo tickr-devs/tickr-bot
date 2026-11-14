@@ -1,0 +1,5 @@
+{
+  "error": "forbidden_host",
+  "cause": "Host 'evil.example:8766' is not allowed",
+  "api_version": 1
+}
