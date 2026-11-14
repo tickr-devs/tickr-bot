@@ -3,6 +3,36 @@
 Run on the owner's Mac, in market hours, in Sandbox (`[run] environment` in `config/bot.toml`).
 Credentials are read from the environment variables named in the active `[environments.*]` table.
 
+## One-time setup (fresh clone)
+
+```
+gh repo clone valentyn-dymaretskyi/Aperture && cd Aperture
+python3.12 -m venv .venv && source .venv/bin/activate     # Python 3.12 or newer
+pip install -e ".[webull,dev]"
+mkdir -p data/webull-token-sandbox                         # [run] data_dir / token_dir
+```
+
+Every command below runs from the repository root: `--config` defaults to the relative path
+`config/bot.toml`. In each new terminal, activate the venv and export the three Sandbox variables
+(names from `[environments.sandbox]`; values from the Webull developer portal, never committed):
+
+```
+source .venv/bin/activate
+export WEBULL_SANDBOX_APP_KEY=...
+export WEBULL_SANDBOX_APP_SECRET=...
+export WEBULL_SANDBOX_ACCOUNT_ID=...
+aperture check-config        # must print "trading gate: open"
+```
+
+The first command that talks to Webull may wait up to `token_check_duration_seconds` (300 s) for
+you to approve the new token in the Webull app; the token is then kept in
+`data/webull-token-sandbox/`.
+
+This manual path sends no notifications: everything it has to tell you is printed to the
+terminal (errors and "needs the operator" lines on stderr). Keep the terminal visible.
+
+## Commands
+
 ```
 aperture check-config
 aperture trade SYMBOL --limit 12.34            # quantity and stop default from [probe]
@@ -37,8 +67,11 @@ If a closing order is refused, the bot puts the stop back, stops, and prints wha
 `resume` and `exit` use today's flatten time from the calendar; after the close, on a
 non-trading day, or if the calendar cannot be read, they close open trades right away.
 
-Ctrl-C once: close through the normal exit path. Ctrl-C twice: stop the command and leave the
-stop resting at the broker.
+Ctrl-C once: close through the normal exit path. Ctrl-C twice, closing the terminal, or a
+SIGTERM: the command stops and the stop stays resting at the broker, with the position still
+open. Run `aperture resume` (keeps protecting and closes at the flatten time) or `aperture exit`
+(closes now) afterwards; the position never closes by itself while no command runs, except by
+its stop.
 
 After a crash or `kill -9`:
 
