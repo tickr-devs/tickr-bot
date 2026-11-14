@@ -591,6 +591,9 @@ class Engine:
             if row.leg is Leg.EXIT:
                 self._count_rejection(row)
         self._clear_fence(Fence.UNKNOWN_ORDER, cid)
+        # A cancel answered "not found" for an order now proven absent (Detail, open orders,
+        # no unexplained position) has nothing left to resolve; Detail never reads it again.
+        self._clear_fence(Fence.CANCEL_UNKNOWN, cid)
 
     def _expected_in(self, symbol: str) -> Decimal:
         total = ZERO
