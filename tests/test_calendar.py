@@ -105,6 +105,48 @@ def test_repository_calendar_knows_2026_nyse_closures(closed):
     assert refused(repo.day, closed) is CalendarCause.HOLIDAY
 
 
+@pytest.mark.parametrize(
+    "closed",
+    [
+        date(2027, 1, 1),
+        date(2027, 1, 18),
+        date(2027, 2, 15),
+        date(2027, 3, 26),
+        date(2027, 5, 31),
+        date(2027, 6, 18),  # Juneteenth observed
+        date(2027, 7, 5),  # Independence Day observed
+        date(2027, 9, 6),
+        date(2027, 11, 25),
+        date(2027, 12, 24),  # Christmas observed
+    ],
+)
+def test_repository_calendar_knows_2027_nyse_closures(closed):
+    repo = SessionCalendar.load(REPO_CALENDARS)
+    assert refused(repo.day, closed) is CalendarCause.HOLIDAY
+
+
+def test_repository_calendar_2027_half_day_and_ordinary_days():
+    repo = SessionCalendar.load(REPO_CALENDARS)
+    half = repo.day(date(2027, 11, 26))
+    assert half.half_day
+    assert half.regular_close == ny(2027, 11, 26, 13, 0)
+    assert half.extended_close == ny(2027, 11, 26, 17, 0)
+    # No early close on Christmas Eve's eve or before Independence Day in 2027.
+    for ordinary in (date(2027, 12, 23), date(2027, 7, 2), date(2027, 12, 31)):
+        day = repo.day(ordinary)
+        assert not day.half_day
+        assert day.regular_close == ny(ordinary.year, ordinary.month, ordinary.day, 16, 0)
+
+
+def test_repository_calendar_covers_2026_and_2027_without_gap():
+    repo = SessionCalendar.load(REPO_CALENDARS)
+    assert repo.coverage == (
+        (date(2026, 1, 1), date(2026, 12, 31)),
+        (date(2027, 1, 1), date(2027, 12, 31)),
+    )
+    assert repo.day(date(2027, 1, 4)).regular_open == ny(2027, 1, 4, 9, 30)
+
+
 # ----------------------------------------------------------------- ordinary days and DST
 
 

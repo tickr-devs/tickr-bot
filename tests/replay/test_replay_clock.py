@@ -31,7 +31,7 @@ def test_half_day_refuses_entries_when_disabled(settings, scripted):
     assert (signal.outcome, signal.cause) == (SignalOutcome.REJECTED, "half day: trading disabled")
 
 
-@pytest.mark.parametrize("day", [date(2026, 11, 26), date(2026, 11, 14), date(2027, 6, 1)])
+@pytest.mark.parametrize("day", [date(2026, 11, 26), date(2026, 11, 14), date(2028, 6, 1)])
 def test_bars_on_a_day_the_calendar_refuses_refuse_the_replay(settings, scripted, day):
     bars = series("10:00", [FLAT], day=day)
     with pytest.raises(ReplayError, match="calendar refuses"):

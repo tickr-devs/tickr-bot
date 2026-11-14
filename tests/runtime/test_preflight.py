@@ -19,7 +19,7 @@ MONDAY = datetime(2026, 11, 16, 13, 30, tzinfo=UTC)  # 08:30 ET, a normal tradin
 SATURDAY = datetime(2026, 11, 14, 13, 30, tzinfo=UTC)
 THANKSGIVING = datetime(2026, 11, 26, 13, 30, tzinfo=UTC)
 HALF_DAY = datetime(2026, 11, 27, 13, 30, tzinfo=UTC)
-NEXT_YEAR = datetime(2027, 1, 4, 13, 30, tzinfo=UTC)
+NEXT_YEAR = datetime(2028, 1, 4, 13, 30, tzinfo=UTC)  # past the last calendar file
 CANARY = "canary-secret-value-7f3a"
 PLENTY = 10**6 * BYTES_PER_MB
 

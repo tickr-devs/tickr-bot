@@ -87,7 +87,7 @@ def test_deadlines_across_dst():
 @pytest.mark.parametrize(("day", "cause"), [
     (date(2026, 11, 26), CalendarCause.HOLIDAY),
     (date(2026, 11, 14), CalendarCause.WEEKEND),
-    (date(2027, 1, 4), CalendarCause.OUT_OF_COVERAGE),
+    (date(2028, 1, 4), CalendarCause.OUT_OF_COVERAGE),
 ])
 def test_deadlines_refuse_unknown_days(day, cause):
     with pytest.raises(CalendarRefused) as exc:

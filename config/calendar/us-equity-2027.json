@@ -1,0 +1,96 @@
+{
+  "schema": "webull-us-equity-session-calendar-v1",
+  "market": "US",
+  "timezone": "America/New_York",
+  "coverage_start": "2027-01-01",
+  "coverage_end": "2027-12-31",
+  "standard_hours": {
+    "premarket_open": "04:00",
+    "regular_open": "09:30",
+    "regular_close": "16:00",
+    "extended_close": "20:00",
+    "source_url": "https://www.webull.com/help/faq/10960-What-are-the-trading-hours-for-stock-and-ETF-orders",
+    "verified_on": "2026-10-28"
+  },
+  "exceptions": [
+    {
+      "day": "2027-01-01",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-01-18",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-02-15",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-03-26",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-05-31",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-06-18",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-07-05",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-09-06",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-11-25",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-11-26",
+      "market": "US",
+      "day_kind": "HALF_DAY",
+      "regular_close": "13:00",
+      "extended_close": "17:00",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    },
+    {
+      "day": "2027-12-24",
+      "market": "US",
+      "day_kind": "CLOSED",
+      "source_url": "https://www.businesswire.com/news/home/20251223981478/en",
+      "verified_on": "2026-11-14"
+    }
+  ]
+}
