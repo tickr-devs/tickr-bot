@@ -85,7 +85,7 @@ def last_check(decision):
 
 def test_create_from_repo_toml_values_are_v1_plus_rules():
     s = v2.create(values("price-action-v2"))
-    assert (s.name, s.version) == ("price-action-v2", "1")
+    assert (s.name, s.version) == ("price-action-v2", "2")
     assert s.rules == v2.Rules(2, d("0.5"), 15)
     base = v1.create(values("price-action-v1")).settings
     assert replace(s.settings, name=base.name, version=base.version) == base
@@ -110,7 +110,7 @@ def test_create_refuses_bad_values(mutate, message):
 def test_selectable_as_observer_with_the_repo_modules():
     modules = parse_modules(config.load(ROOT / "config" / "bot.toml").observers.strategy_modules)
     loaded = load_strategy(ROOT, "price-action-v2", modules)
-    assert loaded.identity == "price-action-v2 v1"
+    assert loaded.identity == "price-action-v2 v2"
 
 
 def test_v1_refuses_the_v2_file():
@@ -227,6 +227,16 @@ def test_progress_before_entry_does_not_count():
     bars[5] = replace(bars[5], high=d("30"))
     held(s, bars[:10])
     assert held(s, bars[:24]).verdict is Verdict.EXIT
+
+
+def test_the_entry_bar_high_before_the_fill_does_not_count():
+    s = make()
+    bars = list(FLAT)
+    bars[9] = replace(bars[9], high=d("23.40"))  # first bar seen: 0.8 R, but before the fill
+    held(s, bars[:10])
+    decision = held(s, bars[:24])
+    assert decision.verdict is Verdict.EXIT
+    assert last_check(decision).rule == "progress_r" and last_check(decision).measured == 0
 
 
 def test_a_new_position_restarts_the_clock():

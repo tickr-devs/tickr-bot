@@ -7,7 +7,7 @@
 # Strategy name; must equal this folder name; recorded with every decision.
 name = "price-action-v2"
 # Strategy version; bump on any value change; recorded with every decision and trade.
-version = "1"
+version = "2"
 
 [indicators]
 # Fast exponential moving average length in completed M1 closes.

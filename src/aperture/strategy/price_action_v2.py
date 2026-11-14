@@ -12,11 +12,13 @@ Values come from `strategies/price-action-v2/strategy.toml`: every v1 section pl
    evaluates once per completed minute, so "consecutive quotes" means the quotes seen by
    consecutive minute evaluations.
 2. No-progress exit. With a position open: EXIT once `window_minutes` have passed since the
-   bar on which the position was first seen and the best high since then is less than
-   `minimum_progress_r` R above the entry (R = entry - stop at first sight); otherwise HOLD
+   bar on which the position was first seen and the best high of the bars after that one
+   (floored at the entry) is less than `minimum_progress_r` R above the entry (R = entry - stop
+   at first sight); otherwise HOLD
    (also HOLD, with the cause, when the bars are not this symbol's in order or R <= 0).
    The fill time is not in `PositionView`, so the entry minute is the first bar evaluated with
-   the position (that bar's start, at most a minute early). Reaching the progress once
+   the position (that bar's start, at most a minute early). That bar can hold highs from
+   before the fill, so it never counts as progress. Reaching the progress once
    satisfies the rule for the rest of the trade.
 
 State: the strategy interface gives one evaluation at a time, so both rules keep the minimum
@@ -132,9 +134,10 @@ class PriceActionV2(v1.PriceActionV1):
             checks.append(v1._check("minutes_held", Decimal(minutes), ">=",
                                     Decimal(rules.window_minutes), "from the first bar seen"))
         if all(c.passed for c in checks):
-            best = max(b.high for b in bars if b.start >= since)
+            # The first bar seen may start before the fill, so its high never counts.
+            best = max([entry, *(b.high for b in bars if b.start > since)])
             checks.append(v1._check("progress_r", (best - entry) / (entry - stop), "<",
-                                    rules.minimum_progress_r, "best high since entry, in R"))
+                                    rules.minimum_progress_r, "best high after entry bar, in R"))
         verdict = Verdict.EXIT if all(c.passed for c in checks) else Verdict.HOLD
         return self._decide(context, verdict, checks)
 
