@@ -27,6 +27,8 @@ max_daily_loss_usd = 300
 max_open_positions = 1
 # Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.
 max_quote_age_seconds = 5
+# Allowed lead of the provider clock over ours, seconds: a quote time up to this far ahead counts as age 0, further ahead = refuse; read by safety.
+max_clock_skew_seconds = 1
 
 [session]
 # Market time zone for all session times; read by the calendar and the scheduler.

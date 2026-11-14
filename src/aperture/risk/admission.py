@@ -1,0 +1,304 @@
+"""Entry admission: the 7 checks of spec section 7, in order.
+
+`admit(inputs, limits)` is pure: no clock, no I/O. All checks must hold; the first failure is
+the single recorded cause. A refusal never guesses: missing or unknown values refuse.
+
+Size, notional, planned loss and the reservation are computed on the FINAL order prices
+(tick-rounded entry limit and stop that will be sent), never on the strategy's raw prices, so
+rounding can never push the real planned loss over a limit.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+
+from aperture.calendar import CalendarRefused, MarketDay, ny_date_of
+from aperture.config import Config, GateResult
+from aperture.risk.causes import AdmissionCause
+from aperture.risk.daily import check_daily
+from aperture.risk.sizing import check_size
+from aperture.risk.timers import deadlines
+from aperture.strategy.base import Decision, Verdict
+from aperture.types import Quote
+
+C = AdmissionCause
+
+
+@dataclass(frozen=True)
+class AdmissionLimits:
+    """Numbers admission reads from config (`[risk]`, `[session]`, `[orders]`)."""
+
+    planned_loss_usd: Decimal
+    position_notional_cap_usd: Decimal
+    max_daily_loss_usd: Decimal
+    max_open_positions: int
+    max_quote_age_seconds: Decimal
+    max_clock_skew_seconds: Decimal
+    broker_read_max_age_seconds: Decimal
+    last_entry_minutes_before_close: int
+    flatten_minutes_before_close: int
+    half_days_enabled: bool
+    active_strategy: str
+    """Only decisions tagged with this strategy name may be admitted."""
+
+    @classmethod
+    def from_config(cls, config: Config) -> AdmissionLimits:
+        risk, session = config.risk, config.session
+        return cls(
+            planned_loss_usd=risk.planned_loss_usd,
+            position_notional_cap_usd=risk.position_notional_cap_usd,
+            max_daily_loss_usd=risk.max_daily_loss_usd,
+            max_open_positions=risk.max_open_positions,
+            max_quote_age_seconds=risk.max_quote_age_seconds,
+            max_clock_skew_seconds=risk.max_clock_skew_seconds,
+            broker_read_max_age_seconds=config.orders.broker_read_max_age_seconds,
+            last_entry_minutes_before_close=session.last_entry_minutes_before_close,
+            flatten_minutes_before_close=session.flatten_minutes_before_close,
+            half_days_enabled=session.half_days_enabled,
+            active_strategy=config.strategy.active,
+        )
+
+
+@dataclass(frozen=True)
+class Reconciliation:
+    """State of reconciliation with the broker, as last established by the engine."""
+
+    startup_done: bool
+    last_broker_read_at: datetime | None
+    """Time of the latest successful broker read of positions and open orders (aware)."""
+    foreign_exposure: bool
+    """A position or open order the bot does not own exists at the broker."""
+    unresolved_exposure: bool
+    """An own order with unknown outcome, a quantity mismatch, or anything not yet explained."""
+
+
+@dataclass(frozen=True)
+class AdmissionInputs:
+    gate: GateResult
+    reconciliation: Reconciliation
+    entry_stop: bool
+    """Operator entry-stop flag (blocks entries only)."""
+    session: MarketDay | CalendarRefused
+    """Calendar answer for the New York date of `now`."""
+    now: datetime
+    own_open_positions: int
+    own_working_orders: int
+    open_positions: int
+    """All positions at the broker (own + foreign), for the position limit."""
+    decision: Decision
+    limit_price: Decimal | None
+    """Final entry LIMIT price that will be sent (tick-rounded); None = not computed."""
+    stop_price: Decimal | None
+    """Final protective STOP price that will be sent (tick-rounded); None = not computed."""
+    setup_valid: bool
+    """The setup is still valid at `now` (the strategy's latest evaluation still says ENTER)."""
+    quote: Quote | None
+    realized_loss_today_usd: Decimal | None
+    """Gross realized loss today as a non-negative amount; None = unknown."""
+    open_reservations_usd: Decimal | None
+    """Planned loss reserved by open own trades and working entries; None = unknown."""
+    entry_budget_available: bool
+    stop_budget_available: bool
+
+
+@dataclass(frozen=True)
+class Admission:
+    ok: bool
+    cause: AdmissionCause | None
+    detail: str
+    planned_loss_usd: Decimal | None = None
+    """On success: the reservation to record for this entry (quantity x (limit - stop price))."""
+
+
+def _refuse(cause: AdmissionCause, detail: str) -> Admission:
+    return Admission(False, cause, detail)
+
+
+def _aware(instant: datetime | None) -> bool:
+    return (isinstance(instant, datetime) and instant.tzinfo is not None
+            and instant.utcoffset() is not None)
+
+
+def _check_gate(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    if not i.gate.open:
+        return _refuse(C.GATE_CLOSED, i.gate.cause)
+    return None
+
+
+def _check_reconciliation(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    if not _aware(i.now):
+        return _refuse(C.CLOCK_INVALID, f"now {i.now!r} is not an aware datetime")
+    r = i.reconciliation
+    if not r.startup_done:
+        return _refuse(C.RECONCILIATION_NOT_DONE, "startup reconciliation not done")
+    if r.last_broker_read_at is None:
+        return _refuse(C.BROKER_READ_MISSING, "no broker read recorded")
+    if not _aware(r.last_broker_read_at):
+        return _refuse(C.CLOCK_INVALID, "last broker read time is not an aware datetime")
+    age = Decimal(str((i.now - r.last_broker_read_at).total_seconds()))
+    if age < 0:
+        return _refuse(C.CLOCK_INVALID, f"last broker read is {-age} s in the future")
+    if age > lim.broker_read_max_age_seconds:
+        return _refuse(C.BROKER_READ_STALE,
+                       f"last broker read {age} s ago > {lim.broker_read_max_age_seconds} s")
+    if r.unresolved_exposure:
+        return _refuse(C.UNRESOLVED_EXPOSURE, "unresolved exposure")
+    if r.foreign_exposure:
+        return _refuse(C.FOREIGN_EXPOSURE, "foreign position or order at the broker")
+    if i.entry_stop:
+        return _refuse(C.ENTRY_STOP_SET, "operator entry-stop is set")
+    return None
+
+
+def _check_session(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    day = i.session
+    if isinstance(day, CalendarRefused):
+        return _refuse(C.CALENDAR_UNKNOWN, f"{day.cause}: {day.detail}")
+    if not isinstance(day, MarketDay):
+        return _refuse(C.CALENDAR_UNKNOWN, f"no calendar answer: {day!r}")
+    today = ny_date_of(i.now)
+    if day.ny_date != today:
+        return _refuse(C.CALENDAR_DAY_MISMATCH,
+                       f"calendar day {day.ny_date} is not today {today} in New York")
+    if day.half_day and not lim.half_days_enabled:
+        return _refuse(C.HALF_DAY, f"{day.ny_date} is a half day; half days disabled")
+    if not day.in_regular_session(i.now):
+        return _refuse(C.OUTSIDE_REGULAR_SESSION,
+                       f"{i.now.isoformat()} is outside {day.regular_open.time()}-"
+                       f"{day.regular_close.time()} New York")
+    try:
+        times = deadlines(day, lim.last_entry_minutes_before_close,
+                          lim.flatten_minutes_before_close)
+    except CalendarRefused as exc:
+        return _refuse(C.SESSION_TIMES_INVALID, f"{exc.cause}: {exc.detail}")
+    if i.now >= times.last_entry:
+        return _refuse(C.AFTER_LAST_ENTRY, f"last entry was {times.last_entry.isoformat()}")
+    return None
+
+
+def _check_own_state(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    counts = {"own_open_positions": i.own_open_positions,
+              "own_working_orders": i.own_working_orders,
+              "open_positions": i.open_positions}
+    for name, value in counts.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return _refuse(C.COUNT_INVALID, f"{name} {value!r} is not a count")
+    if i.own_open_positions:
+        return _refuse(C.OWN_POSITION_OPEN, f"{i.own_open_positions} own position(s) open")
+    if i.own_working_orders:
+        return _refuse(C.OWN_ORDER_WORKING, f"{i.own_working_orders} own order(s) working")
+    if i.open_positions >= lim.max_open_positions:
+        return _refuse(C.POSITION_LIMIT_REACHED,
+                       f"{i.open_positions} open position(s), limit {lim.max_open_positions}")
+    return None
+
+
+def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    d = i.decision
+    if d.verdict is not Verdict.ENTER:
+        return _refuse(C.DECISION_NOT_ENTER, f"verdict is {d.verdict}")
+    if d.strategy != lim.active_strategy:
+        return _refuse(C.DECISION_NOT_ACTIVE,
+                       f"decision from {d.strategy} {d.version}, active is {lim.active_strategy}")
+    missing = [name for name in ("entry_low", "entry_high", "stop", "quantity")
+               if getattr(d, name) is None]
+    if missing:
+        return _refuse(C.DECISION_INCOMPLETE, f"ENTER without {', '.join(missing)}")
+    numbers = (d.entry_low, d.entry_high, d.stop, d.quantity)
+    if not all(isinstance(n, Decimal) and n.is_finite() for n in numbers):
+        return _refuse(C.DECISION_INVALID, f"non-finite or non-Decimal value in {numbers}")
+    if not (Decimal(0) < d.stop < d.entry_low <= d.entry_high):
+        return _refuse(C.DECISION_INVALID,
+                       f"need 0 < stop {d.stop} < entry_low {d.entry_low} <= "
+                       f"entry_high {d.entry_high}")
+    if i.limit_price is None or i.stop_price is None:
+        return _refuse(C.ORDER_PRICES_MISSING, "final limit and stop prices not computed")
+    prices = (i.limit_price, i.stop_price)
+    if not all(isinstance(n, Decimal) and n.is_finite() for n in prices):
+        return _refuse(C.ORDER_PRICES_INVALID, f"non-finite or non-Decimal order price in {prices}")
+    if not (d.entry_low <= i.limit_price <= d.entry_high):
+        return _refuse(C.ORDER_PRICES_INVALID,
+                       f"limit {i.limit_price} outside window {d.entry_low}..{d.entry_high}")
+    if not (Decimal(0) < i.stop_price < i.limit_price):
+        return _refuse(C.ORDER_PRICES_INVALID,
+                       f"need 0 < stop price {i.stop_price} < limit {i.limit_price}")
+    if not i.setup_valid:
+        return _refuse(C.SETUP_INVALIDATED, "setup no longer valid")
+    q = i.quote
+    if q is None:
+        return _refuse(C.QUOTE_MISSING, "no quote")
+    if q.symbol != d.symbol:
+        return _refuse(C.QUOTE_SYMBOL_MISMATCH, f"quote {q.symbol} for decision {d.symbol}")
+    if not all(isinstance(n, Decimal) and n.is_finite() for n in (q.bid, q.ask)):
+        return _refuse(C.QUOTE_INVALID, f"non-finite bid {q.bid} / ask {q.ask}")
+    if not (Decimal(0) < q.bid <= q.ask):
+        return _refuse(C.QUOTE_INVALID, f"bid {q.bid} / ask {q.ask} not executable")
+    if not (_aware(q.provider_time) and _aware(q.receipt_time)):
+        return _refuse(C.QUOTE_TIME_INVALID, "quote times must be aware datetimes")
+    if q.receipt_time > i.now:
+        return _refuse(C.QUOTE_TIME_INVALID, "quote receipt time is after now")
+    age = Decimal(str((i.now - q.provider_time).total_seconds()))
+    if -age > lim.max_clock_skew_seconds:
+        return _refuse(C.QUOTE_TIME_INVALID,
+                       f"provider time {-age} s ahead of our clock "
+                       f"> {lim.max_clock_skew_seconds} s")
+    age = max(age, Decimal(0))
+    if age > lim.max_quote_age_seconds:
+        return _refuse(C.QUOTE_STALE, f"quote {age} s old > {lim.max_quote_age_seconds} s")
+    if not (d.entry_low <= q.ask <= i.limit_price):
+        return _refuse(C.PRICE_OUTSIDE_WINDOW,
+                       f"ask {q.ask} outside {d.entry_low}..limit {i.limit_price}")
+    return None
+
+
+def _check_money(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    d = i.decision
+    assert d.quantity is not None and i.limit_price is not None and i.stop_price is not None
+    size = check_size(d.quantity, i.limit_price, i.stop_price, lim.planned_loss_usd,
+                      lim.position_notional_cap_usd)
+    if not size.ok:
+        assert size.cause is not None
+        return _refuse(size.cause, size.detail)
+    assert size.planned_loss_usd is not None
+    daily = check_daily(i.realized_loss_today_usd, i.open_reservations_usd,
+                        size.planned_loss_usd, lim.max_daily_loss_usd)
+    if not daily.ok:
+        assert daily.cause is not None
+        return _refuse(daily.cause, daily.detail)
+    return None
+
+
+def _check_budget(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    if not i.entry_budget_available:
+        return _refuse(C.ENTRY_BUDGET_UNAVAILABLE, "no request budget for the entry order")
+    if not i.stop_budget_available:
+        return _refuse(C.STOP_BUDGET_UNAVAILABLE, "no request budget for the protective stop")
+    return None
+
+
+CHECKS = (
+    _check_gate,
+    _check_reconciliation,
+    _check_session,
+    _check_own_state,
+    _check_quote_and_setup,
+    _check_money,
+    _check_budget,
+)
+"""Spec section 7 checks 1..7, in order."""
+
+
+def admit(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admission:
+    """Evaluate all checks in order; the first failure is the single cause."""
+    for check in CHECKS:
+        refused = check(inputs, limits)
+        if refused is not None:
+            return refused
+    d = inputs.decision
+    assert d.quantity is not None
+    assert inputs.limit_price is not None and inputs.stop_price is not None
+    planned_loss = d.quantity * (inputs.limit_price - inputs.stop_price)
+    return Admission(True, None, f"admitted {d.quantity} {d.symbol}", planned_loss)
+
