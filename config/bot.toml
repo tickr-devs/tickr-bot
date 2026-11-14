@@ -153,6 +153,18 @@ snapshot_symbols_per_request = 100
 bars_symbols_per_request = 20
 # M1 bars requested per symbol in discovery (one regular session = 390 minutes); read by data.discovery.
 bars_per_symbol = 390
+# M1 bars asked per prior-session history request, per symbol (SDK maximum 1200; one regular session = 390);
+# read by data.history.
+history_bars_per_request = 1200
+# Most history requests for one symbol per (symbol, day, sessions) before refusing with PAGE_LIMIT (five sessions need
+# two at 1200 per request); read by data.history.
+history_max_pages_per_symbol = 4
+# Most calendar days walked back to find the requested prior sessions (weekends and holidays are skipped); read by
+# data.history.
+history_max_lookback_days = 14
+# Prior-session bar cache folder relative to [run] data_dir; files go to <history_dir>/<environment>/<NY date asked
+# on>/<symbol>-<sessions>.jsonl (replay bar format); read by data.history.
+history_dir = "history"
 # Seconds before the L1 stream connects again after its loop ended (failed resubscribe or SDK gave up); read by broker.webull stream.
 stream_reconnect_delay_seconds = 10
 # Seconds without a received quote, transport up, after which a subscribed symbol is quiet; read by data.health.

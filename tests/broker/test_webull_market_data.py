@@ -337,3 +337,24 @@ def test_from_config_uses_market_data_section():
     md = market_data_from_config(cfg, transport=Scripted(
         ok([screener_row("A")]), ok({"data": [profile("A")]})))
     md.screener(ScreenerKind.GAINERS)
+
+
+def test_bars_before_sends_end_time_and_drops_bars_at_or_after_end():
+    end = NOW + timedelta(minutes=1)
+    md, transport = adapter(ok({"result": [{"delay_minutes": 0, "instrument_id": "1",
+                                            "symbol": "AAA",
+                                            "result": [bar_row(1), bar_row(0)]}]}))
+    bars = md.bars_before("AAA", end, 1200)
+    assert [b.start for b in bars] == [NOW]  # the bar starting at `end` is not "before" it
+    assert transport.sent[0] == (Route.BARS, {
+        "symbols": ["AAA"], "category": "US_STOCK", "timespan": "M1", "count": "1200",
+        "end_time": int(end.timestamp() * 1000)})
+
+
+def test_bars_before_refuses_other_symbols_and_naive_end():
+    md, _ = adapter(ok({"result": [{"delay_minutes": 0, "symbol": "BBB",
+                                    "result": [bar_row(0)]}]}))
+    with pytest.raises(MalformedResponse, match="BBB"):
+        md.bars_before("AAA", NOW + timedelta(hours=1), 10)
+    with pytest.raises(ValueError):
+        md.bars_before("AAA", NOW.replace(tzinfo=None), 10)

@@ -913,6 +913,25 @@ class WebullMarketData:
         })
         return read_bars(body)
 
+    def bars_before(self, symbol: str, end: datetime, count: int) -> list[Bar]:
+        """One history page: `end_time` (epoch ms, SDK 3.0.3 BatchHistoricalBarsRequest) with
+        `count`. How Webull applies end_time is not probed yet, so the reply is checked instead
+        of trusted: another symbol is refused and bars starting at or after `end` are dropped."""
+        if end.tzinfo is None or end.utcoffset() is None:
+            raise ValueError(f"naive end time {end!r}")
+        body = self._read(Route.BARS, {
+            "symbols": [symbol],
+            "category": self._category,
+            "timespan": BARS_TIMESPAN_M1,
+            "count": str(count),
+            "end_time": int(end.timestamp() * MILLISECONDS_PER_SECOND),
+        })
+        bars = read_bars(body)
+        stray = sorted({b.symbol for b in bars} - {symbol})
+        if stray:
+            raise MalformedResponse(f"bars: symbols not requested: {', '.join(stray)}")
+        return [b for b in bars if b.start < end]
+
     def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
         if self._stream is None:
             raise MarketDataError("no L1 stream configured for this adapter")

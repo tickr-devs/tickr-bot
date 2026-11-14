@@ -89,6 +89,11 @@ class MarketData(Protocol):
         """
         ...
 
+    def bars_before(self, symbol: str, end: datetime, count: int) -> list[Bar]:
+        """Up to `count` regular-session M1 bars of one symbol that START strictly before the
+        aware `end`, oldest first. One page of history; `aperture.data.history` pages and caches."""
+        ...
+
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]: ...
 
     def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
@@ -161,6 +166,14 @@ class FakeMarketData:
         if self._bars_delay is not None:
             raise DelayedData(symbols, self._bars_delay)
         return [bar for symbol in symbols for bar in self._bars.get(symbol, [])[-count:]]
+
+    def bars_before(self, symbol: str, end: datetime, count: int) -> list[Bar]:
+        self._call("bars_before", [symbol])
+        if self._bars_delay is not None:
+            raise DelayedData([symbol], self._bars_delay)
+        older = sorted((b for b in self._bars.get(symbol, []) if b.start < end),
+                       key=lambda b: b.start)
+        return older[-count:] if count > 0 else []
 
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
         self._call("snapshot", symbols)
