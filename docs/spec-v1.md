@@ -122,9 +122,9 @@ Reconciliation: positions and open orders every `reconcile_interval_seconds`; st
 
 ## 11. Runtime and alerts
 
-- launchd: `preflight` (calendar known, credentials present, token usable, disk, config valid) before the session; `bot` started before 09:30 ET, no automatic relaunch after a crash; `api` always on, loopback only.
+- launchd: `preflight` (calendar known, credentials and iMessage recipient present, token usable, disk, config valid) before the session; `bot` started before 09:30 ET, no automatic relaunch after a crash; `watchdog` a separate read-only job (never the bot's lock, never a trading request, its own journal file) that checks the broker is flat after the flatten time and that the bot runs while a trade is open; `api` always on, loopback only. The bot and watchdog jobs hold a no-sleep assertion (caffeinate) while they run.
 - SIGTERM: stop entries, cancel working entries, leave stops resting, close cleanly. Restart over an open position is refused unless the resting stop is verified first.
-- Alerts (macOS notification now; phone push in the app stage): position without verified protection, stop rejected, closing order refused, unknown order status, foreign exposure, broker reads failing, stream lost with a position, daily ceiling reached, bot crashed or did not start, preflight failed, token needs confirmation in the Webull app, observers switched off, not flat after the flatten time (broker reads after flatten plus a grace still show an own position or order).
+- Alerts (macOS notification and iMessage to the owner, every alert on both; a failing channel is recorded and never stops the other): position without verified protection, stop rejected, closing order refused, unknown order status, foreign exposure, broker reads failing, stream lost with a position, daily ceiling reached, bot crashed or did not start, preflight failed, token needs confirmation in the Webull app, observers switched off, not flat after the flatten time (broker reads after flatten plus a grace still show an own position or order); from the watchdog: not flat after the flatten time (any position or open order), watchdog cannot check, bot down with an open trade.
 
 ## 12. Local API and status screen
 

@@ -381,6 +381,7 @@ def _run(path: Path) -> int:
         adapters: RunAdapters | None = None
         capture: CaptureWriter | None = None
         observers: ObserverSet | None = None
+        watch: Watch | None = None
         try:
             alerter = Alerter(cfg.alerts, f"Aperture {cfg.environment_name}",
                               NOTIFIER(cfg.alerts), clock=NOW)
@@ -433,6 +434,7 @@ def _run(path: Path) -> int:
             for step in ((adapters.stop_stream if adapters is not None else None),
                          (capture.close if capture is not None else None),
                          (_closer(observers, cfg) if observers is not None else None),
+                         (watch.flush_alerts if watch is not None else None),
                          lambda: restore_handlers(previous),
                          lambda: store.end_run(run_id, cause),
                          store.close):

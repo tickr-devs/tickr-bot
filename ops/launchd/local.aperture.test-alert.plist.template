@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Aperture test alert: runs only when kickstarted by hand (no schedule, not at load).
+     It sends one test alert the same way the bot and watchdog jobs do (sh sources the env file,
+     then exec python), so macOS asks for the Automation permission for Messages for the same
+     program the jobs use. See docs/operations.md, "Alerts from launchd".
+     Rendered by `python -m aperture.runtime render-launchd`; see docs/operations.md. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.aperture.test-alert</string>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; . "$0"; set +a; exec "$1" -m aperture.runtime --config "$2" alert preflight-failed "test alert from launchd"</string>
+    <string>{{ENV_FILE}}</string>
+    <string>{{PYTHON}}</string>
+    <string>{{CONFIG}}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>{{LOG_DIR}}/test-alert.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/test-alert.log</string>
+</dict>
+</plist>

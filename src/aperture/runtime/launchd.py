@@ -22,6 +22,7 @@ _HHMM = re.compile(r"^(\d{2}):(\d{2})$")
 _HOURS = 24
 _MINUTES = 60
 _WEEKDAY_MAX = 7
+SECONDS_PER_MINUTE = 60
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class LocalTime:
 class Schedule:
     preflight: LocalTime
     bot: LocalTime
+    watchdog: LocalTime
     weekdays: tuple[int, ...]
 
 
@@ -51,6 +53,7 @@ def schedule(runtime: RuntimeConfig) -> Schedule:
     """Validated launchd schedule from [runtime]; refuses bad times, weekdays and timeouts."""
     preflight = _local_time("preflight_start_local", runtime.preflight_start_local)
     bot = _local_time("bot_start_local", runtime.bot_start_local)
+    watchdog = _local_time("watchdog_start_local", runtime.watchdog_start_local)
     if (preflight.hour, preflight.minute) >= (bot.hour, bot.minute):
         raise ConfigError("[runtime] preflight_start_local must be before bot_start_local")
     days = runtime.launch_weekdays
@@ -66,7 +69,9 @@ def schedule(runtime: RuntimeConfig) -> Schedule:
         raise ConfigError("[runtime] supervisor_poll_seconds must be positive")
     if runtime.min_free_disk_mb <= 0:
         raise ConfigError("[runtime] min_free_disk_mb must be positive")
-    return Schedule(preflight=preflight, bot=bot, weekdays=tuple(days))
+    if runtime.watchdog_bot_check_seconds <= 0:
+        raise ConfigError("[runtime] watchdog_bot_check_seconds must be positive")
+    return Schedule(preflight=preflight, bot=bot, watchdog=watchdog, weekdays=tuple(days))
 
 
 def check_timings(config: Config) -> None:
@@ -74,7 +79,11 @@ def check_timings(config: Config) -> None:
     0 < [orders] shutdown_deadline_seconds < [runtime] stop_alert_after_seconds
       < [runtime] bot_exit_timeout_seconds;
     and unless a reconcile pass fits inside the day-end grace:
-    [orders] reconcile_interval_seconds < [session] flatten_grace_seconds."""
+    [orders] reconcile_interval_seconds < [session] flatten_grace_seconds;
+    and unless both watchdog checks fall between the bot's day-end check and the close:
+    flatten_grace_seconds < watchdog_after_flatten_seconds and
+    watchdog_after_flatten_seconds + watchdog_before_close_seconds
+      < flatten_minutes_before_close (in seconds), watchdog_before_close_seconds > 0."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -87,6 +96,22 @@ def check_timings(config: Config) -> None:
         raise ConfigError(
             f"[session] flatten_grace_seconds ({grace}) must be above "
             f"[orders] reconcile_interval_seconds ({config.orders.reconcile_interval_seconds})")
+    runtime = config.runtime
+    stale = runtime.watchdog_status_stale_seconds
+    floor = max(config.orders.detail_poll_seconds, config.orders.reconcile_interval_seconds)
+    if not stale > floor:
+        raise ConfigError(
+            f"[runtime] watchdog_status_stale_seconds ({stale}) must be above [orders] "
+            f"detail_poll_seconds and reconcile_interval_seconds ({floor})")
+    after, before = runtime.watchdog_after_flatten_seconds, runtime.watchdog_before_close_seconds
+    if not grace < after:
+        raise ConfigError(f"[runtime] watchdog_after_flatten_seconds ({after}) must be above "
+                          f"[session] flatten_grace_seconds ({grace})")
+    window = config.session.flatten_minutes_before_close * SECONDS_PER_MINUTE
+    if not (before > 0 and after + before < window):
+        raise ConfigError(
+            f"[runtime] watchdog_after_flatten_seconds ({after}) + watchdog_before_close_seconds "
+            f"({before}) must be below the flatten-to-close time ({window} s), both positive")
 
 
 def _calendar_xml(at: LocalTime, weekdays: tuple[int, ...]) -> str:
@@ -126,6 +151,7 @@ def values(runtime: RuntimeConfig, paths: Paths) -> dict[str, str]:
         "LOG_DIR": escape(str(paths.log_dir)),
         "PREFLIGHT_CALENDAR": _calendar_xml(sched.preflight, sched.weekdays),
         "BOT_CALENDAR": _calendar_xml(sched.bot, sched.weekdays),
+        "WATCHDOG_CALENDAR": _calendar_xml(sched.watchdog, sched.weekdays),
         "BOT_EXIT_TIMEOUT": str(runtime.bot_exit_timeout_seconds),
     }
 

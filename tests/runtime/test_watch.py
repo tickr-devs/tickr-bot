@@ -236,3 +236,36 @@ def test_daily_ceiling_uses_the_real_net_result(tmp_path):
     rig.now = datetime.now(NEW_YORK)  # trades_today reads the close time of the engine
     rig.watch.check()
     assert AlertKind.DAILY_CEILING_REACHED in rig.kinds()
+
+
+def test_loop_pass_never_waits_on_imessage_and_journals_its_outcome_when_known(tmp_path):
+    """The bot's loop calls watch.check(): an alert returns while the iMessage channel is
+    still blocked; a later pass journals the iMessage outcome; exit flushes nothing twice."""
+    import threading
+
+    from aperture.runtime.alerts import IMESSAGE, Channels, NotifyError
+
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowPhone:
+        def notify(self, title: str, text: str) -> None:
+            entered.set()
+            release.wait()
+            raise NotifyError("osascript exited with code 1")
+
+    rig = Rig(tmp_path)
+    rig.watch.alerter = Alerter(rig.cfg.alerts, "Aperture test",
+                                Channels((("macos", rig.notifier),), ((IMESSAGE, SlowPhone()),)),
+                                lambda: rig.now)
+    rig.fence(Fence.STOP_REJECTED, "t1")
+    rig.watch.check()  # returns although the iMessage send is blocked
+    assert entered.wait(5) and not release.is_set()
+    bodies = [r.body for r in rig.store.journal(ALERT)]
+    assert [(b["delivery"], b.get("pending")) for b in bodies] == [("shown", ["imessage"])]
+    release.set()
+    rig.watch.flush_alerts()
+    rig.watch.check()
+    bodies = [r.body for r in rig.store.journal(ALERT)]
+    assert [(b["delivery"], b.get("channel")) for b in bodies] == [
+        ("shown", None), ("failed", "imessage")]
+    assert len(rig.notifier.shown) == 1

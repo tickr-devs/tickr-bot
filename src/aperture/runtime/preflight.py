@@ -8,6 +8,8 @@ Checks, all reported, the first failure is the single cause:
    "no session today", which is not a failure;
 4. credential environment variables present: only their NAMES are checked and reported, values
    are never read beyond "set and non-empty";
+4b. the iMessage recipient variable (`[alerts] imessage_recipient_variable`) present, the same
+   way: it is personal data;
 5. broker token folder present;
 6. active strategy builds from its file and `[market_data] history_sessions` covers the prior
    sessions it needs. A failure here is reported but does not stop the bot from starting: the
@@ -32,6 +34,7 @@ from aperture import config as config_module
 from aperture.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from aperture.observers.errors import ObserverError
 from aperture.observers.loader import load_active
+from aperture.runtime.alerts import recipient_missing
 from aperture.runtime.launchd import check_timings
 
 STRATEGY_FILE = "strategy.toml"
@@ -54,6 +57,7 @@ class PreflightCause(StrEnum):
     DISK_LOW = "disk-low"
     CALENDAR_UNKNOWN = "calendar-unknown"
     CREDENTIALS_MISSING = "credentials-missing"
+    ALERT_RECIPIENT_MISSING = "alert-recipient-missing"
     TOKEN_DIR_MISSING = "token-dir-missing"
     TOKEN_UNUSABLE = "token-unusable"
     STRATEGY_REFUSED = "strategy-refused"
@@ -64,6 +68,7 @@ class CheckName(StrEnum):
     DISK = "disk"
     CALENDAR = "calendar"
     CREDENTIALS = "credentials"
+    ALERT_RECIPIENT = "alert-recipient"
     TOKEN_DIR = "token-dir"
     TOKEN = "token"
     STRATEGY = "strategy"
@@ -195,6 +200,15 @@ def _check_credentials(cfg: config_module.Config, environ: Mapping[str, str]) ->
     return Check(CheckName.CREDENTIALS, True, "set: " + ", ".join(names))
 
 
+def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str]) -> Check:
+    # Presence only, like the credentials: the iMessage address is personal data.
+    missing = recipient_missing(cfg.alerts, environ)
+    if missing is not None:
+        return Check(CheckName.ALERT_RECIPIENT, False, f"not set: {missing}",
+                     PreflightCause.ALERT_RECIPIENT_MISSING)
+    return Check(CheckName.ALERT_RECIPIENT, True, f"set: {cfg.alerts.imessage_recipient_variable}")
+
+
 def _check_token_dir(cfg: config_module.Config) -> Check:
     token_dir = cfg.root / cfg.run.data_dir / cfg.environment.token_dir
     if not token_dir.is_dir():
@@ -229,7 +243,7 @@ def run_preflight(
     disk = _check_disk(cfg, disk_free)
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, disk, calendar, _check_credentials(cfg, environ),
-              _check_token_dir(cfg), _check_strategy(cfg))
+              _check_alert_recipient(cfg, environ), _check_token_dir(cfg), _check_strategy(cfg))
     blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED
                    for c in checks)
     if token_probe is not None and session_today and not blocking:

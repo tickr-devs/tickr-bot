@@ -20,7 +20,7 @@ from pathlib import Path
 from aperture.calendar import NEW_YORK
 from aperture.config import Config
 from aperture.engine.core import OPERATOR_FENCES, Engine, Fence
-from aperture.runtime.alerts import Alerter, AlertKind
+from aperture.runtime.alerts import Alerter, AlertKind, AlertOutcome
 from aperture.runtime.entries import realized_loss_today
 
 ALERT = "alert"
@@ -63,12 +63,21 @@ class Watch:
         self._ceiling_day: date | None = None  # day the daily ceiling was alerted
 
     def alert(self, kind: AlertKind, text: str) -> None:
-        outcome = self.alerter.alert(kind, text)
-        with self.engine.store.transaction():
-            self.engine.store.append(ALERT, outcome.journal_body(), run_id=self.engine.run_id)
+        self._journal([self.alerter.alert(kind, text)])
+
+    def _journal(self, outcomes: list[AlertOutcome]) -> None:
+        for outcome in outcomes:
+            with self.engine.store.transaction():
+                self.engine.store.append(ALERT, outcome.journal_body(),
+                                         run_id=self.engine.run_id)
+
+    def flush_alerts(self) -> None:
+        """At exit: wait for background alert sends (iMessage) and journal their outcomes."""
+        self._journal(self.alerter.flush())
 
     def check(self) -> None:
-        """Once per loop pass."""
+        """Once per loop pass. Journals background alert sends that finished meanwhile."""
+        self._journal(self.alerter.completed())
         fences = self.engine.fences()
         ages = self.engine.fence_ages()
         threshold = float(self.config.alerts.fence_alert_after_seconds)

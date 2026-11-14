@@ -26,7 +26,8 @@ def _render(config_path: Path, repo: Path, out: Path) -> dict[str, dict]:
 def test_templates_render_to_valid_plists(config_path, repo, tmp_path):
     jobs = _render(config_path, repo, tmp_path / "out")
     assert set(jobs) == {"local.aperture.preflight.plist", "local.aperture.bot.plist",
-                         "local.aperture.api.plist"}
+                         "local.aperture.api.plist", "local.aperture.watchdog.plist",
+                         "local.aperture.test-alert.plist"}
     for job in jobs.values():
         assert job["WorkingDirectory"] == str(PATHS.repo)
 
@@ -122,3 +123,48 @@ def test_flatten_grace_must_cover_a_reconcile_pass(config_path):
     cfg = config_module.load(config_path)
     with pytest.raises(config_module.ConfigError, match="flatten_grace_seconds"):
         launchd.check_timings(cfg)
+
+
+def test_watchdog_job_scheduled_and_both_long_jobs_keep_the_mac_awake(config_path, repo,
+                                                                      tmp_path):
+    cfg = config_module.load(config_path)
+    jobs = _render(config_path, repo, tmp_path / "out")
+    dog = jobs["local.aperture.watchdog.plist"]
+    assert dog["KeepAlive"] is False and dog["RunAtLoad"] is False
+    hour, minute = map(int, cfg.runtime.watchdog_start_local.split(":"))
+    assert dog["StartCalendarInterval"] == [
+        {"Weekday": d, "Hour": hour, "Minute": minute} for d in cfg.runtime.launch_weekdays]
+    assert dog["ProgramArguments"][2].endswith('--config "$2" watchdog')
+    assert '--config "$2" run-bot' in jobs["local.aperture.bot.plist"]["ProgramArguments"][2]
+    for name in ("local.aperture.bot.plist", "local.aperture.watchdog.plist"):
+        script = jobs[name]["ProgramArguments"][2]
+        # A side process waiting on the job's own pid; the job's process is still exec'd, so
+        # launchd's SIGTERM reaches the supervisor directly.
+        assert '/usr/bin/caffeinate -i -s -w $$ >/dev/null 2>&1 & exec "$1"' in script
+    assert "caffeinate" not in str(jobs["local.aperture.preflight.plist"])
+    test = jobs["local.aperture.test-alert.plist"]  # runs only on a manual kickstart
+    assert test["RunAtLoad"] is False and test["KeepAlive"] is False
+    assert "StartCalendarInterval" not in test
+    assert test["ProgramArguments"][:2] == dog["ProgramArguments"][:2]  # same program chain
+
+
+@pytest.mark.parametrize("key,value", [
+    ("watchdog_after_flatten_seconds", "120"),   # not above flatten_grace_seconds
+    ("watchdog_after_flatten_seconds", "260"),   # + before_close reaches the close
+    ("watchdog_before_close_seconds", "0"),
+    ("watchdog_status_stale_seconds", "10"),     # not above reconcile_interval_seconds
+    ("watchdog_status_stale_seconds", "3"),      # not above detail_poll_seconds
+])
+def test_watchdog_checks_must_fit_between_day_end_check_and_close(config_path, key, value):
+    text = re.sub(rf"(?m)^{key} = .*$", f"{key} = {value}", config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    with pytest.raises(config_module.ConfigError, match="watchdog_"):
+        launchd.check_timings(config_module.load(config_path))
+
+
+def test_bad_watchdog_start_refused(config_path):
+    text = re.sub(r"(?m)^watchdog_start_local = .*$", 'watchdog_start_local = "9:05"',
+                  config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    with pytest.raises(config_module.ConfigError, match="watchdog_start_local"):
+        launchd.schedule(config_module.load(config_path).runtime)

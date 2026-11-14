@@ -30,7 +30,7 @@ def _ready(config_path: Path) -> dict[str, str]:
     (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True)
     env = cfg.environment
     return {env.app_key_variable: CANARY, env.app_secret_variable: CANARY,
-            env.account_variable: CANARY}
+            env.account_variable: CANARY, cfg.alerts.imessage_recipient_variable: CANARY}
 
 
 def _run(config_path: Path, environ: dict[str, str], now: datetime = MONDAY, free: int = PLENTY):
@@ -73,11 +73,21 @@ def test_day_outside_calendar_fails(config_path):
 
 def test_missing_credentials_name_the_variables(config_path):
     environ = _ready(config_path)
-    name = sorted(environ)[0]
+    name = config_module.load(config_path).environment.app_key_variable
     environ[name] = ""
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.CREDENTIALS_MISSING
     assert name in result.summary()
+
+
+def test_missing_imessage_recipient_refuses_with_its_own_cause(config_path):
+    environ = _ready(config_path)
+    name = config_module.load(config_path).alerts.imessage_recipient_variable
+    del environ[name]
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.ALERT_RECIPIENT_MISSING
+    assert result.blocks_start and name in result.summary()
+    assert CANARY not in json.dumps(result.journal_body()) + result.summary()
 
 
 def test_missing_token_dir(config_path):
@@ -98,7 +108,7 @@ def test_missing_data_dir_is_first_cause_and_all_checks_reported(config_path):
     result = _run(config_path, {})
     assert result.cause is PreflightCause.DATA_DIR_MISSING
     failed = [c.name.value for c in result.checks if not c.passed]
-    assert failed == ["disk", "credentials", "token-dir"]
+    assert failed == ["disk", "credentials", "alert-recipient", "token-dir"]
 
 
 def test_invalid_config(config_path):

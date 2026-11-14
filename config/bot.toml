@@ -258,6 +258,22 @@ preflight_start_local = "08:30"
 bot_start_local = "09:00"
 # launchd weekdays for the preflight and bot jobs (1 = Monday ... 5 = Friday); the calendar still decides; read by runtime.launchd.
 launch_weekdays = [1, 2, 3, 4, 5]
+# Watchdog job start, Mac local time HH:MM, same weekdays; it then waits for its calendar-derived checks; read by runtime.launchd.
+watchdog_start_local = "09:05"
+# First watchdog broker check this many seconds after the flatten time (15:57:30 ET on a normal day); must be above
+# [session] flatten_grace_seconds so the bot's own day-end check comes first; read by runtime.watchdog.
+watchdog_after_flatten_seconds = 150
+# Last watchdog broker check this many seconds before the regular close (15:59 ET on a normal day); read by runtime.watchdog.
+watchdog_before_close_seconds = 60
+# Seconds between watchdog checks, during the regular session, that the bot runs whenever the database shows an open trade;
+# read by runtime.watchdog.
+watchdog_bot_check_seconds = 60
+# The bot counts as running only while its status file (written every loop pass, about every [orders] detail_poll_seconds)
+# is at most this many seconds old AND its lock records a live pid; must be above detail_poll_seconds and
+# reconcile_interval_seconds; read by runtime.watchdog.
+watchdog_status_stale_seconds = 60
+# Watchdog journal (JSON lines: checks and alerts), relative to data_dir; never the bot's database; read by runtime.watchdog.
+watchdog_journal_file = "watchdog.jsonl"
 # Seconds one loop pass may spend on market upkeep, discovery and the strategy before an
 # evaluation-slow journal row (the next Detail read waits for it; keep it near
 # [orders] detail_poll_seconds); read by runtime.service.
@@ -271,6 +287,9 @@ notification_timeout_seconds = 5
 # Seconds a self-clearing fence (broker read failed, unknown order, foreign exposure, ...) must last before the bot alerts;
 # fences that need the operator alert at once; read by runtime.watch.
 fence_alert_after_seconds = 30
+# NAME of the environment variable holding the owner's iMessage address (phone number or Apple ID email); the value is
+# personal data, set only in the owner's env file, never here; presence checked by preflight; read by runtime.alerts.
+imessage_recipient_variable = "APERTURE_IMESSAGE_TO"
 
 [environments.sandbox]
 # May this process send trading requests in this environment; read by the trading gate.
