@@ -112,8 +112,14 @@ def _schema_v2(db: sqlite3.Connection) -> None:
         db.execute(statement)
 
 
+def _schema_v3(db: sqlite3.Connection) -> None:
+    # Per-trade stop distance below the actual fill (NULL: keep the stop price as given).
+    db.execute("ALTER TABLE trades ADD COLUMN stop_percent_below_fill TEXT")
+
+
 # Forward-only migrations. Never edit a released entry; append a new one.
-MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (_schema_v1, _schema_v2)
+MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
+    _schema_v1, _schema_v2, _schema_v3)
 
 
 def _json_default(value: Any) -> Any:

@@ -80,6 +80,8 @@ class ProbeConfig:
     max_loss_usd: Decimal
     window_start: str
     window_end: str
+    entry_wait_seconds: int
+    hold_seconds: int
 
 
 @dataclass(frozen=True)

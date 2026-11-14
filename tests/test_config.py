@@ -237,7 +237,7 @@ def test_cli_status_is_read_only(tmp_path, capsys):
     before = database.read_bytes()
     with SingleInstanceLock(lock_path):
         assert main(["--config", str(path), "status"]) == 0
-        assert "bot: running" in capsys.readouterr().out
+        assert "process exists (lock not verified)" in capsys.readouterr().out
     assert database.read_bytes() == before
 
 

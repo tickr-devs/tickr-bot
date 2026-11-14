@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -114,6 +114,7 @@ class OrderRow:
     send_state: SendState
     broker_state: OrderState | None
     filled_quantity: Decimal
+    average_fill_price: Decimal | None
     cancel_state: str | None
     cancel_attempts: int
     cancel_at: float | None
@@ -144,6 +145,7 @@ class TradeRow:
     entry_quantity: Decimal
     entry_limit_price: Decimal
     stop_price: Decimal
+    stop_percent_below_fill: Decimal | None
     planned_loss_usd: Decimal
     exit_requested: str | None
     stop_failures: int
@@ -161,7 +163,8 @@ def _order(row: Any) -> OrderRow:
         quantity=Decimal(row["quantity"]), limit_price=_dec(row["limit_price"]),
         stop_price=_dec(row["stop_price"]), send_state=SendState(row["send_state"]),
         broker_state=None if row["broker_state"] is None else OrderState(row["broker_state"]),
-        filled_quantity=Decimal(row["filled_quantity"]), cancel_state=row["cancel_state"],
+        filled_quantity=Decimal(row["filled_quantity"]),
+        average_fill_price=_dec(row["average_fill_price"]), cancel_state=row["cancel_state"],
         cancel_attempts=row["cancel_attempts"], cancel_at=row["cancel_at"],
         absent_reads=row["absent_reads"], last_detail_at=row["last_detail_at"],
     )
@@ -172,7 +175,9 @@ def _trade(row: Any) -> TradeRow:
         trade_id=row["trade_id"], symbol=row["symbol"], state=TradeState(row["state"]),
         entry_quantity=Decimal(row["entry_quantity"]),
         entry_limit_price=Decimal(row["entry_limit_price"]),
-        stop_price=Decimal(row["stop_price"]), planned_loss_usd=Decimal(row["planned_loss_usd"]),
+        stop_price=Decimal(row["stop_price"]),
+        stop_percent_below_fill=_dec(row["stop_percent_below_fill"]),
+        planned_loss_usd=Decimal(row["planned_loss_usd"]),
         exit_requested=row["exit_requested"], stop_failures=row["stop_failures"],
         last_stop_failure_at=row["last_stop_failure_at"],
     )
@@ -281,8 +286,13 @@ class Engine:
     # --- entry and exit requests -------------------------------------------------------------
 
     def open_trade(self, symbol: str, quantity: Decimal, limit_price: Decimal,
-                   stop_price: Decimal, planned_loss_usd: Decimal) -> str:
-        """Record and send a LIMIT BUY entry. Refuses (EntryRefused) instead of guessing."""
+                   stop_price: Decimal, planned_loss_usd: Decimal,
+                   stop_percent_below_fill: Decimal | None = None) -> str:
+        """Record and send a LIMIT BUY entry. Refuses (EntryRefused) instead of guessing.
+
+        With `stop_percent_below_fill`, the stop is re-derived from the first observed average
+        fill price (rounded down to the cent) before the first stop is placed; `stop_price`
+        is the bound computed from the limit and is never loosened."""
         gate = self.gate()
         if not gate.open:
             raise EntryRefused(f"trading gate closed: {gate.cause}")
@@ -300,10 +310,12 @@ class Engine:
             trade_id = f"t{self.store.next_counter('trade')}"
             self.store.execute(
                 "INSERT INTO trades(trade_id, run_id, symbol, state, entry_quantity, "
-                "entry_limit_price, stop_price, planned_loss_usd, opened_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "entry_limit_price, stop_price, stop_percent_below_fill, planned_loss_usd, "
+                "opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (trade_id, self.run_id, symbol, TradeState.OPENING, str(quantity),
-                 str(limit_price), str(stop_price), str(planned_loss_usd), now_utc()))
+                 str(limit_price), str(stop_price),
+                 None if stop_percent_below_fill is None else str(stop_percent_below_fill),
+                 str(planned_loss_usd), now_utc()))
             self.store.append("trade-opened", {
                 "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
                 "stop_price": stop_price, "planned_loss_usd": planned_loss_usd},
@@ -663,6 +675,7 @@ class Engine:
             self._clear_fence(Fence.OVER_PROTECTED, trade.trade_id)
         if covered >= target:
             return
+        trade = self._stop_from_fill(trade, stops)
         orders = self.config.orders
         if trade.stop_failures > orders.stop_retry_attempts:
             if not self._has_fence(Fence.STOP_REJECTED, trade.trade_id):
@@ -678,6 +691,27 @@ class Engine:
                                      OrderType.STOP_LOSS, target - covered,
                                      stop_price=trade.stop_price)
         self._send(cid)
+
+    def _stop_from_fill(self, trade: TradeRow, stops: list[OrderRow]) -> TradeRow:
+        """Before the first stop: derive it from the observed average fill when the trade asks
+        for it (the limit-based price was only the worst case for the planned-loss check)."""
+        if trade.stop_percent_below_fill is None or stops:
+            return trade
+        entry = next(o for o in self.orders(trade.trade_id) if o.leg is Leg.ENTRY)
+        if entry.average_fill_price is None:
+            return trade
+        factor = 1 - trade.stop_percent_below_fill / Decimal(100)
+        derived = (entry.average_fill_price * factor).quantize(Decimal("0.01"),
+                                                                rounding=ROUND_DOWN)
+        if not ZERO < derived < entry.average_fill_price or derived == trade.stop_price:
+            return trade
+        with self.store.transaction():
+            self.store.execute("UPDATE trades SET stop_price = ? WHERE trade_id = ?",
+                               (str(derived), trade.trade_id))
+            self.store.append("stop-from-fill", {"fill": entry.average_fill_price,
+                                                 "stop": derived, "bound": trade.stop_price},
+                              key=trade.trade_id, run_id=self.run_id)
+        return self.trade(trade.trade_id)
 
     def _watch_protection(self, trade: TradeRow, exits: list[OrderRow],
                           expected: Decimal) -> None:

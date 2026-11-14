@@ -1,7 +1,8 @@
 """Single-instance lock: an OS file lock held for the whole bot process lifetime.
 
-Liveness is the held lock, never a process-name or pid match: a stale pid file cannot make a
-dead bot look alive, and the OS releases the lock when the process dies.
+Exclusivity is the held lock, never a process-name or pid match: a stale pid file cannot make
+a dead bot look alive to `acquire()`, and the OS releases the lock when the process dies.
+`recorded_holder` reads the pid for display only and never decides anything.
 """
 
 from __future__ import annotations

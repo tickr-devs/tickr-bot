@@ -89,6 +89,10 @@ max_loss_usd = 5
 window_start = "10:00"
 # Latest probe start, New York time HH:MM; read by the probe command.
 window_end = "15:30"
+# Seconds to wait for the probe entry to fill before cancelling it; read by the probe command.
+entry_wait_seconds = 60
+# Seconds to hold a protected probe position before closing it; read by the probe command.
+hold_seconds = 60
 
 [api]
 # Local API bind address; loopback only; read by the api server.

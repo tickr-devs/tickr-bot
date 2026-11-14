@@ -138,3 +138,20 @@ def test_migration_backs_up_existing_database(tmp_path, monkeypatch):
 def test_new_database_needs_no_backup(tmp_path):
     Store.open(tmp_path / "a.sqlite3", busy_timeout_seconds=0).close()
     assert sorted(p.name for p in tmp_path.glob("*.pre-v*")) == []
+
+
+def test_v2_database_gains_the_stop_percent_column(tmp_path):
+    path = tmp_path / "a.sqlite3"
+    db = sqlite3.connect(path, isolation_level=None)
+    for migration in MIGRATIONS[:2]:
+        migration(db)
+    db.execute("PRAGMA user_version = 2")
+    db.execute("INSERT INTO trades(trade_id, run_id, symbol, state, entry_quantity, "
+               "entry_limit_price, stop_price, planned_loss_usd, opened_at) "
+               "VALUES ('t1', 'r', 'ABC', 'open', '1', '10', '9.8', '0.2', 'x')")
+    db.close()
+    s = Store.open(path, busy_timeout_seconds=0)
+    (row,) = s.query("SELECT trade_id, stop_percent_below_fill FROM trades")
+    assert (row["trade_id"], row["stop_percent_below_fill"]) == ("t1", None)
+    assert (tmp_path / "a.pre-v3.sqlite3").exists()
+    s.close()
