@@ -853,13 +853,19 @@ class WebullMarketData:
             found = read_profiles(self._read(Route.PROFILES, {
                 "symbols": ",".join(chunk), "category": self._category}))
             for symbol in chunk:
-                self._types[symbol] = found.get(symbol)
-        return [replace(r, security_type=self._types[r.symbol]) for r in rows]
+                if found.get(symbol) is not None:
+                    self._types[symbol] = found[symbol]
+        # Only stated types are cached; an unknown one is asked again on the next pass.
+        return [replace(r, security_type=self._types.get(r.symbol)) for r in rows]
 
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
         body = self._read(Route.SNAPSHOT, {
             "symbols": ",".join(symbols), "category": self._category})
-        return read_snapshot(body, self._utc_now())
+        quotes = read_snapshot(body, self._utc_now())
+        stray = sorted({q.symbol for q in quotes} - set(symbols))
+        if stray:
+            raise MalformedResponse(f"snapshot: symbols not requested: {', '.join(stray)}")
+        return quotes
 
     def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
         body = self._read(Route.BARS, {

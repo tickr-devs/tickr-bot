@@ -127,6 +127,8 @@ def test_screener_routes_params_and_profile_types():
         ok([screener_row("AAA")]),
         ok([screener_row("NEW")]),
         ok({"data": [{"symbol": "NEW"}]}),
+        ok([screener_row("NEW")]),
+        ok([{"symbol": "NEW", "security_type": "COMMON_STOCK"}]),
     )
     gainers = md.screener(ScreenerKind.GAINERS)
     assert [r.security_type for r in gainers] == ["COMMON_STOCK", "ETF"]
@@ -134,6 +136,8 @@ def test_screener_routes_params_and_profile_types():
     assert losers[0].security_type == "COMMON_STOCK"
     actives = md.screener(ScreenerKind.TOP_ACTIVES)
     assert actives[0].security_type is None  # profile states no type: refused by discovery
+    again = md.screener(ScreenerKind.TOP_ACTIVES)  # unknown is not cached: asked again
+    assert again[0].security_type == "COMMON_STOCK"
     routes = [(r, p) for r, p in transport.sent]
     assert routes[0] == (Route.GAINERS_LOSERS,
                          {"category": "US_STOCK", "rank_type": "DAY_1", "direction": "DESC"})
@@ -141,7 +145,7 @@ def test_screener_routes_params_and_profile_types():
     assert routes[2][1]["direction"] == "ASC"
     assert routes[3] == (Route.TOP_ACTIVES,
                          {"category": "US_STOCK", "rank_type": "RELATIVE_VOLUME_10D"})
-    assert [r for r, _ in routes].count(Route.PROFILES) == 2
+    assert [r for r, _ in routes].count(Route.PROFILES) == 3
 
 
 def test_profile_cache_resets_on_a_new_new_york_day_and_chunks():
@@ -208,6 +212,12 @@ def test_snapshot_request_and_bars_request():
     assert transport.sent[0] == (Route.SNAPSHOT, {"symbols": "AAA,BBB", "category": "US_STOCK"})
     assert transport.sent[1] == (Route.BARS, {"symbols": ["AAA"], "category": "US_STOCK",
                                               "timespan": "M1", "count": "390"})
+
+
+def test_snapshot_refuses_symbols_not_requested():
+    md, _ = adapter(ok([snapshot_row("AAA"), snapshot_row("ZZZ")]))
+    with pytest.raises(MalformedResponse, match="ZZZ"):
+        md.snapshot(["AAA"])
 
 
 def test_read_bars_time_formats():
