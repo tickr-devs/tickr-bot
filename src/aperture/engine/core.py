@@ -92,6 +92,8 @@ _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, Sen
 _WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
 # Cancel states after which a later Detail read decides whether the cancel took.
 _CANCEL_AWAITING = ("sent", "unknown", "refused")
+# A cancel may be in effect: decided, or sent and not yet shown by Detail not to have taken.
+_CANCEL_IN_FLIGHT = ("requested", *_CANCEL_AWAITING)
 
 
 class EntryRefused(Exception):
@@ -135,6 +137,10 @@ class OrderRow:
     @property
     def open_quantity(self) -> Decimal:
         return self.quantity - self.filled_quantity
+
+    @property
+    def cancelling(self) -> bool:
+        return self.cancel_state in _CANCEL_IN_FLIGHT
 
 
 @dataclass(frozen=True)
@@ -186,8 +192,10 @@ def _trade(row: Any) -> TradeRow:
 def _detail_priority(row: OrderRow, poll_seconds: float) -> float:
     """Oldest read attempt first, so no order can starve the others; the class only gives a
     bounded head start of up to three poll intervals: unknown sends, then unverified stops,
-    then entries and exits, then verified stops."""
-    if row.send_state is SendState.UNKNOWN:
+    then entries and exits, then verified stops and rechecks of orders given up on."""
+    if row.send_state is SendState.ABSENT:
+        boost = 0  # a recheck is a fallback: an unexplained position is usually stale Detail
+    elif row.send_state is SendState.UNKNOWN:
         boost = 3
     elif row.leg is Leg.STOP and not row.verified:
         boost = 2
@@ -583,7 +591,6 @@ class Engine:
         held = {p.symbol: p.quantity for p in positions if p.quantity != 0}
 
         self._observe(held)
-        self._find_lost_fills(held)
 
         open_symbols = set()
         for trade in self.trades():
@@ -601,33 +608,47 @@ class Engine:
                 self._clear_fence(Fence.FOREIGN_POSITION, symbol)
 
     def _observe(self, held: dict[str, Decimal]) -> None:
+        """Detail reads within `detail_reads_per_step`, one queue for everything: orders still
+        open, and orders we gave up on in a symbol whose position we cannot explain."""
         due = [o for o in self.orders()
                if o.send_state in (SendState.ACKNOWLEDGED, SendState.UNKNOWN)
                and (o.broker_state is None or not o.broker_state.terminal)]
+        due += self._lost_fill_suspects(held)
         poll = float(self.config.orders.detail_poll_seconds)
         due.sort(key=lambda row: _detail_priority(row, poll))
         for row in due[:self.config.orders.detail_reads_per_step]:
             try:
-                self._refresh(row, held)
+                if row.send_state is SendState.ABSENT:
+                    self._recheck_absent(row)
+                else:
+                    self._refresh(row, held)
             except RateLimited:
                 self._set_fence(Fence.DETAIL_BUDGET, "", "Detail reads refused by the budget")
                 return
         self._clear_fence(Fence.DETAIL_BUDGET)
 
-    def _find_lost_fills(self, held: dict[str, Decimal]) -> None:
-        """A position we cannot explain, in a symbol where we gave up on an order: ask Detail
-        about those orders once more; a fill there means the order existed after all."""
+    def _lost_fill_suspects(self, held: dict[str, Decimal]) -> list[OrderRow]:
+        suspects: list[OrderRow] = []
         for symbol, quantity in held.items():
             if quantity <= self._expected_in(symbol):
                 continue
-            for row in self.orders():
-                if row.symbol != symbol or row.send_state is not SendState.ABSENT:
-                    continue
-                try:
-                    detail = self.broker.order_detail(row.client_order_id)
-                except BrokerError:
-                    continue
-                self._resurrect(row, detail, "order given up on was found with a fill")
+            suspects += [o for o in self.orders()
+                         if o.symbol == symbol and o.send_state is SendState.ABSENT]
+        return suspects
+
+    def _recheck_absent(self, row: OrderRow) -> None:
+        """Ask Detail once more about an order we gave up on; a fill there means it existed
+        after all. RateLimited propagates like any budgeted read."""
+        with self.store.transaction():
+            self.store.execute("UPDATE orders SET last_detail_at = ? WHERE client_order_id = ?",
+                               (self.clock(), row.client_order_id))
+        try:
+            detail = self.broker.order_detail(row.client_order_id)
+        except RateLimited:
+            raise
+        except BrokerError:
+            return
+        self._resurrect(row, detail, "order given up on was found with a fill")
 
     def _advance(self, trade: TradeRow, held: Decimal) -> None:
         orders = self.orders(trade.trade_id)
@@ -671,6 +692,7 @@ class Engine:
         if covered > target:
             self._set_fence(Fence.OVER_PROTECTED, trade.trade_id,
                             f"stops cover {covered}, Detail holds {target}")
+            self._trim_stops(stops, target)
         else:
             self._clear_fence(Fence.OVER_PROTECTED, trade.trade_id)
         if covered >= target:
@@ -691,6 +713,17 @@ class Engine:
                                      OrderType.STOP_LOSS, target - covered,
                                      stop_price=trade.stop_price)
         self._send(cid)
+
+    def _trim_stops(self, stops: list[OrderRow], target: Decimal) -> None:
+        """Cancel whole stops that are not needed, largest first, never going below `target`:
+        a stop for shares we no longer hold could sell short. Stops already being cancelled
+        do not count as kept. An excess no whole stop fits stays fenced (safer than less)."""
+        keep = [s for s in stops if s.live and not s.cancelling]
+        excess = sum((s.open_quantity for s in keep), ZERO) - target
+        for stop in sorted(keep, key=lambda s: s.open_quantity, reverse=True):
+            if ZERO < stop.open_quantity <= excess and stop.send_state is SendState.ACKNOWLEDGED:
+                self._cancel(stop)
+                excess -= stop.open_quantity
 
     def _stop_from_fill(self, trade: TradeRow, stops: list[OrderRow]) -> TradeRow:
         """Before the first stop: derive it from the observed average fill when the trade asks
@@ -747,13 +780,18 @@ class Engine:
             self._protect(trade, stops, max(expected, ZERO))
             return
         live_stops = [s for s in stops if s.live]
-        if live_stops:
-            for stop in live_stops:
-                self._cancel(stop)
+        for stop in live_stops:
+            self._cancel(stop)
+        # Sell only what no live stop still covers: shares whose stop is gone are not left
+        # waiting for a stop that cannot be confirmed cancelled (for example its Detail is
+        # unreadable). Stops plus this sale never exceed the agreed quantity.
+        covered = sum((s.open_quantity for s in live_stops), ZERO)
+        uncovered = expected - covered
+        if uncovered <= 0:
             return
         with self.store.transaction():
             cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
-                                     OrderType.MARKET, expected)
+                                     OrderType.MARKET, uncovered)
         self._send(cid)
 
     def _set_trade_state(self, trade: TradeRow, state: TradeState) -> None:

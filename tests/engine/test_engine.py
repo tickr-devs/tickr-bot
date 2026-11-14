@@ -523,3 +523,88 @@ def test_r1_a_stop_with_unreadable_detail_cannot_starve_the_entry(store):
     run(e, 8)
     assert legs(e, t, Leg.ENTRY)[0].filled_quantity == D(4)
     assert working_stops(b) == D(4)
+
+
+class StuckStop(FakeBroker):
+    """Detail for the stuck orders is never readable and a cancel never takes."""
+
+    stuck: set = set()
+
+    def order_detail(self, cid):
+        from aperture.broker.base import BrokerError
+
+        if cid in self.stuck:
+            raise BrokerError("DETAIL_NOT_VISIBLE")
+        return super().order_detail(cid)
+
+    def cancel(self, cid):
+        if cid in self.stuck:
+            raise OutcomeUnknown("timeout")
+        super().cancel(cid)
+
+
+def test_teardown_sells_only_what_no_live_stop_covers(store):
+    b = StuckStop()
+    b.stuck = set()
+    e = make(store, b)
+    t = enter(e, "3")
+    entry = legs(e, t, Leg.ENTRY)[0].client_order_id
+    b.fill(entry, D(1), D(10))
+    run(e, 2)
+    b.fill(entry, D(2), D(10))
+    run(e, 6)
+    first, second = legs(e, t, Leg.STOP)
+    assert (first.quantity, second.quantity) == (D(1), D(2))
+    b.stuck.add(first.client_order_id)
+    e.request_exit(t, "flatten")
+    run(e, 8)
+    (exit_order,) = legs(e, t, Leg.EXIT)
+    assert exit_order.quantity == D(2)  # the shares whose stop was cancelled
+    b.fill(exit_order.client_order_id, D(2), D(10))
+    run(e, 6)
+    assert len(legs(e, t, Leg.EXIT)) == 1  # nothing more to sell while the stuck stop lives
+    assert b.holdings["ABC"].quantity == D(1)
+    assert working_stops(b) == D(1)  # the stuck stop still protects the rest
+    assert_single_sends(b)
+
+
+def test_excess_stop_is_cancelled_never_below_the_held_quantity(store):
+    b, e, t = opened(store, "2")
+    with store.transaction():
+        extra = e._write_intent(t, Leg.STOP, "ABC", Side.SELL, OrderType.STOP_LOSS, D(1),
+                                stop_price=D("9.80"))
+    e._send(extra)
+    run(e, 4)
+    assert e.order(extra).broker_state is OrderState.CANCELLED
+    assert working_stops(b) == D(2)
+    assert not has(e, Fence.OVER_PROTECTED)
+
+
+def test_lost_fill_rechecks_share_the_detail_budget(store):
+    b = FakeBroker()
+    b.script("unknown")
+    e = make(store, b)
+    t = enter(e)
+    cid = legs(e, t, Leg.ENTRY)[0].client_order_id
+    hidden = b.orders.pop(cid)
+    run(e, CFG.orders.unknown_absent_reads + 1)
+    assert legs(e, t, Leg.ENTRY)[0].send_state is SendState.ABSENT
+    b.add_foreign_position("ABC", D(2), D(10))  # unexplained position, order still hidden
+    reads = []
+    real = b.order_detail
+
+    def counting(c):
+        reads.append(c)
+        return real(c)
+
+    b.order_detail = counting
+    for _ in range(5):
+        before = len(reads)
+        run(e)
+        assert len(reads) - before <= CFG.orders.detail_reads_per_step
+    assert reads  # it is still asked about
+    b.orders[cid] = hidden
+    b.fill(cid, D(2), D(10))
+    b.holdings["ABC"] = Position("ABC", D(2), D(10))
+    run(e, 4)
+    assert has(e, Fence.RESURRECTED)
