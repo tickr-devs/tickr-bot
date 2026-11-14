@@ -171,3 +171,83 @@ def test_market_data_requests_never_carry_the_account_id(env, monkeypatch):
     assert "account_id" not in json.loads(post.body)
     assert json.loads(post.body)["symbols"] == ["AAA"]
     assert ACCOUNT not in get.url and ACCOUNT not in str(post.body)
+
+
+TOKEN = "CANARY-TOKEN-4417"
+CREATE, CHECK = "/auth/tokens/create", "/auth/tokens/check"
+
+
+def token_answer(status: str) -> tuple[int, dict]:
+    return 200, {"token": TOKEN, "expires": 1893456000000, "status": status}
+
+
+def install_token(monkeypatch, create, checks) -> Wire:
+    """Token checking enabled (Production); `create` answers the create call, `checks` the
+    polls of the SDK's wait loop, in order."""
+    wire = install(monkeypatch, {CREATE: [token_answer(create)],
+                                 CHECK: [token_answer(s) for s in checks]})
+    wire.routes["/openapi/config"] = [(200, {"token_check_enabled": True})]
+    return wire
+
+
+@pytest.fixture
+def sdk_clock(monkeypatch):
+    """The SDK's token wait loop runs on a fake clock: no real sleeping in tests."""
+    from webull.core.http.initializer.token import token_manager
+
+    class Clock:
+        now = 0.0
+
+        def time(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    monkeypatch.setattr(token_manager, "time", Clock())
+
+
+def test_pending_token_calls_the_hook_once_before_waiting(env, monkeypatch, sdk_clock, capsys):
+    wire = install_token(monkeypatch, "PENDING", ["PENDING", "NORMAL"])
+    seen_at: list[int] = []
+    SdkTransport(settings(env), lambda: seen_at.append(len(wire.calls)))
+    paths = [urlsplit(c.url).path for c in wire.calls]
+    assert paths.count(CHECK) == 2
+    assert seen_at == [paths.index(CREATE) + 1]  # right after create, before the first check
+    out = capsys.readouterr()
+    assert TOKEN not in out.out + out.err
+
+
+def test_normal_or_disabled_token_does_not_call_the_hook(env, monkeypatch, sdk_clock):
+    calls: list[str] = []
+    install_token(monkeypatch, "NORMAL", [])
+    SdkTransport(settings(env), lambda: calls.append("x"))
+    install(monkeypatch, {})  # token checking disabled (Sandbox)
+    SdkTransport(settings(env), lambda: calls.append("x"))
+    assert calls == []
+
+
+@pytest.mark.parametrize("state", ["INVALID", "EXPIRED"])
+def test_invalid_or_expired_token_is_a_typed_refusal(env, monkeypatch, sdk_clock, state):
+    install_token(monkeypatch, "PENDING", [state])
+    with pytest.raises(AdapterConfigError, match="INVALID/EXPIRED") as refused:
+        SdkTransport(settings(env), lambda: None)
+    assert TOKEN not in str(refused.value)
+
+
+def test_token_not_confirmed_in_time_is_a_typed_refusal(env, monkeypatch, sdk_clock):
+    calls: list[str] = []
+    install_token(monkeypatch, "PENDING", ["PENDING"] * 3)
+    with pytest.raises(AdapterConfigError, match="not confirmed in the Webull app in time"):
+        SdkTransport(settings(env), lambda: calls.append("x"))
+    assert calls == ["x"]
+
+
+def test_a_failing_hook_never_stops_token_creation(env, monkeypatch, sdk_clock, capsys):
+    install_token(monkeypatch, "PENDING", ["PENDING", "NORMAL"])
+
+    def hook():
+        raise OSError("notifier down")
+
+    SdkTransport(settings(env), hook)  # no exception: the token still becomes usable
+    assert "token-pending alert failed (OSError)" in capsys.readouterr().err

@@ -51,7 +51,7 @@ class Rehearsal:
         self.bot_toml = tmp_path / "config" / "bot.toml"
         self.world = World(ny(DAY, start))
         self.notifier = Notifier(self.world)
-        monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+        monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
             self.world.exchange, self.world.feed, self._stream_start, self._stream_stop))
         monkeypatch.setattr(cli, "NOW", self.world.clock)
         monkeypatch.setattr(cli, "SLEEP", self.world.sleep)

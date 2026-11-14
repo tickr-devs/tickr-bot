@@ -157,3 +157,8 @@ class Alerter:
             return AlertOutcome(kind, text, now, Delivery.FAILED, str(exc))
         self._last_shown[key] = now
         return AlertOutcome(kind, text, now, Delivery.SHOWN, None)
+
+
+def token_pending_text(wait_seconds: int) -> str:
+    """Text of the TOKEN_NEEDS_CONFIRMATION alert: the SDK now waits for the owner."""
+    return f"approve the API token in the Webull app within {wait_seconds} s"

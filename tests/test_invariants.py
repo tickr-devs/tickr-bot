@@ -375,7 +375,7 @@ def test_no_credential_value_reaches_output_logs_files_or_the_database(
     market.set_screener(ScreenerKind.TOP_ACTIVES, [ScreenerRow(
         ScreenerKind.TOP_ACTIVES, 1, "id-ABC", "ABC", "NSQ", "USD", "COMMON_STOCK",
         {"symbol": "ABC", "close": "10.00"})])
-    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda c, on_error: cli.RunAdapters(
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda c, on_error, on_token: cli.RunAdapters(
         broker_from_config(c), market, lambda: None, lambda: None))
     sleeps = [0]
 
@@ -458,7 +458,7 @@ def test_without_a_valid_authorization_no_path_sends_a_trading_request(
     assert cli.main(["--config", str(bot_toml), "trade", "ABC", "--limit", "10.00"]) == 3
 
     # The bot service: protects and reads, never trades.
-    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda c, on_error: cli.RunAdapters(
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda c, on_error, on_token: cli.RunAdapters(
         broker_from_config(c), FakeMarketData(), lambda: None, lambda: None))
     monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
     assert cli.main(["--config", str(bot_toml), "run"]) == 0

@@ -167,9 +167,51 @@ def test_drain_deadline_after_supervisor_alert_is_invalid_config(config_path):
     assert "shutdown_deadline_seconds" in result.summary()
 
 
+def _probe(answer: str | None, calls: list[str]):
+    def probe(cfg: config_module.Config) -> str | None:
+        calls.append(cfg.environment_name)
+        return answer
+    return probe
+
+
+def test_usable_token_is_the_last_check(config_path):
+    calls: list[str] = []
+    result = run_preflight(config_path, now=MONDAY, environ=_ready(config_path),
+                           disk_free=lambda _: PLENTY, token_probe=_probe(None, calls))
+    assert result.exit_code is ExitCode.READY and len(calls) == 1
+    assert result.checks[-1].name.value == "token" and result.checks[-1].passed
+
+
+def test_unusable_token_fails_with_its_cause(config_path):
+    cause = "token initialisation failed: token check failed or token INVALID/EXPIRED"
+    result = run_preflight(config_path, now=MONDAY, environ=_ready(config_path),
+                           disk_free=lambda _: PLENTY, token_probe=_probe(cause, []))
+    assert result.exit_code is ExitCode.FAILED
+    assert result.cause is PreflightCause.TOKEN_UNUSABLE
+    assert result.summary() == f"token: {cause}"
+
+
+@pytest.mark.parametrize("now", [SATURDAY, MONDAY])
+def test_token_is_not_probed_without_a_session_or_after_a_failure(config_path, now):
+    calls: list[str] = []
+    environ = _ready(config_path) if now is SATURDAY else {}  # MONDAY: credentials missing
+    result = run_preflight(config_path, now=now, environ=environ,
+                           disk_free=lambda _: PLENTY, token_probe=_probe(None, calls))
+    assert calls == [] and "token" not in [c.name.value for c in result.checks]
+
+
 @pytest.mark.parametrize("kind", ["missing", "text", "bool", "negative", "raises"])
 def test_misbehaving_strategy_is_refused_never_crashes(config_path, break_strategy, kind):
     break_strategy(kind)
     result = _run(config_path, _ready(config_path))
     assert result.cause is PreflightCause.STRATEGY_REFUSED
     assert not result.blocks_start
+
+
+def test_token_is_probed_when_only_the_strategy_is_refused(config_path, break_strategy):
+    break_strategy("raises")
+    calls: list[str] = []
+    result = run_preflight(config_path, now=MONDAY, environ=_ready(config_path),
+                           disk_free=lambda _: PLENTY, token_probe=_probe(None, calls))
+    assert result.cause is PreflightCause.STRATEGY_REFUSED and not result.blocks_start
+    assert len(calls) == 1 and result.checks[-1].name.value == "token"

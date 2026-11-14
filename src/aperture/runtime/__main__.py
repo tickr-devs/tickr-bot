@@ -1,6 +1,7 @@
 """`python -m aperture.runtime <command>`: the commands the launchd jobs run.
 
-- `preflight`: run the checks, print the result as one JSON line, alert on failure.
+- `preflight`: run the checks, print the result as one JSON line, alert on failure. The last
+  check makes the Webull token usable and alerts token-needs-confirmation while it waits.
 - `run-bot -- <bot command...>`: preflight again (a failure alerts "bot did not start"), then
   run the bot under supervision; alert if it crashes. Never relaunches.
 - `alert <kind> <text>`: show one alert (used to test notifications on the Mac).
@@ -23,9 +24,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from aperture import config as config_module
+from aperture.broker.base import BrokerError
 from aperture.runtime import launchd
-from aperture.runtime.alerts import Alerter, AlertKind, default_notifier
-from aperture.runtime.preflight import ExitCode, PreflightResult, run_preflight
+from aperture.runtime.alerts import Alerter, AlertKind, default_notifier, token_pending_text
+from aperture.runtime.preflight import ExitCode, PreflightResult, TokenProbe, run_preflight
 from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
 from aperture.runtime.supervisor import supervise
 
@@ -58,8 +60,34 @@ def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: st
     _emit("alert", outcome.journal_body())
 
 
+def _token_probe(config_path: Path) -> TokenProbe:
+    """Preflight check 6 over the Webull adapter: alerts token-needs-confirmation when the SDK
+    starts waiting for the owner; returns the cause when the token is not usable."""
+    def probe(cfg: config_module.Config) -> str | None:
+        wait = cfg.environment.token_check_duration_seconds
+
+        def pending() -> None:
+            _alert(config_path, cfg.environment_name, AlertKind.TOKEN_NEEDS_CONFIRMATION,
+                   token_pending_text(wait))
+
+        try:
+            from aperture.broker.webull import check_token  # optional dependency
+            check_token(cfg, pending)
+        except BrokerError as exc:  # AdapterConfigError: names and causes only, no values
+            return str(exc)
+        except Exception as exc:  # noqa: BLE001 - no usable token; the type is the cause
+            return type(exc).__name__
+        return None
+    return probe
+
+
+# Replaced in tests: builds the preflight token probe for a config path.
+TOKEN_PROBE = _token_probe
+
+
 def _preflight(config_path: Path, failure: AlertKind) -> PreflightResult:
-    result = run_preflight(config_path, now=datetime.now(UTC), environ=os.environ)
+    result = run_preflight(config_path, now=datetime.now(UTC), environ=os.environ,
+                           token_probe=TOKEN_PROBE(config_path))
     _emit("preflight", result.journal_body())
     if result.cause is not None:
         # A refused strategy alone does not stop the bot job: say "preflight failed", not

@@ -97,3 +97,29 @@ def test_render_launchd(config_path, repo, tmp_path, capsys):
     assert main(["--config", str(config_path), "render-launchd", "--python", "/x/python",
                  "--env-file", "/x/env", "--log-dir", "/x/logs", "--out", str(out)]) == 0
     assert len(list(out.glob("*.plist"))) == 3
+
+
+def test_token_probe_alerts_when_the_token_waits_for_the_owner(config_path, monkeypatch, capsys):
+    from aperture.broker import webull
+
+    cfg = config_module.load(config_path)
+    monkeypatch.setattr(webull, "check_token", lambda cfg, on_token_pending: on_token_pending())
+    assert runtime_main.TOKEN_PROBE(config_path)(cfg) is None
+    (alert,) = _records(capsys.readouterr().out)
+    assert alert["record"] == "alert" and alert["kind"] == "token-needs-confirmation"
+    assert str(cfg.environment.token_check_duration_seconds) in alert["text"]
+
+
+def test_token_probe_returns_the_refusal_cause(config_path, monkeypatch, capsys):
+    from aperture.broker import webull
+
+    def refuse(cfg, on_token_pending):
+        raise webull.AdapterConfigError("token initialisation failed: token create failed")
+
+    monkeypatch.setattr(webull, "check_token", refuse)
+    probe = runtime_main.TOKEN_PROBE(config_path)
+    cause = probe(config_module.load(config_path))
+    assert cause == "token initialisation failed: token create failed"
+    monkeypatch.setattr(webull, "check_token", lambda cfg, hook: 1 / 0)
+    assert probe(config_module.load(config_path)) == "ZeroDivisionError"
+    assert _records(capsys.readouterr().out) == []

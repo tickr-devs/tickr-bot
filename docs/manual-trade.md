@@ -25,8 +25,10 @@ aperture check-config        # must print "trading gate: open"
 ```
 
 The first command that talks to Webull may wait up to `token_check_duration_seconds` (300 s) for
-you to approve the new token in the Webull app; the token is then kept in
-`data/webull-token-sandbox/`.
+you to approve the new token in the Webull app. When it waits, it prints
+`waiting: approve the API token in the Webull app within 300 s` on stderr first. The token is
+then kept in `data/webull-token-sandbox/`. A token Webull reports INVALID or EXPIRED, or one not
+approved in time, stops the command with `token initialisation failed: <cause>`.
 
 This manual path sends no notifications: everything it has to tell you is printed to the
 terminal (errors and "needs the operator" lines on stderr). Keep the terminal visible.

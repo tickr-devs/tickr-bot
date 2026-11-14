@@ -11,7 +11,10 @@ Checks, all reported, the first failure is the single cause:
 5. broker token folder present;
 6. active strategy builds from its file and `[market_data] history_sessions` covers the prior
    sessions it needs. A failure here is reported but does not stop the bot from starting: the
-   bot then protects positions with entries off (`blocks_start`).
+   bot then protects positions with entries off (`blocks_start`);
+7. broker token usable: only when no earlier check blocks the start and today has a session,
+   the caller's `token_probe` creates or checks the Webull token, which may wait for the
+   owner's confirmation in the app (the probe alerts token-needs-confirmation before it waits).
 
 Exit codes: 0 ready, 1 failed, 2 config invalid, 3 no session today.
 """
@@ -52,6 +55,7 @@ class PreflightCause(StrEnum):
     CALENDAR_UNKNOWN = "calendar-unknown"
     CREDENTIALS_MISSING = "credentials-missing"
     TOKEN_DIR_MISSING = "token-dir-missing"
+    TOKEN_UNUSABLE = "token-unusable"
     STRATEGY_REFUSED = "strategy-refused"
 
 
@@ -61,6 +65,7 @@ class CheckName(StrEnum):
     CALENDAR = "calendar"
     CREDENTIALS = "credentials"
     TOKEN_DIR = "token-dir"
+    TOKEN = "token"
     STRATEGY = "strategy"
 
 
@@ -122,6 +127,8 @@ class PreflightResult:
 
 
 DiskFree = Callable[[Path], int]
+# Makes the broker token usable; returns None, or the cause it is not usable.
+TokenProbe = Callable[[config_module.Config], str | None]
 
 
 def _disk_free(path: Path) -> int:
@@ -212,8 +219,10 @@ def run_preflight(
     now: datetime,
     environ: Mapping[str, str],
     disk_free: DiskFree = _disk_free,
+    token_probe: TokenProbe | None = None,
 ) -> PreflightResult:
-    """Run every check. `now` must be timezone-aware; `environ` is usually os.environ."""
+    """Run every check. `now` must be timezone-aware; `environ` is usually os.environ.
+    Without `token_probe` the token check is not run."""
     cfg, config_check = _load_config(config_path)
     if cfg is None:
         return PreflightResult((config_check,), session_today=False, environment=None, config=None)
@@ -221,4 +230,10 @@ def run_preflight(
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, disk, calendar, _check_credentials(cfg, environ),
               _check_token_dir(cfg), _check_strategy(cfg))
+    blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED
+                   for c in checks)
+    if token_probe is not None and session_today and not blocking:
+        cause = token_probe(cfg)
+        checks += (Check(CheckName.TOKEN, True, "usable") if cause is None else
+                   Check(CheckName.TOKEN, False, cause, PreflightCause.TOKEN_UNUSABLE),)
     return PreflightResult(checks, session_today, cfg.environment_name, cfg)

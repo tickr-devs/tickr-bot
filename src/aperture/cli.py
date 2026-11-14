@@ -79,7 +79,13 @@ def _status(path: Path) -> int:
 
 def _webull_broker(cfg: config_module.Config) -> Broker:
     from aperture.broker.webull import broker_from_config  # optional dependency
-    return broker_from_config(cfg)
+    from aperture.runtime.alerts import token_pending_text
+
+    def token_pending() -> None:
+        wait = cfg.environment.token_check_duration_seconds
+        print(f"waiting: {token_pending_text(wait)}", file=sys.stderr, flush=True)
+
+    return broker_from_config(cfg, on_token_pending=token_pending)
 
 
 @dataclass(frozen=True)
@@ -93,15 +99,16 @@ class RunAdapters:
 
 
 def _webull_run_adapters(cfg: config_module.Config,
-                         on_stream_error: Callable[[str, Exception], None]) -> RunAdapters:
+                         on_stream_error: Callable[[str, Exception], None],
+                         on_token_pending: Callable[[], None]) -> RunAdapters:
     from aperture.broker.webull import bot_adapters  # optional dependency
-    broker, market, stream = bot_adapters(cfg, on_stream_error)
+    broker, market, stream = bot_adapters(cfg, on_stream_error, on_token_pending)
     return RunAdapters(broker, market, stream.start, stream.stop)
 
 
-# Replaced in tests with fakes.
-RUN_ADAPTERS: Callable[[config_module.Config, Callable[[str, Exception], None]],
-                       RunAdapters] = _webull_run_adapters
+# Replaced in tests with fakes. Arguments: config, stream error sink, token-pending hook.
+RUN_ADAPTERS: Callable[[config_module.Config, Callable[[str, Exception], None],
+                        Callable[[], None]], RunAdapters] = _webull_run_adapters
 
 
 def _default_notifier(alerts: config_module.AlertsConfig) -> Any:
@@ -286,10 +293,10 @@ def _run(path: Path) -> int:
     from aperture.data.health import StreamHealth
     from aperture.observers.errors import ObserverError
     from aperture.runtime import service
-    from aperture.runtime.alerts import Alerter, AlertKind
+    from aperture.runtime.alerts import Alerter, AlertKind, token_pending_text
     from aperture.runtime.market import MarketRuntime, StreamInbox
     from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
-    from aperture.runtime.watch import Watch
+    from aperture.runtime.watch import ALERT, Watch
 
     cfg = config_module.load(path)
     strategy = service.strategy_id(cfg)
@@ -308,12 +315,19 @@ def _run(path: Path) -> int:
         capture: CaptureWriter | None = None
         observers: ObserverSet | None = None
         try:
-            adapters = RUN_ADAPTERS(cfg, inbox.on_error)
+            alerter = Alerter(cfg.alerts, f"Aperture {cfg.environment_name}",
+                              NOTIFIER(cfg.alerts), clock=NOW)
+
+            def token_pending() -> None:  # before the SDK waits for the owner (no engine yet)
+                outcome = alerter.alert(AlertKind.TOKEN_NEEDS_CONFIRMATION, token_pending_text(
+                    cfg.environment.token_check_duration_seconds))
+                with store.transaction():
+                    store.append(ALERT, outcome.journal_body(), run_id=run_id)
+
+            adapters = RUN_ADAPTERS(cfg, inbox.on_error, token_pending)
             engine = Engine(store, adapters.broker, cfg, run_id,
                             lambda: config_module.trading_gate(cfg),
                             clock=lambda: NOW().timestamp())
-            alerter = Alerter(cfg.alerts, f"Aperture {cfg.environment_name}",
-                              NOTIFIER(cfg.alerts), clock=NOW)
             calendar = service.load_calendar(cfg)
             capture = CaptureWriter.from_config(cfg, adapters.market.provider)
             market = MarketRuntime(engine, cfg, adapters.market,

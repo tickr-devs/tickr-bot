@@ -285,7 +285,7 @@ def test_cli_run_stops_on_sigterm(tmp_path, monkeypatch):
     broker = FakeBroker()
     market = FakeMarketData()
     started = []
-    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
         broker, market, lambda: started.append("start"), lambda: started.append("stop")))
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
     sleeps = [0]
@@ -314,7 +314,7 @@ def test_cli_run_without_a_loadable_strategy_protects_but_never_enters(tmp_path,
     strategy_toml = tmp_path / "strategies" / CFG.strategy.active / "strategy.toml"
     strategy_toml.write_text(strategy_toml.read_text().replace(
         "relative_volume_sessions = 5", "relative_volume_sessions = -5"))
-    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
         FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
     monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
@@ -330,7 +330,7 @@ def test_cli_run_with_too_little_history_protects_but_never_enters(tmp_path, mon
     bot_toml = copy_config(tmp_path)
     bot_toml.write_text(bot_toml.read_text().replace("history_sessions = 5",
                                                      "history_sessions = 4", 1))
-    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
         FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
     monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
@@ -346,7 +346,7 @@ def test_cli_run_with_a_broken_observer_keeps_entries_on(tmp_path, monkeypatch):
     bot_toml = copy_config(tmp_path)
     bot_toml.write_text(bot_toml.read_text().replace("observers = []",
                                                      'observers = ["missing-folder"]', 1))
-    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
         FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
     monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
@@ -357,6 +357,27 @@ def test_cli_run_with_a_broken_observer_keeps_entries_on(tmp_path, monkeypatch):
     assert "missing-folder" in row.body["cause"]
     assert store.journal(service.STRATEGY_NOT_LOADED) == []
     assert [a.body["kind"] for a in store.journal("alert")] == ["observers-stopped"]
+    store.close()
+
+
+def test_cli_run_alerts_and_journals_a_pending_token(tmp_path, monkeypatch):
+    bot_toml = copy_config(tmp_path)
+
+    def adapters(cfg, on_error, on_token_pending):
+        on_token_pending()  # what the SDK transport does before it waits for the owner
+        return cli.RunAdapters(FakeBroker(), FakeMarketData(), lambda: None, lambda: None)
+
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", adapters)
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    cfg = config.load(bot_toml)
+    database, _ = cli.data_paths(cfg)
+    store = Store.open(database, busy_timeout_seconds=0)
+    (row,) = store.journal("alert")
+    assert row.body["kind"] == "token-needs-confirmation"
+    assert str(cfg.environment.token_check_duration_seconds) in row.body["text"]
+    assert row.run_id == store.last_run()["run_id"]
     store.close()
 
 
@@ -425,7 +446,7 @@ def test_cli_run_with_a_misbehaving_strategy_protects_but_never_enters(tmp_path,
                                                                        break_strategy, kind):
     bot_toml = copy_config(tmp_path)
     break_strategy(kind)
-    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
         FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
     monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
