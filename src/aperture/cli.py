@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 from aperture import config as config_module
 from aperture.broker.base import Broker
 from aperture.calendar import CalendarRefused, SessionCalendar
+from aperture.data.base import MarketData
 from aperture.engine.core import Engine, EntryRefused
 from aperture.engine.manual import (
     ManualRefused,
@@ -75,6 +77,26 @@ def _webull_broker(cfg: config_module.Config) -> Broker:
     return broker_from_config(cfg)
 
 
+@dataclass(frozen=True)
+class RunAdapters:
+    """What `aperture run` talks to: the broker, market data, and the L1 stream's lifecycle."""
+
+    broker: Broker
+    market: MarketData
+    start_stream: Callable[[], None]
+    stop_stream: Callable[[], None]
+
+
+def _webull_run_adapters(cfg: config_module.Config,
+                         on_stream_error: Callable[[str, Exception], None]) -> RunAdapters:
+    from aperture.broker.webull import bot_adapters  # optional dependency
+    broker, market, stream = bot_adapters(cfg, on_stream_error)
+    return RunAdapters(broker, market, stream.start, stream.stop)
+
+
+# Replaced in tests with fakes.
+RUN_ADAPTERS: Callable[[config_module.Config, Callable[[str, Exception], None]],
+                       RunAdapters] = _webull_run_adapters
 # Replaced in tests with a FakeBroker factory.
 BROKER_FACTORY: Callable[[config_module.Config], Broker] = _webull_broker
 NOW: Callable[[], datetime] = lambda: datetime.now(UTC)  # noqa: E731
@@ -200,7 +222,10 @@ def _clear_fence(args: argparse.Namespace) -> int:
 def _run(path: Path) -> int:
     """The launchd bot job (via `aperture.runtime run-bot`): run until SIGTERM, then drain.
     Exit 0 after a clean drain, 5 when the drain hit its deadline."""
+    from aperture.data.capture import CaptureWriter
+    from aperture.data.health import StreamHealth
     from aperture.runtime import service
+    from aperture.runtime.market import MarketRuntime, StreamInbox
     from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
 
     cfg = config_module.load(path)
@@ -214,18 +239,38 @@ def _run(path: Path) -> int:
         stop = StopRequest()
         previous = install_stop_handler(stop)
         cause = "crashed"
+        inbox = StreamInbox()
+        adapters: RunAdapters | None = None
+        capture: CaptureWriter | None = None
         try:
-            engine = Engine(store, BROKER_FACTORY(cfg), cfg, run_id,
+            adapters = RUN_ADAPTERS(cfg, inbox.on_error)
+            engine = Engine(store, adapters.broker, cfg, run_id,
                             lambda: config_module.trading_gate(cfg))
-            bot = service.Service(engine, now=NOW, calendar=service.load_calendar(cfg),
-                                  strategy=strategy,
-                                  paths=service.ServicePaths.from_config(cfg))
+            calendar = service.load_calendar(cfg)
+            capture = CaptureWriter.from_config(cfg, adapters.market.provider)
+            market = MarketRuntime(engine, cfg, adapters.market,
+                                   health=StreamHealth.from_config(cfg), inbox=inbox,
+                                   capture=capture, calendar=calendar, now=NOW,
+                                   monotonic=time.monotonic)
+            bot = service.Service(engine, now=NOW, calendar=calendar, strategy=strategy,
+                                  paths=service.ServicePaths.from_config(cfg), market=market)
+            market.bind()
+            adapters.start_stream()
             clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP)
             cause = f"stopped ({stop.signal_name})" if clean else "shutdown-deadline"
         finally:
-            restore_handlers(previous)
-            store.end_run(run_id, cause)
-            store.close()
+            # Each step guarded: a failing SDK disconnect must not skip recording the run end.
+            for step in ((adapters.stop_stream if adapters is not None else None),
+                         (capture.close if capture is not None else None),
+                         lambda: restore_handlers(previous),
+                         lambda: store.end_run(run_id, cause),
+                         store.close):
+                if step is None:
+                    continue
+                try:
+                    step()
+                except Exception as exc:  # noqa: BLE001 - finish the remaining steps
+                    print(f"shutdown step failed: {type(exc).__name__}", file=sys.stderr)
     if not clean:
         print("shutdown deadline reached with work pending: check orders and position in the "
               "Webull app, then `aperture status`", file=sys.stderr)

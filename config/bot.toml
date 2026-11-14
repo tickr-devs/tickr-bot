@@ -121,6 +121,9 @@ status_recent_commands = 10
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).
 discovery_interval_seconds = 60
+# Seconds the L1 transport may stay down with a position open, in the regular session, before the position is closed
+# through the normal exit path (spec 6: stream loss with a position = market exit); read by runtime.market.
+stream_lost_exit_seconds = 30
 # Exchange codes allowed in discovery: US exchanges (owner 2026-10-16; Webull `exchange_code`; probe M1 saw NYSE as "NYSE",
 # Nasdaq as "NSQ"/"NMS", NYSE Arca as "PSE"). ETFs and warrants are excluded by security type below, never by exchange,
 # so Arca-listed common stocks pass. The issuer's country is not filtered, so US-listed foreign companies (ADRs) pass;

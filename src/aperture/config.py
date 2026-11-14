@@ -102,6 +102,7 @@ class ApiConfig:
 @dataclass(frozen=True)
 class MarketDataConfig:
     discovery_interval_seconds: Decimal
+    stream_lost_exit_seconds: Decimal
     allowed_exchanges: tuple[str, ...]
     allowed_currencies: tuple[str, ...]
     screener_category: str

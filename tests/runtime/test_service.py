@@ -13,6 +13,7 @@ from aperture.api import contract as api
 from aperture.broker.fake import FakeBroker
 from aperture.calendar import NEW_YORK, SessionCalendar
 from aperture.config import GateResult
+from aperture.data.base import FakeMarketData
 from aperture.engine.core import Engine, Fence, TradeState
 from aperture.runtime import service
 from aperture.store import Store
@@ -238,7 +239,10 @@ def copy_config(tmp_path: Path) -> Path:
 def test_cli_run_stops_on_sigterm(tmp_path, monkeypatch):
     bot_toml = copy_config(tmp_path)
     broker = FakeBroker()
-    monkeypatch.setattr(cli, "BROKER_FACTORY", lambda cfg: broker)
+    market = FakeMarketData()
+    started = []
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+        broker, market, lambda: started.append("start"), lambda: started.append("stop")))
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
     sleeps = [0]
 
@@ -251,6 +255,7 @@ def test_cli_run_stops_on_sigterm(tmp_path, monkeypatch):
     previous = signal.getsignal(signal.SIGTERM)
     assert cli.main(["--config", str(bot_toml), "run"]) == 0
     assert signal.getsignal(signal.SIGTERM) == previous
+    assert started == ["start", "stop"]
     cfg = config.load(bot_toml)
     paths = service.ServicePaths.from_config(cfg)
     assert api.read_status(paths.status).bot_state is api.BotState.STOPPED
