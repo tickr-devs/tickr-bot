@@ -197,41 +197,63 @@ class ExportResult:
     revised: int
 
 
-def export_replay_bars(captured: Path, out: Path) -> ExportResult:
-    """Write the bars of a captured bars.jsonl in the replay format, one bar per (symbol, start).
+@dataclass(frozen=True)
+class CapturedBars:
+    """The bars of a captured bars.jsonl, one per (symbol, start): the last version received."""
 
-    Identical repeats (for example after a restart) are dropped. When the provider revised a bar,
-    the last received version is kept and counted in `revised`. Output is ordered by symbol, then
-    start, so the replay tool's strictly-increasing rule holds. Malformed lines raise
-    `CaptureError` naming the line.
+    bars: dict[tuple[str, datetime], Bar]
+    duplicates: int
+    revised: int
+
+
+def read_captured_bars(captured: Path, *, open_tail: bool = False) -> CapturedBars:
+    """Read a captured bars.jsonl, keeping one bar per (symbol, start).
+
+    Identical repeats (for example after a restart) are counted in `duplicates`. When the
+    provider revised a bar, the last received version is kept and counted in `revised`.
+    Malformed lines raise `CaptureError` naming the line. With `open_tail` (a file the bot may
+    be appending to right now), a last line without its newline is not read yet; anywhere else
+    it is read and refused like any other malformed line.
     """
-    latest: dict[tuple[str, datetime], tuple[Bar, dict[str, str]]] = {}
+    latest: dict[tuple[str, datetime], Bar] = {}
     duplicates = revised = 0
     with open(captured, encoding="utf-8") as handle:
-        for number, text in enumerate(handle, start=1):
-            if not text.strip():
-                continue
-            try:
-                record = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise CaptureError(f"{captured}:{number}: invalid JSON: {exc.msg}") from exc
-            if not isinstance(record, dict) or set(record) != BAR_KEYS | CAPTURE_KEYS:
-                raise CaptureError(f"{captured}:{number}: not a captured bar record")
-            bar_only = {k: record[k] for k in BAR_KEYS}
-            try:
-                bar = parse_bar(str(captured), number, json.dumps(bar_only))
-            except BarFileError as exc:
-                raise CaptureError(str(exc)) from exc
-            key = (bar.symbol, bar.start)
-            previous = latest.get(key)
-            if previous is not None:
-                if previous[0] == bar:
-                    duplicates += 1
-                else:
-                    revised += 1
-            latest[key] = (bar, bar_record(bar))
+        lines = handle.readlines()
+    if open_tail and lines and not lines[-1].endswith("\n"):
+        lines.pop()
+    for number, text in enumerate(lines, start=1):
+        if not text.strip():
+            continue
+        try:
+            record = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise CaptureError(f"{captured}:{number}: invalid JSON: {exc.msg}") from exc
+        if not isinstance(record, dict) or set(record) != BAR_KEYS | CAPTURE_KEYS:
+            raise CaptureError(f"{captured}:{number}: not a captured bar record")
+        bar_only = {k: record[k] for k in BAR_KEYS}
+        try:
+            bar = parse_bar(str(captured), number, json.dumps(bar_only))
+        except BarFileError as exc:
+            raise CaptureError(str(exc)) from exc
+        key = (bar.symbol, bar.start)
+        previous = latest.get(key)
+        if previous is not None:
+            if previous == bar:
+                duplicates += 1
+            else:
+                revised += 1
+        latest[key] = bar
+    return CapturedBars(latest, duplicates, revised)
+
+
+def export_replay_bars(captured: Path, out: Path) -> ExportResult:
+    """Write the bars of a captured bars.jsonl in the replay format, one bar per (symbol, start)
+    (see `read_captured_bars`). Output is ordered by symbol, then start, so the replay tool's
+    strictly-increasing rule holds."""
+    read = read_captured_bars(captured)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:
-        for key in sorted(latest):
-            handle.write(json.dumps(latest[key][1], separators=(",", ":"), sort_keys=True) + "\n")
-    return ExportResult(len(latest), duplicates, revised)
+        for key in sorted(read.bars):
+            handle.write(json.dumps(bar_record(read.bars[key]), separators=(",", ":"),
+                                    sort_keys=True) + "\n")
+    return ExportResult(len(read.bars), read.duplicates, read.revised)

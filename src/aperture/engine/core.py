@@ -167,7 +167,7 @@ def _dec(value: Any) -> Decimal | None:
     return None if value is None else Decimal(value)
 
 
-def _order(row: Any) -> OrderRow:
+def order_from_row(row: Any) -> OrderRow:
     return OrderRow(
         client_order_id=row["client_order_id"], trade_id=row["trade_id"], leg=Leg(row["leg"]),
         symbol=row["symbol"], side=Side(row["side"]), order_type=OrderType(row["order_type"]),
@@ -341,10 +341,10 @@ class Engine:
         else:
             rows = self.store.query("SELECT * FROM orders WHERE trade_id = ? ORDER BY rowid",
                                     (trade_id,))
-        return [_order(r) for r in rows]
+        return [order_from_row(r) for r in rows]
 
     def order(self, client_order_id: str) -> OrderRow:
-        return _order(self.store.query("SELECT * FROM orders WHERE client_order_id = ?",
+        return order_from_row(self.store.query("SELECT * FROM orders WHERE client_order_id = ?",
                                        (client_order_id,))[0])
 
     @staticmethod

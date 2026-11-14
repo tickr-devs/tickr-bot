@@ -16,11 +16,12 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from aperture.api import contract
 from aperture.api.contract import (
@@ -31,6 +32,8 @@ from aperture.api.contract import (
     PendingCommandsV1,
     StatusResponseV1,
 )
+from aperture.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
+from aperture.calendar import ny_date_of
 from aperture.config import Config, ConfigError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -55,6 +58,7 @@ class ApiSettings:
     poll_seconds: Decimal
     max_request_body_bytes: int
     max_pending_commands: int
+    history: HistoryPaths
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -78,6 +82,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         poll_seconds=api.poll_seconds,
         max_request_body_bytes=api.max_request_body_bytes,
         max_pending_commands=api.max_pending_commands,
+        history=HistoryPaths.from_config(cfg),
     )
 
 
@@ -93,6 +98,7 @@ class ApiServer(ThreadingHTTPServer):
         self.clock = clock
         self.inbox_lock = threading.Lock()
         self.page = (STATIC_DIR / "status.html").read_bytes()
+        self.history = History(settings.history)
         super().__init__((settings.host, settings.port), Handler)
 
     @property
@@ -149,8 +155,42 @@ _ERROR_CODES = {
     "forbidden_host": 403, "forbidden_origin": 403, "not_found": 404,
     "method_not_allowed": 405, "length_required": 411, "payload_too_large": 413,
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
-    "internal": 500,
+    "internal": 500, "unavailable": 503,
 }
+GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars")
+DAY_PREFIX = "/days/"
+
+
+class BadQuery(ValueError):
+    """The query string is not exactly what the route takes; the message is the cause."""
+
+
+def _query(raw: str, names: frozenset[str]) -> dict[str, str]:
+    """Exactly the parameters `names`, each once and non-empty; anything else is refused."""
+    try:
+        pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=bool(raw))
+    except ValueError as exc:
+        raise BadQuery(f"malformed query string: {exc}") from exc
+    found: dict[str, str] = {}
+    for name, value in pairs:
+        if name not in names:
+            raise BadQuery(f"unknown query parameter {name!r}")
+        if name in found:
+            raise BadQuery(f"query parameter {name!r} given twice")
+        if not value:
+            raise BadQuery(f"query parameter {name!r} is empty")
+        found[name] = value
+    missing = sorted(names - set(found))
+    if missing:
+        raise BadQuery(f"missing query parameters: {', '.join(missing)}")
+    return found
+
+
+def _day(text: str) -> date:
+    try:
+        return contract.parse_date(text)
+    except ContractError as exc:
+        raise BadQuery(str(exc)) from exc
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -222,6 +262,8 @@ class Handler(BaseHTTPRequestHandler):
                                  for name, cls in contract.SCHEMA_TYPES.items()})
             elif path in COMMAND_ROUTES:
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
+            elif path == "/days" or path.startswith(DAY_PREFIX) or path == "/bars":
+                self._history(path)
             else:
                 self._error("not_found", f"no resource {path!r}")
         except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
@@ -233,7 +275,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = self._path()
             if path not in COMMAND_ROUTES:
-                if path in ("/", "/status", "/commands/pending", "/schema"):
+                if path in GET_ROUTES or path.startswith(DAY_PREFIX):
                     self._error("method_not_allowed", "use GET", {"Allow": "GET"})
                 else:
                     self._error("not_found", f"no resource {path!r}")
@@ -258,6 +300,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(202, result)
         except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
             self._error("internal", type(exc).__name__)
+
+    def _history(self, path: str) -> None:
+        """GET /days, /days/<YYYY-MM-DD>, /bars?symbol=&date=: read-only history."""
+        history = self.server.history
+        today = ny_date_of(self.server.clock())
+        query = urlsplit(self.path).query
+        try:
+            if path == "/days":
+                _query(query, frozenset())
+                document: Any = history.days()
+            elif path == "/bars":
+                params = _query(query, frozenset({"symbol", "date"}))
+                if not SYMBOL_PATTERN.match(params["symbol"]):
+                    raise BadQuery(f"symbol {params['symbol']!r} is not a ticker")
+                document = history.bars(params["symbol"], _day(params["date"]), today)
+            else:
+                _query(query, frozenset())
+                document = history.day(_day(path[len(DAY_PREFIX):]), today)
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        except HistoryUnavailable as exc:
+            self._error("unavailable", str(exc))
+            return
+        self._json(200, document)
 
     def _read_json_body(self) -> dict[str, Any] | None:
         media = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()

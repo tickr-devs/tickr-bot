@@ -21,7 +21,7 @@ import re
 import types
 import uuid
 from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
@@ -36,10 +36,12 @@ PROCESSED = "processed"
 
 DECIMAL_PATTERN = r"^-?[0-9]+(\.[0-9]+)?$"
 TIME_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$"
+DATE_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 _DECIMAL = re.compile(DECIMAL_PATTERN)
 _TIME = re.compile(TIME_PATTERN)
 _UUID = re.compile(UUID_PATTERN)
+_DATE = re.compile(DATE_PATTERN)
 _COMMAND_FILE = re.compile(UUID_PATTERN[:-1] + r"\.json$")
 
 
@@ -240,6 +242,83 @@ class ErrorV1:
     api_version: int = _const(API_VERSION)
 
 
+# ---------------------------------------------------------------- history (read-only)
+
+
+@dataclass(frozen=True)
+class DayTrade:
+    """A closed trade with fills. `stop_price` is the first protective stop sent (null if none
+    was); 1 R = `planned_loss_usd`."""
+
+    trade_id: str
+    symbol: str
+    quantity: Decimal
+    entry_price: Decimal
+    exit_price: Decimal
+    opened_at: datetime
+    closed_at: datetime
+    exit_reason: str
+    stop_price: Decimal | None
+    planned_loss_usd: Decimal
+    result_gross_usd: Decimal
+
+
+@dataclass(frozen=True)
+class DaySummary:
+    """One New York date with records: closed trades, a bot run, or captured market data."""
+
+    day: date
+    trades: int
+    wins: int
+    losses: int
+    result_gross_usd: Decimal
+    has_bars: bool
+
+
+@dataclass(frozen=True)
+class DaysV1:
+    """GET /days: every New York date with records in this environment, newest first."""
+
+    environment: str
+    days: tuple[DaySummary, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class DayV1:
+    """GET /days/<YYYY-MM-DD>: the trades closed that New York date and the symbols with
+    captured M1 bars. A date without records answers with empty lists."""
+
+    environment: str
+    day: date
+    trades: tuple[DayTrade, ...]
+    result_gross_usd: Decimal
+    bar_symbols: tuple[str, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class BarV1:
+    start: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+
+
+@dataclass(frozen=True)
+class BarsV1:
+    """GET /bars?symbol=&date=: the captured M1 bars of one symbol on one New York date, oldest
+    first, one per start time (the last version received when the provider revised a bar)."""
+
+    environment: str
+    symbol: str
+    day: date
+    bars: tuple[BarV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
 SCHEMA_TYPES: dict[str, type] = {
     "status-v1": StatusV1,
     "command-v1": CommandV1,
@@ -247,6 +326,9 @@ SCHEMA_TYPES: dict[str, type] = {
     "command-accepted-v1": CommandAcceptedV1,
     "pending-commands-v1": PendingCommandsV1,
     "error-v1": ErrorV1,
+    "days-v1": DaysV1,
+    "day-v1": DayV1,
+    "bars-v1": BarsV1,
 }
 
 
@@ -258,6 +340,11 @@ def format_time(value: datetime) -> str:
         raise ContractError("naive datetime: times must be timezone-aware")
     utc = value.astimezone(UTC)
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+
+
+def parse_date(text: str) -> date:
+    """A wire date "2026-11-13"; anything else raises ContractError."""
+    return _decode("date", text, date)
 
 
 def to_jsonable(value: Any) -> Any:
@@ -273,6 +360,8 @@ def to_jsonable(value: Any) -> Any:
         return format(value, "f")
     if isinstance(value, datetime):
         return format_time(value)
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, tuple | list):
         return [to_jsonable(v) for v in value]
     if isinstance(value, dict):
@@ -341,6 +430,13 @@ def _decode(where: str, raw: Any, hint: Any, meta: Any = None) -> Any:
             return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
         except ValueError as exc:
             raise ContractError(f"{where}: invalid time {raw!r}") from exc
+    if hint is date:
+        if not isinstance(raw, str) or not _DATE.match(raw):
+            raise ContractError(f"{where}: expected a date like 2026-01-02, got {raw!r}")
+        try:
+            return date.fromisoformat(raw)
+        except ValueError as exc:
+            raise ContractError(f"{where}: invalid date {raw!r}") from exc
     if isinstance(hint, type) and issubclass(hint, StrEnum):
         try:
             return hint(raw)
@@ -417,6 +513,8 @@ def _schema(hint: Any, meta: Any = None) -> dict[str, Any]:
         return {"type": "string", "pattern": DECIMAL_PATTERN}
     if hint is datetime:
         return {"type": "string", "pattern": TIME_PATTERN}
+    if hint is date:
+        return {"type": "string", "pattern": DATE_PATTERN}
     if isinstance(hint, type) and issubclass(hint, StrEnum):
         return {"type": "string", "enum": [m.value for m in hint]}
     if get_origin(hint) is tuple:

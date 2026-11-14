@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,9 +16,15 @@ import pytest
 
 from aperture.api import contract
 from aperture.api.contract import (
+    BarsV1,
+    BarV1,
     CommandAcceptedV1,
     CommandKind,
     CommandV1,
+    DaySummary,
+    DaysV1,
+    DayTrade,
+    DayV1,
     ErrorV1,
     PendingCommandsV1,
     StatusResponseV1,
@@ -29,6 +35,7 @@ from .schema_check import errors
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 POLL = Decimal("3")
+DAY = date(2026, 11, 16)
 
 
 def _response(st, age, stale, cause=None) -> StatusResponseV1:
@@ -56,6 +63,26 @@ def documents() -> dict[str, object]:
         "pending-commands-v1": PendingCommandsV1(commands=(command,)),
         "pending-commands-v1.empty": PendingCommandsV1(commands=()),
         "error-v1": ErrorV1("forbidden_host", "Host 'evil.example:8766' is not allowed"),
+        "days-v1": DaysV1("sandbox", (
+            DaySummary(DAY, 2, 1, 1, Decimal("2.50"), True),
+            DaySummary(DAY - timedelta(days=3), 0, 0, 0, Decimal("0"), False))),
+        "days-v1.empty": DaysV1("sandbox", ()),
+        "day-v1": DayV1("sandbox", DAY, (
+            DayTrade("t-0001", "WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0,
+                     T0 + timedelta(minutes=7), "stop", Decimal("5.02"), Decimal("50"),
+                     Decimal("-1.60")),
+            DayTrade("t-0002", "ABCD", Decimal("10"), Decimal("12.34"), Decimal("12.75"),
+                     T0 + timedelta(minutes=20), T0 + timedelta(minutes=48), "strategy_exit",
+                     None, Decimal("50"), Decimal("4.10"))),
+            Decimal("2.50"), ("ABCD", "WXYZ")),
+        "day-v1.empty": DayV1("sandbox", DAY - timedelta(days=3), (), Decimal("0"), ()),
+        "bars-v1": BarsV1("sandbox", "ABCD", DAY, tuple(
+            BarV1(T0 + timedelta(minutes=i), Decimal(o), Decimal(h), Decimal(lo), Decimal(c),
+                  Decimal(v))
+            for i, (o, h, lo, c, v) in enumerate((
+                ("12.30", "12.38", "12.28", "12.36", "18450"),
+                ("12.36", "12.41", "12.33", "12.34", "9120"),
+                ("12.34", "12.52", "12.34", "12.50", "40211"))))),
     }
 
 

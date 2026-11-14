@@ -28,14 +28,13 @@ from aperture.engine.manual import (
     run_until_closed,
 )
 from aperture.lock import AlreadyRunning, SingleInstanceLock, recorded_holder
-from aperture.store import MIGRATIONS, Store
+from aperture.store import DATABASE_FILE, MIGRATIONS, Store
 
 if TYPE_CHECKING:
     from aperture.observers.runner import ObserverSet
     from aperture.runtime.evaluation import Evaluator
     from aperture.runtime.market import StreamInbox
 
-DATABASE_FILE = "aperture.sqlite3"
 LOCK_FILE = "aperture.lock"
 
 

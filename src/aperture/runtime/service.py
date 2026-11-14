@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aperture.api import contract as api
+from aperture.api.history import average_fill_price, closed_trades
 from aperture.calendar import NEW_YORK, CalendarRefused, SessionCalendar
 from aperture.config import Config, trading_gate
 from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
@@ -80,35 +81,12 @@ def _iso(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
-def _average(orders: list[OrderRow]) -> Decimal | None:
-    filled = [o for o in orders if o.filled_quantity > 0 and o.average_fill_price is not None]
-    quantity = sum((o.filled_quantity for o in filled), ZERO)
-    if quantity == 0:
-        return None
-    return sum((o.filled_quantity * o.average_fill_price for o in filled), ZERO) / quantity
-
-
 def trades_today(engine: Engine, now: datetime) -> tuple[api.Trade, ...]:
     """Trades closed today (New York date) that had fills, with gross result."""
     today = now.astimezone(NEW_YORK).date()
-    result = []
-    for row in engine.store.query(
-            "SELECT trade_id, symbol, opened_at, closed_at, close_cause FROM trades "
-            "WHERE closed_at IS NOT NULL ORDER BY closed_at"):
-        closed = _iso(row["closed_at"])
-        if closed.astimezone(NEW_YORK).date() != today:
-            continue
-        orders = engine.orders(row["trade_id"])
-        entries = [o for o in orders if o.leg is Leg.ENTRY]
-        sells = [o for o in orders if o.leg is not Leg.ENTRY]
-        entry_price, exit_price = _average(entries), _average(sells)
-        quantity = sum((o.filled_quantity for o in sells), ZERO)
-        if entry_price is None or exit_price is None or quantity == 0:
-            continue  # never filled: not a trade
-        result.append(api.Trade(row["symbol"], quantity, entry_price, exit_price,
-                                _iso(row["opened_at"]), closed, row["close_cause"],
-                                (exit_price - entry_price) * quantity))
-    return tuple(result)
+    return tuple(api.Trade(t.symbol, t.quantity, t.entry_price, t.exit_price, t.opened_at,
+                           t.closed_at, t.exit_reason, t.result_gross_usd)
+                 for t in closed_trades(engine.store, closed_on=today))
 
 
 class Service:
@@ -352,7 +330,7 @@ class Service:
         for trade in self.engine.trades():
             orders = self.engine.orders(trade.trade_id)
             quantity = self.engine.expected_quantity(orders)
-            entry_price = _average([o for o in orders if o.leg is Leg.ENTRY])
+            entry_price = average_fill_price([o for o in orders if o.leg is Leg.ENTRY])
             if quantity <= 0 or entry_price is None:
                 continue
             stops = [o for o in orders if o.leg is Leg.STOP]

@@ -18,6 +18,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+# Database file name inside [run] data_dir (structural: the bot, the CLI and the API all use it).
+DATABASE_FILE = "aperture.sqlite3"
+
 _SCHEMA_V1 = (
     """CREATE TABLE runs (
         run_id TEXT PRIMARY KEY,

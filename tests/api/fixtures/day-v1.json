@@ -1,0 +1,38 @@
+{
+  "environment": "sandbox",
+  "day": "2026-11-16",
+  "trades": [
+    {
+      "trade_id": "t-0001",
+      "symbol": "WXYZ",
+      "quantity": "20",
+      "entry_price": "5.10",
+      "exit_price": "5.02",
+      "opened_at": "2026-11-16T15:00:00.123Z",
+      "closed_at": "2026-11-16T15:07:00.123Z",
+      "exit_reason": "stop",
+      "stop_price": "5.02",
+      "planned_loss_usd": "50",
+      "result_gross_usd": "-1.60"
+    },
+    {
+      "trade_id": "t-0002",
+      "symbol": "ABCD",
+      "quantity": "10",
+      "entry_price": "12.34",
+      "exit_price": "12.75",
+      "opened_at": "2026-11-16T15:20:00.123Z",
+      "closed_at": "2026-11-16T15:48:00.123Z",
+      "exit_reason": "strategy_exit",
+      "stop_price": null,
+      "planned_loss_usd": "50",
+      "result_gross_usd": "4.10"
+    }
+  ],
+  "result_gross_usd": "2.50",
+  "bar_symbols": [
+    "ABCD",
+    "WXYZ"
+  ],
+  "api_version": 1
+}

@@ -17,7 +17,8 @@ Run it: `python -m aperture.api --config config/bot.toml`. Settings are in `conf
 ## Wire rules
 
 - Money, prices and quantities are decimal strings (`"12.34"`), never JSON numbers.
-- Times are UTC with milliseconds: `"2026-11-14T18:44:39.123Z"`.
+- Times are UTC with milliseconds: `"2026-11-14T18:44:39.123Z"`. Dates are New York trading dates:
+  `"2026-11-14"`.
 - Every object has exactly the documented keys. Nullable keys are present with `null`.
 - Every response carries `api_version`; documents written to disk carry `schema_version`.
 - Version 1 never removes or renames a key or changes a type. Such a change is version 2 and
@@ -38,6 +39,9 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/status` | `200` `status-response-v1`, always this shape. |
 | GET | `/commands/pending` | `200` `pending-commands-v1`: commands written but not yet consumed. |
 | GET | `/schema` | `200` all schemas by name. |
+| GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first. |
+| GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
+| GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}`. `202` `command-accepted-v1`. |
@@ -45,7 +49,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
 `forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
-`too_many_pending` 429, `internal` 500.
+`too_many_pending` 429, `internal` 500, `unavailable` 503 (history cannot be read now: database of
+another schema version, unreadable capture file).
 
 ### GET /status
 
@@ -54,6 +59,19 @@ missing, invalid or dated in the future. `age_seconds` = `served_at - status.wri
 `stale` is true when the age exceeds `[api] status_stale_seconds`. `summary` is the one line to
 show first, in plain words: the single entry-blocking reason, "Entries allowed.", or why the status
 cannot be trusted. Clients should poll every `poll_seconds`.
+
+### History (read-only)
+
+`/days`, `/days/<date>` and `/bars` serve what the bot already recorded, for clients that show past
+days and charts. Trades come from the bot database, opened read-only (WAL: the reader never blocks
+the bot), limited to runs of the configured environment; a trade belongs to the New York date it
+closed. A trade is listed once it is closed and had fills: quantity is what was sold, prices are
+fill-weighted averages, `stop_price` is the first protective stop sent (null if none was), and
+1 R = `planned_loss_usd`. Bars come from the capture files
+(`<capture_dir>/<environment>/<date>/bars.jsonl`): one bar per start time, the last version
+received when the provider revised one. On today's file a last line still being written is not
+read yet. Only M1 is served; clients aggregate M5/M15 and compute indicators themselves.
+Query strings take exactly the documented parameters, each once; anything else is `bad_request`.
 
 ### Commands
 
