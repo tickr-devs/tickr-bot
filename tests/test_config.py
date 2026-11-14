@@ -172,6 +172,24 @@ def test_source_never_names_environments():
     assert offenders == []
 
 
+def test_every_config_field_has_a_reader():
+    """A key nobody reads is a number that looks configurable but changes nothing."""
+    import dataclasses
+    import inspect
+
+    source = "".join(p.read_text("utf-8") for p in (ROOT / "src").rglob("*.py")
+                     if p.name != "config.py")
+    # Readers inside config.py too (the gate, helpers); a declaration `name: type` never
+    # matches `.name`.
+    own = (ROOT / "src" / "aperture" / "config.py").read_text("utf-8")
+    unread = [f"{cls.__name__}.{field.name}"
+              for _, cls in inspect.getmembers(config, dataclasses.is_dataclass)
+              if cls.__module__ == config.__name__
+              for field in dataclasses.fields(cls)
+              if not re.search(rf"\.{field.name}\b", source + own)]
+    assert unread == []
+
+
 def test_only_webull_adapter_imports_sdk():
     pattern = re.compile(r"^\s*(from|import)\s+webull", re.MULTILINE)
     allowed = ROOT / "src" / "aperture" / "broker" / "webull.py"

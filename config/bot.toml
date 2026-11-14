@@ -81,8 +81,6 @@ unknown_absent_reads = 3
 quantity = 1
 # Maximum share price in USD for a probe symbol; read by the probe command.
 max_price_usd = 50
-# Probe entry limit = ask + this many USD; read by the probe command.
-entry_offset_usd = 0.01
 # Probe stop distance below the fill price, percent; read by the probe command.
 stop_percent_below_fill = 2.0
 # Maximum planned loss of a probe in USD; read by the probe command.
@@ -259,8 +257,6 @@ mqtt_host = "data-api.sandbox.webull.com"
 mqtt_port = 1883
 # gRPC order-event host (not used in v1); read by the host allowlist.
 events_host = "events-api.sandbox.webull.com"
-# gRPC port; read by the host allowlist.
-events_port = 443
 # Name of the env variable holding the app key; read by the broker adapter (presence only elsewhere).
 app_key_variable = "WEBULL_SANDBOX_APP_KEY"
 # Name of the env variable holding the app secret; read by the broker adapter (presence only elsewhere).
@@ -305,8 +301,6 @@ mqtt_host = "data-api.webull.com"
 mqtt_port = 1883
 # gRPC order-event host (not used in v1); read by the host allowlist.
 events_host = "events-api.webull.com"
-# gRPC port; read by the host allowlist.
-events_port = 443
 # Name of the env variable holding the app key; read by the broker adapter (presence only elsewhere).
 app_key_variable = "WEBULL_APP_KEY"
 # Name of the env variable holding the app secret; read by the broker adapter (presence only elsewhere).

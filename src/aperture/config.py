@@ -76,7 +76,6 @@ class OrdersConfig:
 class ProbeConfig:
     quantity: int
     max_price_usd: Decimal
-    entry_offset_usd: Decimal
     stop_percent_below_fill: Decimal
     max_loss_usd: Decimal
     window_start: str
@@ -176,7 +175,6 @@ class EnvironmentConfig:
     mqtt_host: str
     mqtt_port: int
     events_host: str
-    events_port: int
     app_key_variable: str
     app_secret_variable: str
     account_variable: str
