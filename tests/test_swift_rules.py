@@ -123,30 +123,32 @@ def test_every_l10n_key_needs_a_russian_translation(tmp_path):
     assert load().catalog_violations(l10n) == [(2, "app.open")]
 
 
-def test_repository_matches_its_baseline():
+def test_repository_follows_the_rules():
     assert load().main([]) == 0
 
 
-def test_a_pull_request_cannot_add_to_the_baseline():
+def test_any_violation_fails(tmp_path, monkeypatch):
     module = load()
-    base = {"text": {"a.swift": ["Old", "Old"]}}
-    assert module.raised({"text": {"a.swift": ["Old", "Old"]}}, base) == 0
-    assert module.raised({"text": {"a.swift": ["Old"]}}, base) == 0
-    assert module.raised({"text": {"a.swift": ["Old", "Old", "Old"]}}, base) == 1
-    assert module.raised({"text": {"a.swift": ["New"]}}, base) == 1
-    assert module.raised({"text": {"b.swift": ["Old"]}}, base) == 1
-    assert module.raised({"text": {"b.swift": ["Old"]}}, None) == 0
-
-
-def test_removing_an_old_violation_does_not_make_room_for_a_new_one(tmp_path, monkeypatch):
-    module = load()
-    path = write(tmp_path, 'Text("Brand new")\n')
+    write(tmp_path, 'Text("Brand new")\n')
     monkeypatch.setattr(module, "REPO", tmp_path)
     monkeypatch.setattr(module, "ROOTS", (".",))
-    baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"text": {path.name: ["Old text"]}}), encoding="utf-8")
-    monkeypatch.setattr(module, "BASELINE", baseline)
     assert module.main([]) == 1
+
+
+def test_only_the_bearer_scheme_may_be_a_capitalised_constant(tmp_path):
+    source = (
+        'static let undocumentedScheme = "Bearer"\n'
+        "/// The authentication scheme.\n"
+        'static let bearerScheme = "Bearer"\n'
+        "/// The header that carries it.\n"
+        'static let authorizationHeader = "Authorization"\n'
+        "/// A section header.\n"
+        'static let tradesHeader = "Trades"\n'
+        "/// A capitalised word that is not a protocol token.\n"
+        'static let title = "Overview"\n'
+    )
+    found = load().text_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 5, 7, 9]
 
 
 def test_info_plist_texts_need_a_russian_translation(tmp_path):
