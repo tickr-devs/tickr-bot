@@ -1,0 +1,35 @@
+{
+  "schema": "webull-us-equity-session-calendar-v1",
+  "market": "US",
+  "timezone": "America/New_York",
+  "coverage_start": "2026-01-01",
+  "coverage_end": "2026-12-31",
+  "standard_hours": {
+    "premarket_open": "04:00",
+    "regular_open": "09:30",
+    "regular_close": "16:00",
+    "extended_close": "20:00",
+    "source_url": "https://www.webull.com/help/faq/10960-What-are-the-trading-hours-for-stock-and-ETF-orders",
+    "verified_on": "2026-10-28"
+  },
+  "exceptions": [
+    {
+      "day": "2026-11-27",
+      "market": "US",
+      "day_kind": "HALF_DAY",
+      "regular_close": "13:00",
+      "extended_close": "17:00",
+      "source_url": "https://www.webull.com/help/faq/11110-Market-Closures",
+      "verified_on": "2026-10-28"
+    },
+    {
+      "day": "2026-12-24",
+      "market": "US",
+      "day_kind": "HALF_DAY",
+      "regular_close": "13:00",
+      "extended_close": "17:00",
+      "source_url": "https://www.webull.com/help/faq/11110-Market-Closures",
+      "verified_on": "2026-10-28"
+    }
+  ]
+}

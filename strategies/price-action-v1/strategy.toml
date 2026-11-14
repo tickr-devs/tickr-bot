@@ -1,0 +1,59 @@
+# Strategy "price-action-v1": long breakout and impulse-continuation setups on completed M1 bars.
+# Values are the October parity values; the owner confirmed the strategy architecture, the
+# stop/size numbers live in config/bot.toml [risk]. Changing any value means a new `version`.
+
+[strategy]
+# Strategy name; must equal this folder name; recorded with every decision.
+name = "price-action-v1"
+# Strategy version; bump on any value change; recorded with every decision and trade.
+version = "1"
+
+[indicators]
+# Fast exponential moving average length in completed M1 closes.
+fast_ema_period = 9
+# Slow exponential moving average length in completed M1 closes.
+slow_ema_period = 20
+# Average true range (Wilder) length in completed M1 bars.
+atr_period = 14
+# Number of prior sessions averaged for relative cumulative volume.
+relative_volume_sessions = 5
+# Minimum relative cumulative volume (current / average of prior sessions at the same minute).
+minimum_relative_volume = 2.0
+# Missing prior-session history for relative volume: true = refuse with a cause.
+refuse_when_relative_volume_unavailable = true
+
+[breakout]
+# Prior completed M1 bars whose highest high must be broken; trigger = that high, invalidation = their lowest low.
+lookback_bars = 5
+
+[continuation]
+# Impulse bars before the base.
+impulse_bars = 2
+# Base bars after the impulse.
+base_bars = 3
+# Minimum impulse size in ATR multiples.
+minimum_impulse_atr = 1.0
+# Maximum base high-low range in ATR multiples.
+maximum_base_range_atr = 1.0
+# Maximum distance of price below the base high, in ATR multiples, to arm the setup.
+maximum_pre_breakout_distance_atr = 1.0
+
+[entry]
+# Price window above the trigger in ATR multiples; beyond it the entry is missed, never chased.
+entry_extension_max_atr = 1.0
+# Cost rule: round trip (2 x spread) divided by ATR must not exceed this.
+max_round_trip_atr_ratio = 0.25
+# Cost rule: round trip divided by per-share structural risk must not exceed this.
+max_round_trip_risk_ratio = 0.20
+# Minimum stop distance in spreads (the larger of this and the percent rule applies).
+minimum_stop_spreads = 3
+# Minimum stop distance in percent of price.
+minimum_stop_percent = 0.5
+# Slippage reserve per side per leg in ATR multiples, added to per-share risk for sizing.
+slippage_reserve_atr = 0.05
+
+[liquidity]
+# Regular session: maximum (ask - bid) / mid.
+max_spread_ratio = 0.015
+# Regular session: minimum current-session dollar volume (sum of close x volume of completed minutes), USD.
+min_dollar_volume_usd = 5000000
