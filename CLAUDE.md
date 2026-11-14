@@ -16,6 +16,15 @@ Broker facts live in `docs/webull-facts.md`. Owner decisions live in `docs/decis
 8. **Strategies are swappable modules.** A strategy never sends orders and never loosens platform risk. It receives data and returns a decision with its reasons, tagged with its name and version.
 9. **Only `src/aperture/broker/webull.py` may import the Webull SDK.**
 
+## Swift code rules (apps/)
+
+Enforced by `apps/scripts/check_swift_rules.py` in the `swift-rules` CI job on every pull request, and by SwiftLint. Details: `docs/design-system.md`.
+
+- **No words in code.** Every text a person reads is defined once in the target's `L10n.swift` as `LocalizedStringResource("key", defaultValue: "English")`, with a Russian translation in its String Catalog. Views use `L10n` entries: never `Text("…")`, `Button("…")`, `Text(verbatim: "…")` or a returned English string. Only SF Symbol names, documented `static let` identifiers and enum raw values may be other string literals.
+- **No magic numbers.** Sizes, durations, opacities and colours come from `Tokens` and `Palette`; anything else is a documented `static let`.
+- **2-space indentation.**
+- `apps/scripts/swift-rules-baseline.json` lists violations that predate these rules. It lists each violation by content and may only shrink: new code is always clean, a PR that removes violations shortens it (`--write-baseline`), and CI fails a PR that adds to it.
+
 ## How we work
 
 - One stage at a time (see `docs/spec-v1.md`, "Stages"). Work on a branch, open a pull request, keep PRs small (one reviewable idea).
