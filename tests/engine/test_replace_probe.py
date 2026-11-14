@@ -382,3 +382,44 @@ def test_cli_unknown_outcome_needs_the_operator(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "F5 result: unresolved" in out and "fence replace-unresolved:" in out
     assert len(broker.replaced) == 1
+
+
+# -- check-quote ---------------------------------------------------------------------------
+
+
+class NoOrders(Market):
+    """Any order method fails the test: check-quote is read-only."""
+
+    def place(self, request):
+        pytest.fail("check-quote placed an order")
+
+    def cancel(self, client_order_id):
+        pytest.fail("check-quote cancelled an order")
+
+    def replace_stop_price(self, *args):
+        pytest.fail("check-quote replaced an order")
+
+
+class FailingQuotes(FakeMarketData):
+    def snapshot(self, symbols):
+        from aperture.data.base import MarketDataError
+        raise MarketDataError("read failed")
+
+
+@pytest.mark.parametrize("market, code, verdict", [
+    (quotes(age=1), 0, "OK: quote is 1.0 s old (limit 5 s)"),
+    (quotes(age=900), 3, "STALE: quote is 900.0 s old (limit 5 s): the probes will refuse; "
+                         "the quotes may be delayed"),
+    (FailingQuotes(), 3, "refused: quote read failed: MarketDataError"),
+    (FakeMarketData(), 3, "refused: no quote for ABC"),
+])
+def test_cli_check_quote(monkeypatch, capsys, market, code, verdict):
+    assert CFG.risk.max_quote_age_seconds == D(5)  # the verdict texts below assume it
+    monkeypatch.setattr(cli, "PROBE_ADAPTERS", lambda cfg: (NoOrders(), market))
+    monkeypatch.setattr(cli, "NOW", lambda: NOW)
+    bot = str(ROOT / "config" / "bot.toml")
+    assert cli.main(["--config", bot, "check-quote", "ABC"]) == code
+    captured = capsys.readouterr()
+    assert verdict in captured.out + captured.err
+    if code == 0 or "STALE" in verdict:
+        assert "bid 10.00 ask 10.02" in captured.out and "provider time" in captured.out

@@ -39,6 +39,7 @@ terminal (errors and "needs the operator" lines on stderr). Keep the terminal vi
 aperture check-config
 aperture trade SYMBOL --limit 12.34            # quantity and stop default from [probe]
 aperture trade SYMBOL --limit 12.34 --stop 12.10
+aperture check-quote SYMBOL                     # read-only: is the snapshot quote fresh?
 ```
 
 Stop price: without `--stop`, the planned-loss check uses the worst case (2 % below the
@@ -91,6 +92,20 @@ need a look (`stop-rejected:*`, `exit-refused:*`) are cleared with
 
 Goal: learn how Webull replaces the price of a working STOP_LOSS (docs/webull-facts.md, F5),
 so the trailing stop can be built. One replace, tightening only, on the bot's own trade.
+
+Step 0 before any probe on Monday: right after the open, run
+
+```
+aperture check-quote SYMBOL      # a liquid symbol, e.g. the one you plan to trade
+```
+
+It reads one snapshot quote through the same path as `probe-replace-stop` and sends no
+orders. It prints bid, ask, provider time, age and the limit (`[risk] max_quote_age_seconds`).
+- `OK: quote is N s old` (exit 0): go ahead.
+- `STALE: ...` (exit 3), or `refused: quote read failed` / `no quote` (exit 3): Sandbox quotes
+  may be delayed, and `probe-replace-stop` would refuse every time. Run it once more a minute
+  later on another liquid symbol; if it still says STALE, do no probe that day and send us the
+  output.
 
 1. Terminal A: `aperture trade SYMBOL --limit PRICE` as usual. Wait until the app shows the
    working SELL stop and the terminal is in the hold (`hold_seconds`, 60 s, from the moment

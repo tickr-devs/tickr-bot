@@ -281,6 +281,25 @@ def _probe_replace_stop(args: argparse.Namespace) -> int:
     return 3 if verdict is replace_probe.Verdict.NOT_SENT else 4
 
 
+def _check_quote(args: argparse.Namespace) -> int:
+    """Read-only: one snapshot quote through the probes' market-data path, and whether its age
+    passes the check `probe-replace-stop` applies. Sends no orders. Exit 0 fresh, 3 not."""
+    from aperture.engine.replace_probe import read_quote, stale_cause
+
+    cfg = config_module.load(args.config)
+    _, market = PROBE_ADAPTERS(cfg)
+    quote = read_quote(market, args.symbol)
+    age, stale = stale_cause(cfg, quote, NOW())
+    print(f"{quote.symbol}: bid {quote.bid} ask {quote.ask}, provider time "
+          f"{quote.provider_time.isoformat()}, age {age} s, "
+          f"limit {cfg.risk.max_quote_age_seconds} s")
+    if stale is not None:
+        print(f"STALE: {stale}: the probes will refuse; the quotes may be delayed")
+        return 3
+    print(f"OK: quote is {age} s old (limit {cfg.risk.max_quote_age_seconds} s)")
+    return 0
+
+
 def _clear_fence(args: argparse.Namespace) -> int:
     with _engine(args.config) as engine:
         if not engine.clear_operator_fence(args.name):
@@ -471,6 +490,9 @@ def main(argv: list[str] | None = None) -> int:
                    "SIGTERM")
     sub.add_parser("resume", help="recover after a crash and keep protecting open trades")
     sub.add_parser("exit", help="close every open trade through the normal exit path")
+    quote = sub.add_parser("check-quote", help="read-only: is the snapshot quote fresh enough "
+                           "for the probes? Sends no orders")
+    quote.add_argument("symbol")
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
     fence.add_argument("name")
     args = parser.parse_args(argv)
@@ -485,6 +507,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resume(args, exit_all=True)
         if args.command == "probe-replace-stop":
             return _probe_replace_stop(args)
+        if args.command == "check-quote":
+            return _check_quote(args)
         if args.command == "clear-fence":
             return _clear_fence(args)
         if args.command == "check-config":

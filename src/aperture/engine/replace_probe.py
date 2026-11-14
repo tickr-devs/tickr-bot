@@ -30,7 +30,7 @@ from aperture.config import Config
 from aperture.data.base import MarketData, MarketDataError
 from aperture.engine.core import Engine, Leg, OrderRow, TradeState
 from aperture.engine.manual import CENT, ManualRefused
-from aperture.types import OrderDetail, OrderState, OrderType, Side
+from aperture.types import OrderDetail, OrderState, OrderType, Quote, Side
 
 Out = Callable[[str], None]
 
@@ -71,18 +71,32 @@ def _detail_line(d: OrderDetail) -> str:
             f"stop_price={stop}")
 
 
-def _fresh_bid(config: Config, market: MarketData, symbol: str, now: datetime) -> Decimal:
+def read_quote(market: MarketData, symbol: str) -> Quote:
+    """One snapshot quote for `symbol`; a failed read or a missing row is refused."""
     try:
         quotes = [q for q in market.snapshot([symbol]) if q.symbol == symbol]
     except (BrokerError, MarketDataError) as exc:
         raise ManualRefused(f"quote read failed: {type(exc).__name__}") from exc
     if len(quotes) != 1:
         raise ManualRefused(f"no quote for {symbol}")
-    quote = quotes[0]
+    return quotes[0]
+
+
+def stale_cause(config: Config, quote: Quote, now: datetime) -> tuple[Decimal, str | None]:
+    """The quote's age in seconds by our clock, and why it is too old (or from too far in the
+    future, beyond the clock skew allowance) to act on; None when it is fresh."""
     age = Decimal(str((now - quote.provider_time).total_seconds()))
     risk = config.risk
     if age > risk.max_quote_age_seconds or age < -risk.max_clock_skew_seconds:
-        raise ManualRefused(f"quote is {age} s old (limit {risk.max_quote_age_seconds} s)")
+        return age, f"quote is {age} s old (limit {risk.max_quote_age_seconds} s)"
+    return age, None
+
+
+def _fresh_bid(config: Config, market: MarketData, symbol: str, now: datetime) -> Decimal:
+    quote = read_quote(market, symbol)
+    _, stale = stale_cause(config, quote, now)
+    if stale is not None:
+        raise ManualRefused(stale)
     if quote.bid <= 0:
         raise ManualRefused("no bid")
     return quote.bid
