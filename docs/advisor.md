@@ -55,6 +55,20 @@ validation runs). A value the strategy rejects refuses the proposal.
 To try a proposal: copy the folder into `strategies/` and add it to
 `[strategy] observers` in `config/bot.toml`.
 
+## Hold-out rule
+
+A proposal is fitted to the days it was given, so those days cannot judge it. The rule
+(from the independent review, 2026-11-14; to be confirmed by the owner) applies to every new strategy version, from the advisor or by hand:
+
+- Write down the days the change was chosen on. The advisor does it for you: the new
+  `strategy.toml` header and `report.md` list them.
+- Judge the version only on other days: live observer days after the last tuning day, or
+  replay/backtest days outside the tuning list.
+- Results that include tuning days are not evidence for the change.
+
+This is not a minimum-sample gate (2026-10-16 still stands: the owner decides when to
+switch); it only says which days count when he looks.
+
 ## API use
 
 Model, effort, output limit and timeout are in `[advisor]` in `config/bot.toml`. The

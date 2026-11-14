@@ -115,6 +115,9 @@ check. Outputs: `diff.csv` and `diff_summary.json`.
 Known gap: live decisions see real L1 quotes, replayed ones a synthetic quote around the bar
 close, so quote-dependent checks (spread, cost rule) can differ for that reason alone.
 
+Hold-out rule (`docs/advisor.md`): when the candidate version was tuned on some days, a `diff`
+or `whatif` over those days says nothing about the change; run it on other days.
+
 ## Settings
 
 `config/research.toml` `[research]` (one comment per key, tested; missing or unknown keys are

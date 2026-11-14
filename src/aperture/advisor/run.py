@@ -139,6 +139,8 @@ def run_advisor(
             f"v{version} over {len(days)} days. NOT APPLIED.",
             f"To try it: copy this folder to strategies/{new_folder}/ and add "
             f'"{new_folder}" to [strategy] observers in config/bot.toml.',
+            "Tuned on (hold-out rule: judge it only on other days): "
+            + ", ".join(d.isoformat() for d in days) + ".",
         ]
         text = render_toml(base_text, proposal, new_version, header)
         target = out / STRATEGIES_DIR / new_folder

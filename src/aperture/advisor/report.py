@@ -73,6 +73,11 @@ def render_report(
             f'2. Add `"{target.name}"` to `[strategy] observers` in `config/bot.toml`.',
             "3. After some days, compare it with `python -m aperture.research observers`.",
             "",
+            "Hold-out rule: this version was tuned on "
+            + ", ".join(d.isoformat() for d in days) + ". Judge it only on "
+            f"days after {days[-1].isoformat()} (observers) or on replay days outside that list; "
+            "results on the tuning days prove nothing.",
+            "",
         ]
     lines += [
         "## Evidence headline",
