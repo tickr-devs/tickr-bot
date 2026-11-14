@@ -9,8 +9,6 @@ environment = "sandbox"
 data_dir = "data"
 # Seconds a database write waits for another connection's write lock before failing; read by the store.
 database_busy_timeout_seconds = 5
-# Decision records folder relative to data_dir; one JSONL file per NY date at <decisions_dir>/<environment>/<date>.jsonl (research record format); written by runtime.entries.
-decisions_dir = "decisions"
 
 [strategy]
 # Active strategy name = folder under strategies/; its decisions may reach the safety layer.
@@ -174,7 +172,7 @@ max_evaluation_seconds = 0.5
 # read by observers.runner.
 queue_size = 256
 # Decision records folder relative to [run] data_dir; files go to <decisions_dir>/<environment>/<NY date>/decisions.jsonl;
-# read by observers.log.
+# written by observers.log for observer and active-strategy decisions (runtime.entries).
 decisions_dir = "decisions"
 
 [advisor]

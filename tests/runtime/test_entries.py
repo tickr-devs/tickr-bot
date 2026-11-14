@@ -12,6 +12,7 @@ from aperture.broker.fake import FakeBroker
 from aperture.calendar import NEW_YORK, SessionCalendar
 from aperture.config import GateResult
 from aperture.engine.core import Engine, Fence, Leg
+from aperture.observers.log import DecisionLog
 from aperture.research.records import load_records
 from aperture.runtime.entries import EntryDesk, round_to_tick
 from aperture.store import Store
@@ -53,7 +54,7 @@ class Desk:
         self.read_at = NOW
         self.dir = tmp_path / "decisions"
         self.desk = EntryDesk(self.engine, CFG, calendar=CALENDAR,
-                              last_broker_read_at=lambda: self.read_at, records_dir=self.dir)
+                              last_broker_read_at=lambda: self.read_at, log=DecisionLog(self.dir))
 
     def decide(self, d: Decision, q: Quote | None = None, now: datetime = NOW):
         return self.desk.on_decision(d, bar_start=BAR, quote=q or quote(), now=now)
@@ -80,8 +81,8 @@ def test_every_decision_is_recorded_in_the_research_format(tmp_path):
     desk.decide(decision(Verdict.WATCH))
     desk.decide(decision(), q=quote(ask="10.50"))  # ask above the window: refused
     desk.decide(decision())
-    (path,) = desk.dir.iterdir()
-    assert path.name == "2026-11-16.jsonl"
+    desk.desk.log.close()
+    path = desk.dir / "2026-11-16" / "decisions.jsonl"
     records = load_records([path])
     assert [r.admission for r in records] == ["not_applicable", "refused", "taken"]
     assert records[1].refusal_cause.startswith("PRICE_OUTSIDE_WINDOW")
@@ -170,3 +171,17 @@ def test_realized_loss_is_the_net_loss_of_the_day(tmp_path, monkeypatch):
     monkeypatch.setattr("aperture.runtime.entries.trades_today",
                         lambda engine, now: (trade(D(-20)), trade(D(50))))
     assert desk.desk._realized_loss(NOW) == D(0)
+
+
+def test_record_failure_after_send_is_journaled_and_never_raises(tmp_path):
+    desk = Desk(tmp_path)
+
+    def broken(record):
+        raise OSError("disk full")
+
+    desk.desk.log.append = broken
+    record = desk.decide(decision())
+    assert record.admission == "taken"
+    assert len(desk.engine.trades()) == 1  # the entry went out; the loop goes on
+    (row,) = desk.store.journal("decision-record-failed")
+    assert row.body["error"] == "OSError" and row.body["admission"] == "taken"
