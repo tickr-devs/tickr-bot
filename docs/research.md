@@ -33,9 +33,16 @@ expected to use the same writer when it records decisions; until then `decide` p
   at or after its end.
 - Decimals are strings or null (floats are refused).
 - `admission`: `taken` / `refused` (active ENTER that reached admission; `refused` needs a
-  `refusal_cause`), `not_evaluated` (ENTER that never reached admission: observer, replay),
+  `refusal_cause`), `not_evaluated` (ENTER that never reached admission: observer, replay,
+  or the bot's own rest of a minute evaluated late for the record after protect-first, see
+  `docs/operations.md`),
   `not_applicable` (every other verdict). `taken` is only valid for role `active`.
 - Exactly these keys; anything else is refused with file, line and cause.
+- A late remainder is evaluated with the quotes and daily loss budget saved when its minute
+  was put aside. Its `evaluation-remainder` journal row (keyed by the bar) is written before
+  its records, so a restart never records it twice. An `evaluation-remainder` row with no
+  matching records for that `bar_start` and those symbols means those records were lost: the
+  process died between writing the row and writing the records.
 
 ## outcomes
 

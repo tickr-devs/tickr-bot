@@ -210,6 +210,14 @@ only the Detail and positions reads and the protection step. One `evaluation-ski
 the start of each such stretch. A pass whose market upkeep, discovery and strategy took longer
 than `[runtime] evaluation_budget_seconds` journals `evaluation-slow`.
 
+When a decision sends an entry (or asks an exit) in the middle of a minute, the symbols left in
+that minute are put aside (`evaluation-stopped`, stage `protect-first`, with `remaining` and
+their quotes at that moment). On the first pass the strategy may run again they are evaluated
+on that same bar and those quotes, for the record only: their ENTERs are recorded
+`not_evaluated` and nothing is sent. An `evaluation-remainder` row marks that this was done
+(once, also across a restart). If their bars or history cannot be read, an
+`evaluation-stopped` row with stage `remainder-...` names the symbols left without a record.
+
 Each trade that had a fill gets one `protection-latency` row: `fill_observed_at` (first Detail
 showing filled shares), `stop_sent_at`, `stop_verified_at`, `observed_to_sent_seconds` and
 `observed_to_verified_seconds`. Webull Detail has no fill time, so fill -> fill observed is not

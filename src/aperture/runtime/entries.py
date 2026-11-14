@@ -231,7 +231,19 @@ class EntryDesk:
             for trade in self.engine.trades():
                 if trade.symbol == decision.symbol and not trade.exit_requested:
                     self.engine.request_exit(trade.trade_id, "strategy-exit")
-        record = DecisionRecord(now, bar_start, Role.ACTIVE, decision, admission, cause)
+        return self._write(DecisionRecord(now, bar_start, Role.ACTIVE, decision, admission,
+                                          cause))
+
+    def record_late(self, decision: Decision, *, bar_start: datetime,
+                    now: datetime) -> DecisionRecord:
+        """Record a decision made late on a minute put aside for protection (runtime
+        evaluation): never admitted or acted on, so an ENTER is `not_evaluated`."""
+        admission = (RecordAdmission.NOT_EVALUATED if decision.verdict is Verdict.ENTER
+                     else RecordAdmission.NOT_APPLICABLE)
+        return self._write(DecisionRecord(now, bar_start, Role.ACTIVE, decision, admission))
+
+    def _write(self, record: DecisionRecord) -> DecisionRecord:
+        decision, admission = record.decision, record.admission
         try:
             self.log.append(record)
         except (OSError, ValueError) as exc:
