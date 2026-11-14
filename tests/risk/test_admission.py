@@ -33,6 +33,22 @@ def test_limits_come_from_config(lim):
     assert lim.max_quote_age_seconds == D(5)
     assert lim.max_clock_skew_seconds == D(1)
     assert lim.active_strategy == "price-action-v1"
+    assert lim.symbol_cooldown_minutes_after_loss == 30
+
+
+def test_cooldown_boundaries(lim):
+    #: one second before its end refused, exactly at its end admitted.
+    end = NOW - timedelta(minutes=30)
+    assert admit(inputs(symbol_last_loss_at=end + timedelta(seconds=1)), lim).cause \
+        is C.SYMBOL_COOLDOWN
+    assert admit(inputs(symbol_last_loss_at=end), lim).ok
+    assert admit(inputs(symbol_last_loss_at=end.astimezone(UTC)), lim).ok
+
+
+def test_cooldown_turned_off(lim):
+    just_lost = inputs(symbol_last_loss_at=NOW)
+    assert admit(just_lost, lim).cause is C.SYMBOL_COOLDOWN
+    assert admit(just_lost, replace(lim, symbol_cooldown_minutes_after_loss=None)).ok
 
 
 def test_there_are_seven_checks():
@@ -86,6 +102,9 @@ REFUSALS = [
     (C.OWN_POSITION_OPEN, lambda: inputs(own_open_positions=1, open_positions=1)),
     (C.OWN_ORDER_WORKING, lambda: inputs(own_working_orders=1)),
     (C.POSITION_LIMIT_REACHED, lambda: inputs(open_positions=1)),
+    (C.SYMBOL_COOLDOWN, lambda: inputs(symbol_last_loss_at=NOW - timedelta(minutes=29))),
+    (C.SYMBOL_COOLDOWN, lambda: inputs(symbol_last_loss_at=NOW + timedelta(seconds=1))),
+    (C.CLOCK_INVALID, lambda: inputs(symbol_last_loss_at=datetime(2026, 11, 16, 9, 45))),
     # 5
     (C.DECISION_NOT_ENTER, lambda: inputs(decision=decision(verdict=Verdict.WATCH))),
     (C.DECISION_NOT_ACTIVE, lambda: inputs(decision=decision(strategy="observer-x"))),

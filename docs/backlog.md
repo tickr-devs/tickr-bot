@@ -15,7 +15,7 @@ Out of scope for v1. Nothing here is built unless a task names it. The full orig
 - Extended hours (needs stop behaviour in PRE/POST proven), half days. Old-tracker answer, reconfirm with the owner when this starts: limit orders only in PRE/POST, smaller size, hard flatten before the session ends, no entries on stream or broker loss (old Q118, #020-12).
 - Short selling (needs borrow/SSR facts). Old-tracker idea: Webull is the authority (no own SSR rule); record `shortable` as read and map short-sell rejection texts to typed causes (old Q107, #158).
 - Risk as percent of equity.
-- Loss locks (stop-out streak, cooldown) if the owner wants them.
+- Loss locks beyond the v1 per-symbol pause after a loss (for example a stop-out streak lock) if the owner wants them.
 - Limit-exit chase before market exit. Old-tracker answer, reconfirm with the owner when this starts: SELL LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from the first reference, then MARKET in the regular session (old Q22, Q110).
 - Per-variant evidence, stop-overshoot measurement, missed-moves "trade of the day". For overshoot: read trade prints (`ticks/list`) after the session for symbols with own fills, since Webull triggers stops on the last trade (old #087).
 - Spike-entry setup block (owner wants it back as its own block; values open).

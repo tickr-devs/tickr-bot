@@ -11,7 +11,7 @@ rounding can never push the real planned loss over a limit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from aperture.calendar import CalendarRefused, MarketDay, ny_date_of
@@ -42,6 +42,8 @@ class AdmissionLimits:
     half_days_enabled: bool
     active_strategy: str
     """Only decisions tagged with this strategy name may be admitted."""
+    symbol_cooldown_minutes_after_loss: int | None
+    """None = cooldown turned off (`symbol_cooldown_after_loss_enabled = false`)."""
 
     @classmethod
     def from_config(cls, config: Config) -> AdmissionLimits:
@@ -58,6 +60,9 @@ class AdmissionLimits:
             flatten_minutes_before_close=session.flatten_minutes_before_close,
             half_days_enabled=session.half_days_enabled,
             active_strategy=config.strategy.active,
+            symbol_cooldown_minutes_after_loss=(
+                risk.symbol_cooldown_minutes_after_loss
+                if risk.symbol_cooldown_after_loss_enabled else None),
         )
 
 
@@ -87,6 +92,9 @@ class AdmissionInputs:
     own_working_orders: int
     open_positions: int
     """All positions at the broker (own + foreign), for the position limit."""
+    symbol_last_loss_at: datetime | None
+    """When the latest trade in the decision's symbol that closed today (New York date) at a
+    loss, or with an unknown result, closed; None = no such trade today."""
     decision: Decision
     limit_price: Decimal | None
     """Final entry LIMIT price that will be sent (tick-rounded); None = not computed."""
@@ -96,7 +104,7 @@ class AdmissionInputs:
     """The setup is still valid at `now` (the strategy's latest evaluation still says ENTER)."""
     quote: Quote | None
     realized_loss_today_usd: Decimal | None
-    """Gross realized loss today as a non-negative amount; None = unknown."""
+    """Net realized loss today (wins offset losses) as a non-negative amount; None = unknown."""
     open_reservations_usd: Decimal | None
     """Planned loss reserved by open own trades and working entries; None = unknown."""
     entry_budget_available: bool
@@ -192,6 +200,20 @@ def _check_own_state(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | No
     if i.open_positions >= lim.max_open_positions:
         return _refuse(C.POSITION_LIMIT_REACHED,
                        f"{i.open_positions} open position(s), limit {lim.max_open_positions}")
+    return _check_cooldown(i, lim)
+
+
+def _check_cooldown(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Per-symbol pause after a loss (part of check 4); may be turned off in config."""
+    loss_at = i.symbol_last_loss_at
+    if lim.symbol_cooldown_minutes_after_loss is not None and loss_at is not None:
+        if not _aware(loss_at):
+            return _refuse(C.CLOCK_INVALID, "losing trade close time is not an aware datetime")
+        until = loss_at + timedelta(minutes=lim.symbol_cooldown_minutes_after_loss)
+        if i.now < until:
+            return _refuse(C.SYMBOL_COOLDOWN,
+                           f"{i.decision.symbol} closed at a loss at {loss_at.isoformat()}; "
+                           f"no entry before {until.isoformat()}")
     return None
 
 

@@ -277,3 +277,67 @@ def test_the_window_bottom_must_sit_between_the_stop_and_the_limit(tmp_path):
     with pytest.raises(EntryRefused):
         desk.engine.open_trade("ABC", D(1), D("10.10"), D("9.75"), D("0.35"),
                                entry_low_price=D("9.75"))
+
+
+class Clock:
+    def __init__(self, at: datetime) -> None:
+        self.at = at
+
+    def __call__(self) -> datetime:
+        return self.at
+
+
+def _round_trip(engine: Engine, broker: FakeBroker, clock: Clock, symbol: str,
+                opened: datetime, closed: datetime, exit_price: str) -> str:
+    """Open, fill and close one trade (10 shares bought at 10.05) through the fake broker."""
+    clock.at = opened
+    trade_id = engine.open_trade(symbol, D(10), D("10.10"), D("9.75"), D("3.50"))
+    broker.fill(engine.orders(trade_id)[0].client_order_id, D(10), D("10.05"))
+    for _ in range(3):
+        engine.step()
+    (stop,) = [o for o in engine.orders(trade_id) if o.leg is Leg.STOP and o.live]
+    clock.at = closed
+    broker.fill(stop.client_order_id, D(10), D(exit_price))
+    for _ in range(3):
+        engine.step()
+    assert not engine.trades(), "the trade should be closed"
+    return trade_id
+
+
+def test_cooldown_is_built_from_the_store_across_a_restart(tmp_path):
+    def at(day: int, hh: int, mm: int) -> datetime:
+        return datetime(2026, 11, day, hh, mm, tzinfo=NEW_YORK)
+
+    clock = Clock(at(13, 11, 0))
+    broker = FakeBroker()
+    path = tmp_path / "db.sqlite3"
+    store = Store.open(path, busy_timeout_seconds=0, now=clock)
+    engine = Engine(store, broker, CFG, "run00001", lambda: GateResult(True, "t"))
+    engine.recover()
+    # Yesterday (Friday) ABC lost: another New York day, no pause today.
+    _round_trip(engine, broker, clock, "ABC", at(13, 11, 0), at(13, 11, 5), "9.75")
+    # Today: ABC won at 10:10 (no pause), ABC lost at 10:41, XYZ won.
+    _round_trip(engine, broker, clock, "ABC", at(16, 10, 0), at(16, 10, 10), "10.50")
+    _round_trip(engine, broker, clock, "ABC", at(16, 10, 30), at(16, 10, 41), "9.75")
+    _round_trip(engine, broker, clock, "XYZ", at(16, 10, 45), at(16, 10, 50), "10.50")
+    store.close()
+
+    # Restart: a new store connection, engine and desk read the same database.
+    clock.at = at(16, 11, 0)
+    store = Store.open(path, busy_timeout_seconds=0, now=clock)
+    engine = Engine(store, broker, CFG, "run00002", lambda: GateResult(True, "t"))
+    engine.recover()
+    desk = EntryDesk(engine, CFG, calendar=CALENDAR, last_broker_read_at=clock,
+                     log=DecisionLog(tmp_path / "decisions"))
+    assert desk._inputs(decision(), quote(), clock.at).symbol_last_loss_at == at(16, 10, 41)
+    assert desk._inputs(decision(symbol="XYZ"), quote(), clock.at).symbol_last_loss_at is None
+
+    def decide(now: datetime):
+        clock.at = now
+        q = Quote("ABC", D("10.04"), D("10.05"), D(100), D(100), now, now)
+        return desk.on_decision(decision(), bar_start=now - timedelta(minutes=1), quote=q,
+                                now=now)
+
+    # The 30-minute pause after the 10:41 loss ends at 11:11 exactly.
+    assert decide(at(16, 11, 10)).refusal_cause.startswith("SYMBOL_COOLDOWN")
+    assert decide(at(16, 11, 11)).admission == "taken"

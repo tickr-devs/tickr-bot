@@ -75,15 +75,15 @@ Modules (`src/aperture/`): `config`, `store`, `broker/` (interface, `fake.py`, `
 
 ## 7. Risk and the safety layer
 
-Numbers in `config/bot.toml` `[risk]`: planned loss 50 USD per trade; notional cap 2,500 USD per position; daily loss ceiling 300 USD gross; one open position; quote age 5 s.
+Numbers in `config/bot.toml` `[risk]`: planned loss 50 USD per trade; notional cap 2,500 USD per position; daily loss ceiling 300 USD on the net realized result of the New York day (winning trades offset losing ones; owner 2026-11-14); one open position; quote age 5 s; 30 min per-symbol pause after a loss; no limit on the number of entries per day or per symbol (owner 2026-11-14).
 
 Admission (all must hold; the first failure is the single recorded cause):
 1. Trading gate open for the active environment.
 2. Startup reconciliation done; latest broker read fresh; no unresolved or foreign exposure; entry-stop flag clear.
 3. Regular session, calendar known for today, not a half day, before last-entry time.
-4. No own position or working order; open positions below the limit.
+4. No own position or working order; open positions below the limit; no trade in the symbol closed at a loss today (New York date, as for the daily rule) within the last `symbol_cooldown_minutes_after_loss` (`SYMBOL_COOLDOWN`; an entry exactly at the end is allowed; a closed trade whose fill prices are unknown counts as a loss; turned off by `symbol_cooldown_after_loss_enabled = false`).
 5. Executable quote fresh; setup still valid; price inside the window.
-6. Quantity at least 1; notional within cap; planned loss within limit; daily rule passes (realized loss + open reservations + new planned loss <= ceiling).
+6. Quantity at least 1; notional within cap; planned loss within limit; daily rule passes (today's net realized loss + open reservations + new planned loss <= ceiling).
 7. Request budget available for the entry AND the stop.
 
 Operator controls (local API + CLI): `entry-stop set|clear` (blocks entries only, survives restart), `cancel-own-orders` (own entry orders only, never stops), `flatten` (closes own position through the normal exit path).

@@ -111,6 +111,22 @@ def realized_loss_today(engine: Engine, now: datetime) -> Decimal | None:
     return max(-net, ZERO)
 
 
+def last_loss_at(engine: Engine, symbol: str, now: datetime) -> datetime | None:
+    """Close time of the latest trade in `symbol` closed today (New York date) at a loss; a
+    closed trade with fills whose prices are unknown counts as a loss (the stricter answer)."""
+    closes = [t.closed_at for t in trades_today(engine, now)
+              if t.symbol == symbol and t.result_gross_usd < 0]
+    today = now.astimezone(NEW_YORK).date()
+    for row in engine.store.query("SELECT trade_id, closed_at FROM trades "
+                                  "WHERE closed_at IS NOT NULL AND symbol = ?", (symbol,)):
+        closed = datetime.fromisoformat(row["closed_at"])
+        if closed.astimezone(NEW_YORK).date() == today and any(
+                o.filled_quantity > 0 and o.average_fill_price is None
+                for o in engine.orders(row["trade_id"])):
+            closes.append(closed)
+    return max(closes, default=None)
+
+
 class EntryDesk:
     def __init__(self, engine: Engine, config: Config, *, calendar: SessionCalendar | None,
                  last_broker_read_at: Callable[[], datetime | None],
@@ -165,6 +181,7 @@ class EntryDesk:
             own_open_positions=own_positions,
             own_working_orders=working,
             open_positions=own_positions + foreign_positions,
+            symbol_last_loss_at=last_loss_at(engine, decision.symbol, now),
             decision=decision,
             limit_price=limit,
             stop_price=stop,

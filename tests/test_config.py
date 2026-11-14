@@ -8,6 +8,7 @@ import pytest
 
 from aperture import config
 from aperture.cli import main
+from aperture.risk.admission import AdmissionLimits
 
 ROOT = Path(__file__).resolve().parent.parent
 BOT = ROOT / "config" / "bot.toml"
@@ -74,6 +75,31 @@ def test_wrong_type_refused(tmp_path):
                   BOT.read_text("utf-8"))
     with pytest.raises(config.ConfigError, match="expected an integer"):
         config.load(_copy(tmp_path, text))
+
+
+def test_cooldown_defaults():
+    risk = config.load(BOT).risk
+    assert (risk.symbol_cooldown_after_loss_enabled, risk.symbol_cooldown_minutes_after_loss) \
+        == (True, 30)
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_cooldown_below_one_minute_refused(tmp_path, enabled):
+    # Zero is never a hidden "off": the _enabled key is the only off switch.
+    text = re.sub(r"(?m)^symbol_cooldown_minutes_after_loss = \d+",
+                  "symbol_cooldown_minutes_after_loss = 0", BOT.read_text("utf-8"))
+    text = re.sub(r"(?m)^symbol_cooldown_after_loss_enabled = \w+",
+                  f"symbol_cooldown_after_loss_enabled = {enabled}", text)
+    with pytest.raises(config.ConfigError, match="must be at least 1"):
+        config.load(_copy(tmp_path, text))
+
+
+def test_cooldown_turned_off_loads(tmp_path):
+    text = re.sub(r"(?m)^symbol_cooldown_after_loss_enabled = \w+",
+                  "symbol_cooldown_after_loss_enabled = false", BOT.read_text("utf-8"))
+    cfg = config.load(_copy(tmp_path, text))
+    assert cfg.risk.symbol_cooldown_after_loss_enabled is False
+    assert AdmissionLimits.from_config(cfg).symbol_cooldown_minutes_after_loss is None
 
 
 def test_unknown_environment_refused(tmp_path):

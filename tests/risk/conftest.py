@@ -56,6 +56,7 @@ def inputs(**changes) -> AdmissionInputs:
         own_open_positions=0,
         own_working_orders=0,
         open_positions=0,
+        symbol_last_loss_at=None,
         decision=decision(),
         limit_price=D("10.20"),
         stop_price=D("9.80"),

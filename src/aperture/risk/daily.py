@@ -1,6 +1,7 @@
 """Daily loss rule (spec section 7, check 6; owner decision 2026-11-14).
 
-realized loss today + open reservations + new planned loss <= max_daily_loss_usd, all gross USD.
+net realized loss today + open reservations + new planned loss <= max_daily_loss_usd, in USD
+(the caller nets wins against losses before passing the realized loss).
 Unknown money (None) is a refusal, never treated as zero. Negative amounts are refused: the
 caller passes losses and reservations as non-negative magnitudes.
 """

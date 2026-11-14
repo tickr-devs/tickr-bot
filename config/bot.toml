@@ -23,7 +23,7 @@ observers = []
 planned_loss_usd = 50
 # Maximum notional per position in USD (owner 2026-10-31); read by safety.
 position_notional_cap_usd = 2500
-# Daily loss ceiling in USD, gross: realized loss + open reservations + new planned loss (owner 2026-11-14); read by safety.
+# Daily loss ceiling in USD: today's NET realized loss (wins offset losses) + open reservations + new planned loss (owner 2026-11-14); read by safety.
 max_daily_loss_usd = 300
 # Maximum simultaneous open positions (v1 supports 1); read by safety.
 max_open_positions = 1
@@ -31,6 +31,12 @@ max_open_positions = 1
 max_quote_age_seconds = 5
 # Allowed lead of the provider clock over ours, seconds: a quote time up to this far ahead counts as age 0, further ahead = refuse; read by safety.
 max_clock_skew_seconds = 1
+# Per-symbol pause after a loss (spec section 7, check 4; owner 2026-11-14): true = after a trade
+# in a symbol closes at a loss today (New York date), no new entry in that symbol for the minutes
+# below; false = off (the minutes are then not read but must still be at least 1); read by safety.
+symbol_cooldown_after_loss_enabled = true
+# Pause length in minutes from the losing trade's close; an entry exactly at the end is allowed (owner 2026-11-14); read by safety.
+symbol_cooldown_minutes_after_loss = 30
 
 [session]
 # Market time zone for all session times; read by the calendar and the scheduler.
