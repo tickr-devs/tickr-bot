@@ -223,6 +223,12 @@ class Engine:
     def fences(self) -> dict[str, str]:
         return {r["name"]: r["cause"] for r in self.store.query("SELECT name, cause FROM fences")}
 
+    def fence_ages(self) -> dict[str, float]:
+        """Seconds each fence has been set, by the engine's clock."""
+        now = self.clock()
+        return {r["name"]: now - r["set_at_epoch"]
+                for r in self.store.query("SELECT name, set_at_epoch FROM fences")}
+
     def _fence_age(self, name: str) -> float | None:
         rows = self.store.query("SELECT set_at_epoch FROM fences WHERE name = ?", (name,))
         return None if not rows else self.clock() - rows[0][0]

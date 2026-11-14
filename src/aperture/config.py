@@ -26,6 +26,7 @@ class RunConfig:
     environment: str
     data_dir: str
     database_busy_timeout_seconds: Decimal
+    backups_dir: str
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,7 @@ class RuntimeConfig:
 class AlertsConfig:
     dedupe_window_seconds: Decimal
     notification_timeout_seconds: Decimal
+    fence_alert_after_seconds: Decimal
 
 
 @dataclass(frozen=True)

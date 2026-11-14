@@ -37,6 +37,8 @@ class AlertKind(StrEnum):
 
     UNPROTECTED_POSITION = "unprotected-position"
     STOP_REJECTED = "stop-rejected"
+    # A closing order was refused; the stop is back and the operator must look.
+    EXIT_REFUSED = "exit-refused"
     UNKNOWN_ORDER_STATUS = "unknown-order-status"
     FOREIGN_EXPOSURE = "foreign-exposure"
     BROKER_READS_FAILING = "broker-reads-failing"

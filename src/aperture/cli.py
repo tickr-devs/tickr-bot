@@ -97,6 +97,15 @@ def _webull_run_adapters(cfg: config_module.Config,
 # Replaced in tests with fakes.
 RUN_ADAPTERS: Callable[[config_module.Config, Callable[[str, Exception], None]],
                        RunAdapters] = _webull_run_adapters
+
+
+def _default_notifier(alerts: config_module.AlertsConfig) -> Any:
+    from aperture.runtime.alerts import default_notifier
+    return default_notifier(alerts)
+
+
+# Replaced in tests: the notifier `aperture run` alerts through (None = journal only).
+NOTIFIER: Callable[[config_module.AlertsConfig], Any] = _default_notifier
 # Replaced in tests with a FakeBroker factory.
 BROKER_FACTORY: Callable[[config_module.Config], Broker] = _webull_broker
 NOW: Callable[[], datetime] = lambda: datetime.now(UTC)  # noqa: E731
@@ -225,8 +234,10 @@ def _run(path: Path) -> int:
     from aperture.data.capture import CaptureWriter
     from aperture.data.health import StreamHealth
     from aperture.runtime import service
+    from aperture.runtime.alerts import Alerter
     from aperture.runtime.market import MarketRuntime, StreamInbox
     from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
+    from aperture.runtime.watch import Watch
 
     cfg = config_module.load(path)
     strategy = service.strategy_id(cfg)
@@ -246,6 +257,8 @@ def _run(path: Path) -> int:
             adapters = RUN_ADAPTERS(cfg, inbox.on_error)
             engine = Engine(store, adapters.broker, cfg, run_id,
                             lambda: config_module.trading_gate(cfg))
+            alerter = Alerter(cfg.alerts, f"Aperture {cfg.environment_name}",
+                              NOTIFIER(cfg.alerts))
             calendar = service.load_calendar(cfg)
             capture = CaptureWriter.from_config(cfg, adapters.market.provider)
             market = MarketRuntime(engine, cfg, adapters.market,
@@ -253,7 +266,8 @@ def _run(path: Path) -> int:
                                    capture=capture, calendar=calendar, now=NOW,
                                    monotonic=time.monotonic)
             bot = service.Service(engine, now=NOW, calendar=calendar, strategy=strategy,
-                                  paths=service.ServicePaths.from_config(cfg), market=market)
+                                  paths=service.ServicePaths.from_config(cfg), market=market,
+                                  watch=Watch(engine, cfg, alerter, NOW))
             market.bind()
             adapters.start_stream()
             clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP)

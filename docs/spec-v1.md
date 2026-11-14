@@ -124,7 +124,7 @@ Reconciliation: positions and open orders every `reconcile_interval_seconds`; st
 
 - launchd: `preflight` (calendar known, credentials present, token usable, disk, config valid) before the session; `bot` started before 09:30 ET, no automatic relaunch after a crash; `api` always on, loopback only.
 - SIGTERM: stop entries, cancel working entries, leave stops resting, close cleanly. Restart over an open position is refused unless the resting stop is verified first.
-- Alerts (macOS notification now; phone push in the app stage): position without verified protection, stop rejected, unknown order status, foreign exposure, broker reads failing, stream lost with a position, daily ceiling reached, bot crashed or did not start, preflight failed, token needs confirmation in the Webull app.
+- Alerts (macOS notification now; phone push in the app stage): position without verified protection, stop rejected, closing order refused, unknown order status, foreign exposure, broker reads failing, stream lost with a position, daily ceiling reached, bot crashed or did not start, preflight failed, token needs confirmation in the Webull app.
 
 ## 12. Local API and status screen
 

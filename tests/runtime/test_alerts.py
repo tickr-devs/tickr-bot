@@ -17,7 +17,8 @@ from aperture.runtime.alerts import (
     default_notifier,
 )
 
-CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_seconds=Decimal(5))
+CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_seconds=Decimal(5),
+                      fence_alert_after_seconds=Decimal(30))
 T0 = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
 
 
@@ -45,7 +46,7 @@ def test_kinds_cover_spec_section_11():
         "unprotected-position", "stop-rejected", "unknown-order-status", "foreign-exposure",
         "broker-reads-failing", "stream-lost-with-position", "daily-ceiling-reached",
         "bot-crashed", "bot-did-not-start", "bot-did-not-stop", "preflight-failed",
-        "token-needs-confirmation",
+        "token-needs-confirmation", "exit-refused",
     }
 
 
