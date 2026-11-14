@@ -27,6 +27,7 @@ from aperture.advisor.report import render_report
 from aperture.archive import existing
 from aperture.calendar import TIMEZONE_NAME, SessionCalendar
 from aperture.config import Config
+from aperture.data.capture import CaptureError, read_captured_bars
 from aperture.observers.errors import ObserverError
 from aperture.observers.loader import (
     STRATEGIES_DIR,
@@ -34,11 +35,11 @@ from aperture.observers.loader import (
     load_strategy,
     parse_modules,
 )
-from aperture.replay.bars import load_bars
 from aperture.replay.clock import ClockFor, calendar_clock
 from aperture.replay.settings import ReplaySettings
 from aperture.research.records import load_records
 from aperture.research.settings import ResearchSettings
+from aperture.types import Bar
 
 DECISIONS_FILE = "decisions.jsonl"
 BARS_FILE = "bars.jsonl"
@@ -81,7 +82,7 @@ def run_advisor(
     if len(days) < settings.min_days:
         raise AdvisorError(f"{len(days)} days given, [advisor] min_days is {settings.min_days}")
     decision_files, bar_files = [], []
-    for day in days:
+    for day in days:  # sorted: captured_bars lets a later day's receipt revise a bar
         decisions, bars = day_files(config, day)
         for path in (decisions, bars):
             if existing(path) is None:  # plain or archived (.gz)
@@ -98,7 +99,7 @@ def run_advisor(
     evidence = build_evidence(
         days=days,
         records=load_records(decision_files),
-        bars_by_symbol=load_bars(bar_files),
+        bars_by_symbol=captured_bars(bar_files),
         strategy=name,
         version=version,
         research=research,
@@ -151,6 +152,27 @@ def run_advisor(
     except (AdvisorError, ObserverError) as exc:
         return _finish(out, Status.REFUSED, None, str(exc), proposal, None, context)
     return _finish(out, Status.PROPOSED, target, "", proposal, f"{name} v{new_version}", context)
+
+
+def captured_bars(paths: Sequence[Path]) -> dict[str, tuple[Bar, ...]]:
+    """Bars per symbol, oldest first, from captured bars.jsonl files (plain or archived).
+
+    Capture is split by receipt day and discovery asks for the latest bars, so a day's file
+    can repeat bars of the day before (a request just after the open). The rule is that of
+    `read_captured_bars`, applied across files given oldest day first: one bar per (symbol,
+    start), and when the values differ the later receipt is the provider's revision and wins.
+    """
+    found: dict[tuple[str, datetime], Bar] = {}
+    for path in paths:
+        try:
+            read = read_captured_bars(path)
+        except CaptureError as exc:
+            raise AdvisorError(f"capture bars refused: {exc}") from exc
+        found.update(read.bars)
+    by_symbol: dict[str, list[Bar]] = {}
+    for symbol, start in sorted(found):
+        by_symbol.setdefault(symbol, []).append(found[symbol, start])
+    return {symbol: tuple(bars) for symbol, bars in by_symbol.items()}
 
 
 def session_clock_from_config(config: Config) -> ClockFor:

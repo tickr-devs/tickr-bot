@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -90,7 +91,7 @@ def _conflict(files: tuple[Path, ...]) -> str | None:
             continue
         try:
             same = same_content(file, archived)
-        except OSError as exc:  # not a readable gzip file
+        except (OSError, EOFError, zlib.error) as exc:  # not gzip, truncated or corrupt
             return f"{archived.name} unreadable ({exc}); look at it, then remove it"
         if not same:
             return f"{file.name} and {archived.name} differ; look at both, then remove one"

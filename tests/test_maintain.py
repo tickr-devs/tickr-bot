@@ -172,6 +172,32 @@ def test_plain_file_beside_a_different_archive_keeps_the_folder(setup, capsys):
     assert other.is_file() and (capture_day / BARS_FILE).is_file()
 
 
+GZIP_HEADER_BYTES = 10  # fixed gzip member header (RFC 1952) when no optional fields are set
+
+
+def _truncated(packed: bytes) -> bytes:
+    return packed[:len(packed) // 2]  # ends before the end-of-stream marker: EOFError
+
+
+def _corrupt(packed: bytes) -> bytes:
+    # first deflate byte 0xFF: block type 3, which does not exist: zlib.error
+    return packed[:GZIP_HEADER_BYTES] + b"\xff" + packed[GZIP_HEADER_BYTES + 1:]
+
+
+@pytest.mark.parametrize("damage", [_truncated, _corrupt])
+def test_damaged_archive_beside_the_plain_file_keeps_the_folder_untouched(setup, capsys,
+                                                                          damage):
+    path, cfg, _, _ = setup
+    capture_day, _ = _folders(cfg, OLD)
+    plain = capture_day / BARS_FILE
+    archived = capture_day / (BARS_FILE + ".gz")
+    archived.write_bytes(damage(gzip.compress(plain.read_bytes(), mtime=0)))
+    before = {f.name: f.read_bytes() for f in capture_day.iterdir()}
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert f"keep {capture_day}: bars.jsonl.gz unreadable" in capsys.readouterr().out
+    assert {f.name: f.read_bytes() for f in capture_day.iterdir()} == before
+
+
 def test_compress_round_trip_and_missing_file(tmp_path):
     plain = tmp_path / "x.jsonl"
     plain.write_text('{"a": 1}\nnot newline terminated', "utf-8")

@@ -4,7 +4,7 @@ import json
 import shutil
 import tomllib
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -18,18 +18,21 @@ from aperture.advisor.__main__ import main
 from aperture.advisor.client import AdvisorReply, AnthropicClient
 from aperture.advisor.errors import AdvisorError
 from aperture.advisor.proposal import SCHEMA, next_version, parse_reply
-from aperture.advisor.run import Status, day_files, run_advisor
+from aperture.advisor.run import Status, captured_bars, day_files, run_advisor
+from aperture.data.capture import BAR_KEYS, CAPTURE_KEYS, CaptureWriter
 from aperture.observers.log import DecisionLog
 from aperture.replay.settings import load_settings
 from aperture.research.records import Admission, DecisionRecord
 from aperture.research.settings import load_research_settings
 from aperture.strategy.base import Check, Decision, Role, Verdict
+from aperture.types import Bar
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 NY = ZoneInfo("America/New_York")
 M1 = timedelta(minutes=1)
 DAYS = [date(2026, 11, 16), date(2026, 11, 17)]
 NOW = datetime(2026, 11, 18, 1, 0, tzinfo=UTC)
+PROVIDER = "fake"
 BASE = tomllib.loads((ROOT / "strategies/price-action-v1/strategy.toml").read_text())
 
 
@@ -56,10 +59,9 @@ class FakeClient:
         return AdvisorReply(self.text, "claude-opus-5-5")
 
 
-def _bars_line(symbol, start, price):
-    p = str(price)
-    return json.dumps({"symbol": symbol, "start": start.isoformat(), "open": p, "high": p,
-                       "low": p, "close": p, "volume": "1000"})
+def _bar(symbol, start, price):
+    return Bar(symbol=symbol, start=start, open=price, high=price, low=price, close=price,
+               volume=Decimal(1000))
 
 
 def make_root(tmp_path, min_days=2, extra=""):
@@ -71,12 +73,12 @@ def make_root(tmp_path, min_days=2, extra=""):
     cfg = config_module.load(bot)
     log = DecisionLog(tmp_path / cfg.run.data_dir / cfg.observers.decisions_dir
                       / cfg.environment_name)
+    capture = CaptureWriter.from_config(cfg, PROVIDER)
     for day in DAYS:
         first = datetime.combine(day, time(10, 0), NY).astimezone(UTC)
-        _, bars = day_files(cfg, day)
-        bars.parent.mkdir(parents=True)
-        bars.write_text("\n".join(_bars_line("ABC", first + i * M1, Decimal("10") + i)
-                                  for i in range(10)) + "\n")
+        for i in range(10):  # each bar received a minute after it ended, as the bot reads them
+            bar = _bar("ABC", first + i * M1, Decimal("10") + i)
+            capture.bars([bar], PROVIDER, bar.start + 2 * M1)
         check = Check("relative_volume", Decimal("1.2"), ">=", Decimal("2.0"), False)
         for i, verdict in enumerate((Verdict.IGNORE, Verdict.WATCH, Verdict.ENTER)):
             start = first + i * M1
@@ -90,6 +92,7 @@ def make_root(tmp_path, min_days=2, extra=""):
                                 (check,) if verdict is not Verdict.ENTER else (), **extra_fields)
             log.append(DecisionRecord(start + M1, start, Role.ACTIVE, decision, admission, cause))
     log.close()
+    capture.close()
     return cfg
 
 
@@ -191,9 +194,51 @@ def test_archived_day_files_are_read(tmp_path):
     assert result.status is Status.PROPOSED
 
 
+def test_reads_real_capture_lines_and_keeps_the_revised_bar(tmp_path):
+    cfg = make_root(tmp_path)
+    _, bars = day_files(cfg, DAYS[0])
+    lines = bars.read_text().splitlines()
+    assert set(json.loads(lines[0])) == BAR_KEYS | CAPTURE_KEYS  # provider and receipt_time
+    revised = json.loads(lines[-1]) | {"close": "9.5", "low": "9.5"}  # a provider revision
+    bars.write_text("\n".join([*lines, json.dumps(revised)]) + "\n")
+    client = FakeClient(answer([("breakout", "lookback_bars", "8")]))
+    assert run(cfg, client, tmp_path).status is Status.PROPOSED
+
+
+def test_bad_capture_line_is_refused_typed(tmp_path):
+    cfg = make_root(tmp_path)
+    _, bars = day_files(cfg, DAYS[1])
+    with bars.open("a") as handle:
+        handle.write('{"symbol": "ABC"}\n')
+    with pytest.raises(AdvisorError, match=r"capture bars refused: .*:11: not a captured bar"):
+        run(cfg, FakeClient(answer()), tmp_path)
+
+
+def test_bars_repeated_at_the_next_open_count_once_and_a_later_revision_wins(tmp_path):
+    cfg = make_root(tmp_path)
+    _, first = day_files(cfg, DAYS[0])
+    _, second = day_files(cfg, DAYS[1])
+    before = captured_bars([first, second])
+    # Discovery just after the next open asks for the latest bars: yesterday's come back and
+    # are written into today's file (receipt day), one of them revised by the provider.
+    old = [_bar("ABC", datetime.combine(DAYS[0], time(10, 0), NY).astimezone(UTC) + i * M1,
+                Decimal("10") + i) for i in range(10)]
+    revised = replace(old[-1], close=Decimal("18.5"), low=Decimal("18.5"))
+    at_open = datetime.combine(DAYS[1], time(9, 31), NY).astimezone(UTC)
+    capture = CaptureWriter.from_config(cfg, PROVIDER)
+    capture.bars([*old[:-1], revised], PROVIDER, at_open)
+    capture.close()
+    lines = [json.loads(line) for line in second.read_text().splitlines()]
+    assert {line["start"] for line in lines} >= {b.start.isoformat() for b in old}  # overlap
+    merged = captured_bars([first, second])["ABC"]
+    assert len(merged) == len(before["ABC"])
+    assert [b for b in merged if b.start == revised.start] == [revised]
+    assert run(cfg, FakeClient(answer([("breakout", "lookback_bars", "8")])),
+               tmp_path).status is Status.PROPOSED
+
+
 def test_evidence_too_big_is_refused_not_cut(tmp_path):
     cfg = make_root(tmp_path)
-    from dataclasses import replace
     small = replace(cfg, advisor=replace(cfg.advisor, max_evidence_bytes=100))
     client = FakeClient(answer())
     with pytest.raises(AdvisorError, match="max_evidence_bytes is 100"):
@@ -357,7 +402,6 @@ def test_client_failures_are_typed(message, raises, cause):
 
 
 def test_client_checks_only_the_key_name():
-    from dataclasses import replace
     with pytest.raises(AdvisorError, match="ANTHROPIC_API_KEY is not set"):
         AnthropicClient(_settings(), environ={}, sdk=FakeSdk(_message()))
     with pytest.raises(AdvisorError, match="must be ANTHROPIC_API_KEY"):
