@@ -12,3 +12,9 @@ Single-owner intraday trading bot for US common stocks on Webull OpenAPI.
 pip install -e ".[dev]"
 pytest -q
 ```
+
+## Apps in Xcode
+
+`open Aperture.xcworkspace` opens the operator apps and their shared package in Xcode 16+.
+Scheme `Aperture macOS` runs on this Mac. The iOS app joins the workspace with its committed
+Xcode project (in progress). Details: `apps/macos/README.md`, `apps/ios/README.md`.
