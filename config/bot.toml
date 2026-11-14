@@ -87,7 +87,9 @@ max_exit_seconds = 30
 # Seconds a SIGTERM shutdown may spend cancelling entries and protecting fills before it gives
 # up with an alert (below the supervisor's 90 s alert and launchd's 120 s cap); read by the engine loop.
 shutdown_deadline_seconds = 60
-# Seconds between reconciliation passes (positions + open orders); read by runtime.
+# Seconds between reconciliation passes (positions + open orders); read by runtime. Also the
+# least spacing of the engine's own open-orders reads while a stop is held after an unresolved
+# replace (engine._replace_blocks).
 reconcile_interval_seconds = 10
 # Maximum age in seconds of the last broker read before entries are blocked; read by safety.
 broker_read_max_age_seconds = 30

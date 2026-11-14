@@ -145,3 +145,18 @@ Results:
     than one: cancel the extra stops in the app and close the position there, then
     `aperture status`; send the screenshots before running anything else.
   Clear `replace-unresolved:<stop id>` only after the app shows a clean state.
+
+  What the bot does meanwhile (`aperture exit` or `resume` running): while
+  `replace-unresolved:<stop id>` is set and the bot would place a stop or send a close, it
+  reads open orders itself, at most once per `reconcile_interval_seconds`. It places no stop
+  and sends no close until two such reads in a row show no working SELL in the symbol that is
+  not ours (Webull may list a new order a moment late); a failed read holds too. The fence
+  `stop-held:<trade>` says so once, with the order id when one is seen ("stop and close held:
+  untracked SELL <id> rests in ABC after an unresolved replace; resolve it in the Webull
+  app"); the screen may otherwise only say "exiting". Once you cancel that order in the app,
+  two clean reads (about 10-20 s) release the hold and, because the exit is already requested
+  (by `aperture exit`, or by the unprotected-too-long rule), the bot sells the position at
+  MARKET. It does not place a new stop first. In the exit path a release is good for one pass
+  only: after it the bot cancels our stop and then holds again for two reads (about 10 to
+  20 s) with no stop of ours before the MARKET close. This is expected and does not mean the
+  bot is stuck.
