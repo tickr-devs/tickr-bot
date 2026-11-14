@@ -1,0 +1,822 @@
+"""Trade engine: entry -> protective stop -> exit -> closed, driven by broker reads.
+
+Every send and cancel is written to the store BEFORE the broker call and its outcome after
+it (commit-before-effect). An order whose send outcome is unknown is never resent: Detail,
+open orders and positions resolve it. State advances only from broker reads; `step()` is
+one pass and is safe to call repeatedly or after a crash.
+
+Quantities: `expected` is what broker Detail says we bought and have not sold. Protection
+and closing orders are sized on `expected` only, and a closing order is sent only when the
+broker position agrees with it. A position larger than `expected` is fenced, never sold or
+protected by guesswork.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from enum import StrEnum
+from typing import Any
+
+from aperture.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, Refused
+from aperture.config import Config, GateResult
+from aperture.store import Store, now_utc
+from aperture.types import (
+    OrderDetail,
+    OrderRequest,
+    OrderState,
+    OrderType,
+    Side,
+    TimeInForce,
+    TradingSession,
+)
+
+ZERO = Decimal(0)
+
+
+class Leg(StrEnum):
+    ENTRY = "entry"
+    STOP = "stop"
+    EXIT = "exit"
+
+
+class SendState(StrEnum):
+    INTENT = "intent"  # written, not yet attempted
+    ATTEMPTED = "attempted"  # about to call the broker
+    ACKNOWLEDGED = "acknowledged"
+    REFUSED = "refused"  # broker or local budget refused: the order was NOT created
+    UNKNOWN = "unknown"  # may or may not exist: never resend, resolve by broker reads
+    ABSENT = "absent"  # resolved: not in Detail and not in open orders
+
+
+class TradeState(StrEnum):
+    OPENING = "opening"  # entry working, nothing filled yet
+    OPEN = "open"  # some quantity filled; protection maintained
+    EXITING = "exiting"  # teardown: cancel entry, then stops, then close what is held
+    CLOSED = "closed"
+
+
+class Fence(StrEnum):
+    """Reasons that block NEW entries. Never block exits, cancels or protection."""
+
+    STARTUP_RECONCILE = "startup-reconcile"
+    BROKER_READ = "broker-read-failed"
+    DETAIL_BUDGET = "detail-budget"
+    UNKNOWN_ORDER = "unknown-order"
+    ORDER_MISSING = "order-missing"
+    STATUS_UNKNOWN = "status-unknown"
+    UNPROTECTED = "unprotected"
+    OVER_PROTECTED = "over-protected"
+    UNPROTECTED_TIMEOUT = "unprotected-timeout"
+    STOP_REJECTED = "stop-rejected"
+    EXIT_REFUSED = "exit-refused"
+    CANCEL_UNKNOWN = "cancel-unknown"
+    CANCEL_FAILED = "cancel-failed"
+    RESURRECTED = "resurrected"
+    FOREIGN_POSITION = "foreign-position"
+    FOREIGN_ORDER = "foreign-order"
+    QUANTITY_MISMATCH = "quantity-mismatch"
+    SHUTTING_DOWN = "shutting-down"
+
+
+# Fences that need the operator to look before entries resume; all others clear themselves
+# when their condition is gone.
+OPERATOR_FENCES = frozenset({Fence.STOP_REJECTED, Fence.EXIT_REFUSED, Fence.CANCEL_FAILED,
+                             Fence.RESURRECTED, Fence.UNPROTECTED_TIMEOUT})
+
+_LEG_LETTER = {Leg.ENTRY: "e", Leg.STOP: "s", Leg.EXIT: "x"}
+_LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
+_WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
+# Cancel states after which a later Detail read decides whether the cancel took.
+_CANCEL_AWAITING = ("sent", "unknown", "refused")
+
+
+class EntryRefused(Exception):
+    def __init__(self, cause: str) -> None:
+        super().__init__(cause)
+        self.cause = cause
+
+
+@dataclass(frozen=True)
+class OrderRow:
+    client_order_id: str
+    trade_id: str
+    leg: Leg
+    symbol: str
+    side: Side
+    order_type: OrderType
+    quantity: Decimal
+    limit_price: Decimal | None
+    stop_price: Decimal | None
+    send_state: SendState
+    broker_state: OrderState | None
+    filled_quantity: Decimal
+    cancel_state: str | None
+    cancel_attempts: int
+    cancel_at: float | None
+    absent_reads: int
+    last_detail_at: float | None
+
+    @property
+    def live(self) -> bool:
+        """Could still create exposure or fill."""
+        if self.send_state not in _LIVE_SEND:
+            return False
+        return self.broker_state is None or not self.broker_state.terminal
+
+    @property
+    def verified(self) -> bool:
+        return self.send_state is SendState.ACKNOWLEDGED and self.broker_state in _WORKING
+
+    @property
+    def open_quantity(self) -> Decimal:
+        return self.quantity - self.filled_quantity
+
+
+@dataclass(frozen=True)
+class TradeRow:
+    trade_id: str
+    symbol: str
+    state: TradeState
+    entry_quantity: Decimal
+    entry_limit_price: Decimal
+    stop_price: Decimal
+    planned_loss_usd: Decimal
+    exit_requested: str | None
+    stop_failures: int
+    last_stop_failure_at: float | None
+
+
+def _dec(value: Any) -> Decimal | None:
+    return None if value is None else Decimal(value)
+
+
+def _order(row: Any) -> OrderRow:
+    return OrderRow(
+        client_order_id=row["client_order_id"], trade_id=row["trade_id"], leg=Leg(row["leg"]),
+        symbol=row["symbol"], side=Side(row["side"]), order_type=OrderType(row["order_type"]),
+        quantity=Decimal(row["quantity"]), limit_price=_dec(row["limit_price"]),
+        stop_price=_dec(row["stop_price"]), send_state=SendState(row["send_state"]),
+        broker_state=None if row["broker_state"] is None else OrderState(row["broker_state"]),
+        filled_quantity=Decimal(row["filled_quantity"]), cancel_state=row["cancel_state"],
+        cancel_attempts=row["cancel_attempts"], cancel_at=row["cancel_at"],
+        absent_reads=row["absent_reads"], last_detail_at=row["last_detail_at"],
+    )
+
+
+def _trade(row: Any) -> TradeRow:
+    return TradeRow(
+        trade_id=row["trade_id"], symbol=row["symbol"], state=TradeState(row["state"]),
+        entry_quantity=Decimal(row["entry_quantity"]),
+        entry_limit_price=Decimal(row["entry_limit_price"]),
+        stop_price=Decimal(row["stop_price"]), planned_loss_usd=Decimal(row["planned_loss_usd"]),
+        exit_requested=row["exit_requested"], stop_failures=row["stop_failures"],
+        last_stop_failure_at=row["last_stop_failure_at"],
+    )
+
+
+def _detail_priority(row: OrderRow, poll_seconds: float) -> float:
+    """Oldest read attempt first, so no order can starve the others; the class only gives a
+    bounded head start of up to three poll intervals: unknown sends, then unverified stops,
+    then entries and exits, then verified stops."""
+    if row.send_state is SendState.UNKNOWN:
+        boost = 3
+    elif row.leg is Leg.STOP and not row.verified:
+        boost = 2
+    elif row.leg is not Leg.STOP:
+        boost = 1
+    else:
+        boost = 0
+    return (row.last_detail_at or 0.0) - boost * poll_seconds
+
+
+class Engine:
+    def __init__(self, store: Store, broker: Broker, config: Config, run_id: str,
+                 gate: Callable[[], GateResult],
+                 clock: Callable[[], float] = time.time) -> None:
+        self.store = store
+        self.broker = broker
+        self.config = config
+        self.run_id = run_id
+        self.gate = gate
+        self.clock = clock
+
+    # --- fences ----------------------------------------------------------------------------
+
+    def fences(self) -> dict[str, str]:
+        return {r["name"]: r["cause"] for r in self.store.query("SELECT name, cause FROM fences")}
+
+    def _fence_age(self, name: str) -> float | None:
+        rows = self.store.query("SELECT set_at_epoch FROM fences WHERE name = ?", (name,))
+        return None if not rows else self.clock() - rows[0][0]
+
+    def _fence_row(self, fence: Fence, key: str, cause: str) -> None:
+        """Set a fence inside an already open transaction."""
+        name = f"{fence}:{key}" if key else str(fence)
+        now = self.clock()
+        if self.store.execute(
+                "INSERT OR IGNORE INTO fences(name, cause, set_at, set_at_epoch) "
+                "VALUES (?, ?, ?, ?)",
+                (name, cause, datetime.fromtimestamp(now, UTC).isoformat(), now)):
+            self.store.append("fence-set", {"cause": cause}, key=name, run_id=self.run_id)
+
+    def _set_fence(self, fence: Fence, key: str, cause: str) -> None:
+        with self.store.transaction():
+            self._fence_row(fence, key, cause)
+
+    def _clear_fence(self, fence: Fence, key: str = "") -> None:
+        name = f"{fence}:{key}" if key else str(fence)
+        with self.store.transaction():
+            if self.store.execute("DELETE FROM fences WHERE name = ?", (name,)):
+                self.store.append("fence-cleared", {}, key=name, run_id=self.run_id)
+
+    def _has_fence(self, fence: Fence, key: str = "") -> bool:
+        name = f"{fence}:{key}" if key else str(fence)
+        return bool(self.store.query("SELECT 1 FROM fences WHERE name = ?", (name,)))
+
+    def clear_operator_fence(self, name: str) -> bool:
+        """Operator command: clear a fence that does not clear itself."""
+        if name.split(":", 1)[0] not in OPERATOR_FENCES:
+            return False
+        with self.store.transaction():
+            removed = self.store.execute("DELETE FROM fences WHERE name = ?", (name,))
+            if removed:
+                self.store.append("fence-cleared", {"by": "operator"}, key=name,
+                                  run_id=self.run_id)
+        return bool(removed)
+
+    # --- reads -----------------------------------------------------------------------------
+
+    def trades(self, *, open_only: bool = True) -> list[TradeRow]:
+        sql = "SELECT * FROM trades"
+        if open_only:
+            sql += f" WHERE state != '{TradeState.CLOSED}'"
+        return [_trade(r) for r in self.store.query(sql + " ORDER BY opened_at, trade_id")]
+
+    def trade(self, trade_id: str) -> TradeRow:
+        return _trade(self.store.query("SELECT * FROM trades WHERE trade_id = ?", (trade_id,))[0])
+
+    def orders(self, trade_id: str | None = None) -> list[OrderRow]:
+        if trade_id is None:
+            rows = self.store.query("SELECT * FROM orders ORDER BY rowid")
+        else:
+            rows = self.store.query("SELECT * FROM orders WHERE trade_id = ? ORDER BY rowid",
+                                    (trade_id,))
+        return [_order(r) for r in rows]
+
+    def order(self, client_order_id: str) -> OrderRow:
+        return _order(self.store.query("SELECT * FROM orders WHERE client_order_id = ?",
+                                       (client_order_id,))[0])
+
+    @staticmethod
+    def expected_quantity(orders: list[OrderRow]) -> Decimal:
+        """What Detail says we bought and have not sold."""
+        bought = sum((o.filled_quantity for o in orders if o.leg is Leg.ENTRY), ZERO)
+        sold = sum((o.filled_quantity for o in orders if o.leg is not Leg.ENTRY), ZERO)
+        return bought - sold
+
+    # --- entry and exit requests -------------------------------------------------------------
+
+    def open_trade(self, symbol: str, quantity: Decimal, limit_price: Decimal,
+                   stop_price: Decimal, planned_loss_usd: Decimal) -> str:
+        """Record and send a LIMIT BUY entry. Refuses (EntryRefused) instead of guessing."""
+        gate = self.gate()
+        if not gate.open:
+            raise EntryRefused(f"trading gate closed: {gate.cause}")
+        fences = self.fences()
+        if fences:
+            raise EntryRefused("entries fenced: " + ", ".join(sorted(fences)))
+        if len(self.trades()) >= self.config.risk.max_open_positions:
+            raise EntryRefused("open position limit reached")
+        if quantity <= 0 or quantity != quantity.to_integral_value():
+            raise EntryRefused("quantity must be a positive whole number")
+        if not ZERO < stop_price < limit_price:
+            raise EntryRefused("stop must be above zero and below the entry limit")
+
+        with self.store.transaction():
+            trade_id = f"t{self.store.next_counter('trade')}"
+            self.store.execute(
+                "INSERT INTO trades(trade_id, run_id, symbol, state, entry_quantity, "
+                "entry_limit_price, stop_price, planned_loss_usd, opened_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (trade_id, self.run_id, symbol, TradeState.OPENING, str(quantity),
+                 str(limit_price), str(stop_price), str(planned_loss_usd), now_utc()))
+            self.store.append("trade-opened", {
+                "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
+                "stop_price": stop_price, "planned_loss_usd": planned_loss_usd},
+                key=trade_id, run_id=self.run_id)
+            cid = self._write_intent(trade_id, Leg.ENTRY, symbol, Side.BUY, OrderType.LIMIT,
+                                     quantity, limit_price=limit_price)
+        self._send(cid)
+        return trade_id
+
+    def request_exit(self, trade_id: str, cause: str) -> bool:
+        """Ask for an orderly exit. Refused while a closing order of this trade was refused
+        (the operator must look first), so a caller can never turn it into a send loop."""
+        if self._has_fence(Fence.EXIT_REFUSED, trade_id):
+            return False
+        with self.store.transaction():
+            changed = self.store.execute(
+                "UPDATE trades SET exit_requested = ? WHERE trade_id = ? AND state != ? "
+                "AND exit_requested IS NULL", (cause, trade_id, TradeState.CLOSED))
+            if changed:
+                self.store.append("exit-requested", {"cause": cause}, key=trade_id,
+                                  run_id=self.run_id)
+        return bool(changed)
+
+    # --- sending ---------------------------------------------------------------------------
+
+    def _client_order_id(self, trade_id: str, leg: Leg) -> str:
+        n = self.store.next_counter(f"orders:{trade_id}")
+        cid = (f"{self.config.orders.client_order_id_prefix}{self.run_id[:8]}-"
+               f"{trade_id}-{_LEG_LETTER[leg]}{n}")
+        if len(cid) > self.config.orders.client_order_id_max_length:
+            raise ValueError(f"client_order_id too long: {cid}")
+        return cid
+
+    def _write_intent(self, trade_id: str, leg: Leg, symbol: str, side: Side,
+                      order_type: OrderType, quantity: Decimal, *,
+                      limit_price: Decimal | None = None,
+                      stop_price: Decimal | None = None) -> str:
+        cid = self._client_order_id(trade_id, leg)
+        self.store.execute(
+            "INSERT INTO orders(client_order_id, trade_id, leg, symbol, side, order_type, "
+            "quantity, limit_price, stop_price, send_state, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cid, trade_id, leg, symbol, side, order_type, str(quantity),
+             None if limit_price is None else str(limit_price),
+             None if stop_price is None else str(stop_price), SendState.INTENT, now_utc()))
+        self.store.append("order-intent", {
+            "trade_id": trade_id, "leg": leg, "symbol": symbol, "side": side,
+            "order_type": order_type, "quantity": quantity, "limit_price": limit_price,
+            "stop_price": stop_price}, key=cid, run_id=self.run_id)
+        return cid
+
+    def _set_send_state(self, cid: str, state: SendState, body: dict[str, Any],
+                        *, refusal: str | None = None, broker_order_id: str | None = None) -> None:
+        self.store.execute(
+            "UPDATE orders SET send_state = ?, refusal = COALESCE(?, refusal), "
+            "broker_order_id = COALESCE(?, broker_order_id), updated_at = ? "
+            "WHERE client_order_id = ?",
+            (state, refusal, broker_order_id, now_utc(), cid))
+        self.store.append(f"order-{state}", body, key=cid, run_id=self.run_id)
+
+    def _send(self, cid: str) -> None:
+        row = self.order(cid)
+        request = OrderRequest(
+            client_order_id=cid, symbol=row.symbol, side=row.side, order_type=row.order_type,
+            quantity=row.quantity, time_in_force=TimeInForce.DAY,
+            session=TradingSession.CORE, limit_price=row.limit_price,
+            stop_price=row.stop_price)
+        with self.store.transaction():
+            self._set_send_state(cid, SendState.ATTEMPTED, {})
+        try:
+            ack = self.broker.place(request)
+        except RateLimited:
+            # Local budget or HTTP 429: nothing was created. Not a broker rejection, so it
+            # does not count against stop retries; the next step decides again.
+            with self.store.transaction():
+                self._set_send_state(cid, SendState.REFUSED, {"code": "rate-limited"},
+                                     refusal="rate-limited")
+            return
+        except Refused as exc:
+            with self.store.transaction():
+                self._set_send_state(cid, SendState.REFUSED, {"code": exc.code},
+                                     refusal=exc.code)
+                self._count_rejection(row)
+            return
+        except Exception as exc:  # OutcomeUnknown and anything unexpected: may exist
+            with self.store.transaction():
+                self._set_send_state(cid, SendState.UNKNOWN, {"error": type(exc).__name__})
+                self._fence_row(Fence.UNKNOWN_ORDER, cid, "send outcome unknown")
+            return
+        with self.store.transaction():
+            self._set_send_state(cid, SendState.ACKNOWLEDGED, {},
+                                 broker_order_id=ack.broker_order_id)
+
+    def _count_rejection(self, row: OrderRow) -> None:
+        """Inside a transaction: the broker refused or rejected a stop or a closing order."""
+        if row.leg is Leg.STOP:
+            self.store.execute(
+                "UPDATE trades SET stop_failures = stop_failures + 1, "
+                "last_stop_failure_at = ? WHERE trade_id = ?", (self.clock(), row.trade_id))
+        elif row.leg is Leg.EXIT:
+            self.store.execute(
+                "UPDATE trades SET state = ?, exit_requested = NULL WHERE trade_id = ?",
+                (TradeState.OPEN, row.trade_id))
+            self.store.append("exit-refused", {"client_order_id": row.client_order_id},
+                              key=row.trade_id, run_id=self.run_id)
+            self._fence_row(Fence.EXIT_REFUSED, row.trade_id,
+                            "closing order refused; protection restored, operator must look")
+
+    def _cancel(self, row: OrderRow) -> None:
+        """One cancel decision. A new decision is allowed only after a later Detail read showed
+        the order still working (the previous cancel is then known not to have taken)."""
+        if row.cancel_state in (*_CANCEL_AWAITING, "requested"):
+            return
+        cid = row.client_order_id
+        if row.cancel_attempts > self.config.orders.cancel_retry_attempts:
+            self._set_fence(Fence.CANCEL_FAILED, cid, "order still working after every cancel")
+            return
+        with self.store.transaction():
+            self.store.execute(
+                "UPDATE orders SET cancel_state = 'requested', cancel_attempts = "
+                "cancel_attempts + 1, cancel_at = ?, updated_at = ? WHERE client_order_id = ?",
+                (self.clock(), now_utc(), cid))
+            self.store.append("cancel-intent", {"attempt": row.cancel_attempts + 1}, key=cid,
+                              run_id=self.run_id)
+        try:
+            self.broker.cancel(cid)
+            outcome = "sent"
+        except RateLimited:
+            outcome = "not-sent"
+        except (Refused, OrderNotFound):
+            outcome = "refused"
+        except Exception:  # noqa: BLE001 - any transport failure: outcome unknown
+            outcome = "unknown"
+        with self.store.transaction():
+            self.store.execute("UPDATE orders SET cancel_state = ?, updated_at = ? "
+                               "WHERE client_order_id = ?", (outcome, now_utc(), cid))
+            self.store.append(f"cancel-{outcome}", {}, key=cid, run_id=self.run_id)
+            if outcome in ("unknown", "refused"):
+                self._fence_row(Fence.CANCEL_UNKNOWN, cid, f"cancel {outcome}; waiting for Detail")
+
+    # --- observation -----------------------------------------------------------------------
+
+    def _apply_detail(self, row: OrderRow, detail: OrderDetail, *, resurrected: bool) -> None:
+        """Inside a transaction: record a Detail read."""
+        cid = row.client_order_id
+        if row.send_state is not SendState.ACKNOWLEDGED:
+            self._set_send_state(cid, SendState.ACKNOWLEDGED,
+                                 {"resolved_by": "resurrection" if resurrected else "detail"})
+        changed = (detail.state != row.broker_state
+                   or detail.filled_quantity != row.filled_quantity)
+        self.store.execute("UPDATE orders SET last_detail_at = ?, absent_reads = 0 "
+                           "WHERE client_order_id = ?", (self.clock(), cid))
+        if changed:
+            self.store.execute(
+                "UPDATE orders SET broker_state = ?, filled_quantity = ?, "
+                "average_fill_price = ?, updated_at = ? WHERE client_order_id = ?",
+                (detail.state, str(detail.filled_quantity),
+                 None if detail.average_fill_price is None
+                 else str(detail.average_fill_price), now_utc(), cid))
+            self.store.append("order-observed", {
+                "state": detail.state, "raw_status": detail.raw_status,
+                "filled_quantity": detail.filled_quantity,
+                "average_fill_price": detail.average_fill_price}, key=cid, run_id=self.run_id)
+            if detail.state is OrderState.REJECTED:
+                self._count_rejection(row)
+        # A cancel is known not to have taken when a read well after it still shows the
+        # order working: a new cancel decision becomes possible.
+        if (row.cancel_state in _CANCEL_AWAITING and not detail.state.terminal
+                and row.cancel_at is not None
+                and self.clock() - row.cancel_at
+                >= float(self.config.orders.cancel_retry_spacing_seconds)):
+            self.store.execute("UPDATE orders SET cancel_state = 'not-taken' "
+                               "WHERE client_order_id = ?", (cid,))
+            self.store.append("cancel-not-taken", {}, key=cid, run_id=self.run_id)
+
+    def _refresh(self, row: OrderRow, held: dict[str, Decimal]) -> None:
+        """One Detail read; RateLimited propagates so the caller stops reading this step.
+        The attempt time is recorded whatever the outcome, so scheduling rotates."""
+        cid = row.client_order_id
+        with self.store.transaction():
+            self.store.execute("UPDATE orders SET last_detail_at = ? WHERE client_order_id = ?",
+                               (self.clock(), cid))
+        try:
+            detail = self.broker.order_detail(cid)
+        except OrderNotFound:
+            self._not_found(row, held)
+            return
+        except RateLimited:
+            raise
+        except BrokerError:
+            return  # read failure: keep the last known state, try again next step
+        with self.store.transaction():
+            self._apply_detail(row, detail, resurrected=False)
+        for fence in (Fence.UNKNOWN_ORDER, Fence.ORDER_MISSING):
+            self._clear_fence(fence, cid)
+        if detail.state is OrderState.UNKNOWN:
+            self._set_fence(Fence.STATUS_UNKNOWN, cid, f"unmapped status {detail.raw_status!r}")
+        else:
+            self._clear_fence(Fence.STATUS_UNKNOWN, cid)
+        if detail.state.terminal or self.order(cid).cancel_state == "not-taken":
+            self._clear_fence(Fence.CANCEL_UNKNOWN, cid)
+
+    def _not_found(self, row: OrderRow, held: dict[str, Decimal]) -> None:
+        cid = row.client_order_id
+        if row.send_state is SendState.ACKNOWLEDGED:
+            # The broker acknowledged it and now says it does not exist: a conflict.
+            self._set_fence(Fence.ORDER_MISSING, cid, "acknowledged order not found by Detail")
+            return
+        reads = row.absent_reads + 1
+        with self.store.transaction():
+            self.store.execute("UPDATE orders SET absent_reads = ?, last_detail_at = ? "
+                               "WHERE client_order_id = ?", (reads, self.clock(), cid))
+        if reads < self.config.orders.unknown_absent_reads:
+            return
+        # Detail alone is not enough: also require absence from open orders, and for an
+        # entry no unexplained position in the symbol.
+        try:
+            open_ids = {o.client_order_id for o in self.broker.open_orders()}
+        except BrokerError:
+            return
+        if cid in open_ids:
+            return  # it exists; Detail will catch up
+        if row.leg is Leg.ENTRY and held.get(row.symbol, ZERO) > self._expected_in(row.symbol):
+            return
+        with self.store.transaction():
+            self._set_send_state(cid, SendState.ABSENT, {"reads": reads})
+            if row.leg is Leg.EXIT:
+                self._count_rejection(row)
+        self._clear_fence(Fence.UNKNOWN_ORDER, cid)
+
+    def _expected_in(self, symbol: str) -> Decimal:
+        total = ZERO
+        for trade in self.trades():
+            if trade.symbol == symbol:
+                total += self.expected_quantity(self.orders(trade.trade_id))
+        return total
+
+    def _resurrect(self, row: OrderRow, detail: OrderDetail | None, why: str) -> None:
+        """An order we had given up on exists at the broker: track it again and fence."""
+        cid = row.client_order_id
+        with self.store.transaction():
+            if detail is not None:
+                self._apply_detail(row, detail, resurrected=True)
+            else:
+                self._set_send_state(cid, SendState.ACKNOWLEDGED, {"resolved_by": "open-orders"})
+                self.store.execute("UPDATE orders SET broker_state = NULL "
+                                   "WHERE client_order_id = ?", (cid,))
+            self.store.execute(
+                "UPDATE trades SET state = ?, closed_at = NULL, close_cause = NULL "
+                "WHERE trade_id = ? AND state = ?",
+                (TradeState.OPEN, row.trade_id, TradeState.CLOSED))
+            self.store.append("order-resurrected", {"why": why}, key=cid, run_id=self.run_id)
+            self._fence_row(Fence.RESURRECTED, cid, why)
+
+    # --- the loop body ---------------------------------------------------------------------
+
+    def step(self) -> None:
+        """One pass: read positions, observe orders within budget, advance every trade."""
+        try:
+            positions = self.broker.positions()
+        except BrokerError as exc:
+            self._set_fence(Fence.BROKER_READ, "", f"positions read failed: {type(exc).__name__}")
+            return
+        self._clear_fence(Fence.BROKER_READ)
+        held = {p.symbol: p.quantity for p in positions if p.quantity != 0}
+
+        self._observe(held)
+        self._find_lost_fills(held)
+
+        open_symbols = set()
+        for trade in self.trades():
+            open_symbols.add(trade.symbol)
+            self._advance(trade, held.get(trade.symbol, ZERO))
+
+        for symbol in held:
+            if symbol not in open_symbols:
+                self._set_fence(Fence.FOREIGN_POSITION, symbol,
+                                "position not opened by this bot")
+        for name in self.fences():
+            fence, _, symbol = name.partition(":")
+            if fence == Fence.FOREIGN_POSITION and (symbol not in held
+                                                    or symbol in open_symbols):
+                self._clear_fence(Fence.FOREIGN_POSITION, symbol)
+
+    def _observe(self, held: dict[str, Decimal]) -> None:
+        due = [o for o in self.orders()
+               if o.send_state in (SendState.ACKNOWLEDGED, SendState.UNKNOWN)
+               and (o.broker_state is None or not o.broker_state.terminal)]
+        poll = float(self.config.orders.detail_poll_seconds)
+        due.sort(key=lambda row: _detail_priority(row, poll))
+        for row in due[:self.config.orders.detail_reads_per_step]:
+            try:
+                self._refresh(row, held)
+            except RateLimited:
+                self._set_fence(Fence.DETAIL_BUDGET, "", "Detail reads refused by the budget")
+                return
+        self._clear_fence(Fence.DETAIL_BUDGET)
+
+    def _find_lost_fills(self, held: dict[str, Decimal]) -> None:
+        """A position we cannot explain, in a symbol where we gave up on an order: ask Detail
+        about those orders once more; a fill there means the order existed after all."""
+        for symbol, quantity in held.items():
+            if quantity <= self._expected_in(symbol):
+                continue
+            for row in self.orders():
+                if row.symbol != symbol or row.send_state is not SendState.ABSENT:
+                    continue
+                try:
+                    detail = self.broker.order_detail(row.client_order_id)
+                except BrokerError:
+                    continue
+                self._resurrect(row, detail, "order given up on was found with a fill")
+
+    def _advance(self, trade: TradeRow, held: Decimal) -> None:
+        orders = self.orders(trade.trade_id)
+        entry = next(o for o in orders if o.leg is Leg.ENTRY)
+        stops = [o for o in orders if o.leg is Leg.STOP]
+        exits = [o for o in orders if o.leg is Leg.EXIT]
+        expected = self.expected_quantity(orders)
+        live = [o for o in orders if o.live]
+
+        if trade.state is TradeState.OPENING and entry.filled_quantity > 0:
+            self._set_trade_state(trade, TradeState.OPEN)
+            trade = self.trade(trade.trade_id)
+        if trade.exit_requested and trade.state is not TradeState.EXITING:
+            self._set_trade_state(trade, TradeState.EXITING)
+            trade = self.trade(trade.trade_id)
+
+        if not live and expected == 0 and held == 0:
+            cause = trade.exit_requested or (
+                "stopped-out" if any(o.filled_quantity > 0 for o in stops)
+                else "entry-not-filled" if entry.filled_quantity == 0 else "closed")
+            self._close(trade, cause)
+            return
+
+        # Only entry and exit orders change the quantity on purpose; a resting stop does not.
+        in_flight = entry.live or any(e.live for e in exits)
+        if held == expected or in_flight:
+            self._clear_fence(Fence.QUANTITY_MISMATCH, trade.trade_id)
+        else:
+            self._set_fence(Fence.QUANTITY_MISMATCH, trade.trade_id,
+                            f"broker holds {held}, Detail says {expected}")
+
+        if trade.state is TradeState.EXITING:
+            self._exit_step(trade, entry, stops, exits, held, expected)
+        else:
+            self._protect(trade, stops, expected)
+        self._watch_protection(trade, exits, expected)
+
+    def _protect(self, trade: TradeRow, stops: list[OrderRow], target: Decimal) -> None:
+        """Keep live stops covering `target` (Detail quantity, never the positions read)."""
+        covered = sum((s.open_quantity for s in stops if s.live), ZERO)
+        if covered > target:
+            self._set_fence(Fence.OVER_PROTECTED, trade.trade_id,
+                            f"stops cover {covered}, Detail holds {target}")
+        else:
+            self._clear_fence(Fence.OVER_PROTECTED, trade.trade_id)
+        if covered >= target:
+            return
+        orders = self.config.orders
+        if trade.stop_failures > orders.stop_retry_attempts:
+            if not self._has_fence(Fence.STOP_REJECTED, trade.trade_id):
+                self._set_fence(Fence.STOP_REJECTED, trade.trade_id,
+                                "protective stop refused after retries; exiting")
+                self.request_exit(trade.trade_id, "stop-rejected")
+            return
+        if (trade.last_stop_failure_at is not None and self.clock() - trade.last_stop_failure_at
+                < float(orders.stop_retry_spacing_seconds)):
+            return
+        with self.store.transaction():
+            cid = self._write_intent(trade.trade_id, Leg.STOP, trade.symbol, Side.SELL,
+                                     OrderType.STOP_LOSS, target - covered,
+                                     stop_price=trade.stop_price)
+        self._send(cid)
+
+    def _watch_protection(self, trade: TradeRow, exits: list[OrderRow],
+                          expected: Decimal) -> None:
+        """Fence while the held quantity lacks a verified stop; exit if that lasts too long."""
+        stops = [o for o in self.orders(trade.trade_id) if o.leg is Leg.STOP]
+        verified = sum((s.open_quantity for s in stops if s.verified), ZERO)
+        if expected <= 0 or verified >= expected:
+            self._clear_fence(Fence.UNPROTECTED, trade.trade_id)
+            return
+        self._set_fence(Fence.UNPROTECTED, trade.trade_id,
+                        f"verified stop covers {verified} of {expected}")
+        age = self._fence_age(f"{Fence.UNPROTECTED}:{trade.trade_id}") or 0.0
+        exiting = trade.state is TradeState.EXITING or any(e.live for e in exits)
+        if age >= float(self.config.orders.max_unprotected_seconds) and not exiting:
+            self._set_fence(Fence.UNPROTECTED_TIMEOUT, trade.trade_id,
+                            f"no verified stop for {int(age)} s; exiting")
+            self.request_exit(trade.trade_id, "unprotected-too-long")
+
+    def _exit_step(self, trade: TradeRow, entry: OrderRow, stops: list[OrderRow],
+                   exits: list[OrderRow], held: Decimal, expected: Decimal) -> None:
+        """Teardown in a safe order: entry first (stops keep protecting late fills), then the
+        stops, then one closing order for exactly the agreed quantity. Whenever the close
+        cannot be sent, protection is restored instead of waiting unprotected."""
+        if entry.live:
+            self._cancel(entry)
+            self._protect(trade, stops, expected)
+            return
+        if any(e.live for e in exits):
+            return
+        if held != expected or expected <= 0:
+            # Positions and Detail disagree: never sell on that; keep the Detail quantity
+            # protected until they agree (the mismatch fence is already set).
+            self._protect(trade, stops, max(expected, ZERO))
+            return
+        live_stops = [s for s in stops if s.live]
+        if live_stops:
+            for stop in live_stops:
+                self._cancel(stop)
+            return
+        with self.store.transaction():
+            cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
+                                     OrderType.MARKET, expected)
+        self._send(cid)
+
+    def _set_trade_state(self, trade: TradeRow, state: TradeState) -> None:
+        with self.store.transaction():
+            self.store.execute("UPDATE trades SET state = ? WHERE trade_id = ?",
+                               (state, trade.trade_id))
+            self.store.append("trade-state", {"from": trade.state, "to": state},
+                              key=trade.trade_id, run_id=self.run_id)
+
+    def _close(self, trade: TradeRow, cause: str) -> None:
+        with self.store.transaction():
+            self.store.execute(
+                "UPDATE trades SET state = ?, closed_at = ?, close_cause = ? WHERE trade_id = ?",
+                (TradeState.CLOSED, now_utc(), cause, trade.trade_id))
+            self.store.append("trade-closed", {"cause": cause}, key=trade.trade_id,
+                              run_id=self.run_id)
+        for fence in (Fence.UNPROTECTED, Fence.QUANTITY_MISMATCH, Fence.OVER_PROTECTED):
+            self._clear_fence(fence, trade.trade_id)
+
+    # --- shutdown --------------------------------------------------------------------------
+
+    def shutdown_pending(self) -> list[str]:
+        """One shutdown pass (spec 11): cancel working entries, keep protecting fills, leave
+        stops resting. Returns what still blocks a clean stop (empty = done)."""
+        with self.store.transaction():
+            self._fence_row(Fence.SHUTTING_DOWN, "", "shutdown in progress")
+        for trade in self.trades():
+            for order in self.orders(trade.trade_id):
+                if order.leg is Leg.ENTRY and order.live:
+                    self._cancel(order)
+        self.step()
+        pending = []
+        for trade in self.trades():
+            orders = self.orders(trade.trade_id)
+            if any(o.live and o.leg is not Leg.STOP for o in orders):
+                pending.append(f"{trade.trade_id}: entry or exit still working")
+            if self._has_fence(Fence.UNPROTECTED, trade.trade_id):
+                pending.append(f"{trade.trade_id}: position without a verified stop")
+        return pending
+
+    # --- startup ---------------------------------------------------------------------------
+
+    def recover(self) -> None:
+        """Call once at startup before anything else. Fences entries until reconciled."""
+        self._set_fence(Fence.STARTUP_RECONCILE, "", "startup reconciliation pending")
+        self._clear_fence(Fence.SHUTTING_DOWN)
+        for row in self.orders():
+            if row.send_state is SendState.INTENT:
+                # The attempt was never written, so the broker was never called.
+                with self.store.transaction():
+                    self._set_send_state(row.client_order_id, SendState.ABSENT,
+                                         {"recovered": "never attempted"})
+            elif row.send_state is SendState.ATTEMPTED:
+                with self.store.transaction():
+                    self._set_send_state(row.client_order_id, SendState.UNKNOWN,
+                                         {"recovered": "crashed during send"})
+                    self._fence_row(Fence.UNKNOWN_ORDER, row.client_order_id,
+                                    "crashed during send")
+            if row.cancel_state == "requested":
+                with self.store.transaction():
+                    self.store.execute("UPDATE orders SET cancel_state = 'unknown' "
+                                       "WHERE client_order_id = ?", (row.client_order_id,))
+                    self.store.append("cancel-unknown", {"recovered": "crashed during cancel"},
+                                      key=row.client_order_id, run_id=self.run_id)
+                    self._fence_row(Fence.CANCEL_UNKNOWN, row.client_order_id,
+                                    "crashed during cancel")
+        self.reconcile()
+
+    def reconcile(self) -> bool:
+        """Compare broker open orders with our records, then step. Returns False if a read
+        failed. The startup fence clears on the first success, whenever that is."""
+        try:
+            open_orders = self.broker.open_orders()
+        except BrokerError as exc:
+            self._set_fence(Fence.BROKER_READ, "", f"open orders read failed: {type(exc).__name__}")
+            return False
+        rows = {o.client_order_id: o for o in self.orders()}
+        broker_ids = set()
+        for order in open_orders:
+            cid = order.client_order_id
+            broker_ids.add(cid)
+            row = rows.get(cid)
+            if row is None:
+                self._set_fence(Fence.FOREIGN_ORDER, cid, "open order not in our records")
+            elif row.send_state is SendState.UNKNOWN:
+                with self.store.transaction():
+                    self._apply_detail(row, order, resurrected=False)
+                self._clear_fence(Fence.UNKNOWN_ORDER, cid)
+            elif not row.live:
+                # Ours, working at the broker, but we had given up on it.
+                self._resurrect(row, order, "working at the broker but not live in records")
+        for name in self.fences():
+            fence, _, cid = name.partition(":")
+            if fence == Fence.FOREIGN_ORDER and cid not in broker_ids:
+                self._clear_fence(Fence.FOREIGN_ORDER, cid)
+        self.step()
+        if self._has_fence(Fence.BROKER_READ):
+            return False
+        self._clear_fence(Fence.STARTUP_RECONCILE)
+        return True

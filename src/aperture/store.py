@@ -52,8 +52,68 @@ def _schema_v1(db: sqlite3.Connection) -> None:
         db.execute(statement)
 
 
+# v2: engine state tables. Decimals are stored as text; times as UTC ISO-8601 text.
+_SCHEMA_V2 = (
+    """CREATE TABLE trades (
+        trade_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        state TEXT NOT NULL,
+        entry_quantity TEXT NOT NULL,
+        entry_limit_price TEXT NOT NULL,
+        stop_price TEXT NOT NULL,
+        planned_loss_usd TEXT NOT NULL,
+        exit_requested TEXT,
+        stop_failures INTEGER NOT NULL DEFAULT 0,
+        last_stop_failure_at REAL,
+        opened_at TEXT NOT NULL,
+        closed_at TEXT,
+        close_cause TEXT
+    )""",
+    """CREATE TABLE orders (
+        client_order_id TEXT PRIMARY KEY,
+        trade_id TEXT NOT NULL REFERENCES trades(trade_id),
+        leg TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        order_type TEXT NOT NULL,
+        quantity TEXT NOT NULL,
+        limit_price TEXT,
+        stop_price TEXT,
+        send_state TEXT NOT NULL,
+        broker_state TEXT,
+        filled_quantity TEXT NOT NULL DEFAULT '0',
+        average_fill_price TEXT,
+        broker_order_id TEXT,
+        refusal TEXT,
+        absent_reads INTEGER NOT NULL DEFAULT 0,
+        cancel_state TEXT,
+        cancel_attempts INTEGER NOT NULL DEFAULT 0,
+        cancel_at REAL,
+        last_detail_at REAL,
+        updated_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX orders_trade ON orders(trade_id)",
+    """CREATE TABLE fences (
+        name TEXT PRIMARY KEY,
+        cause TEXT NOT NULL,
+        set_at TEXT NOT NULL,
+        set_at_epoch REAL NOT NULL
+    )""",
+    """CREATE TABLE counters (
+        name TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
+    )""",
+)
+
+
+def _schema_v2(db: sqlite3.Connection) -> None:
+    for statement in _SCHEMA_V2:
+        db.execute(statement)
+
+
 # Forward-only migrations. Never edit a released entry; append a new one.
-MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (_schema_v1,)
+MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (_schema_v1, _schema_v2)
 
 
 def _json_default(value: Any) -> Any:
@@ -165,6 +225,27 @@ class Store:
              json.dumps(body, default=_json_default, sort_keys=True)),
         )
         return int(cursor.lastrowid)
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> int:
+        """Write to a state table. Must be called inside `transaction()`; returns rowcount."""
+        if not self._in_transaction:
+            raise RuntimeError("state is written only inside a transaction")
+        return self._db.execute(sql, params).rowcount
+
+    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+        cursor = self._db.execute(sql, params)
+        cursor.row_factory = sqlite3.Row
+        return cursor.fetchall()
+
+    def next_counter(self, name: str) -> int:
+        """Durable monotonically increasing counter (inside a transaction)."""
+        if not self._in_transaction:
+            raise RuntimeError("counters are advanced only inside a transaction")
+        self._db.execute(
+            "INSERT INTO counters(name, value) VALUES (?, 1) "
+            "ON CONFLICT(name) DO UPDATE SET value = value + 1", (name,))
+        return int(self._db.execute("SELECT value FROM counters WHERE name = ?",
+                                    (name,)).fetchone()[0])
 
     def start_run(self, *, environment: str, config_digest: str, strategy: str,
                   strategy_version: str, code_version: str) -> str:

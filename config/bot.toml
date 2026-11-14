@@ -55,10 +55,24 @@ detail_poll_seconds = 3
 stop_retry_attempts = 2
 # Seconds between protective stop attempts; read by protection.
 stop_retry_spacing_seconds = 3
+# Detail reads per engine step (Sandbox Detail route: 30 per 60 s; one read every 3 s = 20 per minute); read by the engine.
+detail_reads_per_step = 1
+# Extra cancel attempts after Detail shows an order still working after a cancel; then an operator fence; read by the engine.
+cancel_retry_attempts = 2
+# Seconds after a cancel before a Detail read showing the order still working counts as "cancel did not take"; read by the engine.
+cancel_retry_spacing_seconds = 6
+# Seconds a position may lack a verified broker stop before the engine closes it; read by the engine.
+max_unprotected_seconds = 30
+# Seconds a SIGTERM shutdown may spend cancelling entries and protecting fills before it gives
+# up with an alert (below the supervisor's 90 s alert and launchd's 120 s cap); read by the engine loop.
+shutdown_deadline_seconds = 60
 # Seconds between reconciliation passes (positions + open orders); read by runtime.
 reconcile_interval_seconds = 10
 # Maximum age in seconds of the last broker read before entries are blocked; read by safety.
 broker_read_max_age_seconds = 30
+# Consecutive "order not found" Detail reads before an order with an unknown send outcome is
+# treated as never created; read by the engine.
+unknown_absent_reads = 3
 
 [probe]
 # Shares per probe order (owner 2026-11-14); read by the probe command.
