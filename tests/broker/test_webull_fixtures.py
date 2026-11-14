@@ -45,7 +45,7 @@ def recorded_combo() -> dict:
 
 
 def test_fixtures_carry_no_account_identity():
-    for path in FIXTURES.glob("*.json"):
+    for path in [*FIXTURES.rglob("*.json"), *FIXTURES.rglob("*.md")]:
         text = path.read_text("utf-8")
         assert "account_id" not in text, path.name
         assert "TS" + "JE" not in text, path.name  # prefix of the real Sandbox account

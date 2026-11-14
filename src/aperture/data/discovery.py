@@ -5,7 +5,8 @@ One pass (spec section 6):
    Rows of one instrument that disagree on symbol, exchange or currency, or one symbol under two
    instrument ids, are refused as conflicting, never resolved by picking one.
 2. Universe: exchange, currency and security type must be in the configured lists. A row without
-   a security type is refused (`SECURITY_TYPE_UNKNOWN`).
+   a security type is refused (`SECURITY_TYPE_UNKNOWN`). Webull screener rows carry no type; the
+   provider fills it from its instrument profile (no symbol lists, owner 2026-11-14).
 3. Spread: one snapshot quote per symbol, fresh (provider time within `max_quote_age` and not
    ahead of our clock by more than `max_clock_skew`), bid and
    ask positive and not crossed, (ask - bid) / mid within the limit.

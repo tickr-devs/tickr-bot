@@ -154,3 +154,20 @@ def test_sdk_writes_no_logs_stdout_or_files(env, monkeypatch, capsys, caplog):
         assert canary not in text
     assert not [r for r in caplog.records if r.name.startswith("webull")]
     assert not list(env.glob("*.log"))
+
+
+def test_market_data_requests_never_carry_the_account_id(env, monkeypatch):
+    wire = install(monkeypatch, {
+        "/market-data/stocks/snapshots/list": [(200, [])],
+        "/market-data/stocks/bars/list": [(200, {"result": []})],
+    })
+    transport = SdkTransport(settings(env))
+    transport.send(Route.SNAPSHOT, {"symbols": "AAA", "category": "US_STOCK"})
+    transport.send(Route.BARS, {"symbols": ["AAA"], "category": "US_STOCK", "timespan": "M1",
+                                "count": "390"})
+    get, post = wire.calls[-2:]
+    query = parse_qs(urlsplit(get.url).query)
+    assert "account_id" not in query and query["symbols"] == ["AAA"]
+    assert "account_id" not in json.loads(post.body)
+    assert json.loads(post.body)["symbols"] == ["AAA"]
+    assert ACCOUNT not in get.url and ACCOUNT not in str(post.body)

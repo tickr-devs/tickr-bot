@@ -95,9 +95,13 @@ class MarketDataConfig:
     discovery_interval_seconds: Decimal
     allowed_exchanges: tuple[str, ...]
     allowed_currencies: tuple[str, ...]
+    screener_category: str
     allowed_security_types: tuple[str, ...]
+    profile_symbols_per_request: int
     max_spread_ratio: Decimal
     min_session_dollar_volume_usd: Decimal
+    gainers_losers_rank_type: str
+    top_actives_rank_type: str
     snapshot_symbols_per_request: int
     bars_symbols_per_request: int
     bars_per_symbol: int

@@ -144,7 +144,7 @@ Each stage is one or more PRs; the next starts after the previous merges.
 
 | # | Stage | Done when |
 |---|---|---|
-| 0 | Probe broker facts (owner present, market hours) | Answered: are Sandbox quotes real time; does a 1-share LIMIT BUY fill; is OTO entry+stop accepted; is STOP_LOSS accepted and visible; cancel stop + MARKET close; non-empty positions/open-orders shapes. Responses saved as fixtures. |
+| 0 | Probe broker facts (owner present, market hours) | Answered: are Sandbox quotes real time; does a 1-share LIMIT BUY fill; is OTO entry+stop accepted; is STOP_LOSS accepted and visible; cancel stop + MARKET close; non-empty positions/open-orders shapes; instrument profile shape (security type of a stock, ETF, warrant, ADR) and a raw M1 bars body. Responses saved as fixtures. |
 | 1 | Skeleton | config loader + comment rule, SQLite journal, single-instance lock, fake broker, CLI `status`, CI. |
 | 2 | Webull adapter | read account/positions/orders/Detail, place/cancel, host allowlist, request budget; recorded-shape tests green. |
 | 3 | Protected trade on command | `enter 1 SYMBOL` does intent -> order -> fill -> stop -> exit -> reconcile in Sandbox; kill -9 mid-trade and restart resumes correctly. |

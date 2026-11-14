@@ -101,18 +101,30 @@ command_max_age_seconds = 60
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).
 discovery_interval_seconds = 60
-# Exchange codes allowed in discovery (owner 2026-10-16; Webull screener `exchange_code`); read by data.discovery.
+# Exchange codes allowed in discovery: US exchanges (owner 2026-10-16; Webull screener `exchange_code`); the issuer's
+# country is not filtered, so US-listed foreign companies (ADRs) pass; read by data.discovery.
 allowed_exchanges = ["NMS", "NAS", "NSQ", "NYS", "ASE"]
 # Currencies allowed in discovery (screener `currency`); read by data.discovery.
 allowed_currencies = ["USD"]
-# Security types allowed (owner 2026-10-16: common stocks only); a row without a type is refused; read by data.discovery.
+# Webull `category` sent with every screener, snapshot, bars and instrument-profile request; read by broker.webull market data.
+screener_category = "US_STOCK"
+# Security types allowed, as named by Webull's instrument profile (owner 2026-11-14: no ETFs, no warrants; ADRs on US
+# exchanges are fine). The profile's type field and values are UNPROVEN until the stage-0 probe; a row whose type is
+# unknown is refused. Read by data.discovery.
 allowed_security_types = ["COMMON_STOCK"]
+# Symbols per instrument-profile request (security type lookup, cached per symbol per New York day; limit unverified);
+# read by broker.webull market data.
+profile_symbols_per_request = 100
 # Platform floor: maximum snapshot spread (ask - bid) / mid for a discovery candidate, ratio; read by data.discovery.
 # Independent of strategies/<name>/strategy.toml [liquidity]: a strategy may be stricter; edit each on its own.
 max_spread_ratio = 0.015
 # Platform floor: minimum current-session dollar volume (sum of close x volume of completed M1 bars), USD; read by data.discovery.
 # Independent of the strategy's min_dollar_volume_usd: a strategy may be stricter; edit each on its own.
 min_session_dollar_volume_usd = 5000000
+# Webull gainers/losers `rank_type` during the regular session (DAY_1 = today's change); read by broker.webull market data.
+gainers_losers_rank_type = "DAY_1"
+# Webull top-actives `rank_type` (RELATIVE_VOLUME_10D, as in the 2026-11-10 probe); read by broker.webull market data.
+top_actives_rank_type = "RELATIVE_VOLUME_10D"
 # Symbols per snapshot request (Webull docs: at most 100); read by data.discovery.
 snapshot_symbols_per_request = 100
 # Symbols per M1 bars request (Webull docs: 20); read by data.discovery.

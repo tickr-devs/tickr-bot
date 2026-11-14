@@ -30,8 +30,9 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Protocol
@@ -47,12 +48,22 @@ from aperture.broker.base import (
 )
 from aperture.broker.budget import RequestBudget, RouteLimit
 from aperture.broker.status import map_status
+from aperture.calendar import ny_date_of
 from aperture.config import Config, GateResult, trading_gate
+from aperture.data.base import (
+    DelayedData,
+    MarketDataError,
+    QuoteListener,
+    ScreenerKind,
+    ScreenerRow,
+)
 from aperture.types import (
+    Bar,
     OrderDetail,
     OrderRequest,
     OrderType,
     Position,
+    Quote,
     Side,
 )
 
@@ -95,6 +106,11 @@ class Route(Enum):
     ORDER_DETAIL = ("GET", "/trading/orders/get", False)
     PLACE = ("POST", "/trading/orders/place", True)
     CANCEL = ("POST", "/trading/orders/cancel", True)
+    GAINERS_LOSERS = ("GET", "/market-data/screeners/gainers-losers/list", False)
+    TOP_ACTIVES = ("GET", "/market-data/screeners/top-actives/list", False)
+    SNAPSHOT = ("GET", "/market-data/stocks/snapshots/list", False)
+    BARS = ("POST", "/market-data/stocks/bars/list", False)
+    PROFILES = ("GET", "/trading/instruments/stocks/profiles/list", False)
 
     @property
     def method(self) -> str:
@@ -107,6 +123,13 @@ class Route(Enum):
     @property
     def mutating(self) -> bool:
         return self.value[2]
+
+
+# Routes that are not account-scoped: the transport never adds the account id to them.
+ACCOUNT_FREE_ROUTES = frozenset(
+    {Route.ACCOUNTS, Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS,
+     Route.PROFILES}
+)
 
 
 # --------------------------------------------------------------------------------------------
@@ -463,6 +486,37 @@ def build_order_body(request: OrderRequest, client_order_id_max_length: int) -> 
 # --------------------------------------------------------------------------------------------
 
 
+def send_once(
+    transport: Transport,
+    budget: RequestBudget,
+    route: Route,
+    params: Mapping[str, Any],
+    clock: Callable[[], float],
+) -> WireResponse:
+    """Take budget, send once, handle transport failure and 429. Never retries."""
+    budget.take(route.path)  # BudgetExhausted (RateLimited): nothing was sent
+    started = clock()
+    try:
+        response = transport.send(route, params)
+    except TransportFailure as failure:
+        log.warning("%s %s transport failure %s", route.method, route.path, failure.code)
+        if route.mutating:
+            raise OutcomeUnknown(f"{route.name}: no response ({failure.code})") from None
+        raise BrokerReadFailed(route.name, None, failure.code) from None
+    elapsed_ms = (clock() - started) * 1000
+    log.info(
+        "%s %s -> %s %s (%.0f ms)",
+        route.method, route.path, response.status, response.error_code or "", elapsed_ms,
+    )
+    if response.status == HTTP_TOO_MANY_REQUESTS:
+        budget.pause(route.path)
+        if route.mutating:
+            # Not proven that a throttled POST created nothing: resolve by Detail.
+            raise OutcomeUnknown(f"{route.name}: HTTP 429 on a trading request")
+        raise RateLimited(f"{route.name}: HTTP 429 {response.error_code or ''}".strip())
+    return response
+
+
 class WebullBroker:
     """`Broker` over a `Transport`, with a per-route request budget."""
 
@@ -491,28 +545,7 @@ class WebullBroker:
     # -- plumbing -------------------------------------------------------------------------
 
     def _send(self, route: Route, params: Mapping[str, Any]) -> WireResponse:
-        """Take budget, send once, handle transport failure and 429. Never retries."""
-        self._budget.take(route.path)  # BudgetExhausted (RateLimited): nothing was sent
-        started = self._clock()
-        try:
-            response = self._transport.send(route, params)
-        except TransportFailure as failure:
-            log.warning("%s %s transport failure %s", route.method, route.path, failure.code)
-            if route.mutating:
-                raise OutcomeUnknown(f"{route.name}: no response ({failure.code})") from None
-            raise BrokerReadFailed(route.name, None, failure.code) from None
-        elapsed_ms = (self._clock() - started) * 1000
-        log.info(
-            "%s %s -> %s %s (%.0f ms)",
-            route.method, route.path, response.status, response.error_code or "", elapsed_ms,
-        )
-        if response.status == HTTP_TOO_MANY_REQUESTS:
-            self._budget.pause(route.path)
-            if route.mutating:
-                # Not proven that a throttled POST created nothing: resolve by Detail.
-                raise OutcomeUnknown(f"{route.name}: HTTP 429 on a trading request")
-            raise RateLimited(f"{route.name}: HTTP 429 {response.error_code or ''}".strip())
-        return response
+        return send_once(self._transport, self._budget, route, params, self._clock)
 
     @staticmethod
     def _order_not_present(response: WireResponse) -> bool:
@@ -605,6 +638,243 @@ class WebullBroker:
             raise OrderNotFound(client_order_id)
         # No cancel refusal code is proven yet: anything else is resolved by Detail.
         raise OutcomeUnknown(f"CANCEL: HTTP {response.status} {response.error_code or ''}".strip())
+
+
+# --------------------------------------------------------------------------------------------
+# Market data over HTTP (aperture.data.base.MarketData). Shapes: tests/fixtures/webull/market_data.
+# --------------------------------------------------------------------------------------------
+
+MARKET_DATA_PROVIDER = "webull"
+BARS_TIMESPAN_M1 = "M1"
+DIRECTION_GAINERS = "DESC"
+DIRECTION_LOSERS = "ASC"
+MILLISECONDS_PER_SECOND = 1000
+# Candidate security-type keys of an instrument profile row, read in this order. UNPROVEN: no
+# profile response has been recorded (probe M1). None present = type unknown = refused later.
+SECURITY_TYPE_KEYS = ("security_type", "instrument_type", "sub_category", "type")
+
+
+def epoch_ms_to_utc(value: Any, where: str) -> datetime:
+    """Epoch milliseconds (JSON number or digit string) -> aware UTC datetime."""
+    millis = to_decimal(value, where)
+    if millis != millis.to_integral_value() or millis <= 0:
+        raise MalformedResponse(f"{where}: not a positive whole number of milliseconds")
+    return datetime.fromtimestamp(int(millis) / MILLISECONDS_PER_SECOND, tz=UTC)
+
+
+def _bar_time(value: Any, where: str) -> datetime:
+    """Bar `time`: its wire format is UNPROVEN (no raw bars body recorded). Accept epoch ms or
+    ISO-8601 with an explicit offset; refuse anything else rather than guess a time zone."""
+    if isinstance(value, str) and not value.strip().isdigit():
+        try:
+            parsed = datetime.fromisoformat(value.strip())
+        except ValueError:
+            raise MalformedResponse(f"{where}: unsupported time {value!r}") from None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise MalformedResponse(f"{where}: time without an offset {value!r}")
+        return parsed.astimezone(UTC)
+    return epoch_ms_to_utc(value, where)
+
+
+def read_screener(body: Any, kind: ScreenerKind) -> list[ScreenerRow]:
+    """Screener body (bare array, recorded) -> rows in provider order, rank from 1."""
+    rows: list[ScreenerRow] = []
+    for index, item in enumerate(_unwrap_list(body, "screener"), start=1):
+        where = f"screener[{index}]"
+        rows.append(ScreenerRow(
+            kind=kind,
+            rank=index,
+            instrument_id=str(_require(item, "instrument_id", where)),
+            symbol=str(_require(item, "symbol", where)),
+            exchange_code=str(_require(item, "exchange_code", where)),
+            currency=str(_require(item, "currency", where)),
+            security_type=None,  # screener rows carry none; filled from the profile
+            fields={str(k): str(v) for k, v in item.items() if v is not None},
+        ))
+    return rows
+
+
+def read_profiles(body: Any) -> dict[str, str | None]:
+    """Instrument profile rows -> {symbol: security type or None}. Shape UNPROVEN (probe M1):
+    rows bare or under `data`; the type is the first present key of SECURITY_TYPE_KEYS."""
+    types: dict[str, str | None] = {}
+    for index, item in enumerate(_unwrap_list(body, "profiles")):
+        where = f"profiles[{index}]"
+        symbol = str(_require(item, "symbol", where))
+        found = next((str(item[k]) for k in SECURITY_TYPE_KEYS if _optional(item, k) is not None),
+                     None)
+        if symbol in types and types[symbol] != found:
+            raise MalformedResponse(f"{where}: {symbol} listed twice with different types")
+        types[symbol] = found
+    return types
+
+
+def read_snapshot(body: Any, receipt_time: datetime) -> list[Quote]:
+    """Snapshot body (bare array, recorded) -> quotes.
+
+    A row without bid, ask, sizes or `quote_time` (for example a halted symbol) yields no quote;
+    the caller then records NO_QUOTE for it. A row that is not an object or has no symbol, or a
+    present but malformed value, raises MalformedResponse."""
+    quotes: list[Quote] = []
+    for index, item in enumerate(_unwrap_list(body, "snapshot")):
+        where = f"snapshot[{index}]"
+        symbol = str(_require(item, "symbol", where))
+        needed = ("bid", "ask", "bid_size", "ask_size", "quote_time")
+        absent = [k for k in needed if _optional(item, k) is None]
+        if absent:
+            log.warning("snapshot %s without %s: no quote", symbol, ",".join(absent))
+            continue
+        quotes.append(Quote(
+            symbol=symbol,
+            bid=_decimal_field(item, "bid", where),
+            ask=_decimal_field(item, "ask", where),
+            bid_size=_decimal_field(item, "bid_size", where),
+            ask_size=_decimal_field(item, "ask_size", where),
+            provider_time=epoch_ms_to_utc(item["quote_time"], f"{where}.quote_time"),
+            receipt_time=receipt_time,
+        ))
+    return quotes
+
+
+def read_bars(body: Any) -> list[Bar]:
+    """Bars body `{result: [{delay_minutes, instrument_id, symbol, result: [bar...]}]}` -> bars,
+    oldest first per symbol. Any series with delay_minutes != 0 raises DelayedData."""
+    if not isinstance(body, Mapping):
+        raise MalformedResponse("bars: expected an object with 'result'")
+    series = body.get("result")
+    if not isinstance(series, list):
+        raise MalformedResponse("bars: missing list 'result'")
+    bars: list[Bar] = []
+    delayed: list[str] = []
+    delay = Decimal(0)
+    for index, entry in enumerate(series):
+        where = f"bars.result[{index}]"
+        symbol = str(_require(entry, "symbol", where))
+        minutes = to_decimal(_require_present(entry, "delay_minutes", where),
+                             f"{where}.delay_minutes")
+        if minutes != 0:
+            delayed.append(symbol)
+            delay = max(delay, minutes)
+            continue
+        rows = entry.get("result")
+        if not isinstance(rows, list):
+            raise MalformedResponse(f"{where}: missing list 'result'")
+        own = []
+        for number, row in enumerate(rows):
+            at = f"{where}.result[{number}]"
+            own.append(Bar(
+                symbol=symbol,
+                start=_bar_time(_require(row, "time", at), f"{at}.time"),
+                open=_decimal_field(row, "open", at),
+                high=_decimal_field(row, "high", at),
+                low=_decimal_field(row, "low", at),
+                close=_decimal_field(row, "close", at),
+                volume=_decimal_field(row, "volume", at),
+            ))
+        bars.extend(sorted(own, key=lambda b: b.start))
+    if delayed:
+        raise DelayedData(delayed, delay)
+    return bars
+
+
+def _require_present(obj: Any, key: str, where: str) -> Any:
+    """Like _require, but 0 is a value (delay_minutes = 0 means real time)."""
+    if not isinstance(obj, Mapping) or key not in obj or obj[key] is None or obj[key] == "":
+        raise MalformedResponse(f"{where}: missing field {key!r}")
+    return obj[key]
+
+
+class WebullMarketData:
+    """`MarketData` over the HTTP routes. Takes request budget per route like the broker.
+
+    Screener rows get their security type from the instrument profile (one lookup per new
+    symbol per New York day). The L1 stream (MQTT) is not implemented yet: subscribe and
+    unsubscribe raise MarketDataError.
+    """
+
+    def __init__(
+        self,
+        transport: Transport,
+        budget: RequestBudget,
+        category: str,
+        gainers_losers_rank_type: str,
+        top_actives_rank_type: str,
+        profile_symbols_per_request: int,
+        utc_now: Callable[[], datetime],
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if profile_symbols_per_request < 1:
+            raise AdapterConfigError("profile_symbols_per_request must be at least 1")
+        self._profile_chunk = profile_symbols_per_request
+        self._types: dict[str, str | None] = {}
+        self._types_day: date | None = None
+        self._transport = transport
+        self._budget = budget
+        self._category = category
+        self._gainers_losers_rank_type = gainers_losers_rank_type
+        self._top_actives_rank_type = top_actives_rank_type
+        self._utc_now = utc_now
+        self._clock = clock
+
+    @property
+    def provider(self) -> str:
+        return MARKET_DATA_PROVIDER
+
+    def _read(self, route: Route, params: Mapping[str, Any]) -> Any:
+        response = send_once(self._transport, self._budget, route, params, self._clock)
+        if not response.ok:
+            raise BrokerReadFailed(route.name, response.status, response.error_code)
+        return response.body
+
+    def screener(self, kind: ScreenerKind) -> list[ScreenerRow]:
+        if kind is ScreenerKind.TOP_ACTIVES:
+            body = self._read(Route.TOP_ACTIVES, {
+                "category": self._category, "rank_type": self._top_actives_rank_type})
+        else:
+            direction = DIRECTION_GAINERS if kind is ScreenerKind.GAINERS else DIRECTION_LOSERS
+            body = self._read(Route.GAINERS_LOSERS, {
+                "category": self._category,
+                "rank_type": self._gainers_losers_rank_type,
+                "direction": direction,
+            })
+        return self._with_types(read_screener(body, kind))
+
+    def _with_types(self, rows: list[ScreenerRow]) -> list[ScreenerRow]:
+        """Fill each row's security type from the instrument profile, cached per New York day.
+
+        A budget refusal (RateLimited) propagates so the caller shows it; rows the profile does
+        not mention, or that state no type, keep None and are refused by discovery."""
+        today = ny_date_of(self._utc_now())
+        if self._types_day != today:
+            self._types, self._types_day = {}, today
+        missing = list(dict.fromkeys(r.symbol for r in rows if r.symbol not in self._types))
+        for start in range(0, len(missing), self._profile_chunk):
+            chunk = missing[start:start + self._profile_chunk]
+            found = read_profiles(self._read(Route.PROFILES, {
+                "symbols": ",".join(chunk), "category": self._category}))
+            for symbol in chunk:
+                self._types[symbol] = found.get(symbol)
+        return [replace(r, security_type=self._types[r.symbol]) for r in rows]
+
+    def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
+        body = self._read(Route.SNAPSHOT, {
+            "symbols": ",".join(symbols), "category": self._category})
+        return read_snapshot(body, self._utc_now())
+
+    def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
+        body = self._read(Route.BARS, {
+            "symbols": list(symbols),
+            "category": self._category,
+            "timespan": BARS_TIMESPAN_M1,
+            "count": str(count),
+        })
+        return read_bars(body)
+
+    def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
+        raise MarketDataError("L1 stream is not implemented in this adapter yet")
+
+    def unsubscribe(self, symbols: Iterable[str]) -> None:
+        raise MarketDataError("L1 stream is not implemented in this adapter yet")
 
 
 # --------------------------------------------------------------------------------------------
@@ -719,11 +989,11 @@ class SdkTransport:
 
         query: dict[str, Any] = {}
         body: dict[str, Any] | None = None
-        if route is not Route.ACCOUNTS:
-            if route.method == "GET":
-                query = {"account_id": self._account_id, **params}
-            else:
-                body = {"account_id": self._account_id, **params}
+        scoped = {} if route in ACCOUNT_FREE_ROUTES else {"account_id": self._account_id}
+        if route.method == "GET":
+            query = {**scoped, **params}
+        else:
+            body = {**scoped, **params}
         request = ApiRequest(
             route.path,
             version=SDK_API_VERSION,
@@ -791,6 +1061,23 @@ def budget_from_config(
         for route, (count, window) in env.route_limits.items()
     }
     return RequestBudget(default, limits, clock=clock)
+
+
+def market_data_from_config(
+    config: Config, transport: Transport | None = None, budget: RequestBudget | None = None
+) -> WebullMarketData:
+    """HTTP market data for the active environment. Pass the broker's transport (one token,
+    one SDK client) and, to share route accounting, its budget."""
+    md = config.market_data
+    return WebullMarketData(
+        transport if transport is not None else SdkTransport(settings_from_config(config)),
+        budget if budget is not None else budget_from_config(config),
+        md.screener_category,
+        md.gainers_losers_rank_type,
+        md.top_actives_rank_type,
+        md.profile_symbols_per_request,
+        utc_now=lambda: datetime.now(UTC),
+    )
 
 
 def broker_from_config(config: Config, transport: Transport | None = None) -> WebullBroker:

@@ -1,0 +1,88 @@
+{
+  "category": "US_STOCK",
+  "direction": "DESC",
+  "environment": "sandbox",
+  "observations": [
+    {
+      "key_names": [
+        "amplitude",
+        "change",
+        "change_ratio",
+        "close",
+        "currency",
+        "currency_code",
+        "exchange_code",
+        "high",
+        "instrument_id",
+        "low",
+        "market_value",
+        "name",
+        "open",
+        "pe_ttm",
+        "pre_close",
+        "price",
+        "relative_volume_10d",
+        "symbol",
+        "turnover_rate",
+        "volume"
+      ],
+      "rank_type": "PRE_MARKET",
+      "rows": 200
+    },
+    {
+      "key_names": [
+        "amplitude",
+        "change",
+        "change_ratio",
+        "close",
+        "currency",
+        "currency_code",
+        "exchange_code",
+        "high",
+        "instrument_id",
+        "low",
+        "market_value",
+        "name",
+        "open",
+        "pe_ttm",
+        "pre_close",
+        "price",
+        "relative_volume_10d",
+        "symbol",
+        "turnover_rate",
+        "volume"
+      ],
+      "rank_type": "DAY_1",
+      "rows": 200
+    },
+    {
+      "key_names": [
+        "amplitude",
+        "change",
+        "change_ratio",
+        "close",
+        "currency",
+        "currency_code",
+        "exchange_code",
+        "high",
+        "instrument_id",
+        "low",
+        "market_value",
+        "name",
+        "open",
+        "pe_ttm",
+        "pre_close",
+        "price",
+        "relative_volume_10d",
+        "symbol",
+        "turnover_rate",
+        "volume"
+      ],
+      "rank_type": "AFTER_MARKET",
+      "rows": 200
+    }
+  ],
+  "route": "/market-data/screeners/gainers-losers/list",
+  "sort_by": "CHANGE_RATIO",
+  "version": "v3"
+}
