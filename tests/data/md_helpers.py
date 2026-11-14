@@ -41,6 +41,7 @@ def settings(**overrides: object) -> DiscoverySettings:
         max_spread_ratio=Decimal("0.015"),
         min_session_dollar_volume_usd=Decimal("5000000"),
         max_quote_age=timedelta(seconds=5),
+        max_clock_skew=timedelta(seconds=1),
         snapshot_symbols_per_request=100,
         bars_symbols_per_request=20,
         bars_per_symbol=390,

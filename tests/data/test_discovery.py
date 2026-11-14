@@ -52,6 +52,7 @@ def test_settings_from_bot_config():
     cfg = config.load(ROOT / "config" / "bot.toml")
     s = DiscoverySettings.from_config(cfg)
     assert "NSQ" in s.allowed_exchanges and s.max_quote_age == timedelta(seconds=5)
+    assert s.max_clock_skew == timedelta(seconds=float(cfg.risk.max_clock_skew_seconds))
     assert s.bars_symbols_per_request == 20
 
 
@@ -106,15 +107,19 @@ def test_universe_refusals():
 
 def test_quote_refusals():
     md = FakeMarketData()
-    md.set_screener(G, [row(G, i, s) for i, s in enumerate(["NOQ", "OLD", "BAD", "WIDE"], 1)])
+    symbols = ["NOQ", "OLD", "FUT", "BAD", "WIDE", "SKEW"]
+    md.set_screener(G, [row(G, i, s) for i, s in enumerate(symbols, 1)])
     md.set_quote(quote("OLD", age_seconds=6))
+    md.set_quote(quote("FUT", age_seconds=-2))
+    md.set_quote(quote("SKEW", age_seconds=-1))
     md.set_quote(quote("BAD", bid="10.05", ask="10.00"))
     md.set_quote(quote("WIDE", bid="10.00", ask="10.20"))
     result = run(md)
     causes = {r.symbol: r.cause for r in result.rejections}
     assert causes == {"NOQ": Cause.NO_QUOTE, "OLD": Cause.QUOTE_STALE,
-                      "BAD": Cause.QUOTE_INVALID, "WIDE": Cause.SPREAD_TOO_WIDE}
-    assert result.evaluated == 4 and not any(c[0] == "bars" for c in md.calls)
+                      "FUT": Cause.QUOTE_FROM_FUTURE, "BAD": Cause.QUOTE_INVALID,
+                      "WIDE": Cause.SPREAD_TOO_WIDE, "SKEW": Cause.NO_BARS}
+    assert result.evaluated == 6  # SKEW is 1 s ahead, within the allowed skew: it reached bars
 
 
 def test_dollar_volume_counts_only_completed_session_minutes():

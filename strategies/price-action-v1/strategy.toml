@@ -59,6 +59,8 @@ minimum_stop_percent = 0.5
 slippage_reserve_atr = 0.05
 
 [liquidity]
+# Strategy thresholds, read by price_action_v1. Discovery applies its own platform floor from
+# config/bot.toml [market_data]; the two are edited independently and the stricter one decides.
 # Regular session: maximum (ask - bid) / mid.
 max_spread_ratio = 0.015
 # Regular session: minimum current-session dollar volume (sum of close x volume of completed minutes), USD.

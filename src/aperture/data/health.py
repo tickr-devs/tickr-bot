@@ -15,7 +15,7 @@ A query for a symbol that is not tracked raises `UntrackedSymbol` instead of ans
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -107,15 +107,27 @@ class StreamHealth:
 
 
 class FanOut:
-    """Forwards every stream event to several listeners, in order."""
+    """Forwards every stream event to several listeners, in order, each isolated.
 
-    def __init__(self, *listeners: QuoteListener) -> None:
+    A listener that raises (for example capture with a full disk) never stops the others from
+    receiving the event and never propagates into the provider's thread: the failure is handed
+    to `on_error(listener, event, error)`, which must record it (journal, alert) and not raise.
+    """
+
+    def __init__(self, *listeners: QuoteListener,
+                 on_error: Callable[[QuoteListener, str, Exception], None]) -> None:
         self._listeners = listeners
+        self._on_error = on_error
+
+    def _each(self, event: str, call: Callable[[QuoteListener], None]) -> None:
+        for listener in self._listeners:
+            try:
+                call(listener)
+            except Exception as exc:  # noqa: BLE001 - isolation is the point; reported below
+                self._on_error(listener, event, exc)
 
     def on_quote(self, quote: Quote) -> None:
-        for listener in self._listeners:
-            listener.on_quote(quote)
+        self._each("quote", lambda listener: listener.on_quote(quote))
 
     def on_transport(self, up: bool, at: datetime, detail: str) -> None:
-        for listener in self._listeners:
-            listener.on_transport(up, at, detail)
+        self._each("transport", lambda listener: listener.on_transport(up, at, detail))

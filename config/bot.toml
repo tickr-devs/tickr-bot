@@ -91,9 +91,11 @@ allowed_exchanges = ["NMS", "NAS", "NSQ", "NYS", "ASE"]
 allowed_currencies = ["USD"]
 # Security types allowed (owner 2026-10-16: common stocks only); a row without a type is refused; read by data.discovery.
 allowed_security_types = ["COMMON_STOCK"]
-# Maximum snapshot spread (ask - bid) / mid for a candidate, ratio; read by data.discovery.
+# Platform floor: maximum snapshot spread (ask - bid) / mid for a discovery candidate, ratio; read by data.discovery.
+# Independent of strategies/<name>/strategy.toml [liquidity]: a strategy may be stricter; edit each on its own.
 max_spread_ratio = 0.015
-# Minimum current-session dollar volume (sum of close x volume of completed M1 bars), USD; read by data.discovery.
+# Platform floor: minimum current-session dollar volume (sum of close x volume of completed M1 bars), USD; read by data.discovery.
+# Independent of the strategy's min_dollar_volume_usd: a strategy may be stricter; edit each on its own.
 min_session_dollar_volume_usd = 5000000
 # Symbols per snapshot request (Webull docs: at most 100); read by data.discovery.
 snapshot_symbols_per_request = 100

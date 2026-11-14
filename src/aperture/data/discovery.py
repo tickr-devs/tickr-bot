@@ -6,7 +6,8 @@ One pass (spec section 6):
    instrument ids, are refused as conflicting, never resolved by picking one.
 2. Universe: exchange, currency and security type must be in the configured lists. A row without
    a security type is refused (`SECURITY_TYPE_UNKNOWN`).
-3. Spread: one snapshot quote per symbol, fresh (provider time within `max_quote_age`), bid and
+3. Spread: one snapshot quote per symbol, fresh (provider time within `max_quote_age` and not
+   ahead of our clock by more than `max_clock_skew`), bid and
    ask positive and not crossed, (ask - bid) / mid within the limit.
 4. Session dollar volume: M1 bars; sum of close x volume over completed minutes of the current
    regular session (bar start >= session open, bar end <= now) must reach the minimum.
@@ -47,6 +48,7 @@ class Cause(StrEnum):
     SECURITY_TYPE_NOT_ALLOWED = "SECURITY_TYPE_NOT_ALLOWED"
     NO_QUOTE = "NO_QUOTE"
     QUOTE_STALE = "QUOTE_STALE"
+    QUOTE_FROM_FUTURE = "QUOTE_FROM_FUTURE"
     QUOTE_INVALID = "QUOTE_INVALID"
     SPREAD_TOO_WIDE = "SPREAD_TOO_WIDE"
     NO_BARS = "NO_BARS"
@@ -143,6 +145,7 @@ class DiscoverySettings:
     max_spread_ratio: Decimal
     min_session_dollar_volume_usd: Decimal
     max_quote_age: timedelta
+    max_clock_skew: timedelta
     snapshot_symbols_per_request: int
     bars_symbols_per_request: int
     bars_per_symbol: int
@@ -157,6 +160,7 @@ class DiscoverySettings:
             max_spread_ratio=md.max_spread_ratio,
             min_session_dollar_volume_usd=md.min_session_dollar_volume_usd,
             max_quote_age=timedelta(seconds=float(config.risk.max_quote_age_seconds)),
+            max_clock_skew=timedelta(seconds=float(config.risk.max_clock_skew_seconds)),
             snapshot_symbols_per_request=md.snapshot_symbols_per_request,
             bars_symbols_per_request=md.bars_symbols_per_request,
             bars_per_symbol=md.bars_per_symbol,
@@ -242,6 +246,9 @@ def spread_check(instrument: Instrument, quote: Quote | None, now: datetime,
     if quote is None:
         return reject(Cause.NO_QUOTE, "none", "one snapshot quote")
     age = now - quote.provider_time
+    if -age > settings.max_clock_skew:
+        return reject(Cause.QUOTE_FROM_FUTURE, f"{(-age).total_seconds()}s ahead",
+                      f"<= {settings.max_clock_skew.total_seconds()}s")
     if age > settings.max_quote_age:
         return reject(Cause.QUOTE_STALE, f"{age.total_seconds()}s",
                       f"<= {settings.max_quote_age.total_seconds()}s")

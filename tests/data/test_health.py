@@ -77,7 +77,7 @@ def test_fan_out_through_fake_stream():
         def on_transport(self, up, at, detail):
             seen.append(detail)
 
-    md.subscribe(["AAA"], FanOut(h, Recorder()))
+    md.subscribe(["AAA"], FanOut(h, Recorder(), on_error=lambda *a: None))
     md.transport(True, NOW, "up")
     md.push_quote(quote("AAA", at=NOW))
     md.push_quote(quote("NOT", at=NOW))
@@ -93,3 +93,23 @@ def test_from_config():
     h.on_quote(quote("AAA", at=NOW))
     assert h.state("AAA", NOW + timedelta(seconds=float(cfg.market_data.quiet_after_seconds))) \
         is StreamState.FRESH
+
+
+def test_fan_out_isolates_a_failing_listener():
+    h = health("AAA")
+    errors: list = []
+
+    class Broken:
+        def on_quote(self, q):
+            raise OSError("disk full")
+
+        def on_transport(self, up, at, detail):
+            raise OSError("disk full")
+
+    broken = Broken()
+    fan = FanOut(broken, h, on_error=lambda listener, event, exc: errors.append(
+        (listener, event, str(exc))))
+    fan.on_transport(True, NOW, "up")
+    fan.on_quote(quote("AAA", at=NOW))
+    assert h.state("AAA", NOW) is StreamState.FRESH
+    assert errors == [(broken, "transport", "disk full"), (broken, "quote", "disk full")]
