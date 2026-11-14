@@ -211,7 +211,7 @@ class Budget:
 
 def real_session(budget):
     from aperture.broker.webull import StreamSession
-    session = StreamSession(budget, lambda: MONDAY_11, lambda where, exc: None)
+    session = StreamSession(budget, lambda: MONDAY_11, lambda where, exc: None, max_symbols=100)
     session.bind(lambda symbols: None, lambda symbols: None, lambda: None)
     return session
 
@@ -297,7 +297,7 @@ def test_refused_candidates_never_take_the_position_off_the_stream(tmp_path):
             raise RuntimeError("symbol limit")
         sent.update(symbols)
 
-    session = StreamSession(Budget(), lambda: MONDAY_11, lambda where, exc: None)
+    session = StreamSession(Budget(), lambda: MONDAY_11, lambda where, exc: None, max_symbols=100)
     session.bind(send_subscribe, lambda symbols: sent.difference_update(symbols),
                  lambda: (sent.clear(), session.on_connected()))
     rig = Rig(tmp_path, source=SessionSource(session))
@@ -338,7 +338,7 @@ def test_candidates_are_dropped_while_the_transport_is_down(tmp_path):
         sent.update(symbols)
 
     clock = [MONDAY_11]
-    session = StreamSession(Budget(), lambda: clock[0], lambda where, exc: None)
+    session = StreamSession(Budget(), lambda: clock[0], lambda where, exc: None, max_symbols=100)
     session.bind(send_subscribe, lambda symbols: sent.difference_update(symbols),
                  lambda: reconnects.append(1))  # the SDK reconnects later
     rig = Rig(tmp_path, source=SessionSource(session))

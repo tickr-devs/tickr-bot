@@ -275,3 +275,11 @@ def test_cli_status_refuses_schema_mismatch(tmp_path, capsys):
     db = sqlite3.connect(database)
     assert db.execute("PRAGMA user_version").fetchone()[0] == 99
     db.close()
+
+
+def test_candidates_must_leave_the_reserved_stream_slots(tmp_path):
+    text = BOT.read_text("utf-8").replace("candidate_subscriptions = 5",
+                                          "candidate_subscriptions = 81")
+    path = _copy(tmp_path, text)
+    with pytest.raises(config.ConfigError, match="stream_reserved_symbols"):
+        config.load(path)

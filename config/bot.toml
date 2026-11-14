@@ -173,14 +173,22 @@ history_sessions = 5
 # on>/<symbol>-<sessions>.jsonl (replay bar format); read by data.history.
 history_dir = "history"
 # Most discovery candidates (best first) kept on the L1 stream besides the position and the strategy's WATCH symbols, so
-# a candidate has a fresh quote the minute the strategy first says ENTER; count. Symbols per connection are unproven
-# (docs/webull-facts.md, probe M3 pending), so this stays small; read by runtime.market.
+# a candidate has a fresh quote the minute the strategy first says ENTER; count. At most stream_max_symbols minus
+# stream_reserved_symbols (checked when config loads); read by runtime.market.
 candidate_subscriptions = 5
 # Seconds candidates stay off the stream after their subscribe was refused (the position and WATCH symbols are never
 # affected); read by runtime.market.
 candidate_retry_seconds = 300
 # Seconds before the L1 stream connects again after its loop ended (failed resubscribe or SDK gave up); read by broker.webull stream.
 stream_reconnect_delay_seconds = 10
+# Most symbols on the L1 stream connection, count. Webull's limit is 100 per connection, cumulative (probe M3: the
+# subscribe past it is refused with HTTP 417 TOO_MANY_SYMBOLS_SUBSCRIPTION); never set above 100. A subscribe that would
+# pass it is refused before sending (SubscriptionLimit); read by broker.webull stream.
+stream_max_symbols = 100
+# Stream slots never used by discovery candidates, kept for open positions and the strategy's WATCH symbols, count
+# (position and WATCH symbols beyond stream_max_symbols get the same SubscriptionLimit refusal);
+# read by config (checks candidate_subscriptions <= stream_max_symbols - stream_reserved_symbols).
+stream_reserved_symbols = 20
 # Seconds without a received quote, transport up, after which a subscribed symbol is quiet; read by data.health.
 quiet_after_seconds = 5
 # Capture folder relative to [run] data_dir; files go to <capture_dir>/<environment>/<NY date>/; read by data.capture.

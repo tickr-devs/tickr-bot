@@ -123,6 +123,8 @@ class MarketDataConfig:
     candidate_retry_seconds: Decimal
     history_dir: str
     stream_reconnect_delay_seconds: Decimal
+    stream_max_symbols: int
+    stream_reserved_symbols: int
     quiet_after_seconds: Decimal
     capture_dir: str
 
@@ -329,6 +331,12 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if run.environment not in environments:
         raise ConfigError(
             f"[run] environment {run.environment!r} is not one of: {', '.join(environments)}"
+        )
+    md: MarketDataConfig = built["market_data"]
+    if md.candidate_subscriptions > md.stream_max_symbols - md.stream_reserved_symbols:
+        raise ConfigError(
+            "[market_data] candidate_subscriptions must leave stream_reserved_symbols free "
+            "within stream_max_symbols"
         )
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:

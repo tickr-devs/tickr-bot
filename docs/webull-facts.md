@@ -20,7 +20,7 @@ A fact marked UNPROVEN must not be relied on by trading code until a probe prove
 - Sandbox: 30 requests per 60 s per route (docs; probe: Detail polled about once per second returned HTTP 429 `TOO_MANY_REQUESTS` after about 33 calls).
 - Token create/check: 10 per 10 s (docs).
 - Production (docs, unverified): market data 60/60 s (display) or 300/60 s (non-display); place/replace/cancel 600/60 s; preview 150/10 s; Detail, open orders, history, positions 2 per 2 s; accounts 10/30 s. Docs conflict with each other in places; never assume the looser value.
-- Streaming: at most 5 concurrent connections per App Key (docs). Symbols per subscribe request 100 (docs, unverified). Symbols per connection/account: UNPROVEN.
+- Streaming: at most 5 concurrent connections per App Key (docs). Symbols per connection: 100, cumulative (probe M3, below). Two connections giving 2 x 100: untested.
 
 ## Trading endpoints (SDK, v3)
 | Purpose | Route | Notes |
@@ -115,6 +115,22 @@ Fixtures:
 - `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json` — 12 representative bars of a 1200-bar all-sessions response; `_meta.trimmed` says so.
 - **How Aperture uses it:** `WebullMarketData.bars_before` sends `end_time` only (never `start_time`, so the extra bar never arrives) and omits `trading_sessions` (RTH only; any other session is refused). `data.history` pages back with `end_time` = oldest bar start; its INCOMPLETE and NO_PROGRESS refusals remain as guards should the behaviour change.
 
+## M3 — L1 QUOTE subscription capacity per stream connection (probed 2026-11-14, Sandbox, read-only, market closed)
+
+One MQTT session; QUOTE subscribes via `POST /market-data/streaming/subscribe` (SDK `MarketDataStreaming.subscribe`), each request carrying only new symbols (never more than 100 in one request), cumulative 5 → 10 → 20 → 40 → 80 → 100 → 150.
+
+- **The limit is 100 symbols per connection (session), cumulative**, not only per request. Steps up to 100 returned HTTP 200 with an empty body. The step to 150 sent only 50 new symbols and was refused:
+  - HTTP `417`, error code `TOO_MANY_SYMBOLS_SUBSCRIPTION`, message `Maximum number of subscribe tickers:100`.
+  - The refusal is a REST error on the subscribe call (SDK raises `ServerException`); no stream notice reports it. The already-subscribed 100 stayed (unsubscribe of exactly those 100 then succeeded).
+- Success gives no per-symbol confirmation: an empty 200 body. A caller cannot learn from the response which symbols are live.
+- Unsubscribe by explicit symbol list (≤100, `unsubscribe_all=false`) raised no error (the SDK does not surface its status on success).
+- Stream `notice` messages arrive about once a minute, type `1001`, fields `drop`, `rtt`, `sent` (e.g. `{'drop': 0, 'rtt': 43, 'sent': 0, 'type': '1001'}`); no other notice types were seen.
+- **Not measured (market closed):** whether quotes actually flow for all 100 symbols, update rates, and silent drops under load. Zero quote messages arrived in ~90 s, as expected on a Saturday. Repeat during RTH for that half.
+- Not tested: the number of concurrent connections per App Key (docs claim ≤5) and whether two connections give 2 × 100.
+
+Fixture: `tests/fixtures/webull/market_data/streaming_subscribe_capacity_ramp.json` (event log of the ramp; the universe filter excluded BK, EA, FI, MMC as ambiguous or not `COMMON_STOCK`/`OC`).
+- **How Aperture uses it:** `[market_data] stream_max_symbols` (100, never above) caps one connection; `StreamSession` refuses a subscribe that would pass it before sending (`SubscriptionLimit`). A provider 417 `TOO_MANY_SYMBOLS_SUBSCRIPTION` under our cap means Webull counts differently (for example an unsubscribe that does not free a slot): the refused symbols are taken back out, the transport is reported down and a reconnect is requested (a fresh connection resets the count), and `SubscriptionLimit` is raised. `stream_reserved_symbols` keeps slots free of discovery candidates for the position and WATCH symbols.
+
 ## Known SDK defects (3.0.3)
 - KD-1: streaming `SnapshotResult.close` is filled from `open`. Never use it.
 - KD-2: tick request docstring/default disagree. Use measured limits only.
@@ -127,4 +143,4 @@ Fixtures:
 - `/trade/calendar` works only on Production (read-only, the single allowed Production call). We keep `config/calendar/us-equity-<year>.json` with standard hours and exceptions (half days 2026-11-27 and 2026-12-24 close RTH at 13:00, POST at 17:00), cross-checked daily. Unknown or contradictory day = no trading. Next year's exceptions must be added before 1 December.
 
 ## Open broker questions (to prove by probe)
-F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; a raw bars body and a snapshot during the regular session (M1/M2 above were probed on a closed market); M3 L1 stream: a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), notice 1001/1002, resubscribe after a forced reconnect.
+F1 a Sandbox order fills, Detail shape of a fill and fees; F2 STOP_LOSS SELL accepted and visible in RTH; F3 stop triggers and fills; F4 cancel of a working stop, cancel-vs-fill race; F5 replace of a stop; F6 MARKET SELL in RTH; F7 stops in PRE/POST; F9 non-empty positions/open-orders/balance shapes; F10 DAY expiry status; OTO entry+stop combo; real-time vs delayed Sandbox quotes; a closing SELL while a stop reserves the shares; a raw bars body and a snapshot during the regular session (M1/M2 above were probed on a closed market); L1 stream: does an unsubscribe free a slot on the same connection (runtime rotates candidates all day); during RTH (M3 second half): a recorded quote frame (is bids[0]/asks[0] the best level, how many levels arrive), do quotes flow for all 100 symbols, notice 1002, resubscribe after a forced reconnect.

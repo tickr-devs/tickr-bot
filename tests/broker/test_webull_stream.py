@@ -6,8 +6,10 @@ Decimal price and string size); no real frame has been recorded yet.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,14 +18,16 @@ from aperture.broker.base import RateLimited
 from aperture.broker.budget import RequestBudget, RouteLimit
 from aperture.broker.webull import (
     STREAM_SUBSCRIBE_PATH,
+    STREAM_TOO_MANY_SYMBOLS,
     AdapterConfigError,
     MalformedResponse,
     StreamSession,
     StreamSettings,
     WebullMarketData,
     quote_from_stream,
+    subscribe_error,
 )
-from aperture.data.base import MarketDataError
+from aperture.data.base import MarketDataError, SubscriptionLimit
 from aperture.data.health import StreamHealth, StreamState
 
 NOW = datetime(2026, 11, 13, 15, 0, tzinfo=UTC)
@@ -53,10 +57,11 @@ class Recorder:
         self.transport.append((up, detail))
 
 
-def session(limit=30):
+def session(limit=30, max_symbols=100):
     errors: list = []
     budget = RequestBudget(RouteLimit(limit, 60, 60), clock=lambda: 0.0)
-    s = StreamSession(budget, lambda: NOW, lambda where, exc: errors.append((where, exc)))
+    s = StreamSession(budget, lambda: NOW, lambda where, exc: errors.append((where, exc)),
+                      max_symbols=max_symbols)
     sent: list = []
     s.bind(lambda syms: sent.append(("sub", syms)), lambda syms: sent.append(("unsub", syms)),
            lambda: sent.append(("reconnect", [])))
@@ -219,7 +224,7 @@ def _settings(tmp_path, mqtt="data-api.sandbox.webull.com"):
                           allowed_hosts=allowed, region_id="us",
                           token_dir=str(tmp_path / "token"), app_key_env="T_APP_KEY",
                           app_secret_env="T_APP_SECRET", category="US_STOCK",
-                          reconnect_delay_seconds=0.0)
+                          reconnect_delay_seconds=0.0, max_symbols=100)
 
 
 def test_sdk_stream_refuses_host_outside_allowlist(tmp_path):
@@ -236,7 +241,7 @@ def test_sdk_stream_wires_callbacks(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("T_APP_SECRET", "CANARY-SECRET")
     monkeypatch.chdir(tmp_path)
     s = StreamSession(RequestBudget(RouteLimit(30, 60, 60), clock=lambda: 0.0), lambda: NOW,
-                      lambda w, e: None)
+                      lambda w, e: None, max_symbols=100)
     stream = SdkQuoteStream(_settings(tmp_path), s)
     client = stream._client
     calls: list = []
@@ -262,7 +267,7 @@ def test_sdk_stream_reconnects_after_the_loop_ends(tmp_path, monkeypatch):
     monkeypatch.setenv("T_APP_SECRET", "s")
     monkeypatch.chdir(tmp_path)
     s = StreamSession(RequestBudget(RouteLimit(30, 60, 60), clock=lambda: 0.0), lambda: NOW,
-                      lambda w, e: None)
+                      lambda w, e: None, max_symbols=100)
     rec = Recorder()
     s.subscribe(["AAA"], rec)
     stream = SdkQuoteStream(_settings(tmp_path), s)
@@ -294,3 +299,93 @@ def test_subscribe_failure_while_up_marks_down_reconnects_and_raises():
     # Rolled back: the next connect resubscribes only what was in sync, so a refused symbol
     # can never keep the stream down; the caller (runtime.market) asks for BBB again.
     assert s.symbols == {"AAA"}
+
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "webull" / "market_data"
+
+
+class ProviderLimit(Exception):
+    """Shaped like the SDK's ServerException for the M3 refusal."""
+
+    error_code = STREAM_TOO_MANY_SYMBOLS
+    http_status = 417
+
+
+def test_m3_recorded_limit_is_100_cumulative_and_refusal_is_417():
+    events = json.loads((FIXTURES / "streaming_subscribe_capacity_ramp.json").read_text("utf-8"))
+    subs = [e for e in events["events"] if e["kind"] == "subscribe"]
+    assert max(e["accepted_total"] for e in subs if e["ok"]) == 100
+    refused = [e for e in subs if not e["ok"]]
+    assert len(refused) == 1 and refused[0]["http_status"] == 417
+    assert refused[0]["error"]["code"] == STREAM_TOO_MANY_SYMBOLS
+    assert refused[0]["sent"] < 100  # a small request is refused: the limit is cumulative
+
+
+def test_subscribe_past_the_configured_limit_is_refused_before_sending():
+    s, sent, errors, _ = session(max_symbols=3)
+    rec = Recorder()
+    s.subscribe(["A", "B"], rec)
+    s.on_connected()
+    with pytest.raises(SubscriptionLimit) as caught:
+        s.subscribe(["C", "D"], rec)
+    assert caught.value.symbols == ("C", "D") and not caught.value.by_provider
+    assert s.symbols == {"A", "B"} and s.up
+    assert sent == [("sub", ["A", "B"])]
+    s.subscribe(["B", "C"], rec)  # B already counted: exactly at the limit is fine
+    assert s.symbols == {"A", "B", "C"}
+
+
+def test_provider_limit_under_our_cap_reconnects_and_raises():
+    s, sent, errors, _ = session()
+    rec = Recorder()
+
+    def refuse_second(symbols):
+        sent.append(("sub", symbols))
+        if "B" in symbols:
+            raise subscribe_error(ProviderLimit(), symbols, 100)
+
+    s.bind(refuse_second, lambda symbols: None, lambda: sent.append(("reconnect", [])))
+    s.subscribe(["A"], rec)
+    s.on_connected()
+    with pytest.raises(SubscriptionLimit) as caught:
+        s.subscribe(["B"], rec)  # 2 symbols, far under the local cap of 100
+    assert caught.value.by_provider and caught.value.symbols == ("B",)
+    assert not s.up and s.symbols == {"A"}  # B rolled back; a fresh connection resets the count
+    assert sent[-1] == ("reconnect", [])
+    assert rec.transport[-1][0] is False and "SubscriptionLimit" in rec.transport[-1][1]
+    assert [where for where, _ in errors] == ["subscribe"]
+    s.on_connected()  # the reconnect resubscribes A only
+    assert s.up and sent[-1] == ("sub", ["A"])
+
+
+def test_subscribe_error_maps_only_the_limit_code():
+    other = RuntimeError("HTTP 500")
+    assert subscribe_error(other, ["A"], 100) is other
+    mapped = subscribe_error(ProviderLimit(), ["A"], 100)
+    assert isinstance(mapped, SubscriptionLimit) and mapped.limit == 100
+
+
+def test_sdk_stream_maps_417_to_subscription_limit(tmp_path, monkeypatch):
+    pytest.importorskip("webull")
+    from aperture.broker.webull import SdkQuoteStream
+    monkeypatch.setenv("T_APP_KEY", "k")
+    monkeypatch.setenv("T_APP_SECRET", "s")
+    monkeypatch.chdir(tmp_path)
+    s = StreamSession(RequestBudget(RouteLimit(30, 60, 60), clock=lambda: 0.0), lambda: NOW,
+                      lambda w, e: None, max_symbols=100)
+    stream = SdkQuoteStream(_settings(tmp_path), s)
+    client = stream._client
+    calls: list = []
+
+    def subscribe(symbols, category, types):
+        calls.append(symbols)
+        if len(calls) > 1:
+            raise ProviderLimit()
+
+    monkeypatch.setattr(client, "subscribe", subscribe)
+    listener = Recorder()
+    stream.subscribe(["AAA"], listener)
+    client.on_connect_success(client, None, "sid")
+    with pytest.raises(SubscriptionLimit):
+        stream.subscribe(["BBB"], listener)
+    assert not s.up and s.symbols == {"AAA"}

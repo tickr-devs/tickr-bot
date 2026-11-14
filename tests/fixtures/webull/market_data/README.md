@@ -13,6 +13,7 @@ not full responses. They are what was recorded, copied unchanged from the owner'
 | `stocks_bars_list_aapl_m1.json` | probe M2, Sandbox, 2026-11-14 (body only) | raw M1 bars: `time` "...T20:59:00.000+0000" = bar start UTC, newest first, `trading_session` RTH |
 | `stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json` | probe M4, Sandbox, 2026-11-14 (body only, 12 of 1200 bars) | `end_time` exclusive (newest bar = end - 1 min); PRE/RTH/ATH labels and boundaries; a missing PRE minute |
 | `stocks_bars_list_aapl_m1_window_pre_rth.json` | probe M4, same (6 of 61 bars) | `start_time` returns one extra bar at start - 1 min |
+| `streaming_subscribe_capacity_ramp.json` | probe M3, Sandbox, 2026-11-14 (event log, market closed) | stream subscribe ramp 5 → 100 accepted (empty 200), 150 refused with HTTP 417 `TOO_MANY_SYMBOLS_SUBSCRIPTION`; notice 1001 `{drop, rtt, sent}` |
 | `snapshot_bars_keys.md` | owner run 2026-11-11 ~02:45Z, AAPL | snapshot regular/extended key names and types; M1 bars structure `$.result[] {delay_minutes, instrument_id, symbol, result[] {time, open, high, low, close, volume, trading_session}}` |
 
 Facts worth reading off: all screener and snapshot values are strings except `quote_time`,
@@ -20,4 +21,4 @@ Facts worth reading off: all screener and snapshot values are strings except `qu
 absent and `relative_volume_10d` is missing in 33 to 68 of 200 rows; screeners carry no provider
 time. The security type is the instrument profile's `sub_category` (probe M1).
 
-Not recorded: an L1 stream frame, any snapshot during the regular session.
+Not recorded: an L1 quote frame, any snapshot during the regular session.

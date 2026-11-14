@@ -64,6 +64,19 @@ class DelayedData(MarketDataError):
         self.delay_minutes = delay_minutes
 
 
+class SubscriptionLimit(MarketDataError):
+    """A stream subscribe was refused for the per-connection symbol limit. The symbols already
+    subscribed stay subscribed (probe M3); the refused ones were not added."""
+
+    def __init__(self, symbols: Iterable[str], limit: int, by_provider: bool) -> None:
+        self.symbols = tuple(sorted(symbols))
+        self.limit = limit
+        self.by_provider = by_provider
+        who = "provider" if by_provider else "configured"
+        refused = ", ".join(self.symbols)
+        super().__init__(f"{who} stream limit of {limit} symbols: refused {refused}")
+
+
 class QuoteListener(Protocol):
     """Receives stream events. Called on the provider's thread; keep the work tiny."""
 
