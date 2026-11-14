@@ -480,6 +480,7 @@ class Service:
                 last_reconcile = monotonic()
         self.state = api.BotState.STOPPING
         self.write_status()
+        self.day_end.finish()
         clean = drain(self.engine, sleep=sleep, monotonic=monotonic)
         self.state = api.BotState.STOPPED
         self.write_status()

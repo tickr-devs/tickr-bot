@@ -193,3 +193,38 @@ def test_a_run_started_after_flatten_and_grace_records_a_known_clean_day(tmp_pat
     day.run(GRACE_PASSES)  # flatten_at is the start itself; the grace counts from there
     (record,) = day.records()
     assert (record["broker_read"], record["agree"], record["day_clean"]) == (True, True, True)
+
+
+def test_one_failed_read_at_the_grace_waits_for_a_known_view(tmp_path):
+    day = Day(tmp_path)
+    t = day.open()
+    day.run(12)  # flatten reached, the trade closes
+    assert day.engine.trade(t).state is TradeState.CLOSED
+    day.broker.reads_fail = True
+    recover_at = FLATTEN + timedelta(seconds=float(CFG.session.flatten_grace_seconds) + 3 * POLL)
+    seen = []
+    tick = day.sleep
+
+    def sleep(seconds):
+        tick(seconds)
+        if day.broker.reads_fail and day.now >= recover_at:
+            seen.append(day.records())  # past the grace with only failed reads: no row yet
+            day.broker.reads_fail = False
+
+    day.sleep = sleep
+    day.run(GRACE_PASSES + 6)
+    assert seen == [[]]
+    (record,) = day.records()
+    assert (record["broker_read"], record["agree"], record["day_clean"]) == (True, True, True)
+
+
+def test_a_day_without_any_known_view_is_recorded_unknown_at_stop(tmp_path):
+    day = Day(tmp_path)
+    day.broker.reads_fail = True
+    day.service.flatten_due()
+    day.now = FLATTEN + timedelta(seconds=float(CFG.session.flatten_grace_seconds) + 1)
+    day.service.flatten_due()
+    assert day.records() == []  # not yet: a later read may still show the day
+    day.service.day_end.finish()
+    (record,) = day.records()
+    assert (record["broker_read"], record["day_clean"]) == (False, None)

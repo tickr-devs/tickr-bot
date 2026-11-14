@@ -7,11 +7,12 @@ Our records alone never prove a flat day.
 - `own_left` lists what of ours the broker still holds or works: positions in the symbol of
   an open trade, and open orders with our client order ids. Foreign exposure is not listed
   (it has its own fences and alert).
-- `day_end_record` is the once-per-day journal row. `agree` is true only when the reads are
-  known AND the broker's positions equal what our open trades expect (Detail fills, symbol by
-  symbol) AND the broker's open orders are exactly our live orders; so any foreign position or
-  order, or an order of ours whose state we do not know, means "not agree". `day_clean` is
-  null when the reads are unknown, never a guess.
+- `day_end_record` is the once-per-day journal row, written at the first check with known
+  reads; only a day that ends (service stop or a new day) without any is recorded unknown.
+  `agree` is true only when the reads are known AND the broker's positions equal what our
+  open trades expect (Detail fills, symbol by symbol) AND the broker's open orders are exactly
+  our live orders; so any foreign position or order, or an order of ours whose state we do
+  not know, means "not agree". `day_clean` is null when the reads are unknown, never a guess.
 """
 
 from __future__ import annotations
@@ -86,16 +87,27 @@ class DayEnd:
         self.calendar = calendar
         self.watch = watch
         self._recorded: date | None = None
+        # Past flatten + grace with no known broker view yet: when that was first seen.
+        self._unknown_since: datetime | None = None
         self._alerted: tuple[str, datetime] | None = None  # last not-flat text and when
 
     def check(self, flatten_at: datetime, now: datetime) -> None:
         config = self.engine.config
         if now < flatten_at + timedelta(seconds=float(config.session.flatten_grace_seconds)):
             return
+        if (self._unknown_since is not None
+                and self._unknown_since.astimezone(NEW_YORK).date()
+                != now.astimezone(NEW_YORK).date()):
+            self.finish()  # a new day began before the last one had a known view
         view = self.engine.broker_view
-        self._record(view, now)
         if view is None:
-            return  # unknown, never "flat": failing reads have their own alert
+            # Unknown, never "flat": failing reads have their own alert. The day's row waits
+            # for a known view; `finish` records it as unknown if none comes.
+            if self._unknown_since is None:
+                self._unknown_since = now
+            return
+        self._unknown_since = None
+        self._record(view, now)
         positions, orders = own_left(self.engine, view)
         if not positions and not orders:
             self._alerted = None
@@ -109,6 +121,13 @@ class DayEnd:
         self._alerted = (text, now)
         if self.watch is not None:
             self.watch.alert(AlertKind.NOT_FLAT_AFTER_FLATTEN, text)
+
+    def finish(self) -> None:
+        """The day ends (the service stops, or a new day begins) without a known broker view
+        after flatten + grace: record the day as unknown, `day_clean` null."""
+        if self._unknown_since is not None:
+            self._record(None, self._unknown_since)
+            self._unknown_since = None
 
     def _record(self, view: BrokerView | None, now: datetime) -> None:
         """One day-end row per trading day (survives restarts: the journal is the memory)."""
