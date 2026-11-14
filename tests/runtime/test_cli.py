@@ -6,7 +6,7 @@ import sys
 from aperture import config as config_module
 from aperture.runtime import __main__ as runtime_main
 from aperture.runtime.__main__ import main
-from aperture.runtime.preflight import Check, CheckName, PreflightResult
+from aperture.runtime.preflight import Check, CheckName, PreflightCause, PreflightResult
 
 
 def _records(out: str) -> list[dict]:
@@ -67,6 +67,23 @@ def test_run_bot_clean_exit(config_path, monkeypatch, capsys):
     assert main(["--config", str(config_path), "run-bot", "--", sys.executable, "-c",
                  "pass"]) == 0
     assert _records(capsys.readouterr().out)[-1]["record"] == "bot-exit"
+
+
+def test_run_bot_starts_when_only_the_strategy_is_refused(config_path, monkeypatch, tmp_path,
+                                                          capsys):
+    cfg = config_module.load(config_path)
+    checks = (Check(CheckName.CONFIG, True, "ok"),
+              Check(CheckName.STRATEGY, False, "needs 5 prior sessions",
+                    PreflightCause.STRATEGY_REFUSED))
+    result = PreflightResult(checks, session_today=True, environment=cfg.environment_name,
+                             config=cfg)
+    monkeypatch.setattr(runtime_main, "run_preflight", lambda *a, **k: result)
+    marker = tmp_path / "started"
+    assert main(["--config", str(config_path), "run-bot", "--", sys.executable, "-c",
+                 f"open({str(marker)!r}, 'w')"]) == 0
+    assert marker.exists()
+    alert = next(r for r in _records(capsys.readouterr().out) if r["record"] == "alert")
+    assert alert["kind"] == "preflight-failed"
 
 
 def test_alert_command(config_path, capsys):

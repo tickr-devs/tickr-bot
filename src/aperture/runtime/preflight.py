@@ -8,7 +8,10 @@ Checks, all reported, the first failure is the single cause:
    "no session today", which is not a failure;
 4. credential environment variables present: only their NAMES are checked and reported, values
    are never read beyond "set and non-empty";
-5. broker token folder present.
+5. broker token folder present;
+6. active strategy builds from its file and `[market_data] history_sessions` covers the prior
+   sessions it needs. A failure here is reported but does not stop the bot from starting: the
+   bot then protects positions with entries off (`blocks_start`).
 
 Exit codes: 0 ready, 1 failed, 2 config invalid, 3 no session today.
 """
@@ -24,6 +27,8 @@ from pathlib import Path
 
 from aperture import config as config_module
 from aperture.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
+from aperture.observers.errors import ObserverError
+from aperture.observers.loader import load_active
 from aperture.runtime.launchd import check_shutdown_deadlines
 
 STRATEGY_FILE = "strategy.toml"
@@ -47,6 +52,7 @@ class PreflightCause(StrEnum):
     CALENDAR_UNKNOWN = "calendar-unknown"
     CREDENTIALS_MISSING = "credentials-missing"
     TOKEN_DIR_MISSING = "token-dir-missing"
+    STRATEGY_REFUSED = "strategy-refused"
 
 
 class CheckName(StrEnum):
@@ -55,6 +61,7 @@ class CheckName(StrEnum):
     CALENDAR = "calendar"
     CREDENTIALS = "credentials"
     TOKEN_DIR = "token-dir"
+    STRATEGY = "strategy"
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,15 @@ class PreflightResult:
         if not self.session_today:
             return ExitCode.NO_SESSION
         return ExitCode.READY
+
+    @property
+    def blocks_start(self) -> bool:
+        """True when the bot must not be started. A refused strategy alone does not block:
+        the bot starts with entries off so it can still protect an existing position."""
+        if self.exit_code is ExitCode.NO_SESSION:
+            return True
+        return any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED
+                   for c in self.checks)
 
     def journal_body(self) -> dict[str, object]:
         return {
@@ -180,6 +196,16 @@ def _check_token_dir(cfg: config_module.Config) -> Check:
     return Check(CheckName.TOKEN_DIR, True, str(token_dir))
 
 
+def _check_strategy(cfg: config_module.Config) -> Check:
+    try:
+        loaded = load_active(cfg)
+    except ObserverError as exc:
+        return Check(CheckName.STRATEGY, False, str(exc), PreflightCause.STRATEGY_REFUSED)
+    return Check(CheckName.STRATEGY, True,
+                 f"{loaded.identity} needs {loaded.strategy.prior_sessions_needed} prior "
+                 f"sessions, history_sessions = {cfg.market_data.history_sessions}")
+
+
 def run_preflight(
     config_path: Path,
     *,
@@ -194,5 +220,5 @@ def run_preflight(
     disk = _check_disk(cfg, disk_free)
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, disk, calendar, _check_credentials(cfg, environ),
-              _check_token_dir(cfg))
+              _check_token_dir(cfg), _check_strategy(cfg))
     return PreflightResult(checks, session_today, cfg.environment_name, cfg)

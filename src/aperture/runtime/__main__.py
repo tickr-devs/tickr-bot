@@ -62,7 +62,10 @@ def _preflight(config_path: Path, failure: AlertKind) -> PreflightResult:
     result = run_preflight(config_path, now=datetime.now(UTC), environ=os.environ)
     _emit("preflight", result.journal_body())
     if result.cause is not None:
-        _alert(config_path, result.environment, failure, result.summary())
+        # A refused strategy alone does not stop the bot job: say "preflight failed", not
+        # "bot did not start".
+        kind = failure if result.blocks_start else AlertKind.PREFLIGHT_FAILED
+        _alert(config_path, result.environment, kind, result.summary())
     return result
 
 
@@ -73,7 +76,7 @@ def _run_bot(config_path: Path, command: list[str]) -> int:
         print("run-bot: give the bot command after --", file=sys.stderr)
         return int(ExitCode.CONFIG_INVALID)
     result = _preflight(config_path, AlertKind.BOT_DID_NOT_START)
-    if result.exit_code is not ExitCode.READY or result.config is None:
+    if result.blocks_start or result.config is None:
         return int(result.exit_code)
     stop = StopRequest()
     previous = install_stop_handler(stop)

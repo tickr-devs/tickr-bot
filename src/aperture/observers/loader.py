@@ -72,14 +72,40 @@ def load_strategy(root: Path, folder: str, modules: Mapping[str, str]) -> Loaded
         raise ObserverError(f"{folder}: module {module_name} has no create(values)")
     try:
         strategy = create(values)
-    except ValueError as exc:
+    except Exception as exc:  # any failure to build is a refusal, never a crash of the caller
         raise ObserverError(f"{folder}: values refused by {module_name}: {exc}") from exc
-    if strategy.name != name or strategy.version != table.get("version"):
+    reported = (getattr(strategy, "name", None), getattr(strategy, "version", None))
+    if reported != (name, table.get("version")):
         raise ObserverError(
-            f"{folder}: strategy reports {strategy.name} v{strategy.version}, "
+            f"{folder}: strategy reports {reported[0]} v{reported[1]}, "
             f"file says {name} v{table.get('version')}"
         )
     return LoadedStrategy(folder, strategy)
+
+
+def check_history(loaded: LoadedStrategy, history_sessions: int) -> None:
+    """Refuse a strategy that needs more prior sessions than the platform fetches: it would
+    refuse every evaluation for missing history all day."""
+    need = getattr(loaded.strategy, "prior_sessions_needed", None)
+    if isinstance(need, bool) or not isinstance(need, int) or need < 0:
+        raise ObserverError(
+            f"{loaded.folder}: {loaded.identity} declares no valid prior_sessions_needed "
+            f"(got {need!r})"
+        )
+    if need > history_sessions:
+        raise ObserverError(
+            f"{loaded.folder}: {loaded.identity} needs {need} prior sessions, "
+            f"[market_data] history_sessions = {history_sessions}"
+        )
+
+
+def load_active(config: Config) -> LoadedStrategy:
+    """The active strategy, refused (ObserverError) when it cannot be built or when the
+    configured history is shorter than it needs."""
+    loaded = load_strategy(config.root, config.strategy.active,
+                           parse_modules(config.observers.strategy_modules))
+    check_history(loaded, config.market_data.history_sessions)
+    return loaded
 
 
 def load_observers(config: Config) -> tuple[LoadedStrategy, ...]:
@@ -100,6 +126,7 @@ def load_observers(config: Config) -> tuple[LoadedStrategy, ...]:
     loaded = []
     for folder in folders:
         observer = load_strategy(config.root, folder, modules)
+        check_history(observer, config.market_data.history_sessions)
         if observer.identity in seen:
             raise ObserverError(
                 f"{folder}: {observer.identity} is the same identity as {seen[observer.identity]}"

@@ -89,6 +89,10 @@ class SymbolContext:
 class Strategy(Protocol):
     name: str
     version: str
+    prior_sessions_needed: int
+    """How many completed prior sessions of M1 bars `evaluate` needs in
+    `SymbolContext.prior_sessions`. The platform refuses to run a strategy that needs more
+    than `[market_data] history_sessions` provides; 0 = no history needed."""
 
     def evaluate(self, context: SymbolContext) -> Decision: ...
 

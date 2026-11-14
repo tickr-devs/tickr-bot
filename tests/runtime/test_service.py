@@ -326,6 +326,22 @@ def test_cli_run_without_a_loadable_strategy_protects_but_never_enters(tmp_path,
     store.close()
 
 
+def test_cli_run_with_too_little_history_protects_but_never_enters(tmp_path, monkeypatch):
+    bot_toml = copy_config(tmp_path)
+    bot_toml.write_text(bot_toml.read_text().replace("history_sessions = 5",
+                                                     "history_sessions = 4", 1))
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    database, _ = cli.data_paths(config.load(bot_toml))
+    store = Store.open(database, busy_timeout_seconds=0)
+    (row,) = store.journal(service.STRATEGY_NOT_LOADED)
+    assert "needs 5 prior sessions, [market_data] history_sessions = 4" in row.body["cause"]
+    store.close()
+
+
 def test_cli_run_with_a_broken_observer_keeps_entries_on(tmp_path, monkeypatch):
     bot_toml = copy_config(tmp_path)
     bot_toml.write_text(bot_toml.read_text().replace("observers = []",
@@ -402,3 +418,20 @@ def test_flatten_record_and_exit_request_are_one_write(tmp_path):
     bot.engine.exit_request_row = real
     bot.service.process_commands()  # file still in the inbox: acted on now
     assert bot.engine.trade(t).exit_requested == "operator-flatten"
+
+
+@pytest.mark.parametrize("kind", ["missing", "text", "raises"])
+def test_cli_run_with_a_misbehaving_strategy_protects_but_never_enters(tmp_path, monkeypatch,
+                                                                       break_strategy, kind):
+    bot_toml = copy_config(tmp_path)
+    break_strategy(kind)
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    database, _ = cli.data_paths(config.load(bot_toml))
+    store = Store.open(database, busy_timeout_seconds=0)
+    (row,) = store.journal(service.STRATEGY_NOT_LOADED)
+    assert row.body["cause"]
+    store.close()

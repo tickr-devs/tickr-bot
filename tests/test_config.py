@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,14 @@ def test_only_webull_adapter_imports_sdk():
 def test_cli_check_config(capsys):
     assert main(["--config", str(BOT), "check-config"]) == 0
     assert "trading gate" in capsys.readouterr().out
+
+
+def test_cli_check_config_reports_too_little_history(tmp_path, capsys):
+    shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
+    path = _copy(tmp_path, BOT.read_text("utf-8").replace("history_sessions = 5",
+                                                          "history_sessions = 4", 1))
+    assert main(["--config", str(path), "check-config"]) == 1
+    assert "needs 5 prior sessions, [market_data] history_sessions = 4" in capsys.readouterr().out
 
 
 def test_cli_reports_config_error(tmp_path, capsys):

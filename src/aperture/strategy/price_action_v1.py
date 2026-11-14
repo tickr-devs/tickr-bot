@@ -242,6 +242,8 @@ class PriceActionV1:
         self.settings = settings
         self.name = settings.name
         self.version = settings.version
+        # Relative volume is the only rule that reads prior sessions.
+        self.prior_sessions_needed = settings.relative_volume_sessions
 
     # A decision is built from the checks gathered so far.
     def _decide(

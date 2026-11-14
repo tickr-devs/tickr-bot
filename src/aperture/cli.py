@@ -245,7 +245,7 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     trading."""
     from aperture.data.history import HistoryReader
     from aperture.observers.errors import ObserverError
-    from aperture.observers.loader import load_observers, load_strategy, parse_modules
+    from aperture.observers.loader import load_active, load_observers
     from aperture.observers.log import DecisionLog
     from aperture.observers.runner import ObserverSet
     from aperture.runtime.entries import EntryDesk
@@ -253,8 +253,7 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
 
     if calendar is None:
         return None
-    loaded = load_strategy(cfg.root, cfg.strategy.active,  # ObserverError: caller refuses
-                           parse_modules(cfg.observers.strategy_modules))
+    loaded = load_active(cfg)  # ObserverError: caller refuses entries
     log = DecisionLog.from_config(cfg)
     desk = EntryDesk(engine, cfg, calendar=calendar, last_broker_read_at=last_broker_read_at,
                      log=log)
@@ -375,6 +374,15 @@ def _check_config(path: Path) -> int:
     print(f"config digest: {cfg.digest}")
     print(f"active strategy: {cfg.strategy.active}")
     print(f"trading gate: {'open' if gate.open else 'closed'} ({gate.cause})")
+    from aperture.observers.errors import ObserverError
+    from aperture.observers.loader import load_active
+    try:
+        loaded = load_active(cfg)
+    except ObserverError as exc:
+        print(f"strategy refused: {exc}")
+        return 1
+    print(f"strategy: {loaded.identity} needs {loaded.strategy.prior_sessions_needed} prior "
+          f"sessions, history_sessions = {cfg.market_data.history_sessions}")
     return 1 if problems else 0
 
 

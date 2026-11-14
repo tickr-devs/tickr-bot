@@ -13,7 +13,12 @@ import pytest
 
 from aperture import config
 from aperture.observers.errors import ObserverError
-from aperture.observers.loader import LoadedStrategy, load_observers, parse_modules
+from aperture.observers.loader import (
+    LoadedStrategy,
+    load_active,
+    load_observers,
+    parse_modules,
+)
 from aperture.observers.log import DecisionLog
 from aperture.observers.runner import ObserverSet
 from aperture.research.records import Admission, load_records
@@ -232,6 +237,23 @@ def test_bad_observer_setup_is_refused(tmp_path, kwargs, cause):
     _variant(tmp_path, "v2", "2")
     with pytest.raises(ObserverError, match=cause):
         load_observers(cfg)
+
+
+def test_observer_needing_more_history_than_configured_is_refused(tmp_path):
+    cfg = _config(tmp_path, ["rvol-20"])
+    _variant(tmp_path, "rvol-20", "2",
+             change=("relative_volume_sessions = 5", "relative_volume_sessions = 20"))
+    with pytest.raises(ObserverError, match="rvol-20: .* needs 20 prior sessions, "
+                                            r"\[market_data\] history_sessions = 5"):
+        load_observers(cfg)
+
+
+def test_active_strategy_needing_more_history_than_configured_is_refused(tmp_path):
+    cfg = _config(tmp_path)
+    assert load_active(cfg).strategy.prior_sessions_needed == 5
+    short = replace(cfg, market_data=replace(cfg.market_data, history_sessions=4))
+    with pytest.raises(ObserverError, match="needs 5 prior sessions"):
+        load_active(short)
 
 
 def test_values_refused_by_the_strategy(tmp_path):
