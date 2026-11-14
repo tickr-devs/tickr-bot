@@ -80,6 +80,7 @@ class Fence(StrEnum):
     FOREIGN_ORDER = "foreign-order"
     QUANTITY_MISMATCH = "quantity-mismatch"
     SHUTTING_DOWN = "shutting-down"
+    ENTRY_STOP = "entry-stop"  # operator command; only the entry-stop-off command clears it
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
@@ -260,6 +261,31 @@ class Engine:
                 self.store.append("fence-cleared", {"by": "operator"}, key=name,
                                   run_id=self.run_id)
         return bool(removed)
+
+    def entry_stop_row(self, on: bool, cause: str) -> None:
+        """Operator entry-stop, inside the caller's transaction (the command is journaled in
+        the same one). Survives restarts; touches no other fence."""
+        if on:
+            self._fence_row(Fence.ENTRY_STOP, "", cause)
+        elif self.store.execute("DELETE FROM fences WHERE name = ?", (str(Fence.ENTRY_STOP),)):
+            self.store.append("fence-cleared", {"by": "operator"}, key=str(Fence.ENTRY_STOP),
+                              run_id=self.run_id)
+
+    def cancel_entries(self) -> int:
+        """Operator cancel-own-orders: cancel working entry orders only, never stops or exits.
+        Returns how many entries were asked to cancel."""
+        asked = 0
+        for trade in self.trades():
+            for order in self.orders(trade.trade_id):
+                if order.leg is Leg.ENTRY and order.live:
+                    self._cancel(order)
+                    asked += 1
+        return asked
+
+    def fence_rows(self) -> list[tuple[str, str, str]]:
+        """(name, cause, set_at UTC ISO) of every fence, oldest first."""
+        return [(r["name"], r["cause"], r["set_at"]) for r in
+                self.store.query("SELECT name, cause, set_at FROM fences ORDER BY set_at_epoch")]
 
     # --- reads -----------------------------------------------------------------------------
 

@@ -197,6 +197,41 @@ def _clear_fence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run(path: Path) -> int:
+    """The launchd bot job (via `aperture.runtime run-bot`): run until SIGTERM, then drain.
+    Exit 0 after a clean drain, 5 when the drain hit its deadline."""
+    from aperture.runtime import service
+    from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
+
+    cfg = config_module.load(path)
+    strategy = service.strategy_id(cfg)
+    database, lock_path = data_paths(cfg)
+    with SingleInstanceLock(lock_path):
+        store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds)
+        run_id = store.start_run(environment=cfg.environment_name, config_digest=cfg.digest,
+                                 strategy=strategy.name, strategy_version=strategy.version,
+                                 code_version="-")
+        stop = StopRequest()
+        previous = install_stop_handler(stop)
+        cause = "crashed"
+        try:
+            engine = Engine(store, BROKER_FACTORY(cfg), cfg, run_id,
+                            lambda: config_module.trading_gate(cfg))
+            bot = service.Service(engine, now=NOW, calendar=service.load_calendar(cfg),
+                                  strategy=strategy,
+                                  paths=service.ServicePaths.from_config(cfg))
+            clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP)
+            cause = f"stopped ({stop.signal_name})" if clean else "shutdown-deadline"
+        finally:
+            restore_handlers(previous)
+            store.end_run(run_id, cause)
+            store.close()
+    if not clean:
+        print("shutdown deadline reached with work pending: check orders and position in the "
+              "Webull app, then `aperture status`", file=sys.stderr)
+    return 0 if clean else 5
+
+
 def _check_config(path: Path) -> int:
     text = path.read_text("utf-8")
     problems = config_module.uncommented_keys(text)
@@ -223,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
     trade.add_argument("--limit", type=_decimal, required=True, help="entry limit price, USD")
     trade.add_argument("--stop", type=_decimal, help="stop price, USD (default from [probe])")
     trade.add_argument("--quantity", type=_decimal, help="shares (default from [probe])")
+    sub.add_parser("run", help="the bot service (launchd): protect, obey commands, drain on "
+                   "SIGTERM")
     sub.add_parser("resume", help="recover after a crash and keep protecting open trades")
     sub.add_parser("exit", help="close every open trade through the normal exit path")
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
@@ -231,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "trade":
             return _trade(args)
+        if args.command == "run":
+            return _run(args.config)
         if args.command == "resume":
             return _resume(args, exit_all=False)
         if args.command == "exit":

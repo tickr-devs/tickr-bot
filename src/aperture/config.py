@@ -96,6 +96,7 @@ class ApiConfig:
     max_request_body_bytes: int
     max_pending_commands: int
     command_max_age_seconds: Decimal
+    status_recent_commands: int
 
 
 @dataclass(frozen=True)

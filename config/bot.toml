@@ -115,6 +115,8 @@ max_request_body_bytes = 1024
 max_pending_commands = 20
 # A command older than this many seconds when the bot reads it is refused as expired, never executed late; read by the bot via read_commands.
 command_max_age_seconds = 60
+# How many of the latest processed commands the bot lists in status.json (recent_commands); read by the bot's status writer.
+status_recent_commands = 10
 
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).

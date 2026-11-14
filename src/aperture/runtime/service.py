@@ -1,0 +1,300 @@
+"""The bot service behind `aperture run`: keep what the engine owns protected, act on operator
+commands, flatten at the session's flatten time, write status.json, drain on SIGTERM.
+
+This build never opens a trade on its own: strategy entries are wired in a later change, and
+until then status says so as the entry-blocking reason.
+"""
+
+from __future__ import annotations
+
+import time
+import tomllib
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+from aperture.api import contract as api
+from aperture.calendar import NEW_YORK, CalendarRefused, SessionCalendar
+from aperture.config import Config, trading_gate
+from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
+from aperture.engine.loop import drain
+from aperture.engine.manual import flatten_deadline
+
+STRATEGIES_DIR = "strategies"
+STRATEGY_FILE = "strategy.toml"
+COMMAND = "command"
+COMMAND_FILE_REFUSED = "command-file-refused"
+NOT_WIRED = api.EntryBlock("entries_not_wired",
+                           "This build does not open trades on its own yet.")
+ZERO = Decimal(0)
+
+
+@dataclass(frozen=True)
+class ServicePaths:
+    status: Path
+    inbox: Path
+    processed: Path
+
+    @classmethod
+    def from_config(cls, config: Config) -> ServicePaths:
+        data = config.root / config.run.data_dir
+        commands = data / config.api.commands_dir
+        return cls(data / config.api.status_file, commands / api.INBOX,
+                   commands / api.PROCESSED)
+
+
+def strategy_id(config: Config) -> api.StrategyId:
+    """Name and version of the active strategy, from its strategy.toml."""
+    path = config.root / STRATEGIES_DIR / config.strategy.active / STRATEGY_FILE
+    with path.open("rb") as handle:
+        section = tomllib.load(handle)["strategy"]
+    return api.StrategyId(str(section["name"]), str(section["version"]))
+
+
+def load_calendar(config: Config) -> SessionCalendar | None:
+    try:
+        return SessionCalendar.load((config.root / config.session.calendar_file).parent)
+    except CalendarRefused:
+        return None
+
+
+def _iso(text: str) -> datetime:
+    return datetime.fromisoformat(text)
+
+
+def _average(orders: list[OrderRow]) -> Decimal | None:
+    filled = [o for o in orders if o.filled_quantity > 0 and o.average_fill_price is not None]
+    quantity = sum((o.filled_quantity for o in filled), ZERO)
+    if quantity == 0:
+        return None
+    return sum((o.filled_quantity * o.average_fill_price for o in filled), ZERO) / quantity
+
+
+class Service:
+    def __init__(self, engine: Engine, *, now: Callable[[], datetime],
+                 calendar: SessionCalendar | None, strategy: api.StrategyId,
+                 paths: ServicePaths) -> None:
+        self.engine = engine
+        self.config = engine.config
+        self.now = now
+        self.calendar = calendar
+        self.strategy = strategy
+        self.paths = paths
+        self.state = api.BotState.STARTING
+        self.last_broker_read_at: datetime | None = None
+        self._flatten_day: date | None = None
+        self._flatten_at: datetime | None = None
+
+    # --- commands --------------------------------------------------------------------------
+
+    def _seen(self, command_id: str) -> bool:
+        return bool(self.engine.store.journal(COMMAND, command_id))
+
+    def process_commands(self) -> None:
+        """Journal, act, retire (docs/api.md). Commands run in request order, so of two
+        entry-stop commands the later one wins. A command already journaled (crash before
+        retire) is retired without acting again."""
+        store = self.engine.store
+        items = api.read_commands(self.paths.inbox, self.now(),
+                                  self.config.api.command_max_age_seconds)
+        for item in items:
+            command = item.command
+            if command is None:
+                with store.transaction():
+                    store.append(COMMAND_FILE_REFUSED,
+                                 {"file": item.path.name, "cause": item.refusal},
+                                 run_id=self.engine.run_id)
+            elif not self._seen(command.command_id):
+                self._act(command)
+            api.retire_command(item, self.paths.processed)
+
+    def _record(self, command: api.CommandV1, outcome: api.CommandOutcome,
+                cause: str | None) -> None:
+        self.engine.store.append(COMMAND, {
+            "kind": command.kind, "requested_at": api.format_time(command.requested_at),
+            "source": command.source, "outcome": outcome, "cause": cause},
+            key=command.command_id, run_id=self.engine.run_id)
+
+    def _act(self, command: api.CommandV1) -> None:
+        engine, store = self.engine, self.engine.store
+        kind = command.kind
+        if kind in (api.CommandKind.ENTRY_STOP_ON, api.CommandKind.ENTRY_STOP_OFF):
+            with store.transaction():
+                self._record(command, api.CommandOutcome.DONE, None)
+                engine.entry_stop_row(kind is api.CommandKind.ENTRY_STOP_ON,
+                                      f"operator command {command.command_id}")
+            return
+        trades = engine.trades()
+        if kind is api.CommandKind.CANCEL_OWN_ORDERS:
+            with store.transaction():
+                self._record(command, api.CommandOutcome.DONE, None)
+            asked = engine.cancel_entries()
+            with store.transaction():
+                store.append("command-effect", {"entries_cancel_requested": asked},
+                             key=command.command_id, run_id=engine.run_id)
+            return
+        # FLATTEN: through the normal exit path; refused while a close waits for the operator.
+        refused = [t.trade_id for t in trades
+                   if f"{Fence.EXIT_REFUSED}:{t.trade_id}" in engine.fences()]
+        with store.transaction():
+            if refused:
+                self._record(command, api.CommandOutcome.REFUSED,
+                             f"closing order refused before for {', '.join(refused)}: "
+                             "look in the Webull app, then clear the fence")
+            else:
+                self._record(command, api.CommandOutcome.DONE,
+                             None if trades else "nothing open")
+        if not refused:
+            for trade in trades:
+                engine.request_exit(trade.trade_id, "operator-flatten")
+
+    # --- session timer ---------------------------------------------------------------------
+
+    def flatten_due(self) -> None:
+        """At the session's flatten time (or at once with no usable calendar or session)
+        ask every open trade to exit through the normal path."""
+        now = self.now()
+        day = now.astimezone(NEW_YORK).date()
+        if self._flatten_day != day:
+            self._flatten_day = day
+            self._flatten_at = (now if self.calendar is None
+                                else flatten_deadline(self.config, self.calendar, now))
+        if self._flatten_at is None or now < self._flatten_at:
+            return
+        for trade in self.engine.trades():
+            if not trade.exit_requested:
+                self.engine.request_exit(trade.trade_id, "session-flatten")
+
+    # --- status ----------------------------------------------------------------------------
+
+    def _entry_block(self, gate_open: bool, gate_cause: str,
+                     fences: list[tuple[str, str, str]]) -> api.EntryBlock:
+        if self.state is not api.BotState.RUNNING:
+            return api.EntryBlock(f"bot_{self.state}", f"The bot is {self.state}.")
+        if not gate_open:
+            return api.EntryBlock("trading_gate_closed", f"Trading gate closed: {gate_cause}.")
+        names = [name for name, _, _ in fences]
+        if str(Fence.ENTRY_STOP) in names:
+            return api.EntryBlock("entry_stop", "Entries stopped by the operator.")
+        if fences:
+            name, cause, _ = fences[0]
+            return api.EntryBlock(name.split(":", 1)[0].replace("-", "_"), f"{name}: {cause}")
+        return NOT_WIRED
+
+    def _stop(self, trade: TradeRow, stops: list[OrderRow]) -> api.Stop:
+        live = [s for s in stops if s.live]
+        verified = [s for s in live if s.verified]
+        if verified:
+            return api.Stop(api.StopState.VERIFIED, trade.stop_price,
+                            verified[0].client_order_id)
+        unknown = [s for s in live if s.send_state is SendState.UNKNOWN]
+        if unknown:
+            return api.Stop(api.StopState.UNKNOWN, trade.stop_price,
+                            unknown[0].client_order_id)
+        if live:
+            return api.Stop(api.StopState.PENDING, trade.stop_price, live[0].client_order_id)
+        return api.Stop(api.StopState.MISSING, None, None)
+
+    def _opened_at(self, trade_id: str) -> datetime:
+        row = self.engine.store.query("SELECT opened_at, closed_at FROM trades "
+                                      "WHERE trade_id = ?", (trade_id,))[0]
+        return _iso(row["opened_at"])
+
+    def _position(self) -> api.Position | None:
+        for trade in self.engine.trades():
+            orders = self.engine.orders(trade.trade_id)
+            quantity = self.engine.expected_quantity(orders)
+            entry_price = _average([o for o in orders if o.leg is Leg.ENTRY])
+            if quantity <= 0 or entry_price is None:
+                continue
+            stops = [o for o in orders if o.leg is Leg.STOP]
+            return api.Position(trade.symbol, quantity, entry_price,
+                                self._opened_at(trade.trade_id), self._stop(trade, stops))
+        return None
+
+    def _trades_today(self) -> tuple[api.Trade, ...]:
+        today = self.now().astimezone(NEW_YORK).date()
+        result = []
+        for row in self.engine.store.query(
+                "SELECT trade_id, symbol, opened_at, closed_at, close_cause FROM trades "
+                "WHERE closed_at IS NOT NULL ORDER BY closed_at"):
+            closed = _iso(row["closed_at"])
+            if closed.astimezone(NEW_YORK).date() != today:
+                continue
+            orders = self.engine.orders(row["trade_id"])
+            entries = [o for o in orders if o.leg is Leg.ENTRY]
+            sells = [o for o in orders if o.leg is not Leg.ENTRY]
+            entry_price, exit_price = _average(entries), _average(sells)
+            quantity = sum((o.filled_quantity for o in sells), ZERO)
+            if entry_price is None or exit_price is None or quantity == 0:
+                continue  # never filled: not a trade
+            result.append(api.Trade(row["symbol"], quantity, entry_price, exit_price,
+                                    _iso(row["opened_at"]), closed, row["close_cause"],
+                                    (exit_price - entry_price) * quantity))
+        return tuple(result)
+
+    def _recent_commands(self) -> tuple[api.CommandRecord, ...]:
+        rows = self.engine.store.journal(COMMAND)[-self.config.api.status_recent_commands:]
+        return tuple(api.CommandRecord(
+            r.key or "", api.CommandKind(r.body["kind"]), _iso(r.body["requested_at"]),
+            _iso(r.at_utc), api.CommandOutcome(r.body["outcome"]), r.body["cause"])
+            for r in reversed(rows))
+
+    def status(self) -> api.StatusV1:
+        gate = trading_gate(self.config)
+        fences = self.engine.fence_rows()
+        trades = self._trades_today()
+        return api.StatusV1(
+            written_at=self.now(), bot_state=self.state, run_id=self.engine.run_id,
+            environment=self.config.environment_name,
+            trading_gate=api.Gate(gate.open, gate.cause), strategy=self.strategy,
+            entry_stop=any(name == Fence.ENTRY_STOP for name, _, _ in fences),
+            entry_block=self._entry_block(gate.open, gate.cause, fences),
+            fences=tuple(api.Fence(name, _iso(set_at), cause) for name, cause, set_at in fences),
+            position=self._position(), trades_today=trades,
+            result_today_gross_usd=sum((t.result_gross_usd for t in trades), ZERO),
+            freshness=api.Freshness(self.last_broker_read_at, None, api.StreamHealth.OFF),
+            recent_commands=self._recent_commands())
+
+    def write_status(self) -> None:
+        api.write_status(self.paths.status, self.status())
+
+    # --- loop ------------------------------------------------------------------------------
+
+    def _observe(self, reconcile: bool) -> None:
+        ok = self.engine.reconcile() if reconcile else True
+        if not reconcile:
+            self.engine.step()
+        if ok and not any(n == Fence.BROKER_READ for n in self.engine.fences()):
+            self.last_broker_read_at = self.now()
+
+    def run(self, *, should_stop: Callable[[], bool],
+            sleep: Callable[[float], None] = time.sleep,
+            monotonic: Callable[[], float] = time.monotonic) -> bool:
+        """Recover, loop until `should_stop()`, then drain (spec 11). Returns False when the
+        drain hit shutdown_deadline_seconds: the caller exits non-zero and the supervisor
+        alerts."""
+        orders = self.config.orders
+        self.write_status()
+        self.engine.recover()
+        if not any(n == Fence.BROKER_READ for n in self.engine.fences()):
+            self.last_broker_read_at = self.now()
+        self.state = api.BotState.RUNNING
+        last_reconcile = monotonic()
+        while not should_stop():
+            self.process_commands()
+            self.flatten_due()
+            self.write_status()
+            sleep(float(orders.detail_poll_seconds))
+            due = monotonic() - last_reconcile >= float(orders.reconcile_interval_seconds)
+            self._observe(reconcile=due)
+            if due:
+                last_reconcile = monotonic()
+        self.state = api.BotState.STOPPING
+        self.write_status()
+        clean = drain(self.engine, sleep=sleep, monotonic=monotonic)
+        self.state = api.BotState.STOPPED
+        self.write_status()
+        return clean

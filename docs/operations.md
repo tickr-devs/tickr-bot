@@ -35,8 +35,13 @@ waiting; launchd sends SIGKILL at `bot_exit_timeout_seconds`.
    `ExitTimeOut` then. A resting stop stays at the broker either way; a working entry order may not be
    cancelled.
 
-Not yet available (other workstreams): the bot's `aperture.cli run` command (engine, stage 6) and
-the `aperture.api` server module (local API). Until they land, load only the preflight job.
+`aperture.cli run` (the bot job's command) recovers and reconciles, keeps the positions it owns
+protected, acts on API commands (entry-stop on/off, cancel-own-orders, flatten), asks every open
+trade to exit at the session's flatten time (at once when there is no session or no calendar),
+and writes `data/status.json` on every loop pass. On SIGTERM it cancels working entries, leaves
+stops resting and exits 0, or 5 if `shutdown_deadline_seconds` passed with work pending. It does
+not open trades on its own yet: status shows `entries_not_wired` as the entry-blocking reason
+until the strategy is wired in.
 
 ## Exit codes
 
