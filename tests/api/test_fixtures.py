@@ -18,6 +18,7 @@ from aperture.api import contract
 from aperture.api.contract import (
     BarsV1,
     BarV1,
+    CheckV1,
     CommandAcceptedV1,
     CommandKind,
     CommandV1,
@@ -26,12 +27,15 @@ from aperture.api.contract import (
     DayTrade,
     DayV1,
     ErrorV1,
+    ExplainV1,
     PendingCommandsV1,
     RiskSettings,
     SessionSettings,
     SettingsV1,
     StatusResponseV1,
 )
+from aperture.research.records import Admission
+from aperture.strategy.base import Verdict
 
 from .samples import T0, status
 from .schema_check import errors
@@ -90,6 +94,15 @@ def documents() -> dict[str, object]:
                 ("12.30", "12.38", "12.28", "12.36", "18450"),
                 ("12.36", "12.41", "12.33", "12.34", "9120"),
                 ("12.34", "12.52", "12.34", "12.50", "40211"))))),
+        "explain-v1": ExplainV1(
+            "sandbox", DAY, "ABCD", T0 + timedelta(minutes=1, seconds=2), T0.replace(
+                microsecond=0), "price_action_v1", "1", Verdict.WATCH, "breakout",
+            Admission.NOT_APPLICABLE, None, "spread_ratio", (
+                CheckV1("bars_consistent", None, "is", None, True, "own symbol, increasing "
+                        "start"),
+                CheckV1("relative_volume", Decimal("2.4"), ">=", Decimal("1.5"), True, ""),
+                CheckV1("spread_ratio", Decimal("0.0031"), "<=", Decimal("0.002"), False,
+                        ""))),
     }
 
 

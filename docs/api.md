@@ -77,6 +77,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). |
+| GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}`. `202` `command-accepted-v1`. |
@@ -108,6 +109,28 @@ fill-weighted averages, `stop_price` is the first protective stop sent (null if 
 received when the provider revised one. On today's file a last line still being written is not
 read yet. Only M1 is served; clients aggregate M5/M15 and compute indicators themselves.
 Query strings take exactly the documented parameters, each once; anything else is `bad_request`.
+
+### GET /explain (read-only)
+
+Answers "why did the bot do (or not do) this?" for one symbol, from the decision file the bot
+already writes (`<data_dir>/<decisions_dir>/<environment>/<NY date>/decisions.jsonl`); it never
+reads the broker and records nothing. "Today" is the New York date of the API's clock. Only
+records of the active strategy count (observer records are left out); the last one written wins.
+`symbol` must be a ticker in upper case, exactly as the bot records it; nothing is normalized.
+
+`checks` are in the order the strategy evaluated them: `measured` `operator` `threshold` and
+`passed`; yes/no rules have operator `"is"` with null `measured` and `threshold`.
+`first_failed_check` is the rule of the first check with `passed` false, or null. `admission` is
+`taken` / `refused` for an ENTER that reached admission (`refusal_cause` then holds the single
+`CAUSE: detail`), `not_evaluated` for an ENTER made too late to act on, `not_applicable` for
+every other verdict. The quote age the admission measured is not recorded in the decision file;
+when it was the cause it appears in `refusal_cause`.
+
+No record for the symbol today is `404 not_found` (cause names the symbol and date); a malformed
+line for the symbol in the decision file is `503 unavailable` (lines of other symbols are not
+parsed); a missing, repeated, extra or non-ticker parameter is
+`400 bad_request`. The command line has the same read: `aperture explain SYMBOL` (exit 0 found,
+1 none or unreadable).
 
 ### Commands
 

@@ -48,6 +48,8 @@ from aperture.api.contract import (
 from aperture.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
 from aperture.calendar import ny_date_of
 from aperture.config import Config, ConfigError
+from aperture.observers.log import DecisionLog
+from aperture.research.errors import RecordFileError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 COMMAND_SOURCE = "api"
@@ -83,6 +85,7 @@ class ApiSettings:
     max_request_body_bytes: int
     max_pending_commands: int
     history: HistoryPaths
+    decisions: Path  # <decisions_dir>/<environment>, read by GET /explain
     shown: SettingsV1  # served at GET /settings
 
 
@@ -123,6 +126,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         max_request_body_bytes=api.max_request_body_bytes,
         max_pending_commands=api.max_pending_commands,
         history=HistoryPaths.from_config(cfg),
+        decisions=DecisionLog.from_config(cfg).directory,
         shown=shown_settings(cfg),
     )
 
@@ -225,7 +229,8 @@ _ERROR_CODES = {
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
     "internal": 500, "unavailable": 503, "unauthorized": 401,
 }
-GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings")
+GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
+              "/explain")
 DAY_PREFIX = "/days/"
 
 
@@ -365,6 +370,8 @@ class Handler(BaseHTTPRequestHandler):
                                  for name, cls in contract.SCHEMA_TYPES.items()})
             elif path == "/settings":
                 self._json(200, self.server.settings.shown)
+            elif path == "/explain":
+                self._explain()
             elif path in COMMAND_ROUTES:
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
             elif path == "/days" or path.startswith(DAY_PREFIX) or path == "/bars":
@@ -430,6 +437,26 @@ class Handler(BaseHTTPRequestHandler):
             self._error("unavailable", str(exc))
             return
         self._json(200, document)
+
+    def _explain(self) -> None:
+        """GET /explain?symbol=: the latest active-strategy decision recorded today."""
+        try:
+            symbol = _query(urlsplit(self.path).query, frozenset({"symbol"}))["symbol"]
+            if not SYMBOL_PATTERN.match(symbol):
+                raise BadQuery(f"symbol {symbol!r} is not a ticker")
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        day = ny_date_of(self.server.clock())
+        try:
+            record = DecisionLog(self.server.settings.decisions).latest_active(day, symbol)
+        except (RecordFileError, OSError) as exc:
+            self._error("unavailable", f"decision file unreadable: {exc}")
+            return
+        if record is None:
+            self._error("not_found", f"no decision recorded for {symbol} on {day.isoformat()}")
+            return
+        self._json(200, contract.explain(self.server.settings.history.environment, day, record))
 
     def _read_json_body(self) -> dict[str, Any] | None:
         media = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()

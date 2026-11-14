@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from aperture import config as config_module
 from aperture.broker.base import Broker
-from aperture.calendar import CalendarRefused, SessionCalendar
+from aperture.calendar import CalendarRefused, SessionCalendar, ny_date_of
 from aperture.data.base import MarketData
 from aperture.engine.core import Engine, EntryRefused
 from aperture.engine.manual import (
@@ -302,6 +302,38 @@ def _check_quote(args: argparse.Namespace) -> int:
     return 0
 
 
+def _explain(args: argparse.Namespace) -> int:
+    """Read-only: the latest decision of the active strategy recorded today for one symbol,
+    from the decision file. No broker, no database writes. Exit 0 found, 1 none or unreadable."""
+    from aperture.api.contract import explain
+    from aperture.observers.log import DecisionLog
+    from aperture.research.errors import RecordFileError
+
+    cfg = config_module.load(args.config)
+    day = ny_date_of(NOW())
+    try:
+        record = DecisionLog.from_config(cfg).latest_active(day, args.symbol)
+    except (RecordFileError, OSError) as exc:
+        print(f"decision file unreadable: {exc}", file=sys.stderr)
+        return 1
+    if record is None:
+        print(f"no decision recorded for {args.symbol} on {day.isoformat()} "
+              f"({cfg.environment_name})")
+        return 1
+    e = explain(cfg.environment_name, day, record)
+    print(f"{e.symbol} {e.day.isoformat()}: {e.verdict} by {e.strategy} {e.version} at "
+          f"{e.decided_at.isoformat()} (bar {e.bar_start.isoformat()}), setup {e.setup or '-'}")
+    print(f"admission: {e.admission}"
+          + (f" ({e.refusal_cause})" if e.refusal_cause is not None else ""))
+    for c in e.checks:
+        value = ("" if c.measured is None and c.threshold is None
+                 else f": {c.measured} {c.operator} {c.threshold}")
+        note = f" [{c.note}]" if c.note else ""
+        print(f"  {'pass' if c.passed else 'FAIL'} {c.rule}{value}{note}")
+    print(f"first failed check: {e.first_failed_check or 'none'}")
+    return 0
+
+
 def _clear_fence(args: argparse.Namespace) -> int:
     with _engine(args.config) as engine:
         if not engine.clear_operator_fence(args.name):
@@ -497,6 +529,9 @@ def main(argv: list[str] | None = None) -> int:
     quote = sub.add_parser("check-quote", help="read-only: is the snapshot quote fresh enough "
                            "for the probes? Sends no orders")
     quote.add_argument("symbol")
+    explain_parser = sub.add_parser("explain", help="read-only: the latest decision recorded "
+                                    "today for a symbol, with every check")
+    explain_parser.add_argument("symbol")
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
     fence.add_argument("name")
     args = parser.parse_args(argv)
@@ -513,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
             return _probe_replace_stop(args)
         if args.command == "check-quote":
             return _check_quote(args)
+        if args.command == "explain":
+            return _explain(args)
         if args.command == "clear-fence":
             return _clear_fence(args)
         if args.command == "check-config":

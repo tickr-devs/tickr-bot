@@ -27,6 +27,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
+from aperture.research.records import Admission, DecisionRecord
+from aperture.strategy.base import Verdict
+
 API_VERSION = 1
 STATUS_SCHEMA_VERSION = 1
 COMMAND_SCHEMA_VERSION = 1
@@ -355,6 +358,54 @@ class SettingsV1:
     api_version: int = _const(API_VERSION)
 
 
+# ---------------------------------------------------------------- explain (read-only)
+
+
+@dataclass(frozen=True)
+class CheckV1:
+    """One rule the strategy evaluated: `measured` `operator` `threshold`. Yes/no rules have
+    operator "is" and null measured and threshold."""
+
+    rule: str
+    measured: Decimal | None
+    operator: str
+    threshold: Decimal | None
+    passed: bool
+    note: str
+
+
+@dataclass(frozen=True)
+class ExplainV1:
+    """GET /explain?symbol=: the latest decision of the active strategy recorded today for
+    one symbol, with every check in the order evaluated, as the decision file holds it."""
+
+    environment: str
+    day: date
+    symbol: str
+    decided_at: datetime
+    bar_start: datetime
+    strategy: str
+    version: str
+    verdict: Verdict
+    setup: str | None
+    admission: Admission
+    refusal_cause: str | None
+    first_failed_check: str | None
+    checks: tuple[CheckV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+def explain(environment: str, day: date, record: DecisionRecord) -> ExplainV1:
+    d = record.decision
+    checks = tuple(CheckV1(c.rule, c.measured, c.operator, c.threshold, c.passed, c.note)
+                   for c in d.checks)
+    return ExplainV1(
+        environment=environment, day=day, symbol=d.symbol, decided_at=record.time,
+        bar_start=record.bar_start, strategy=d.strategy, version=d.version, verdict=d.verdict,
+        setup=d.setup, admission=record.admission, refusal_cause=record.refusal_cause,
+        first_failed_check=d.decisive.rule if d.decisive else None, checks=checks)
+
+
 SCHEMA_TYPES: dict[str, type] = {
     "status-v1": StatusV1,
     "command-v1": CommandV1,
@@ -366,6 +417,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "day-v1": DayV1,
     "bars-v1": BarsV1,
     "settings-v1": SettingsV1,
+    "explain-v1": ExplainV1,
 }
 
 

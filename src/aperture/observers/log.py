@@ -11,6 +11,7 @@ journal (store.py) keeps its own durability.
 
 from __future__ import annotations
 
+import json
 import threading
 from datetime import date
 from pathlib import Path
@@ -18,7 +19,9 @@ from typing import TextIO
 
 from aperture.calendar import ny_date_of
 from aperture.config import Config
-from aperture.research.records import DecisionRecord, record_to_json
+from aperture.research.errors import RecordFileError
+from aperture.research.records import DecisionRecord, record_from_mapping, record_to_json
+from aperture.strategy.base import Role
 
 FILE_NAME = "decisions.jsonl"
 
@@ -37,6 +40,29 @@ class DecisionLog:
 
     def path(self, day: date) -> Path:
         return self.directory / day.isoformat() / FILE_NAME
+
+    def latest_active(self, day: date, symbol: str) -> DecisionRecord | None:
+        """The last active-strategy record for `symbol` in the file of `day` (read only), or
+        None when there is none. A last line still being written (no newline yet) is not read.
+        Lines without the symbol's key exactly as `record_to_json` writes it (json.dumps default
+        separators) cannot be this symbol's and are skipped unparsed; any other malformed line
+        is a RecordFileError."""
+        path = self.path(day)
+        if not path.is_file():
+            return None
+        latest = None
+        key = '"symbol": ' + json.dumps(symbol)
+        with open(path, encoding="utf-8") as handle:
+            for number, text in enumerate(handle, start=1):
+                if not text.endswith("\n") or key not in text:
+                    continue
+                try:
+                    record = record_from_mapping(json.loads(text))
+                except ValueError as exc:  # JSONDecodeError is a ValueError
+                    raise RecordFileError(str(path), number, str(exc)) from exc
+                if record.role is Role.ACTIVE and record.symbol == symbol:
+                    latest = record
+        return latest
 
     def append(self, record: DecisionRecord) -> None:
         """Write one record (refused if it breaks the record rules) and flush it. Safe to call
