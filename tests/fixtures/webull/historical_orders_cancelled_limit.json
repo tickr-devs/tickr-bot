@@ -1,0 +1,34 @@
+{
+  "source": "sandbox 2026-11-11, GET /trading/orders/historical-orders/list; probe LIMIT BUY 1 AAPL cancelled 2026-11-04; order ids replaced",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "client_order_id": "probe-d13d7316437b4405b9a3a655c0",
+        "combo_order_id": "ORDERID000000000000000001",
+        "combo_type": "NORMAL",
+        "orders": [
+          {
+            "client_order_id": "probe-d13d7316437b4405b9a3a655c0",
+            "commission": {},
+            "entrust_type": "QTY",
+            "fees": [],
+            "filled_quantity": "0",
+            "instrument_type": "EQUITY",
+            "limit_price": "100.00",
+            "order_id": "ORDERID000000000000000001",
+            "order_type": "LIMIT",
+            "place_time": "1793827313916",
+            "place_time_at": "2026-11-04T21:21:53.916Z",
+            "side": "BUY",
+            "status": "CANCELLED",
+            "support_trading_session": "ALL",
+            "symbol": "AAPL",
+            "time_in_force": "DAY",
+            "total_quantity": "1"
+          }
+        ]
+      }
+    ]
+  }
+}

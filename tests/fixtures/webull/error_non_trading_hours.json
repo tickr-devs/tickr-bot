@@ -1,0 +1,8 @@
+{
+  "source": "sandbox 2026-11-01, POST /trading/orders/place on a weekend; no order created (from the SDK ServerException)",
+  "status": 417,
+  "body": {
+    "error_code": "OPENAPI_CAN_NOT_TRADING_FOR_NON_TRADING_HOURS",
+    "message": "Orders cannot be placed at this time. Please try again during normal market hours 9:30 a.m. - 4:00 p.m. ET."
+  }
+}

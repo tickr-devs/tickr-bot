@@ -1,0 +1,8 @@
+{
+  "source": "sandbox, GET /trading/orders/get and POST /trading/orders/cancel for a never-placed id (from the SDK ServerException)",
+  "status": 417,
+  "body": {
+    "error_code": "OPENAPI_PARAM_ERR",
+    "message": "Parameter error, Order not present."
+  }
+}

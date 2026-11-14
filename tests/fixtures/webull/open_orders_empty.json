@@ -1,0 +1,7 @@
+{
+  "source": "sandbox 2026-11-11, GET /trading/orders/open-orders/list, empty account",
+  "status": 200,
+  "body": {
+    "data": []
+  }
+}

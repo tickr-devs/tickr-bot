@@ -1,0 +1,8 @@
+{
+  "source": "sandbox, Detail polled about once per second (from the SDK ServerException)",
+  "status": 429,
+  "body": {
+    "error_code": "TOO_MANY_REQUESTS",
+    "message": "Too many requests"
+  }
+}
