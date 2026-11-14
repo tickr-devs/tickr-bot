@@ -172,6 +172,13 @@ history_sessions = 5
 # Prior-session bar cache folder relative to [run] data_dir; files go to <history_dir>/<environment>/<NY date asked
 # on>/<symbol>-<sessions>.jsonl (replay bar format); read by data.history.
 history_dir = "history"
+# Most discovery candidates (best first) kept on the L1 stream besides the position and the strategy's WATCH symbols, so
+# a candidate has a fresh quote the minute the strategy first says ENTER; count. Symbols per connection are unproven
+# (docs/webull-facts.md, probe M3 pending), so this stays small; read by runtime.market.
+candidate_subscriptions = 5
+# Seconds candidates stay off the stream after their subscribe was refused (the position and WATCH symbols are never
+# affected); read by runtime.market.
+candidate_retry_seconds = 300
 # Seconds before the L1 stream connects again after its loop ended (failed resubscribe or SDK gave up); read by broker.webull stream.
 stream_reconnect_delay_seconds = 10
 # Seconds without a received quote, transport up, after which a subscribed symbol is quiet; read by data.health.

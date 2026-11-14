@@ -1097,10 +1097,13 @@ class StreamSession:
                 raise MarketDataError("one stream listener per session; use FanOut")
             first = self._listener is None
             self._listener = listener
-            self._symbols.update(symbols)
+            added = set(symbols) - self._symbols
+            self._symbols.update(added)
             up = self._up
         if up:
-            self._sync_or_reconnect(raise_error=True)
+            # A refused subscribe takes its own symbols back out before the reconnect, so the
+            # resubscribe of the full set cannot fail on them again (and again).
+            self._sync_or_reconnect(raise_error=True, rollback=added)
         if first:
             # A connect before any listener was bound was reported to nobody: tell the new
             # listener now, so its health never stays "never connected" on a live stream.
@@ -1116,13 +1119,16 @@ class StreamSession:
         if up:
             self._sync_or_reconnect(raise_error=True)
 
-    def _sync_or_reconnect(self, raise_error: bool) -> bool:
-        """Sync; on failure mark the transport down (cause reported), call on_error and ask
-        for a reconnect, whose resubscribe sends the full set again. True when in sync."""
+    def _sync_or_reconnect(self, raise_error: bool,
+                           rollback: Iterable[str] = ()) -> bool:
+        """Sync; on failure drop `rollback` from the desired set, mark the transport down
+        (cause reported), call on_error and ask for a reconnect, whose resubscribe sends the
+        full set again. True when in sync."""
         try:
             return self._sync()
         except Exception as exc:  # noqa: BLE001 - budget, HTTP or SDK failure while (un)subscribing
             with self._lock:
+                self._symbols.difference_update(rollback)
                 self._connected = self._up = False
             self._notify(False, f"resubscribe failed ({type(exc).__name__}); reconnecting")
             self._on_error("subscribe", exc)

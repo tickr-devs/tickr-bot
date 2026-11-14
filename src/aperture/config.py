@@ -119,6 +119,8 @@ class MarketDataConfig:
     history_max_pages_per_symbol: int
     history_max_lookback_days: int
     history_sessions: int
+    candidate_subscriptions: int
+    candidate_retry_seconds: Decimal
     history_dir: str
     stream_reconnect_delay_seconds: Decimal
     quiet_after_seconds: Decimal

@@ -111,6 +111,7 @@ class MarketRuntime:
         self.subscribed: set[str] = set()
         self.watch: set[str] = set()  # the strategy's WATCH symbols, set by the service
         self.discovery: DiscoveryState | None = None
+        self._candidates_retry_at = monotonic()  # candidates off until then after a refusal
         self._next_discovery = monotonic()
         self._started = now()
 
@@ -125,7 +126,7 @@ class MarketRuntime:
 
     def tick(self) -> None:
         self._journal_stream_events()
-        self._sync_subscriptions()
+        self._sync_subscriptions()  # new candidates: on the next pass, a second later
         self._exit_on_stream_loss()
         self._discover_if_due()
 
@@ -145,10 +146,25 @@ class MarketRuntime:
                 symbols.add(trade.symbol)
         return symbols
 
+    def _candidate_symbols(self) -> set[str]:
+        # Only on a live transport: a subscribe while down is queued silently and sent by the
+        # next connect's resubscribe of the full set, where a refusal cannot be rolled back.
+        if (self.discovery is None or not self.health.transport.up
+                or self.monotonic() < self._candidates_retry_at):
+            return set()
+        best = self.discovery.candidates[:self.config.market_data.candidate_subscriptions]
+        return {c.instrument.symbol for c in best}
+
     def _sync_subscriptions(self) -> None:
-        """L1 for the open position and the strategy's WATCH symbols (spec 6)."""
-        desired = self._position_symbols() | self.watch
-        added, removed = desired - self.subscribed, self.subscribed - desired
+        """L1 for the open position and the strategy's WATCH symbols (spec 6), then the best
+        discovery candidates, so a quote is there the first minute the strategy says ENTER.
+        Candidates are kept only while the transport is up, and go in their own request: a
+        refusal (the per-connection symbol limit is unproven) never touches the position's
+        subscription, and candidates then stay off for `candidate_retry_seconds`."""
+        essential = self._position_symbols() | self.watch
+        candidates = self._candidate_symbols() - essential
+        desired = essential | candidates
+        removed = self.subscribed - desired
         if removed:
             try:
                 self.source.unsubscribe(sorted(removed))
@@ -158,15 +174,24 @@ class MarketRuntime:
             for symbol in removed:
                 self.inbox.forget(symbol)
             self.subscribed -= removed
-        if added:
-            self.health.track(added)
-            try:
-                self.source.subscribe(sorted(added), self.listener)
-            except Exception as exc:  # noqa: BLE001 - a stream problem never ends the loop
-                self.inbox.on_error("subscribe", exc)
-                self.health.untrack(added)
-                return
-            self.subscribed |= added
+        if not self._subscribe(essential - self.subscribed, "subscribe"):
+            return
+        if not self._subscribe(candidates - self.subscribed, "subscribe-candidates"):
+            self._candidates_retry_at = (
+                self.monotonic() + float(self.config.market_data.candidate_retry_seconds))
+
+    def _subscribe(self, added: set[str], where: str) -> bool:
+        if not added:
+            return True
+        self.health.track(added)
+        try:
+            self.source.subscribe(sorted(added), self.listener)
+        except Exception as exc:  # noqa: BLE001 - a stream problem never ends the loop
+            self.inbox.on_error(where, exc)
+            self.health.untrack(added)
+            return False
+        self.subscribed |= added
+        return True
 
     def _in_regular_session(self, now: datetime) -> tuple[bool, datetime | None]:
         if self.calendar is None:

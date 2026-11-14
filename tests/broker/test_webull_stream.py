@@ -291,4 +291,6 @@ def test_subscribe_failure_while_up_marks_down_reconnects_and_raises():
     assert not s.up and sent[-1] == ("reconnect", [])
     assert rec.transport[-1] == (False, "resubscribe failed (BudgetExhausted); reconnecting")
     assert [w for w, _ in errors] == ["subscribe"]
-    assert s.symbols == {"AAA", "BBB"}  # kept: the next connect sends the full set
+    # Rolled back: the next connect resubscribes only what was in sync, so a refused symbol
+    # can never keep the stream down; the caller (runtime.market) asks for BBB again.
+    assert s.symbols == {"AAA"}
