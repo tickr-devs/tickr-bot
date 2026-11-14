@@ -76,7 +76,7 @@ class Fence(StrEnum):
     EXIT_REFUSED = "exit-refused"
     CANCEL_UNKNOWN = "cancel-unknown"
     CANCEL_FAILED = "cancel-failed"
-    CANCEL_NOT_SENT = "cancel-not-sent"  # cancels kept failing to leave (429 / budget)
+    CANCEL_NOT_SENT = "cancel-not-sent"  # cancels kept refused by our request budget
     RESURRECTED = "resurrected"
     FOREIGN_POSITION = "foreign-position"
     FOREIGN_ORDER = "foreign-order"
@@ -477,7 +477,8 @@ class Engine:
         try:
             ack = self.broker.place(request)
         except RateLimited:
-            # Local budget or HTTP 429: nothing was created. Not a broker rejection, so it
+            # Our request budget refused it: nothing was sent (a 429 on a trading request is
+            # OutcomeUnknown in the adapter). Not a broker rejection, so it
             # does not count against stop retries; the next step decides again.
             with self.store.transaction():
                 self._set_send_state(cid, SendState.REFUSED, {"code": "rate-limited"},
@@ -547,7 +548,7 @@ class Engine:
             self.store.execute("UPDATE orders SET cancel_state = ?, updated_at = ? "
                                "WHERE client_order_id = ?", (outcome, self.store.stamp(), cid))
             if outcome == "not-sent":
-                # Refused by the budget or a 429 before reaching the broker: no cancel was
+                # Refused by our request budget before reaching the broker: no cancel was
                 # sent, so it does not use up one of the attempts that end in CANCEL_FAILED.
                 self.store.execute("UPDATE orders SET cancel_attempts = cancel_attempts - 1 "
                                    "WHERE client_order_id = ?", (cid,))
@@ -568,7 +569,7 @@ class Engine:
         waited = self.clock() - since
         if waited >= self.config.orders.cancel_not_sent_alert_seconds:
             self._set_fence(Fence.CANCEL_NOT_SENT, cid,
-                            f"no cancel could be sent for {waited:.0f} s (rate limit or budget)")
+                            f"no cancel could be sent for {waited:.0f} s (request budget)")
 
     # --- observation -----------------------------------------------------------------------
 

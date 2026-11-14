@@ -77,7 +77,7 @@ detail_reads_per_step = 1
 cancel_retry_attempts = 2
 # Seconds after a cancel before a Detail read showing the order still working counts as "cancel did not take"; read by the engine.
 cancel_retry_spacing_seconds = 6
-# Seconds a needed cancel may keep failing to leave (429 or our request budget) before an operator alert and an entry fence; read by the engine.
+# Seconds a needed cancel may keep being refused by our request budget (nothing sent) before an operator alert and an entry fence; read by the engine.
 cancel_not_sent_alert_seconds = 30
 # Seconds a position may lack a verified broker stop before the engine closes it; read by the engine.
 max_unprotected_seconds = 30
