@@ -161,8 +161,108 @@ def test_osascript_failures_become_notify_error(effect):
 
 
 def test_default_notifier_by_platform():
-    assert isinstance(default_notifier(CONFIG, "darwin", {}), Channels)
+    channels = default_notifier(CONFIG, "darwin", {})
+    assert isinstance(channels, Channels)
+    # Neither channel runs in the caller's thread: the bot's loop waits for no alert.
+    assert channels.background == (MACOS, IMESSAGE)
     assert default_notifier(CONFIG, "linux") is None
+
+
+class Blocking:
+    """A channel that waits until released, as a slow Tickr app or osascript would."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.entered, self.release = threading.Event(), threading.Event()
+        self.shown, self.fail = 0, fail
+
+    def notify(self, title: str, text: str) -> None:
+        self.entered.set()
+        assert self.release.wait(5)
+        if self.fail:
+            raise NotifyError("boom")
+        self.shown += 1
+
+
+def test_alert_never_waits_for_the_mac_notification_and_one_send_runs_at_a_time():
+    """With every channel in the background, alert() returns at once, and the same alert
+    raised again while its send is still running is a repeat: one send, not one per pass."""
+    mac, phone = Blocking(), Blocking()
+    alerter = Alerter(CONFIG, "Tickr", Channels((), ((MACOS, mac), (IMESSAGE, phone))),
+                      Clock())
+    first = alerter.alert(AlertKind.UNPROTECTED_POSITION, "ABC")
+    assert first.delivery is Delivery.SENDING and first.pending == (MACOS, IMESSAGE)
+    assert mac.entered.wait(5) and phone.entered.wait(5)  # both still "busy"
+    for _ in range(3):  # the next loop passes raise it again
+        again = alerter.alert(AlertKind.UNPROTECTED_POSITION, "ABC")
+        assert again.delivery is Delivery.SUPPRESSED_REPEAT
+    other = alerter.alert(AlertKind.UNPROTECTED_POSITION, "XYZ")  # another alert is not held
+    assert other.delivery is Delivery.SENDING
+    mac.release.set()
+    phone.release.set()
+    done = alerter.flush()
+    assert sorted((o.text, o.channel, o.delivery) for o in done) == sorted(
+        (text, channel, Delivery.SHOWN) for text in ("ABC", "XYZ")
+        for channel in (MACOS, IMESSAGE))
+    assert mac.shown == phone.shown == 2
+    # Delivered: the usual window now suppresses it.
+    assert alerter.alert(AlertKind.UNPROTECTED_POSITION, "ABC").delivery \
+        is Delivery.SUPPRESSED_REPEAT
+
+
+def test_an_alert_no_channel_delivered_is_sent_again_once_its_sends_have_ended():
+    mac, phone = Blocking(fail=True), Blocking(fail=True)
+    alerter = Alerter(CONFIG, "Tickr", Channels((), ((MACOS, mac), (IMESSAGE, phone))),
+                      Clock())
+    assert alerter.alert(AlertKind.BOT_CRASHED, "x").delivery is Delivery.SENDING
+    mac.release.set()
+    assert mac.entered.wait(5)
+    while not alerter.completed():  # the Mac send has failed; iMessage is still running
+        pass
+    assert alerter.alert(AlertKind.BOT_CRASHED, "x").delivery is Delivery.SUPPRESSED_REPEAT
+    phone.release.set()
+    (failed,) = alerter.flush()
+    assert failed.delivery is Delivery.FAILED and failed.channel == IMESSAGE
+    # Nothing was delivered and nothing is running: the next occurrence tries again.
+    assert alerter.alert(AlertKind.BOT_CRASHED, "x").delivery is Delivery.SENDING
+    alerter.flush()
+
+
+def test_an_alert_whose_thread_cannot_start_is_reported_and_sent_again_next_time():
+    starts = []
+
+    def spawn(target):
+        starts.append(target)
+        if len(starts) == 1:
+            raise RuntimeError("can't start new thread")
+        thread = threading.Thread(target=target)
+        thread.start()
+        return thread
+
+    mac, phone = Recorder(fail=True), Recorder(fail=True)
+    alerter = Alerter(CONFIG, "Tickr",
+                      Channels((), ((MACOS, mac), (IMESSAGE, phone)), spawn=spawn), Clock())
+    # The bot's loop gets an outcome, never the exception; the other channel still runs.
+    assert alerter.alert(AlertKind.BOT_CRASHED, "x").delivery is Delivery.SENDING
+    outcomes = {o.channel: (o.delivery, o.error) for o in alerter.flush()}
+    assert outcomes == {MACOS: (Delivery.FAILED, "macos: not started: RuntimeError"),
+                        IMESSAGE: (Delivery.FAILED, "imessage: boom")}
+    # Not suppressed until a restart: the next occurrence is sent, on both channels.
+    phone.fail = mac.fail = False
+    assert alerter.alert(AlertKind.BOT_CRASHED, "x").delivery is Delivery.SENDING
+    assert {o.channel: o.delivery for o in alerter.flush()} == {
+        MACOS: Delivery.SHOWN, IMESSAGE: Delivery.SHOWN}
+    assert len(mac.shown) == len(phone.shown) == 1
+
+
+def test_a_send_that_raises_leaves_no_alert_marked_as_sending():
+    class Broken(Channels):
+        def send(self, title, text, done):
+            raise RuntimeError("boom")
+
+    alerter = Alerter(CONFIG, "Tickr", Broken((), ((MACOS, Recorder()),)), Clock())
+    for _ in range(2):  # the second call reaches send again instead of being suppressed
+        with pytest.raises(RuntimeError):
+            alerter.alert(AlertKind.BOT_CRASHED, "x")
 
 
 RECIPIENT = "+15550001234-canary"

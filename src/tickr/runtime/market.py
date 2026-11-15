@@ -30,6 +30,7 @@ STREAM_TRANSPORT = "stream-transport"
 STREAM_ERROR = "stream-error"
 DISCOVERY = "discovery"
 DISCOVERY_FAILED = "discovery-failed"
+STREAM_SUBSCRIPTIONS = "stream-subscriptions"
 STREAM_LOST_EXIT = "stream-lost"
 
 
@@ -208,6 +209,27 @@ class MarketRuntime:
         return set(self._observers_applied)
 
     def _sync_subscriptions(self) -> None:
+        """One pass of `_apply_subscriptions`; a change of the bot's subscribed set is
+        journaled as `stream-subscriptions`: the symbols `added` and `removed` by this pass,
+        then the whole set (`subscribed`) and the part of it on the optional path
+        (`optional`). It is the bot's own record of what it asked for and was not refused,
+        so a day's quotes and latency can be read against what was subscribed when; the
+        symbols a failed unsubscribe may have left on the connection are not in it."""
+        before = set(self.subscribed)
+        try:
+            self._apply_subscriptions()
+        finally:
+            if self.subscribed != before:
+                store = self.engine.store
+                with store.transaction():
+                    store.append(STREAM_SUBSCRIPTIONS, {
+                        "added": sorted(self.subscribed - before),
+                        "removed": sorted(before - self.subscribed),
+                        "subscribed": sorted(self.subscribed),
+                        "optional": sorted(self._optional & self.subscribed)},
+                        run_id=self.engine.run_id)
+
+    def _apply_subscriptions(self) -> None:
         """L1 for the open position and the strategy's WATCH symbols (spec 6), then the best
         discovery candidates, so a quote is there the first minute the strategy says ENTER,
         then the observers' WATCH symbols so their results are not limited to the active

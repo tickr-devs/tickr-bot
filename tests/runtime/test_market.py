@@ -18,6 +18,7 @@ from tickr.runtime.market import (
     DISCOVERY_FAILED,
     STREAM_ERROR,
     STREAM_LOST_EXIT,
+    STREAM_SUBSCRIPTIONS,
     STREAM_TRANSPORT,
     MarketRuntime,
     StreamInbox,
@@ -620,3 +621,41 @@ def test_no_unsubscribe_failure_reconnects_with_a_position_open(tmp_path):
     rig.advance(LOST_AFTER.total_seconds() * 2)
     rig.market.tick(discover=False)
     assert rig.engine.trade(t).exit_requested is None and reconnects == []
+
+
+def test_every_change_of_the_subscribed_set_is_journaled_once(tmp_path):
+    rig = tiered(tmp_path, candidate_subscriptions=1, observer_subscriptions=1)
+    rig.market.watch = {"WAT"}
+    rig.market.observer_watch = {"OB1"}
+    rig.market.tick()
+    rig.market.tick()  # nothing changed: no second record
+    (first,) = rig.store.journal(STREAM_SUBSCRIPTIONS)
+    assert first.body == {"added": ["WAT"], "removed": [], "subscribed": ["WAT"],
+                          "optional": []}
+    assert first.run_id == rig.engine.run_id
+    rig.source.transport(True, rig.now, "up")
+    rig.advance(RESYNC)
+    rig.market.tick()
+    assert rig.store.journal(STREAM_SUBSCRIPTIONS)[-1].body == {
+        "added": ["AAA", "OB1"], "removed": [], "subscribed": ["AAA", "OB1", "WAT"],
+        "optional": ["AAA", "OB1"]}
+    rig.market.watch = set()
+    rig.market.discovery = None
+    rig.market.tick()
+    assert rig.store.journal(STREAM_SUBSCRIPTIONS)[-1].body == {
+        "added": [], "removed": ["AAA", "WAT"], "subscribed": ["OB1"], "optional": ["OB1"]}
+    assert len(rig.store.journal(STREAM_SUBSCRIPTIONS)) == 3
+
+
+def test_a_refused_subscribe_is_not_journaled_as_subscribed(tmp_path):
+    class Refusing(FakeMarketData):
+        def subscribe(self, symbols, listener):
+            if symbols:
+                raise RuntimeError("refused")
+            super().subscribe(symbols, listener)
+
+    rig = Rig(tmp_path, now=SATURDAY, source=Refusing())
+    rig.market.watch = {"WAT"}
+    rig.market.tick()
+    assert rig.market.subscribed == set()
+    assert rig.store.journal(STREAM_SUBSCRIPTIONS) == []

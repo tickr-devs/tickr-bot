@@ -466,8 +466,8 @@ imessage_recipient_variable = "TICKR_IMESSAGE_TO"
 # The Tickr Mac app that shows the Mac notification with its own icon (path to the .app; empty = none). When it is
 # missing, not allowed to notify or fails, the notification goes through osascript instead; read by runtime.alerts.
 mac_app = "/Applications/Tickr.app"
-# Seconds to wait for the Tickr app to hand the notification over before osascript shows it instead (kept short: the
-# bot's loop waits for it); read by runtime.alerts.
+# Seconds to wait for the Tickr app to hand the notification over before osascript shows it instead (the alert is sent
+# on a background thread, so the bot's loop does not wait for it); read by runtime.alerts.
 mac_app_timeout_seconds = 2
 
 [chart]
