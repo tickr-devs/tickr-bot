@@ -55,6 +55,98 @@
               }
             ]
           },
+          "refusal": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "GATE_CLOSED",
+                      "CLOCK_INVALID",
+                      "RECONCILIATION_NOT_DONE",
+                      "BROKER_READ_MISSING",
+                      "BROKER_READ_STALE",
+                      "UNRESOLVED_EXPOSURE",
+                      "FOREIGN_EXPOSURE",
+                      "ENTRY_STOP_SET",
+                      "CALENDAR_UNKNOWN",
+                      "CALENDAR_DAY_MISMATCH",
+                      "HALF_DAY",
+                      "OUTSIDE_REGULAR_SESSION",
+                      "SESSION_TIMES_INVALID",
+                      "AFTER_LAST_ENTRY",
+                      "COUNT_INVALID",
+                      "OWN_POSITION_OPEN",
+                      "OWN_ORDER_WORKING",
+                      "POSITION_LIMIT_REACHED",
+                      "SYMBOL_COOLDOWN",
+                      "DECISION_NOT_ENTER",
+                      "DECISION_NOT_ACTIVE",
+                      "DECISION_INCOMPLETE",
+                      "DECISION_INVALID",
+                      "ORDER_PRICES_MISSING",
+                      "ORDER_PRICES_INVALID",
+                      "SETUP_INVALIDATED",
+                      "QUOTE_MISSING",
+                      "QUOTE_SYMBOL_MISMATCH",
+                      "QUOTE_INVALID",
+                      "QUOTE_TIME_INVALID",
+                      "QUOTE_STALE",
+                      "PRICE_OUTSIDE_WINDOW",
+                      "QUANTITY_BELOW_ONE",
+                      "QUANTITY_NOT_WHOLE",
+                      "NOTIONAL_OVER_CAP",
+                      "PLANNED_LOSS_OVER_LIMIT",
+                      "DAILY_MONEY_UNKNOWN",
+                      "DAILY_MONEY_INVALID",
+                      "DAILY_CEILING",
+                      "ENTRY_BUDGET_UNAVAILABLE",
+                      "STOP_BUDGET_UNAVAILABLE",
+                      "ENGINE_REFUSED",
+                      "UNKNOWN"
+                    ]
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "since": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "until": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "since",
+                  "until"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "entry_price": {
             "anyOf": [
               {
@@ -135,6 +227,7 @@
           "strategy",
           "admission",
           "refusal_cause",
+          "refusal",
           "entry_price",
           "stop_price",
           "checks"

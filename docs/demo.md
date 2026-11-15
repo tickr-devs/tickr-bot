@@ -3,9 +3,9 @@
 A made-up trading day, so every screen of the macOS and iOS apps can be looked at with full data
 (open position with its stop, wins and losses, daily room near the ceiling, decisions and their
 checks, skipped signals for "Not taken" (ZNTH's re-breakout inside its cooldown after a loss is
-refused), the Overview's live flow and "Watching closely", observers with their simulated day
-results, account, past days for the day picker, performance in R over the demo sessions,
-minute bars).
+refused, with the cooldown's `until`), the Overview's live flow and "Watching closely", observers
+with their simulated day results, account, past days for the day picker, performance in R over
+the demo sessions, minute bars).
 
 ```
 .venv/bin/aperture demo          # or: python -m aperture.cli demo

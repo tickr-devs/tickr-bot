@@ -24,6 +24,7 @@ from aperture.research import observer_report
 from aperture.research.records import Admission, DecisionRecord
 from aperture.strategy.base import Decision, Role, Verdict
 
+from .schema_check import errors
 from .test_decisions import (
     ACTIVE,
     BAR,
@@ -133,7 +134,7 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
     assert body["signals"] == [
         {"at": "2026-11-16T15:02:00.000Z", "symbol": "WXYZ",
          "strategy": {"name": "price-action-v1", "version": "1"},
-         "admission": "not_evaluated", "refusal_cause": None,
+         "admission": "not_evaluated", "refusal_cause": None, "refusal": None,
          "entry_price": "12.10", "stop_price": "11.80",
          "checks": [{"rule": "relative_volume", "measured": "2.4", "operator": ">=",
                      "threshold": "1.5", "passed": True, "note": ""}]},
@@ -141,6 +142,8 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
          "strategy": {"name": "price-action-v1", "version": "1"},
          "admission": "refused",
          "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position, limit 1",
+         "refusal": {"code": "POSITION_LIMIT_REACHED", "message": "1 open position, limit 1",
+                     "since": None, "until": None},
          "entry_price": "12.10", "stop_price": "11.80",
          "checks": [{"rule": "relative_volume", "measured": "2.4", "operator": ">=",
                      "threshold": "1.5", "passed": True, "note": ""}]},
@@ -152,6 +155,8 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
         ("15:01", "taken", None), ("15:03", "not_applicable", None),
         ("15:04", "not_evaluated", None),
         ("15:07", "refused", "POSITION_LIMIT_REACHED: 1 open position, limit 1")]
+    assert [d["refusal"] for d in decisions["decisions"]][:3] == [None, None, None]
+    assert decisions["decisions"][3]["refusal"] == body["signals"][1]["refusal"]
 
 
 def test_skipped_archived_day_and_empty_day(api, cfg):
@@ -163,7 +168,112 @@ def test_skipped_archived_day_and_empty_day(api, cfg):
     body = _get(api, f"/skipped?date={PAST.isoformat()}", "skipped-v1")
     assert [(s["symbol"], s["refusal_cause"]) for s in body["signals"]] == [
         ("ABCD", "SYMBOL_COOLDOWN: ABCD")]
+    # not the shape admission writes for a cooldown: read as UNKNOWN, never guessed
+    assert body["signals"][0]["refusal"] == {"code": "UNKNOWN", "message": "SYMBOL_COOLDOWN: ABCD",
+                                             "since": None, "until": None}
     assert _get(api, "/skipped?date=2026-11-10", "skipped-v1")["signals"] == []
+
+
+def test_cooldown_refusal_is_served_with_its_times(api, cfg):
+    cause = ("SYMBOL_COOLDOWN: ABCD closed at a loss at 2026-11-16T09:51:30.123456-05:00; "
+             "no entry before 2026-11-16T10:21:30.123456-05:00")
+    _write(DecisionLog.from_config(cfg), _enter(ACTIVE, Role.ACTIVE, minute=7,
+                                                admission=Admission.REFUSED, cause=cause))
+    (signal,) = _get(api, "/skipped", "skipped-v1")["signals"]
+    assert signal["refusal_cause"] == cause
+    assert signal["refusal"] == {
+        "code": "SYMBOL_COOLDOWN",
+        "message": "ABCD closed at a loss; no new entry in it during the cooldown",
+        "since": "2026-11-16T14:51:30.123Z", "until": "2026-11-16T15:21:30.123Z"}
+
+
+ENGINE_CAUSES = ["trading gate closed: disabled", "entries fenced: entry-stop",
+                 "open position limit reached", "quantity must be a positive whole number"]
+
+
+@pytest.mark.parametrize("detail", ENGINE_CAUSES)
+def test_engine_refusal_after_admission_is_read(detail):
+    refusal = contract.refusal_of(f"ENGINE_REFUSED: {detail}")
+    assert refusal == contract.RefusalV1(contract.RefusalCode.ENGINE_REFUSED, detail, None, None)
+
+
+@pytest.mark.parametrize("cause", [
+    "",
+    "POSITION_LIMIT_REACHED",  # no detail
+    "POSITION_LIMIT_REACHED:",
+    "POSITION_LIMIT_REACHED: ",
+    "POSITION_LIMIT_REACHED:1 open position",  # no space after the colon
+    "position_limit_reached: 1 open position",  # codes are exact
+    "NOT_A_CAUSE: something",
+    "UNKNOWN: something",
+    "daily loss ceiling",  # free text from an older writer
+    "SYMBOL_COOLDOWN: ABCD",
+    "SYMBOL_COOLDOWN: ABCD closed at a loss at 2026-11-16T09:51:30; "
+    "no entry before 2026-11-16T10:21:30",  # naive times
+    "SYMBOL_COOLDOWN: ABCD closed at a loss at noon; no entry before 2026-11-16T10:21:30+00:00",
+    "SYMBOL_COOLDOWN: ABCD closed at a loss at 2026-11-16T09:51:30+00:00; "
+    "no entry before 2026-11-16T10:21:30+00:00; extra",
+    "AFTER_LAST_ENTRY: last entry was 15:45",
+    "AFTER_LAST_ENTRY: last entry was 2026-11-16T15:45:00-05:00 New York",
+    "OUTSIDE_REGULAR_SESSION: now is outside 09:30:00-16:00:00 New York",
+    "OUTSIDE_REGULAR_SESSION: 2026-11-16T09:29:00-05:00 is outside 09:30-16:00 New York",
+    "QUOTE_STALE: quote of 2026-11-16T15:00:00+00:00 is old",  # a time in a plain detail
+])
+def test_unreadable_cause_is_unknown_with_the_recorded_text(cause):
+    assert contract.refusal_of(cause) == contract.RefusalV1(
+        contract.RefusalCode.UNKNOWN, cause, None, None)
+
+
+def test_no_cause_is_no_refusal():
+    assert contract.refusal_of(None) is None
+
+
+def _priced(entry_high, stop, admission=Admission.REFUSED, minute=0):
+    decision = Decision(*ACTIVE, "ABCD", Verdict.ENTER, (PASS,), entry_low=Decimal(entry_high),
+                        entry_high=Decimal(entry_high), stop=Decimal(stop),
+                        quantity=Decimal(10))
+    cause = "QUOTE_MISSING: no quote" if admission is Admission.REFUSED else None
+    bar = BAR + minute * M1
+    return DecisionRecord(bar + M1, bar, Role.ACTIVE, decision, admission, cause)
+
+
+@pytest.mark.parametrize("entry_high, stop, entry_price, stop_price", [
+    # raw strategy prices as a real decision file holds them, 28 places
+    ("12.10999999999999999999999999", "11.80499999999999999999999999", "12.10", "11.80"),
+    ("1.009", "0.99999", "1.00", "0.9999"),  # one dollar is cent-priced, below it 0.0001
+    ("0.98765432", "0.95129999", "0.9876", "0.9512"),
+    ("25", "24.5", "25.00", "24.50"),
+])
+def test_what_if_prices_are_the_order_prices(entry_high, stop, entry_price, stop_price):
+    record = _priced(entry_high, stop)
+    (signal,) = contract.skipped_document(DAY, (record,)).signals
+    (decision,) = contract.decisions_document("ABCD", DAY, (record,)).decisions
+    for document in (signal, decision):
+        raw = contract.to_jsonable(document)
+        assert (raw["entry_price"], raw["stop_price"]) == (entry_price, stop_price)
+    assert record.decision.entry_high == Decimal(entry_high)  # the record is not changed
+
+
+def test_documents_with_every_refusal_shape_match_their_schemas():
+    causes = ["QUOTE_MISSING: no quote", "garbled",
+              "SYMBOL_COOLDOWN: ABCD closed at a loss at 2026-11-16T09:51:30.5+00:00; "
+              "no entry before 2026-11-16T10:21:30.5+00:00",
+              "AFTER_LAST_ENTRY: last entry was 2026-11-16T15:45:00-05:00"]
+    records = tuple(
+        DecisionRecord(BAR + (n + 1) * M1, BAR + n * M1, Role.ACTIVE, Decision(
+            *ACTIVE, "ABCD", Verdict.ENTER, (PASS,), entry_low=Decimal("0.5"),
+            entry_high=Decimal("0.987654"), stop=Decimal("0.4")), Admission.REFUSED, cause)
+        for n, cause in enumerate(causes)) + (
+            _priced("12.105", "11.8", Admission.NOT_EVALUATED, minute=9),)
+    for name, document in (("skipped-v1", contract.skipped_document(DAY, records)),
+                           ("decisions-v1", contract.decisions_document("ABCD", DAY, records))):
+        raw = contract.to_jsonable(document)
+        cls = contract.SCHEMA_TYPES[name]
+        assert errors(contract.json_schema(cls), raw) == []
+        assert contract.to_jsonable(contract.from_jsonable(cls, raw)) == raw
+    signals = contract.skipped_document(DAY, records).signals
+    assert [s.refusal and s.refusal.code for s in signals] == [
+        "QUOTE_MISSING", "UNKNOWN", "SYMBOL_COOLDOWN", "AFTER_LAST_ENTRY", None]
 
 
 @pytest.mark.parametrize("path", [

@@ -56,3 +56,8 @@ class AdmissionCause(StrEnum):
     # 7. Request budget
     ENTRY_BUDGET_UNAVAILABLE = "ENTRY_BUDGET_UNAVAILABLE"
     STOP_BUDGET_UNAVAILABLE = "STOP_BUDGET_UNAVAILABLE"
+
+
+# Recorded as the cause code when admission passed but the engine refused to open the trade
+# (`runtime/entries.py`); its detail is the engine's text.
+ENGINE_REFUSED = "ENGINE_REFUSED"

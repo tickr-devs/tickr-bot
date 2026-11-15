@@ -67,6 +67,10 @@ from .samples import T0, account, entry, status
 from .schema_check import errors
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+LIMIT_CAUSE = "POSITION_LIMIT_REACHED: 1 open position(s), limit 1"
+# As admission records it: New York offsets, microseconds (risk/admission.py _check_cooldown).
+COOLDOWN_CAUSE = ("SYMBOL_COOLDOWN: ZNTH closed at a loss at 2026-11-16T10:14:07.250000-05:00; "
+                  "no entry before 2026-11-16T10:44:07.250000-05:00")
 POLL = Decimal("3")
 DAY = date(2026, 11, 16)
 
@@ -172,30 +176,37 @@ def documents() -> dict[str, object]:
                        StrategyId("price-action-v1", "1"), False, (
                            CheckV1("ask_above_trigger", Decimal("12.33"), ">",
                                    Decimal("12.35"), False, ""),), None, None,
-                       Admission.NOT_APPLICABLE, None),
+                       Admission.NOT_APPLICABLE, None, None),
             DecisionV1(T0.replace(microsecond=0) + timedelta(minutes=1), Verdict.ENTER,
                        StrategyId("price-action-v1", "2"), True, (
                            CheckV1("ask_above_trigger", Decimal("12.37"), ">",
                                    Decimal("12.35"), True, ""),),
-                       Decimal("12.40"), Decimal("12.10"), Admission.NOT_EVALUATED, None),
+                       Decimal("12.40"), Decimal("12.10"), Admission.NOT_EVALUATED, None,
+                       None),
             DecisionV1(T0.replace(microsecond=0) + timedelta(minutes=2), Verdict.ENTER,
                        StrategyId("price-action-v1", "1"), False, (
                            CheckV1("ask_above_trigger", Decimal("12.41"), ">",
                                    Decimal("12.35"), True, ""),),
                        Decimal("12.45"), Decimal("12.15"), Admission.REFUSED,
-                       "POSITION_LIMIT_REACHED: 1 open position, limit 1"))),
+                       LIMIT_CAUSE, contract.refusal_of(LIMIT_CAUSE)))),
         "skipped-v1": SkippedV1(DAY, (
             SkippedSignalV1(T0.replace(microsecond=0) + timedelta(minutes=2), "ABCD",
                             StrategyId("price-action-v1", "1"), Admission.REFUSED,
-                            "POSITION_LIMIT_REACHED: 1 open position, limit 1", Decimal("12.45"),
+                            LIMIT_CAUSE, contract.refusal_of(LIMIT_CAUSE), Decimal("12.45"),
                             Decimal("12.15"), (
                                 CheckV1("relative_volume", Decimal("2.4"), ">=",
                                         Decimal("1.5"), True, ""),
                                 CheckV1("ask_above_trigger", Decimal("12.41"), ">",
                                         Decimal("12.35"), True, ""))),
+            SkippedSignalV1(T0.replace(microsecond=0) + timedelta(minutes=35), "ZNTH",
+                            StrategyId("price-action-v1", "1"), Admission.REFUSED,
+                            COOLDOWN_CAUSE, contract.refusal_of(COOLDOWN_CAUSE),
+                            Decimal("0.9876"), Decimal("0.9512"), (
+                                CheckV1("ask_above_trigger", Decimal("0.9881"), ">",
+                                        Decimal("0.9850"), True, ""),)),
             SkippedSignalV1(T0.replace(microsecond=0) + timedelta(minutes=47), "WXYZ",
                             StrategyId("price-action-v1", "1"), Admission.NOT_EVALUATED, None,
-                            None, None, (
+                            None, None, None, (
                                 CheckV1("ask_above_trigger", Decimal("5.31"), ">",
                                         Decimal("5.25"), True, ""),)))),
         "skipped-v1.empty": SkippedV1(DAY - timedelta(days=3), ()),

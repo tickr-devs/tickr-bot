@@ -23,7 +23,8 @@
       "entry_price": null,
       "stop_price": null,
       "admission": "not_applicable",
-      "refusal_cause": null
+      "refusal_cause": null,
+      "refusal": null
     },
     {
       "at": "2026-11-16T15:01:00.000Z",
@@ -46,7 +47,8 @@
       "entry_price": "12.40",
       "stop_price": "12.10",
       "admission": "not_evaluated",
-      "refusal_cause": null
+      "refusal_cause": null,
+      "refusal": null
     },
     {
       "at": "2026-11-16T15:02:00.000Z",
@@ -69,7 +71,13 @@
       "entry_price": "12.45",
       "stop_price": "12.15",
       "admission": "refused",
-      "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position, limit 1"
+      "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position(s), limit 1",
+      "refusal": {
+        "code": "POSITION_LIMIT_REACHED",
+        "message": "1 open position(s), limit 1",
+        "since": null,
+        "until": null
+      }
     }
   ],
   "api_version": 1

@@ -32,6 +32,8 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from aperture.data.base import ScreenerKind
 from aperture.research.records import Admission, DecisionRecord
+from aperture.risk.causes import ENGINE_REFUSED, AdmissionCause
+from aperture.risk.ticks import round_to_tick
 from aperture.strategy.base import Check, Decision, Role, Verdict
 
 API_VERSION = 1
@@ -563,11 +565,32 @@ class ObserversV1:
     api_version: int = _const(API_VERSION)
 
 
+# The recorded cause code of a refused ENTER: every admission cause, the engine's refusal after
+# admission, and UNKNOWN for a recorded cause the API cannot read exactly.
+UNKNOWN_CAUSE = "UNKNOWN"
+RefusalCode = StrEnum("RefusalCode", [(c.value, c.value) for c in AdmissionCause]
+                      + [(ENGINE_REFUSED, ENGINE_REFUSED), (UNKNOWN_CAUSE, UNKNOWN_CAUSE)])
+
+
+@dataclass(frozen=True)
+class RefusalV1:
+    """Why admission refused an ENTER, read from the recorded `CODE: detail` (docs/api.md).
+    `message` is the detail without timestamps; `since` is when the refusal began to apply and
+    `until` when it stops applying, each null when the cause has no such time."""
+
+    code: RefusalCode
+    message: str
+    since: datetime | None
+    until: datetime | None
+
+
 @dataclass(frozen=True)
 class DecisionV1:
     """One recorded decision of the active strategy or an observer (`observer` true). `checks`
     as in explain-v1. `entry_price` (top of the entry window) and `stop_price` only for an ENTER
-    that was not taken (refused, or never evaluated) and only when the record holds them."""
+    that was not taken (refused, or never evaluated) and only when the record holds them, both
+    rounded down to the tick like the order the bot would have sent. `refusal_cause` is the
+    recorded text, kept for older clients; `refusal` is the same cause read into fields."""
 
     at: datetime
     action: Verdict
@@ -578,6 +601,7 @@ class DecisionV1:
     stop_price: Decimal | None
     admission: Admission
     refusal_cause: str | None
+    refusal: RefusalV1 | None
 
 
 @dataclass(frozen=True)
@@ -639,6 +663,71 @@ def _version_order(version: str) -> tuple[bool, int, str]:
 
 _SKIPPED = (Admission.REFUSED, Admission.NOT_EVALUATED)
 
+# Recorded details that carry times (risk/admission.py); each time is an ISO-8601 text with an
+# offset. A detail of any other code is shown as recorded, unless it holds such a time: then the
+# cause is UNKNOWN (a new detail shape is read on purpose, never by accident).
+_COOLDOWN = re.compile(r"(?P<symbol>\S+) closed at a loss at (?P<since>\S+); "
+                       r"no entry before (?P<until>\S+)")
+_AFTER_LAST_ENTRY = re.compile(r"last entry was (?P<since>\S+)")
+_OUTSIDE_SESSION = re.compile(r"(?P<now>\S+) is outside (?P<open>[0-9]{2}:[0-9]{2}:[0-9]{2})-"
+                              r"(?P<close>[0-9]{2}:[0-9]{2}:[0-9]{2}) New York")
+_ISO_TIME_IN_TEXT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}")
+
+
+def _recorded_time(text: str) -> datetime | None:
+    """An aware ISO-8601 time as admission writes it, or None."""
+    try:
+        value = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return value if value.utcoffset() is not None else None
+
+
+def refusal_of(cause: str | None) -> RefusalV1 | None:
+    """The recorded `CODE: detail` of a refusal in fields. Strict: a cause that is not exactly
+    one of the shapes admission and the entry path write is UNKNOWN with the recorded text as
+    its message, never a guess."""
+    if cause is None:
+        return None
+    unknown = RefusalV1(RefusalCode(UNKNOWN_CAUSE), cause, None, None)
+    code_text, separator, detail = cause.partition(": ")
+    if (not separator or not detail.strip() or code_text == UNKNOWN_CAUSE
+            or code_text not in RefusalCode.__members__):
+        return unknown
+    code = RefusalCode(code_text)
+    since = until = None
+    if code_text == AdmissionCause.SYMBOL_COOLDOWN:
+        match = _COOLDOWN.fullmatch(detail)
+        if match is None:
+            return unknown
+        since, until = _recorded_time(match["since"]), _recorded_time(match["until"])
+        if since is None or until is None:
+            return unknown
+        message = f"{match['symbol']} closed at a loss; no new entry in it during the cooldown"
+    elif code_text == AdmissionCause.AFTER_LAST_ENTRY:
+        match = _AFTER_LAST_ENTRY.fullmatch(detail)
+        if match is None or (since := _recorded_time(match["since"])) is None:
+            return unknown
+        message = "the session's last entry time had passed"
+    elif code_text == AdmissionCause.OUTSIDE_REGULAR_SESSION:
+        match = _OUTSIDE_SESSION.fullmatch(detail)
+        if match is None or _recorded_time(match["now"]) is None:
+            return unknown
+        message = f"outside the regular session {match['open']}-{match['close']} New York"
+    elif code_text == AdmissionCause.SESSION_TIMES_INVALID:
+        # The detail quotes the computed instants; the code alone says what is wrong.
+        message = "the [session] offsets give no valid last entry and flatten times for the day"
+    elif _ISO_TIME_IN_TEXT.search(detail):
+        return unknown
+    else:
+        message = detail
+    return RefusalV1(code, message, since, until)
+
+
+def _what_if(price: Decimal | None) -> Decimal | None:
+    """A recorded strategy price as the order path would have sent it."""
+    return None if price is None else round_to_tick(price)
+
 
 def decisions_document(symbol: str, day: date,
                        records: tuple[DecisionRecord, ...]) -> DecisionsV1:
@@ -649,23 +738,25 @@ def decisions_document(symbol: str, day: date,
         out.append(DecisionV1(
             at=r.bar_start, action=d.verdict,
             strategy=StrategyId(d.strategy, d.version), observer=r.role is Role.OBSERVER,
-            checks=checks_of(d), entry_price=d.entry_high if skipped else None,
-            stop_price=d.stop if skipped else None, admission=r.admission,
-            refusal_cause=r.refusal_cause))
+            checks=checks_of(d), entry_price=_what_if(d.entry_high) if skipped else None,
+            stop_price=_what_if(d.stop) if skipped else None, admission=r.admission,
+            refusal_cause=r.refusal_cause, refusal=refusal_of(r.refusal_cause)))
     return DecisionsV1(symbol=symbol, day=day, decisions=tuple(out))
 
 
 @dataclass(frozen=True)
 class SkippedSignalV1:
     """One ENTER of the active strategy that did not become a position: admission `refused`
-    (`refusal_cause` holds the single `CAUSE: detail`) or `not_evaluated` (made too late to act
-    on). `entry_price` / `stop_price` and `checks` as in decisions-v1."""
+    (`refusal` says why; `refusal_cause` is the recorded `CAUSE: detail`, kept for older
+    clients) or `not_evaluated` (made too late to act on). `entry_price` / `stop_price` and
+    `checks` as in decisions-v1."""
 
     at: datetime
     symbol: str
     strategy: StrategyId
     admission: Admission
     refusal_cause: str | None
+    refusal: RefusalV1 | None
     entry_price: Decimal | None
     stop_price: Decimal | None
     checks: tuple[CheckV1, ...]
@@ -688,7 +779,8 @@ def skipped_document(day: date, records: tuple[DecisionRecord, ...]) -> SkippedV
             at=r.bar_start, symbol=r.symbol,
             strategy=StrategyId(r.decision.strategy, r.decision.version),
             admission=r.admission, refusal_cause=r.refusal_cause,
-            entry_price=r.decision.entry_high, stop_price=r.decision.stop,
+            refusal=refusal_of(r.refusal_cause), entry_price=_what_if(r.decision.entry_high),
+            stop_price=_what_if(r.decision.stop),
             checks=checks_of(r.decision))
         for r in _oldest_first(records)
         if r.decision.verdict is Verdict.ENTER and r.admission in _SKIPPED))

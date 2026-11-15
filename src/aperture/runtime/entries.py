@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from decimal import ROUND_DOWN, Decimal
+from decimal import Decimal
 
 from aperture.calendar import (
     NEW_YORK,
@@ -26,27 +26,17 @@ from aperture.observers.log import DecisionLog
 from aperture.research.records import Admission as RecordAdmission
 from aperture.research.records import DecisionRecord
 from aperture.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation, admit
+from aperture.risk.causes import ENGINE_REFUSED
+from aperture.risk.ticks import round_to_tick
 from aperture.runtime.service import trades_today
 from aperture.strategy.base import Decision, Role, Verdict
 from aperture.types import Quote
 
 ZERO = Decimal(0)
-# Minimum price increments of US equities (SEC Regulation NMS Rule 612): one cent at or above
-# one dollar, 0.0001 below it. Protocol constants, not tunable numbers.
-CENT = Decimal("0.01")
-SUB_DOLLAR_TICK = Decimal("0.0001")
-ONE_DOLLAR = Decimal(1)
 STOP_ORDERS_PER_ENTRY = 1
 FOREIGN = (Fence.FOREIGN_POSITION, Fence.FOREIGN_ORDER)
 # Fences that are reported through their own admission field, not as unresolved exposure.
 NOT_EXPOSURE = (Fence.STARTUP_RECONCILE, Fence.ENTRY_STOP, Fence.BROKER_READ, *FOREIGN)
-
-
-def round_to_tick(price: Decimal) -> Decimal:
-    """Down to the valid increment: a limit never above the window, a stop never above the
-    strategy's stop (the planned loss is recomputed from the rounded prices)."""
-    tick = CENT if price >= ONE_DOLLAR else SUB_DOLLAR_TICK
-    return price.quantize(tick, rounding=ROUND_DOWN)
 
 
 def entry_cancel_cause(trade: TradeRow, quote: Quote | None, now: datetime,
@@ -226,7 +216,7 @@ class EntryDesk:
                                            entry_low_price=decision.entry_low)
                     admission = RecordAdmission.TAKEN
                 except EntryRefused as exc:
-                    admission, cause = RecordAdmission.REFUSED, f"ENGINE_REFUSED: {exc.cause}"
+                    admission, cause = RecordAdmission.REFUSED, f"{ENGINE_REFUSED}: {exc.cause}"
         elif decision.verdict is Verdict.EXIT:
             for trade in self.engine.trades():
                 if trade.symbol == decision.symbol and not trade.exit_requested:

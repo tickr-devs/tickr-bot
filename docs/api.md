@@ -382,16 +382,42 @@ version}`. `checks` have the explain-v1 shape (`rule` `measured` `operator` `thr
 (admission `refused`, or `not_evaluated` as for every observer ENTER): the top of the recorded
 entry window (`entry_high`, the price sizing and the what-if simulation use) and the recorded
 stop, each `null` when the record does not hold it, and both `null` for any other decision.
+Both are rounded the way the order path rounds the prices it sends (`risk/ticks.py`
+`round_to_tick`: down to the cent at or above $1, down to 0.0001 below it), so they are the
+limit and stop the bot would have sent; the decision file keeps the strategy's raw prices.
 `admission` and `refusal_cause` are the recorded admission, as in explain-v1 (`not_evaluated`
-for every observer ENTER, `not_applicable` for every other verdict).
+for every observer ENTER, `not_applicable` for every other verdict); `refusal` is the same cause
+read into fields (below).
 
 `/skipped?date=` (date optional, default today in New York) lists, for the apps' "Not taken"
 list, every record of the active strategy (role `active`, as `/explain`) with verdict `ENTER`
 and admission `refused` or `not_evaluated`, oldest first: `at` (bar start), `symbol`,
 `strategy {name, version}`, `admission`, `refusal_cause` (the single `CAUSE: detail` of a
-refusal, else `null`), the what-if `entry_price` and `stop_price` (the same rule as
-`/decisions`) and `checks` (explain-v1 shape). Taken ENTERs, other verdicts and observer
-records are left out. A date without a decision file answers with an empty list.
+refusal, else `null`), `refusal` (below), the what-if `entry_price` and `stop_price` (the same
+rule and rounding as `/decisions`) and `checks` (explain-v1 shape). Taken ENTERs, other verdicts
+and observer records are left out. A date without a decision file answers with an empty list.
+Every refused minute is its own row: consecutive refusals are not merged.
+
+`refusal` (in `/skipped` and `/decisions`) is `null` unless admission is `refused`; then it is
+`{code, message, since, until}`, read from the recorded `CODE: detail` at the API (the decision
+file keeps the text):
+- `code`: the admission cause (`risk/causes.py`, in spec order: `GATE_CLOSED` ...
+  `STOP_BUDGET_UNAVAILABLE`), `ENGINE_REFUSED` when admission passed but the engine refused to
+  open the trade, or `UNKNOWN` (see below). The schema lists the closed set.
+- `message`: the detail as a sentence without raw timestamps. For most codes it is the recorded
+  detail itself (`1 own position(s) open`); `SYMBOL_COOLDOWN`, `AFTER_LAST_ENTRY`,
+  `OUTSIDE_REGULAR_SESSION` and `SESSION_TIMES_INVALID` get a fixed sentence and their times move
+  to the fields below.
+- `since` / `until`: wire times (UTC, milliseconds) or `null`. `SYMBOL_COOLDOWN`: `since` is when
+  the losing trade closed and `until` when the cooldown ends (no entry in that symbol before it).
+  `AFTER_LAST_ENTRY`: `since` is the session's last entry time, `until` is `null`. Every other
+  code: both `null`.
+- A cause that is not exactly one of the shapes admission and the entry path write (no `: `,
+  an unknown code, a detail of a timed code that does not match, or a detail of any other code
+  that holds an ISO time) is `code` `UNKNOWN` with the recorded text as `message`, never a guess.
+
+`refusal_cause` stays in both documents for older clients (version 1 never removes or renames a
+key); new clients read `refusal`.
 
 A missing, repeated, extra, malformed or non-ticker parameter is `400 bad_request`; a malformed
 line for the symbol (`/decisions`), an observer line (`/observers`) or an active line

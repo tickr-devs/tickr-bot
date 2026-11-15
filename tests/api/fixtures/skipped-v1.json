@@ -9,7 +9,13 @@
         "version": "1"
       },
       "admission": "refused",
-      "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position, limit 1",
+      "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position(s), limit 1",
+      "refusal": {
+        "code": "POSITION_LIMIT_REACHED",
+        "message": "1 open position(s), limit 1",
+        "since": null,
+        "until": null
+      },
       "entry_price": "12.45",
       "stop_price": "12.15",
       "checks": [
@@ -32,6 +38,34 @@
       ]
     },
     {
+      "at": "2026-11-16T15:35:00.000Z",
+      "symbol": "ZNTH",
+      "strategy": {
+        "name": "price-action-v1",
+        "version": "1"
+      },
+      "admission": "refused",
+      "refusal_cause": "SYMBOL_COOLDOWN: ZNTH closed at a loss at 2026-11-16T10:14:07.250000-05:00; no entry before 2026-11-16T10:44:07.250000-05:00",
+      "refusal": {
+        "code": "SYMBOL_COOLDOWN",
+        "message": "ZNTH closed at a loss; no new entry in it during the cooldown",
+        "since": "2026-11-16T15:14:07.250Z",
+        "until": "2026-11-16T15:44:07.250Z"
+      },
+      "entry_price": "0.9876",
+      "stop_price": "0.9512",
+      "checks": [
+        {
+          "rule": "ask_above_trigger",
+          "measured": "0.9881",
+          "operator": ">",
+          "threshold": "0.9850",
+          "passed": true,
+          "note": ""
+        }
+      ]
+    },
+    {
       "at": "2026-11-16T15:47:00.000Z",
       "symbol": "WXYZ",
       "strategy": {
@@ -40,6 +74,7 @@
       },
       "admission": "not_evaluated",
       "refusal_cause": null,
+      "refusal": null,
       "entry_price": null,
       "stop_price": null,
       "checks": [

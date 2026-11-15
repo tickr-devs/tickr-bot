@@ -40,12 +40,14 @@ def small(scenario_path: Path):
     full = load(scenario_path)
     breakout = SymbolPlan("AAA", D(20), D(3000), ScreenerKind.GAINERS, (
         ("09:30", "09:45", D("24.50"), HOT), ("10:30", "10:32", D(21), HOT)))
+    # Today AAA breaks out again inside its 30-minute pause after the stop-out: refused.
+    again = replace(breakout, legs=(*breakout.legs, ("10:36", "10:52", D("24.80"), HOT)))
     held = SymbolPlan("BBB", D(30), D(3000), ScreenerKind.GAINERS, (
         ("10:40", "10:55", D("34.50"), HOT),))
     # Breaks out while BBB is held: admission refuses it (one position at a time).
     late = SymbolPlan("CCC", D(40), D(3000), ScreenerKind.GAINERS, (
         ("11:05", "11:20", D("46.00"), HOT),))
-    return replace(full, past=((breakout,),), today=(breakout, held, late), clock="11:30",
+    return replace(full, past=((breakout,),), today=(again, held, late), clock="11:30",
                    commands=(DemoCommand("10:35", api.CommandKind.ENTRY_STOP_ON, None),
                              DemoCommand("10:38", api.CommandKind.ENTRY_STOP_OFF, None)))
 
@@ -150,8 +152,17 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
         skipped = _get(server, "/skipped")
         assert skipped["day"] == FRIDAY.isoformat()
         assert skipped["signals"] and {(s["symbol"], s["admission"])
-                                       for s in skipped["signals"]} == {("CCC", "refused")}
-        assert all(s["refusal_cause"] and s["entry_price"] for s in skipped["signals"])
+                                       for s in skipped["signals"]} == {("AAA", "refused"),
+                                                                        ("CCC", "refused")}
+        assert all(s["refusal"] and s["entry_price"] for s in skipped["signals"])
+        assert {s["refusal"]["code"] for s in skipped["signals"]} == {
+            "SYMBOL_COOLDOWN", "OWN_POSITION_OPEN"}
+        # The cooldown refusal carries its times: 30 minutes from AAA's stop-out.
+        cooldown = next(s["refusal"] for s in skipped["signals"]
+                        if s["refusal"]["code"] == "SYMBOL_COOLDOWN")
+        since, until = api.parse_time(cooldown["since"]), api.parse_time(cooldown["until"])
+        assert (until - since).total_seconds() == cfg.risk.symbol_cooldown_minutes_after_loss * 60
+        assert since == day_trade.closed_at.replace(microsecond=since.microsecond)
         # The Overview's live flow and "Watching closely".
         flow = _get(server, "/flow")
         assert {c["symbol"] for c in flow["chips"]} == {"AAA", "BBB", "CCC"}

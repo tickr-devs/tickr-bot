@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
+from aperture.api.contract import RefusalCode, refusal_of
 from aperture.calendar import NEW_YORK, CalendarCause, CalendarRefused
 from aperture.config import GateResult
 from aperture.risk.admission import CHECKS, admit
@@ -166,6 +168,54 @@ def test_each_refusal_has_its_cause(lim, cause, make):
 def test_every_cause_is_exercised():
     # SESSION_TIMES_INVALID needs other limits; see test_invalid_session_offsets_refuse.
     assert {c for c, _ in REFUSALS} | {C.SESSION_TIMES_INVALID} == set(C)
+
+
+def _recorded(result) -> str:
+    """The cause as runtime/entries.py records it in the decision file."""
+    return f"{result.cause}: {result.detail}"
+
+
+ISO_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}")
+TIMED = {C.SYMBOL_COOLDOWN: (True, True), C.AFTER_LAST_ENTRY: (True, False)}
+
+
+@pytest.mark.parametrize(("cause", "make"), REFUSALS,
+                         ids=[f"{c}-{n}" for n, (c, _) in enumerate(REFUSALS)])
+def test_the_api_reads_every_recorded_refusal(lim, cause, make):
+    """GET /skipped and /decisions read each refusal admission writes into its exact code, a
+    message without raw timestamps, and its times as fields (never UNKNOWN)."""
+    result = admit(make(), lim)
+    refusal = refusal_of(_recorded(result))
+    assert refusal.code is RefusalCode(cause), refusal
+    assert refusal.message and not ISO_TIME.search(refusal.message), refusal.message
+    has_since, has_until = TIMED.get(cause, (False, False))
+    assert (refusal.since is not None, refusal.until is not None) == (has_since, has_until)
+    if cause is C.SYMBOL_COOLDOWN:
+        assert refusal.until - refusal.since == timedelta(minutes=30)
+        assert refusal.message == "ABCD closed at a loss; no new entry in it during the cooldown"
+
+
+def test_the_api_reads_session_times_invalid(lim):
+    bad = replace(lim, last_entry_minutes_before_close=5, flatten_minutes_before_close=15)
+    refusal = refusal_of(_recorded(admit(inputs(), bad)))
+    assert refusal.code is RefusalCode.SESSION_TIMES_INVALID and refusal.message
+
+
+def test_cooldown_times_are_read_exactly(lim):
+    lost = NOW - timedelta(minutes=29, seconds=1, microseconds=250000)
+    refusal = refusal_of(_recorded(admit(inputs(symbol_last_loss_at=lost), lim)))
+    assert (refusal.since, refusal.until) == (lost, lost + timedelta(minutes=30))
+
+
+def test_after_last_entry_time_is_read(lim):
+    refusal = refusal_of(_recorded(admit(_moved(_at(15, 50)), lim)))
+    assert refusal.since == _at(15, 45)
+    assert refusal.message == "the session's last entry time had passed"
+
+
+def test_outside_session_message_keeps_the_session_hours(lim):
+    refusal = refusal_of(_recorded(admit(_moved(_at(9, 29)), lim)))
+    assert refusal.message == "outside the regular session 09:30:00-16:00:00 New York"
 
 
 def test_boundaries_admit(lim):
