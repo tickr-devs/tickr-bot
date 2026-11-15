@@ -38,6 +38,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
+from pathlib import Path
 from typing import Any, Protocol
 
 from aperture.broker.base import (
@@ -85,6 +86,7 @@ HTTP_TOO_MANY_REQUESTS = 429
 
 CODE_NON_TRADING_HOURS = "OPENAPI_CAN_NOT_TRADING_FOR_NON_TRADING_HOURS"
 CODE_PARAM_ERROR = "OPENAPI_PARAM_ERR"
+CODE_INVALID_SYMBOL = "INVALID_SYMBOL"
 GATE_CLOSED = "GATE_CLOSED"
 MESSAGE_ORDER_NOT_PRESENT = "order not present"
 
@@ -156,6 +158,11 @@ class BrokerReadFailed(BrokerError):
         self.route = route
         self.http_status = http_status
         self.code = code
+
+
+class SymbolsRefused(BrokerReadFailed):
+    """A bars read was refused because a requested symbol is unknown to the bars route
+    (HTTP 417 INVALID_SYMBOL, seen 2026-11-14 for listed-but-odd symbols such as 1ESC011)."""
 
 
 class AdapterConfigError(BrokerError):
@@ -1025,6 +1032,203 @@ STREAM_UNSUBSCRIBE_PATH = "/market-data/streaming/unsubscribe"
 STREAM_TOO_MANY_SYMBOLS = "TOO_MANY_SYMBOLS_SUBSCRIPTION"
 
 
+# --------------------------------------------------------------------------------------------
+# Offline history for the backtest (python -m aperture.backtest). Never used by the bot.
+# --------------------------------------------------------------------------------------------
+
+BARS_TIMESPAN_DAY = "D"
+# Top-level keys of an instrument-profile page: rows, and the key of the next page (SDK
+# list_instruments docstring: "not returned on the last page"). Anything else is refused.
+INSTRUMENT_PAGE_KEYS = frozenset({"data", "pagination_key"})
+
+
+@dataclass(frozen=True)
+class InstrumentRow:
+    instrument_id: str
+    symbol: str
+    exchange_code: str
+    currency: str
+    security_type: str | None
+    status: str | None
+
+
+@dataclass(frozen=True)
+class InstrumentPage:
+    rows: tuple[InstrumentRow, ...]
+    next_key: str | None
+
+
+def read_instrument_page(body: Any) -> InstrumentPage:
+    """One page of `/trading/instruments/stocks/profiles/list` without symbols (the full list).
+
+    The page shape beyond `data` is unproven: an unknown top-level key is refused so that a
+    differently named pagination key can never end the listing early unnoticed."""
+    if not isinstance(body, Mapping):
+        raise MalformedResponse("instruments: expected an object")
+    unknown = sorted(set(body) - INSTRUMENT_PAGE_KEYS)
+    if unknown:
+        raise MalformedResponse(f"instruments: unknown top-level keys {unknown}")
+    rows: list[InstrumentRow] = []
+    for index, item in enumerate(_unwrap_list(body, "instruments")):
+        where = f"instruments[{index}]"
+        rows.append(InstrumentRow(
+            instrument_id=str(_require(item, "instrument_id", where)),
+            symbol=str(_require(item, "symbol", where)),
+            exchange_code=str(_require(item, "exchange_code", where)),
+            currency=str(_require(item, "currency", where)),
+            security_type=(None if _optional(item, SECURITY_TYPE_KEY) is None
+                           else str(item[SECURITY_TYPE_KEY])),
+            status=None if _optional(item, "status") is None else str(item["status"]),
+        ))
+    key = _optional(body, "pagination_key")
+    return InstrumentPage(tuple(rows), None if key is None else str(key))
+
+
+@dataclass(frozen=True)
+class DailyBar:
+    """One daily bar as Webull labels it. `time` is the provider's label, never interpreted
+    here: the backtest maps it to a New York session date and refuses one that is not a session.
+    Daily bars are forward-adjusted (SDK docstring); minute bars are not."""
+
+    symbol: str
+    time: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+
+
+def _bar_series(body: Any) -> list[tuple[str, list[Any]]]:
+    """(symbol, rows) per series of a bars body; DelayedData if any series is delayed."""
+    if not isinstance(body, Mapping):
+        raise MalformedResponse("bars: expected an object with 'result'")
+    series = body.get("result")
+    if not isinstance(series, list):
+        raise MalformedResponse("bars: missing list 'result'")
+    out: list[tuple[str, list[Any]]] = []
+    delayed: list[str] = []
+    delay = Decimal(0)
+    for index, entry in enumerate(series):
+        where = f"bars.result[{index}]"
+        symbol = str(_require(entry, "symbol", where))
+        minutes = to_decimal(_require_present(entry, "delay_minutes", where),
+                             f"{where}.delay_minutes")
+        if minutes != 0:
+            delayed.append(symbol)
+            delay = max(delay, minutes)
+            continue
+        rows = entry.get("result")
+        if not isinstance(rows, list):
+            raise MalformedResponse(f"{where}: missing list 'result'")
+        out.append((symbol, rows))
+    if delayed:
+        raise DelayedData(delayed, delay)
+    return out
+
+
+def read_daily_bars(body: Any) -> list[DailyBar]:
+    """Daily bars body (same envelope as M1 bars) -> bars, oldest first per symbol."""
+    bars: list[DailyBar] = []
+    for symbol, rows in _bar_series(body):
+        own = []
+        for number, row in enumerate(rows):
+            at = f"daily[{symbol}][{number}]"
+            own.append(DailyBar(
+                symbol=symbol,
+                time=_bar_time(_require(row, "time", at), f"{at}.time"),
+                open=_decimal_field(row, "open", at),
+                high=_decimal_field(row, "high", at),
+                low=_decimal_field(row, "low", at),
+                close=_decimal_field(row, "close", at),
+                volume=_decimal_field(row, "volume", at),
+            ))
+        bars.extend(sorted(own, key=lambda b: b.time))
+    return bars
+
+
+class WebullHistory:
+    """Read-only history reads for the offline backtest: the full common-stock list, daily bars
+    and regular-session M1 bars of several symbols before an end time. Takes request budget per
+    route like the bot; `BudgetExhausted`/`RateLimited` propagate (the caller waits).
+
+    With `raw_dir`, the first response of each kind and every failed one are written there as
+    JSON before parsing (market data only: these routes carry no account id), so the real shape
+    can be inspected and recorded as a fixture."""
+
+    def __init__(self, transport: Transport, budget: RequestBudget, category: str,
+                 clock: Callable[[], float] = time.monotonic,
+                 raw_dir: Path | None = None) -> None:
+        self._transport = transport
+        self._budget = budget
+        self._category = category
+        self._clock = clock
+        self._raw_dir = raw_dir
+        self._requests = 0
+        self._saved: set[str] = set()
+        # Raw file names carry the start of this process, so a rerun never overwrites them.
+        self._started = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+
+    @property
+    def requests(self) -> int:
+        """Requests sent so far."""
+        return self._requests
+
+    def _read(self, route: Route, params: Mapping[str, Any], tag: str) -> Any:
+        response = send_once(self._transport, self._budget, route, params, self._clock)
+        self._requests += 1
+        if self._raw_dir is not None and (tag not in self._saved or not response.ok):
+            self._saved.add(tag)
+            self._raw_dir.mkdir(parents=True, exist_ok=True)
+            name = f"{self._started}-{self._requests:06d}-{tag}.json"
+            (self._raw_dir / name).write_text(
+                json.dumps({"status": response.status, "body": response.body}), "utf-8")
+        if not response.ok:
+            if response.error_code == CODE_INVALID_SYMBOL:
+                raise SymbolsRefused(route.name, response.status, response.error_code)
+            raise BrokerReadFailed(route.name, response.status, response.error_code)
+        return response.body
+
+    def instruments(self, sub_category: str, pagination_key: str | None) -> InstrumentPage:
+        params: dict[str, Any] = {"category": self._category, "sub_category": sub_category}
+        if pagination_key is not None:
+            params["pagination_key"] = pagination_key
+        return read_instrument_page(self._read(Route.PROFILES, params, "instruments"))
+
+    def daily_bars(self, symbols: Sequence[str], end: datetime, count: int) -> list[DailyBar]:
+        bars = read_daily_bars(self._read(Route.BARS, self._bars_params(
+            symbols, BARS_TIMESPAN_DAY, end, count), "daily"))
+        self._only(symbols, {b.symbol for b in bars})
+        return [b for b in bars if b.time < end]
+
+    def minute_bars(self, symbols: Sequence[str], end: datetime, count: int) -> list[Bar]:
+        """Up to `count` regular-session M1 bars per symbol starting before `end` (probe M4:
+        end_time is exclusive). Whether `count` applies per symbol or per request is unproven;
+        the caller pages until each symbol reaches its window, so either way is correct."""
+        bars = read_bars(self._read(Route.BARS, self._bars_params(
+            symbols, BARS_TIMESPAN_M1, end, count), "minutes"))
+        self._only(symbols, {b.symbol for b in bars})
+        return [b for b in bars if b.start < end]
+
+    def _bars_params(self, symbols: Sequence[str], timespan: str, end: datetime,
+                     count: int) -> dict[str, Any]:
+        if end.tzinfo is None or end.utcoffset() is None:
+            raise ValueError(f"naive end time {end!r}")
+        return {
+            "symbols": list(symbols),
+            "category": self._category,
+            "timespan": timespan,
+            "count": str(count),
+            "end_time": int(end.timestamp() * MILLISECONDS_PER_SECOND),
+        }
+
+    @staticmethod
+    def _only(asked: Sequence[str], got: set[str]) -> None:
+        stray = sorted(got - set(asked))
+        if stray:
+            raise MalformedResponse(f"bars: symbols not requested: {', '.join(stray)}")
+
+
 def subscribe_error(exc: Exception, symbols: list[str], limit: int) -> Exception:
     """The SDK's subscribe failure -> SubscriptionLimit for the proven limit code, else as is."""
     if getattr(exc, "error_code", None) == STREAM_TOO_MANY_SYMBOLS:
@@ -1701,3 +1905,9 @@ def bot_adapters(
                             max_symbols=settings.max_symbols)
     stream = SdkQuoteStream(settings, session)
     return broker, market_data_from_config(config, transport, budget, stream), stream
+
+
+def history_from_config(config: Config, raw_dir: Path | None = None) -> WebullHistory:
+    """History reads for the active environment's market data (the backtest tool only)."""
+    return WebullHistory(SdkTransport(settings_from_config(config)), budget_from_config(config),
+                         config.market_data.screener_category, raw_dir=raw_dir)

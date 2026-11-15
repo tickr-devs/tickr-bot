@@ -1,0 +1,45 @@
+# Settings of the offline backtest tool (python -m aperture.backtest). Every result is SIMULATED.
+# Read only by src/aperture/backtest/; the trading bot never reads this file. See docs/backtest.md.
+# Universe lists, the dollar-volume floor and request sizes come from config/bot.toml, fills and
+# history depth from config/replay.toml.
+
+[backtest]
+# A symbol counts as a gainer from the first completed M1 bar whose close is at least this many percent above the
+# previous session's last close (proxy for being on Webull's top-200 gainers list); a day enters the pool when its
+# daily high reaches it. Percent; read by backtest/universe.py and backtest/gate.py.
+gainer_change_percent = 5.0
+# Most pool symbols per session, best daily-high change first. The ranking uses the day's high (look-ahead), so this
+# is set high enough not to bind; pool_cap.csv and the report show any session where it did; count; read by
+# backtest/universe.py.
+max_pool_per_day = 2000
+# Most instrument-list pages read before refusing (guards a pagination key that never ends); count; read by
+# backtest/fetch.py.
+instrument_max_pages = 100
+# Most M1 pages per symbol and contiguous run of sessions before that run is recorded incomplete (1200 bars per page
+# is about three sessions); count; read by backtest/fetch.py.
+minute_max_pages_per_run = 40
+# Symbols fetched together before their bar files are written (bounds memory; a rerun skips written symbols); count;
+# read by backtest/fetch.py.
+symbols_per_wave = 200
+# Worker processes for the strategy run (one symbol per task); count; read by backtest/run.py.
+workers = 4
+# Bootstrap resamples of the per-trade R for the confidence interval of the mean; count; read by backtest/report.py.
+bootstrap_samples = 2000
+# Seed of the bootstrap random generator, so a report is reproducible; integer; read by backtest/report.py.
+bootstrap_seed = 7
+# Two-sided confidence level of the interval for the mean R per trade, percent; read by backtest/report.py.
+confidence_percent = 95
+# Entry-price bucket edges for the report breakdown, USD, increasing (buckets: below the first, between edges, at or
+# above the last); read by backtest/report.py.
+price_bucket_edges_usd = [5, 20, 50]
+# Largest disagreement between the daily (forward-adjusted) and M1 (unadjusted) price scales of the previous session
+# and the pool day, percent; more means a split or reverse split between them, and the day is skipped with a cause
+# (the gate's change against the previous M1 close would be meaningless); read by backtest/run.py.
+split_tolerance_percent = 2
+# Share of the window's sessions, the most recent ones, reported separately as a hold-out (the earlier sessions are
+# reported on their own too), percent; read by backtest/report.py.
+holdout_percent = 33
+# Instrument `status` values (Webull instrument profile) kept in the universe. Measured 2026-11-14 on 1020 symbols:
+# every OC symbol had daily bars, 314 of 397 NT symbols were refused by the bars route as INVALID_SYMBOL and most of
+# the rest had no bars, CO was mixed; read by backtest/fetch.py.
+instrument_statuses = ["OC", "CO"]

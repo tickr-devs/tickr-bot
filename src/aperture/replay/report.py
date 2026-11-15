@@ -32,6 +32,8 @@ TRADE_COLUMNS = (
     "bars_held",
     "r_multiple",
     "return_percent",
+    "quantity",
+    "pnl_usd",
 )
 
 SIGNAL_COLUMNS = (
@@ -142,6 +144,8 @@ def write_trades(result: ReplayResult, path: Path, places: int) -> None:
                 t.bars_held,
                 t.r_multiple,
                 t.return_percent,
+                t.quantity,
+                t.pnl_usd,
             )
             writer.writerow([_fmt(v, places) for v in row])
 

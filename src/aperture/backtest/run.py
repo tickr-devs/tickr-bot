@@ -1,0 +1,186 @@
+"""The backtest run: every pool (symbol, session) whose history is complete is replayed through
+the replay engine with the strategy behind the gainer gate (gate.py), one process per symbol.
+
+A pool day is skipped, with its cause in `skipped.csv`, when the symbol's M1 file lacks the day
+or one of the `history_sessions` sessions before it, or the fetch recorded that run incomplete:
+live, the bot refuses a symbol whose prior-session history is incomplete, so it never trades it.
+"""
+
+from __future__ import annotations
+
+import csv
+import importlib
+import tomllib
+from collections import defaultdict
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+from aperture.backtest import fetch, report
+from aperture.backtest.errors import BacktestError
+from aperture.backtest.gate import GainerGate
+from aperture.backtest.sessions import sessions_before
+from aperture.backtest.settings import BacktestSettings
+from aperture.backtest.universe import CAP_FILE, POOL_FILE, PoolEntry, read_caps, read_pool
+from aperture.calendar import SessionCalendar, ny_date_of
+from aperture.config import Config
+from aperture.replay.bars import load_bars
+from aperture.replay.clock import calendar_clock
+from aperture.replay.engine import ReplayResult, replay
+from aperture.replay.report import write_all
+from aperture.replay.settings import ReplaySettings
+from aperture.strategy.base import Strategy
+
+SKIPPED_FILE = "skipped.csv"
+
+
+@dataclass(frozen=True)
+class Task:
+    symbol: str
+    bars_file: Path
+    pool_days: tuple[date, ...]
+    strategy_module: str
+    values: dict
+    change_percent: Decimal
+    dollar_volume_floor: Decimal
+    calendar_dir: Path
+    cfg: Config
+    settings: ReplaySettings
+
+
+def factory(module_name: str, values: dict) -> Callable[[], Strategy]:
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise BacktestError(f"strategy module {module_name} cannot be imported: {exc}") from exc
+    create = getattr(module, "create", None)
+    if not callable(create):
+        raise BacktestError(f"strategy module {module_name} has no create(values)")
+    try:
+        create(values)
+    except ValueError as exc:
+        raise BacktestError(f"strategy values refused by {module_name}: {exc}") from exc
+    return lambda: create(values)
+
+
+def run_symbol(task: Task) -> ReplayResult:
+    create = factory(task.strategy_module, task.values)
+    pool = [(task.symbol, d) for d in task.pool_days]
+    bars = load_bars([task.bars_file])
+    if set(bars) != {task.symbol}:
+        raise BacktestError(f"{task.bars_file}: holds {sorted(bars)}, not {task.symbol}")
+    clock = calendar_clock(SessionCalendar.load(task.calendar_dir), task.cfg.session)
+    return replay(lambda: GainerGate(create(), pool, task.change_percent,
+                                     task.dollar_volume_floor),
+                  bars, task.settings, clock)
+
+
+def tradable_days(cfg: Config, calendar: SessionCalendar, pool: list[PoolEntry], out: Path,
+                  history_sessions: int, tolerance_percent: Decimal,
+                  ) -> tuple[dict[str, list[date]], list[dict[str, str]]]:
+    """Pool days per symbol that can be replayed as live would see them, and the skipped ones."""
+    incomplete: dict[str, set[date]] = defaultdict(set)
+    for status in fetch.load_statuses(out):
+        if not status["complete"]:
+            first = date.fromisoformat(status["first_session"])
+            last = date.fromisoformat(status["last_session"])
+            incomplete[status["symbol"]].update(
+                d.ny_date for d in fetch.sessions_between(calendar, first, last))
+    session_days: dict[str, dict[date, Decimal]] = {}
+    days: dict[str, list[date]] = defaultdict(list)
+    skipped: list[dict[str, str]] = []
+    lookback = cfg.market_data.history_max_lookback_days
+    for entry in pool:
+        symbol, day = entry.symbol, entry.session_date
+        path = out / fetch.MINUTES_DIR / f"{symbol}.jsonl"
+        if not path.exists():
+            skipped.append({"symbol": symbol, "session_date": day.isoformat(),
+                            "cause": "NO_MINUTE_FILE"})
+            continue
+        if day in incomplete.get(symbol, set()):
+            skipped.append({"symbol": symbol, "session_date": day.isoformat(),
+                            "cause": "FETCH_INCOMPLETE"})
+            continue
+        if symbol not in session_days:
+            session_days[symbol] = _last_closes(path)
+        closes = session_days[symbol]
+        wanted = [d.ny_date for d in sessions_before(calendar, day, history_sessions, lookback)]
+        missing = [d for d in [*wanted, day] if d not in closes]
+        if missing:
+            skipped.append({"symbol": symbol, "session_date": day.isoformat(),
+                            "cause": "SESSION_WITHOUT_BARS: "
+                            + " ".join(d.isoformat() for d in missing)})
+            continue
+        # Daily bars are forward-adjusted, M1 bars are not: the ratio daily/M1 is the same on
+        # both days unless a split falls between them.
+        before = entry.previous_close / closes[wanted[-1]] if wanted else None
+        after = entry.day_close / closes[day]
+        if before is not None and abs(before / after - 1) * 100 > tolerance_percent:
+            skipped.append({"symbol": symbol, "session_date": day.isoformat(),
+                            "cause": f"SPLIT_BETWEEN_SESSIONS: daily/M1 scale {before:.4f} "
+                            f"before, {after:.4f} on the day"})
+            continue
+        days[symbol].append(day)
+    return dict(days), skipped
+
+
+def _last_closes(path: Path) -> dict[date, Decimal]:
+    """Last M1 close of every session date in the file (bars are oldest first)."""
+    closes: dict[date, Decimal] = {}
+    for series in load_bars([path]).values():
+        for bar in series:
+            closes[ny_date_of(bar.start)] = bar.close
+    return closes
+
+
+def run_backtest(cfg: Config, settings: BacktestSettings, replay_settings: ReplaySettings,
+                 out: Path, results: Path, strategy_module: str, values_path: Path) -> None:
+    calendar_dir = (cfg.root / cfg.session.calendar_file).parent
+    calendar = SessionCalendar.load(calendar_dir)
+    with open(values_path, "rb") as handle:
+        values = tomllib.load(handle)
+    factory(strategy_module, values)  # refuse bad values before any work
+    pool = read_pool(out / POOL_FILE)
+    days, skipped = tradable_days(cfg, calendar, pool, out, replay_settings.history_sessions,
+                                  settings.split_tolerance_percent)
+    caps = read_caps(out / CAP_FILE)
+    floor = cfg.market_data.min_session_dollar_volume_usd
+    tasks = [Task(symbol, out / fetch.MINUTES_DIR / f"{symbol}.jsonl", tuple(sorted(d)),
+                  strategy_module, values, settings.gainer_change_percent, floor, calendar_dir,
+                  cfg, replay_settings) for symbol, d in sorted(days.items())]
+    if not tasks:
+        raise BacktestError("no pool day has complete history")
+    print(f"run: {sum(len(t.pool_days) for t in tasks)} symbol-days over {len(tasks)} symbols, "
+          f"{len(skipped)} skipped, {settings.workers} workers")
+    with ProcessPoolExecutor(max_workers=settings.workers) as pool_executor:
+        parts = list(pool_executor.map(run_symbol, tasks))
+    merged = merge(parts)
+    results.mkdir(parents=True, exist_ok=True)
+    write_all(merged, results, replay_settings.output_decimal_places)
+    with open(results / SKIPPED_FILE, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=("symbol", "session_date", "cause"))
+        writer.writeheader()
+        writer.writerows(skipped)
+    traded_days = sum(len(t.pool_days) for t in tasks)
+    text = report.write_report(merged, pool, caps, traded_days, skipped, cfg, settings,
+                               replay_settings, results)
+    print(text)
+
+
+def merge(parts: list[ReplayResult]) -> ReplayResult:
+    verdicts: dict[str, int] = {}
+    for part in parts:
+        for verdict, count in part.verdict_counts.items():
+            verdicts[verdict] = verdicts.get(verdict, 0) + count
+    first = parts[0]
+    return ReplayResult(
+        strategy=first.strategy, version=first.version,
+        trades=tuple(sorted((t for p in parts for t in p.trades),
+                            key=lambda t: (t.entry_time, t.symbol))),
+        signals=tuple(sorted((s for p in parts for s in p.signals),
+                             key=lambda s: (s.bar_start, s.symbol))),
+        verdict_counts=dict(sorted(verdicts.items())),
+        sessions=sum(p.sessions for p in parts), bars=sum(p.bars for p in parts))

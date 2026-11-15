@@ -92,7 +92,8 @@ Percent per trade = (exit - entry) / entry x 100.
 
 - `trades.csv`: one row per simulated trade: label, strategy, version, symbol, session date,
   setup, signal bar, entry time and price, stop, exit time, price and reason
-  (`stop`, `strategy_exit`, `flatten`, `end_of_data`), bars held, R, percent.
+  (`stop`, `strategy_exit`, `flatten`, `end_of_data`), bars held, R, percent, the strategy's
+  quantity and USD = (exit - entry) x quantity (gross, empty without a quantity).
 - `signals.csv`: every ENTER decision with its outcome (`filled`, `missed`, `rejected`,
   `ignored`) and cause: the input for "what if we had entered".
 - `summary.json` (also printed): sessions, bars, signals by outcome, trades, wins, losses,

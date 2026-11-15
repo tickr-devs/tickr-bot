@@ -67,6 +67,17 @@ class SimulatedTrade:
     exit_price: Decimal
     exit_reason: ExitReason
     bars_held: int
+    quantity: Decimal | None = None
+    """The strategy's `Decision.quantity` (None if it gave none); R and percent ignore it."""
+    entry_high: Decimal | None = None
+    """Top of the decision's price window (the live limit price, before slippage)."""
+
+    @property
+    def pnl_usd(self) -> Decimal | None:
+        """(exit - entry) x the strategy's quantity, gross of commissions and fees."""
+        if self.quantity is None:
+            return None
+        return (self.exit_price - self.entry_price) * self.quantity
 
     @property
     def risk_per_share(self) -> Decimal:
@@ -222,6 +233,8 @@ class _SessionReplay:
                 exit_price=price,
                 exit_reason=reason,
                 bars_held=index - position.entry_index + 1,
+                quantity=position.decision.quantity,
+                entry_high=position.decision.entry_high,
             )
         )
         self.open = None
