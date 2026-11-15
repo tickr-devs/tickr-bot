@@ -168,6 +168,7 @@ class ApiConfig:
     replay_settings_file: str
     observer_trades_max_rows: int
     watching_max_rows: int
+    journal_rows: int
     watching_closeness_decimal_places: int
     check_decimal_places: int
     flow_change_pct_decimal_places: int

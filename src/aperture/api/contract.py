@@ -717,6 +717,30 @@ class SessionTimesV1:
 
 
 @dataclass(frozen=True)
+class JournalRowV1:
+    """One row of the bot's durable journal. `kind` is the bot's own event name
+    (`trade-opened`, `order-intent`, `reconcile-checked` ...); `symbol` when the row's body names
+    one. The body itself is not served."""
+
+    seq: int  # the journal's own row number: grows by one per row, never reused
+    at: datetime
+    kind: str
+    symbol: str | None
+
+
+@dataclass(frozen=True)
+class JournalV1:
+    """GET /journal: the latest `[api] journal_rows` journal rows, oldest first, from the
+    database opened read-only. `last_seq`: the newest row's number ("line #N"), null with
+    `cause` when there is no database or it cannot be read."""
+
+    last_seq: int | None
+    rows: tuple[JournalRowV1, ...]
+    cause: str | None
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
 class JobsV1:
     """GET /jobs: when the bot's scheduled work last ran and runs next, for the Settings jobs
     strip. Read-only: from the status file, the database (read-only), config and calendar.
@@ -1504,6 +1528,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "chart-v1": ChartV1,
     "settings-v1": SettingsV1,
     "jobs-v1": JobsV1,
+    "journal-v1": JournalV1,
     "lab-replay-v1": LabReplayV1,
     "explain-v1": ExplainV1,
     "observers-v1": ObserversV1,

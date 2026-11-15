@@ -203,6 +203,8 @@ replay_settings_file = "config/replay.toml"
 observer_trades_max_rows = 100
 # Most rows GET /watching returns (the closest first; the answer's `total` counts them all); read by the api server.
 watching_max_rows = 8
+# Latest journal rows GET /journal returns (oldest first; `last_seq` is the newest row's number); read by the api server.
+journal_rows = 40
 # Decimal places of GET /watching `closeness` (0..1, rounded down); read by the api server.
 watching_closeness_decimal_places = 4
 # Decimal places of check measured and threshold values in /watching, /explain, /decisions and

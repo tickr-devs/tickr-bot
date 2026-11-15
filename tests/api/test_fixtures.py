@@ -54,6 +54,8 @@ from aperture.api.contract import (
     FlowStopV1,
     FlowV1,
     JobsV1,
+    JournalRowV1,
+    JournalV1,
     LabReplayState,
     LabReplaySummaryV1,
     LabReplayV1,
@@ -215,6 +217,13 @@ def documents() -> dict[str, object]:
             BackupJobV1(T0 + timedelta(days=4), T0 + timedelta(days=4, hours=7),
                         "OperationalError", None),
             _LAUNCHD, None, "2026-11-21 is a weekend"),
+        # The Overview's journal card: the latest rows, oldest first; "line #731".
+        "journal-v1": JournalV1(731, (
+            JournalRowV1(728, T0 - timedelta(seconds=9), "order-intent", "ABCD"),
+            JournalRowV1(729, T0 - timedelta(seconds=8), "trade-opened", "ABCD"),
+            JournalRowV1(730, T0 - timedelta(seconds=4), "reconcile-checked", None),
+            JournalRowV1(731, T0, "stop-from-fill", "ABCD")), None),
+        "journal-v1.empty": JournalV1(None, (), "the bot has not created its database yet"),
         # Saturday: the replay of the last 20 sessions finished, with its SIMULATED numbers.
         "lab-replay-v1": LabReplayV1(
             LabReplayState.DONE, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1", "1", 20,
