@@ -124,10 +124,9 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
         assert day_trade.mae_usd is not None and day_trade.mfe_usd is not None
         # Lower bound: the stop-out shows its 1 R loss, not the fall after the stop filled.
         assert day_trade.mae_usd == day_trade.result_gross_usd == -day_trade.planned_loss_usd
-        # The journal proves the shares held only until the stop's working read, seconds
-        # after the fill (reads are journaled on change), so no bar counts: the rise before
-        # the stop-out is not proven, and MFE is the entry itself.
-        assert day_trade.mfe_usd == 0
+        # The bot's periodic `order-held` rows prove the shares held until shortly before
+        # the stop-out, so the bars after the fill count: the rise is shown.
+        assert day_trade.mfe_usd > 0
         room = status.daily_room_usd
         assert room is not None and room < cfg.risk.max_daily_loss_usd
         assert [c.kind for c in status.recent_commands] == [

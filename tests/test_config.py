@@ -112,6 +112,14 @@ def test_min_daily_room_must_sit_below_the_ceiling(tmp_path, value):
         config.load(_copy(tmp_path, text))
 
 
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_stop_held_proof_interval_must_be_positive(tmp_path, value):
+    text = re.sub(r"(?m)^stop_held_proof_seconds = \S+", f"stop_held_proof_seconds = {value}",
+                  BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="stop_held_proof_seconds"):
+        config.load(_copy(tmp_path, text))
+
+
 def test_account_stale_must_exceed_the_reconcile_interval(tmp_path):
     text = re.sub(r"(?m)^account_stale_seconds = \S+", "account_stale_seconds = 10",
                   BOT.read_text("utf-8"))

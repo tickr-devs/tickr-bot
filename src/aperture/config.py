@@ -78,6 +78,7 @@ class OrdersConfig:
     reconcile_interval_seconds: Decimal
     broker_read_max_age_seconds: Decimal
     unknown_absent_reads: int
+    stop_held_proof_seconds: Decimal
 
 
 @dataclass(frozen=True)
@@ -392,6 +393,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                           "turn the cooldown off set symbol_cooldown_after_loss_enabled = false")
     if not 0 <= risk.min_daily_room_usd < risk.max_daily_loss_usd:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
+    if built["orders"].stop_held_proof_seconds <= 0:
+        raise ConfigError("[orders] stop_held_proof_seconds must be above 0")
     if built["api"].account_stale_seconds <= built["orders"].reconcile_interval_seconds:
         raise ConfigError("[api] account_stale_seconds must be above [orders] "
                           "reconcile_interval_seconds (the account file is written per reconcile)")

@@ -183,9 +183,16 @@ Computed by the reader from what the bot already records; `null` means unknown, 
     may hold prices from before the fill).
   - Window end ("held until"): for each stop or exit order that sold shares, the latest moment
     the journal proves it had not sold yet. For a close (MARKET exit) that is its send intent
-    (`order-intent` row, written before the send); for a stop, its last `order-observed` read
-    still showing nothing filled (in practice its working read). The earliest of these over
-    all orders that sold is the end. Its minute's bar is left out too.
+    (`order-intent` row, written before the send); for a stop, its last read still showing
+    nothing filled: an `order-observed` row (in practice its working read) or an `order-held`
+    row. The bot writes `order-held` from the Detail reads it already makes (no extra broker
+    request): when a read shows the stop working (`ACCEPTED` or `PARTIALLY_FILLED`) with
+    filled quantity 0 and no change, and the order's last `order-observed` or `order-held` row
+    is at least `[orders] stop_held_proof_seconds` (60) old, it journals
+    `{state, raw_status, filled_quantity}` keyed by the client order id, at the read's
+    journal time like `order-observed`. A held row with filled quantity above 0, or after a
+    read of the order that showed a fill, proves nothing. The earliest of these over all
+    orders that sold is the end. Its minute's bar is left out too.
   - Prices: the entry fill price (fill-weighted average), the fill price of each order that
     sold shares, and the low and high of the captured M1 bars that start after the start
     minute and before the end minute. If an order that sold has no proving row, no bar
@@ -197,9 +204,10 @@ Computed by the reader from what the bot already records; `null` means unknown, 
     shares sold must be in the capture file, as proof it covered the trade; their prices are
     not used.
 
-  So a stop-out at -1 R shows about -1 R (its fill), never the fall after it. A stop-out
-  usually shows its fill prices alone: a resting stop's only journaled unfilled read is its
-  working read, seconds after the fill. A restart between the last proving read and the read
+  So a stop-out at -1 R shows about -1 R (its fill), never the fall after it. A stop-out's
+  window ends at most about `stop_held_proof_seconds` (plus a Detail poll) before the read of
+  its fill, so up to two minutes before the stop-out are not counted; a stop-out within
+  that time of the entry shows its fill prices alone. A restart between the last proving read and the read
   of the fill changes nothing (the proven window is used). As the entry price is always
   included, MAE is at most 0 and MFE at least 0; no value is defaulted. `null` when either
   edge minute's bar is not captured, no entry fill read or no read of the sale is journaled.

@@ -100,6 +100,12 @@ OPERATOR_FENCES = frozenset({Fence.STOP_REJECTED, Fence.EXIT_REFUSED, Fence.CANC
                              Fence.MARKET_CLOSED})
 
 _LEG_LETTER = {Leg.ENTRY: "e", Leg.STOP: "s", Leg.EXIT: "x"}
+# A Detail read that changed an order's state or filled quantity.
+ORDER_OBSERVED = "order-observed"
+# A Detail read showing a stop still working with nothing filled, journaled at most once per
+# `[orders] stop_held_proof_seconds` when no change was seen: a display-only record of how long
+# the shares were provably held (api/history.py, MAE/MFE); nothing in the engine reads it.
+ORDER_HELD = "order-held"
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
 _WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
 # Cancel states after which a later Detail read decides whether the cancel took.
@@ -604,12 +610,16 @@ class Engine:
                 (detail.state, str(detail.filled_quantity),
                  None if detail.average_fill_price is None
                  else str(detail.average_fill_price), self.store.stamp(), cid))
-            self.store.append("order-observed", {
+            self.store.append(ORDER_OBSERVED, {
                 "state": detail.state, "raw_status": detail.raw_status,
                 "filled_quantity": detail.filled_quantity,
                 "average_fill_price": detail.average_fill_price}, key=cid, run_id=self.run_id)
             if detail.state is OrderState.REJECTED:
                 self._count_rejection(row)
+        elif self._held_proof_due(row, detail):
+            self.store.append(ORDER_HELD, {
+                "state": detail.state, "raw_status": detail.raw_status,
+                "filled_quantity": detail.filled_quantity}, key=cid, run_id=self.run_id)
         # A cancel is known not to have taken when a read well after it still shows the
         # order working: a new cancel decision becomes possible.
         if (row.cancel_state in _CANCEL_AWAITING and not detail.state.terminal
@@ -619,6 +629,22 @@ class Engine:
             self.store.execute("UPDATE orders SET cancel_state = 'not-taken' "
                                "WHERE client_order_id = ?", (cid,))
             self.store.append("cancel-not-taken", {}, key=cid, run_id=self.run_id)
+
+    def _held_proof_due(self, row: OrderRow, detail: OrderDetail) -> bool:
+        """This unchanged read shows a stop working with nothing filled, and the order's last
+        proof row (`order-observed` or `order-held`) is at least the configured interval old.
+        Journal times only (the store clock), like the rows it compares."""
+        if (row.leg is not Leg.STOP or detail.state not in _WORKING
+                or detail.filled_quantity != 0):
+            return False
+        last = self.store.query(
+            "SELECT at_utc FROM journal WHERE kind IN (?, ?) AND key = ? ORDER BY seq DESC "
+            "LIMIT 1", (ORDER_OBSERVED, ORDER_HELD, row.client_order_id))
+        if not last:
+            return True
+        since = (datetime.fromisoformat(self.store.stamp())
+                 - datetime.fromisoformat(last[0]["at_utc"])).total_seconds()
+        return since >= self.config.orders.stop_held_proof_seconds
 
     def _refresh(self, row: OrderRow, held: dict[str, Decimal]) -> None:
         """One Detail read; RateLimited propagates so the caller stops reading this step.

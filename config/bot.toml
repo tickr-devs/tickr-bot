@@ -103,6 +103,11 @@ broker_read_max_age_seconds = 30
 # Consecutive "order not found" Detail reads before an order with an unknown send outcome is
 # treated as never created; read by the engine.
 unknown_absent_reads = 3
+# Least seconds between two journal rows proving a working stop still had nothing filled: an
+# unchanged Detail read the engine already makes writes an `order-held` row once this long after
+# the order's last such proof (never an extra broker read); read by the engine, and the rows by
+# api.history (the MAE/MFE window).
+stop_held_proof_seconds = 60
 
 [probe]
 # Shares per probe order (owner 2026-11-14); read by the probe command.

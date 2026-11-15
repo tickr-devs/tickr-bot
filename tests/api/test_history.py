@@ -274,6 +274,76 @@ def test_a_restart_between_the_last_unfilled_read_and_the_fill_read_keeps_the_pr
     assert trade.mae_usd == Decimal("-5.40") and trade.mfe_usd == Decimal(0)
 
 
+def _held(store: Store, clock: Clock, cid: str, seconds: float, filled: str = "0",
+          state: str = "ACCEPTED") -> None:
+    """The engine's periodic `order-held` row: an unchanged read of a working stop."""
+    clock.now = OPEN + timedelta(seconds=seconds)
+    with store.transaction():
+        store.append("order-held", {"state": state, "raw_status": state,
+                                    "filled_quantity": Decimal(filled)}, key=cid)
+
+
+def _stop_out_with_held_rows(paths: HistoryPaths, *held: tuple[float, str]) -> None:
+    """Fill read at 10:00:30, stop working at 10:00:33 (the only change before its fill),
+    the given `order-held` rows, the stop's fill at 11.80 read at 10:06:01."""
+    store, clock = _timed_store(paths)
+    run_id = _run(store)
+    _trade(store, run_id, "t1", OPEN + timedelta(minutes=30), exit_=None)
+    _sold_by_stop(store, "t1", "10", "11.80")
+    _observed(store, clock, "t1-entry", 30, "FILLED", "10", run_id)
+    _observed(store, clock, "t1-stop", 33, "ACCEPTED", "0", run_id)
+    for seconds, filled in held:
+        _held(store, clock, "t1-stop", seconds, filled)
+    _observed(store, clock, "t1-stop", 361, "FILLED", "10", run_id)
+    store.close()
+
+
+def test_held_rows_extend_the_window_of_a_stop_out(paths):
+    _stop_out_with_held_rows(paths, (93, "0"), (153, "0"), (213, "0"))
+    _bars_file(paths, DAY, _bars(0, 1, 2, 3, 4, 5, 6, m2="12.20,12.95"))
+    (trade,) = History(paths).day(DAY, LATER).trades
+    # The last held row is at 10:03:33: minutes 1 and 2 count, 3 (its own) does not.
+    assert trade.mae_usd == trade.result_gross_usd == Decimal("-5.40")  # the stop fill
+    assert trade.mfe_usd == (Decimal("12.95") - Decimal("12.34")) * 10
+    assert trade.stop_confirmed_after_seconds == Decimal("3.000")  # held rows never confirm
+
+
+def test_without_held_rows_a_stop_out_keeps_only_its_fill_prices(paths):
+    _stop_out_with_held_rows(paths)
+    _bars_file(paths, DAY, _bars(0, 1, 2, 3, 4, 5, 6, m2="12.20,12.95"))
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert trade.mae_usd == Decimal("-5.40") and trade.mfe_usd == Decimal(0)
+
+
+def test_a_held_row_showing_or_following_a_fill_proves_nothing(paths):
+    store, clock = _timed_store(paths)
+    _trade(store, _run(store), "t1", OPEN + timedelta(minutes=30), exit_=None)
+    _sold_by_stop(store, "t1", "10", "11.80")
+    _observed(store, clock, "t1-entry", 30, "FILLED", "10")
+    _observed(store, clock, "t1-stop", 33, "ACCEPTED", "0")
+    _held(store, clock, "t1-stop", 93, filled="4", state="PARTIALLY_FILLED")
+    _observed(store, clock, "t1-stop", 100, "PARTIALLY_FILLED", "4")
+    _held(store, clock, "t1-stop", 200)  # after a read showing a fill: not full quantity
+    _observed(store, clock, "t1-stop", 361, "FILLED", "10")
+    store.close()
+    _bars_file(paths, DAY, _bars(0, 1, 2, 3, 4, 5, 6))
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert trade.mae_usd == Decimal("-5.40") and trade.mfe_usd == Decimal(0)
+
+
+def test_a_malformed_held_row_shows_null_metrics(paths):
+    _stop_out_with_held_rows(paths, (93, "0"))
+    store, clock = _timed_store(paths)
+    clock.now = OPEN + timedelta(seconds=150)
+    with store.transaction():
+        store.append("order-held", {"state": "ACCEPTED"}, key="t1-stop")
+    store.close()
+    _bars_file(paths, DAY, _bars(0, 1, 2, 3, 4, 5, 6))
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert (trade.stop_confirmed_after_seconds, trade.mae_usd, trade.mfe_usd) == (
+        None, None, None)
+
+
 def test_a_partial_entry_fill_counts_only_the_shares_first_seen_filled(paths):
     store, clock = _timed_store(paths)
     _trade(store, _run(store), "t1", OPEN + timedelta(minutes=30))
