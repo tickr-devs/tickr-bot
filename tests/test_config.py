@@ -405,3 +405,27 @@ def test_chart_cache_must_outlive_the_session_lookback(tmp_path):
     text = BOT.read_text("utf-8").replace("cache_max_age_days = 30", "cache_max_age_days = 13", 1)
     with pytest.raises(config.ConfigError, match="cache_max_age_days"):
         config.load(_copy(tmp_path, text))
+
+
+def test_old_check_places_key_loads_with_a_warning(tmp_path):
+    """An old local bot.toml with the pre-#248 key name keeps loading, warns, keeps its value."""
+    text = re.sub(r"(?m)^check_decimal_places = \d+", "watching_check_decimal_places = 3",
+                  BOT.read_text("utf-8"))
+    with pytest.warns(config.RenamedKeyWarning, match="watching_check_decimal_places"):
+        cfg = config.load(_copy(tmp_path, text))
+    assert cfg.api.check_decimal_places == 3
+    assert cfg.renamed_keys == ("[api] watching_check_decimal_places -> check_decimal_places",)
+
+
+def test_old_and_new_check_places_keys_together_are_refused(tmp_path):
+    text = re.sub(r"(?m)^(check_decimal_places = \d+)", r"\1\nwatching_check_decimal_places = 3",
+                  BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="both watching_check_decimal_places"):
+        config.load(_copy(tmp_path, text))
+
+
+def test_current_bot_toml_uses_no_old_key_names():
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", config.RenamedKeyWarning)
+        assert config.load(BOT).renamed_keys == ()

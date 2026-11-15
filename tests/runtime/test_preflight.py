@@ -321,3 +321,17 @@ def test_an_empty_database_file_passes_and_a_newer_schema_blocks(config_path):
     db.close()
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.DATABASE_UNREADABLE and "schema 9999" in result.summary()
+
+
+def test_old_config_key_name_is_reported_in_the_journal(config_path):
+    """An old key name loads (config.RENAMED_KEYS) and preflight's journal row names it, so the
+    owner sees it under launchd too, not only as a Python warning on stderr."""
+    environ = _ready(config_path)
+    text = re.sub(r"(?m)^check_decimal_places = ", "watching_check_decimal_places = ",
+                  config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    with pytest.warns(config_module.RenamedKeyWarning):
+        result = _run(config_path, environ)
+    assert result.exit_code is ExitCode.READY
+    body = json.dumps(result.journal_body())
+    assert "[api] watching_check_decimal_places -> check_decimal_places" in body

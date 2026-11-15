@@ -174,7 +174,10 @@ def _load_config(path: Path) -> tuple[config_module.Config | None, Check]:
         check_timings(cfg)
     except (OSError, UnicodeDecodeError, config_module.ConfigError) as exc:
         return None, Check(CheckName.CONFIG, False, str(exc), PreflightCause.CONFIG_INVALID)
-    return cfg, Check(CheckName.CONFIG, True, f"{path} digest {cfg.digest[:12]}")
+    detail = f"{path} digest {cfg.digest[:12]}"
+    if cfg.renamed_keys:
+        detail += f"; old key names, rename them: {', '.join(cfg.renamed_keys)}"
+    return cfg, Check(CheckName.CONFIG, True, detail)
 
 
 def _check_disk(cfg: config_module.Config, disk_free: DiskFree) -> Check:
