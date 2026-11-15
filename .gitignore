@@ -6,6 +6,10 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+# SwiftPM build folders and local package state of every Swift package (apps/shared, apps/macos,
+# apps/ios), wherever `swift build` or Xcode runs.
+.build/
+.swiftpm/
 # Runtime data, secrets and tokens never enter the repository.
 .env
 .env.*
