@@ -74,6 +74,9 @@ today = [
   { symbol = "HLQN", base = "11.00", volume = "9000", screener = "GAINERS", legs = [["13:20", "13:35", "14.20", "60000"], ["13:45", "13:47", "10.00", "60000"]] },
   # The open position: bought on the breakout into the room left, drifting up while the demo runs.
   { symbol = "MVLD", base = "24.00", volume = "9000", screener = "GAINERS", legs = [["13:55", "14:10", "28.50", "40000"], ["14:10", "15:30", "29.60", "9000"]] },
+  # Breaks out while MVLD is held: risk refuses it (one position at a time), so the live flow's
+  # refused tray has a symbol in it.
+  { symbol = "QRTZ", base = "18.00", volume = "5000", screener = "GAINERS", legs = [["14:12", "14:24", "21.60", "40000"]] },
   # On the losers list all day: the strategy sees it and never finds a setup.
   { symbol = "BXVR", base = "36.00", volume = "5000", screener = "LOSERS", legs = [["09:30", "11:00", "31.50", "9000"], ["11:00", "15:30", "30.80", "5000"]] },
 ]
