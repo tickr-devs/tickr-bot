@@ -361,6 +361,27 @@ def test_observer_watching_seconds_must_be_positive(tmp_path):
         config.load(path)
 
 
+def _observers(tmp_path: Path, names: str) -> Path:
+    text = re.sub(r"(?m)^observers = \[.*\]", f"observers = [{names}]", BOT.read_text("utf-8"))
+    return _copy(tmp_path, text)
+
+
+def test_an_observer_listed_twice_is_refused(tmp_path):
+    with pytest.raises(config.ConfigError, match="observers lists price-action-v2 more than once"):
+        config.load(_observers(tmp_path, '"price-action-v2", "noise-band-v1", "price-action-v2"'))
+
+
+def test_the_active_strategy_as_an_observer_is_refused(tmp_path):
+    active = config.load(BOT).strategy.active
+    with pytest.raises(config.ConfigError, match="cannot also be an observer"):
+        config.load(_observers(tmp_path, f'"{active}"'))
+
+
+def test_distinct_observers_load(tmp_path):
+    cfg = config.load(_observers(tmp_path, '"price-action-v2", "noise-band-v1"'))
+    assert cfg.strategy.observers == ("price-action-v2", "noise-band-v1")
+
+
 def _copy_in(tmp_path: Path, name: str, text: str) -> Path:
     (tmp_path / name).mkdir()
     return _copy(tmp_path / name, text)

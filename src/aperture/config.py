@@ -512,6 +512,9 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:
         raise ConfigError("[strategy] the active strategy cannot also be an observer")
+    repeated = sorted({name for name in strategy.observers if strategy.observers.count(name) > 1})
+    if repeated:
+        raise ConfigError(f"[strategy] observers lists {', '.join(repeated)} more than once")
 
     return Config(
         **built,
