@@ -867,3 +867,23 @@ def test_a_failed_open_orders_read_keeps_the_broker_read_time_old(tmp_path):
     del bot.broker.open_orders
     bot.service._observe(reconcile=True)
     assert bot.service.last_broker_read_at == bot.now
+
+
+def test_cli_run_refuses_a_database_of_another_environment(tmp_path, monkeypatch, capsys):
+    bot_toml = copy_config(tmp_path)
+    cfg = config.load(bot_toml)
+    database, _ = cli.data_paths(cfg)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    store = Store.open(database, busy_timeout_seconds=0)
+    store.start_run(environment="another", config_digest="d", strategy="s",
+                    strategy_version="1", code_version="x")
+    store.close()
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: None)
+    assert cli.main(["--config", str(bot_toml), "run"]) == 3
+    assert "environment 'another'" in capsys.readouterr().err
+    store = Store.open(database, busy_timeout_seconds=0)
+    assert store.run_count() == 1  # refused before any run was recorded
+    store.close()

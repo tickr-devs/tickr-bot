@@ -31,7 +31,7 @@ from aperture.engine.manual import (
 )
 from aperture.lock import AlreadyRunning, SingleInstanceLock, recorded_holder
 from aperture.runtime import stopmarker
-from aperture.store import DATABASE_FILE, MIGRATIONS, Store
+from aperture.store import DATABASE_FILE, MIGRATIONS, EnvironmentMismatch, Store
 
 if TYPE_CHECKING:
     from aperture.observers.runner import ObserverSet
@@ -44,6 +44,15 @@ LOCK_FILE = "aperture.lock"
 def data_paths(cfg: config_module.Config) -> tuple[Path, Path]:
     data = cfg.root / cfg.run.data_dir
     return data / DATABASE_FILE, data / LOCK_FILE
+
+
+def _require_environment(store: Store, cfg: config_module.Config) -> None:
+    """Before a run starts: the database must be this environment's own."""
+    try:
+        store.require_environment(cfg.environment_name)
+    except EnvironmentMismatch:
+        store.close()
+        raise
 
 
 def _status(path: Path) -> int:
@@ -168,6 +177,7 @@ def _engine(path: Path, broker: Broker | None = None,
     database, lock_path = data_paths(cfg)
     with SingleInstanceLock(lock_path):
         store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds)
+        _require_environment(store, cfg)
         run_id = store.start_run(environment=cfg.environment_name, config_digest=cfg.digest,
                                  strategy="manual", strategy_version="-", code_version="-")
         cause = "crashed"
@@ -451,6 +461,7 @@ def _run(path: Path) -> int:
     with SingleInstanceLock(lock_path):
         store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds,
                            now=NOW)
+        _require_environment(store, cfg)
         run_id = store.start_run(environment=cfg.environment_name, config_digest=cfg.digest,
                                  strategy=strategy.name, strategy_version=strategy.version,
                                  code_version="-")
@@ -624,6 +635,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
     except (ManualRefused, EntryRefused) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+    except EnvironmentMismatch as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 3
     except AlreadyRunning:

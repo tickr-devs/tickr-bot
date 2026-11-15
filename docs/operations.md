@@ -257,6 +257,26 @@ counts as shown, for repeat suppression, when either channel delivered it.
 The same kind and text inside `[alerts] dedupe_window_seconds` is shown once; every occurrence is
 still recorded (in the bot's journal, the watchdog's journal, or the job log for these commands).
 
+### `broker-reads-failing`
+
+Entries are refused while a positions or open-orders read fails (`broker-read-failed`, or
+`broker-read-failed:open-orders`, which only a successful reconciliation clears). The bot
+still reads order Detail and keeps the stops; it closes no trade and sends no closing order
+until positions can be read again.
+
+### `unknown-order-status` on a closing order or stop
+
+A sell whose send outcome is unknown is not given up on while the account holds fewer shares
+than the bot's orders explain: it may have filled. If the alert stays, look in the Webull app.
+If the shares were sold there by hand and the bot's order never arrived, the bot keeps waiting
+for it and the rest of the position may have no stop: close it in the Webull app.
+
+### `refused: the database holds runs of environment ...`
+
+One database belongs to one environment (spec section 10). After changing `[run] environment`,
+move `data/aperture.sqlite3` aside (keep it) or point `[run] data_dir` at another folder; the
+bot and the manual commands refuse to start on another environment's records.
+
 ## Fill to stop
 
 While a trade has an entry working, filled shares not yet covered by a stop that Detail shows

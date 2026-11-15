@@ -143,6 +143,10 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+class EnvironmentMismatch(Exception):
+    """The database belongs to another environment; nothing was started."""
+
+
 @dataclass(frozen=True)
 class JournalRow:
     seq: int
@@ -269,6 +273,18 @@ class Store:
             "ON CONFLICT(name) DO UPDATE SET value = value + 1", (name,))
         return int(self._db.execute("SELECT value FROM counters WHERE name = ?",
                                     (name,)).fetchone()[0])
+
+    def require_environment(self, environment: str) -> None:
+        """Refuse a database that holds runs of another environment (spec 10: one database
+        per environment). Its open trades, fences and day result would be taken as this
+        environment's own."""
+        row = self._db.execute("SELECT environment FROM runs WHERE environment != ? LIMIT 1",
+                               (environment,)).fetchone()
+        if row is not None:
+            raise EnvironmentMismatch(
+                f"the database holds runs of environment {row[0]!r}, the config says "
+                f"{environment!r}: move the database aside (or point [run] data_dir at "
+                "another folder) before running this environment")
 
     def start_run(self, *, environment: str, config_digest: str, strategy: str,
                   strategy_version: str, code_version: str) -> str:

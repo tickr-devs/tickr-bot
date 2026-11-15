@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from aperture.store import MIGRATIONS, Store
+from aperture.store import MIGRATIONS, EnvironmentMismatch, Store
 
 
 @pytest.fixture
@@ -155,3 +155,14 @@ def test_v2_database_gains_the_stop_percent_column(tmp_path):
     assert (row["trade_id"], row["stop_percent_below_fill"]) == ("t1", None)
     assert (tmp_path / "a.pre-v3.sqlite3").exists()
     s.close()
+
+
+def test_a_database_with_runs_of_another_environment_is_refused(tmp_path):
+    store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
+    store.require_environment("one")  # empty: any environment may start
+    store.start_run(environment="one", config_digest="d", strategy="s",
+                    strategy_version="1", code_version="x")
+    store.require_environment("one")
+    with pytest.raises(EnvironmentMismatch, match="'one'"):
+        store.require_environment("two")
+    store.close()

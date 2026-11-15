@@ -700,7 +700,7 @@ class Engine:
         if cid in open_ids:
             return  # it exists; Detail will catch up
         unexplained = held.get(row.symbol, ZERO) - self._expected_in(row.symbol)
-        if unexplained > 0 if row.side is Side.BUY else unexplained < 0:
+        if (unexplained > 0) if row.side is Side.BUY else (unexplained < 0):
             return
         with self.store.transaction():
             self._set_send_state(cid, SendState.ABSENT, {"reads": reads})
