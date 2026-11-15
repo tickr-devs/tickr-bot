@@ -82,6 +82,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
+| GET | `/lab/replay` | `200` `lab-replay-v1`: the Lab's latest SIMULATED replay of the active strategy over the last sessions of fetched data (see Lab replay below). |
+| POST | `/lab/replay` | Body `{}`. Starts that replay: `202` `lab-replay-v1` (state `running`), or `409 conflict` with the cause it cannot start now. Not a bot command: nothing goes to the inbox. |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
 | GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first, its simulated day result and simulated trades. |
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
@@ -99,7 +101,8 @@ Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
 `unauthorized` 401 (remote request without the paired token),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
 `too_many_pending` 429, `rate_limited` 429 (GET /chart: its request budget is spent; `Retry-After`),
-`conflict` 409 (an `Idempotency-Key` already used for another command),
+`conflict` 409 (an `Idempotency-Key` already used for another command; a Lab replay that cannot
+start now),
 `internal` 500, `unavailable` 503 (history cannot be read now: database of another schema
 version, unreadable capture file).
 
@@ -495,6 +498,32 @@ reads and writes nothing for it.
 - `session`: today's New York date with `regular_open`, `last_entry_at`, `flatten_at` and
   `regular_close`, or null with `session_cause` (a weekend, a closure, a half day with
   `half_days_enabled = false`, a calendar that does not cover today).
+
+### GET and POST /lab/replay (simulated, never the bot)
+
+The Lab's "replay the last days": the active strategy (`[strategy] active`, its module from
+`[observers] strategy_modules`) replayed by the backtest (`docs/backtest.md`) over the last
+`[api] lab_replay_sessions` sessions of the data already fetched into `[api] lab_replay_data_dir`,
+ending at its last pool day. It never fetches: `summary.last_day` is where the data ends, and the
+app shows it. Code: `src/aperture/api/lab_replay.py`.
+
+POST starts `python -m aperture.backtest run --last-sessions N` as a child process of the API
+under `nice -n [api] lab_replay_niceness`, writing into `[api] lab_replay_results_dir`; the bot
+reads nothing of it. One run at a time, shared by both listeners; each start deletes the previous
+run. It is refused (`409 conflict`, one cause) while a run is going, during the regular session
+of a trading day when `[api] lab_replay_outside_session_only = true`, without fetched data
+(`pool.csv`), without a module for the strategy, or when the API was started without its config
+file path (the demo).
+
+- `state`: `idle` (no run yet), `running`, `done` (with `summary`) or `failed` (with `cause`:
+  the backtest's own refusal, paths relative to the repo).
+- `strategy`, `version`: what was replayed; `sessions`: the number asked for.
+- `summary`: the window (`first_day` ... `last_day`, `sessions_without_replayed_days`: no gainer
+  or incomplete data that day), every signal (`trades`, `win_rate_percent`, `mean_r`, `total_r`,
+  `profit_factor`, the day-resampled `mean_r_interval_low`/`high` at `confidence_percent`, null
+  when too few days, `max_drawdown_r`) and what the bot's risk limits would have taken
+  (`bot_trades`, `bot_total_usd`, `bot_max_drawdown_usd`). Twenty sessions are few: the interval
+  is wide by construction.
 
 ### GET /chart (read-only, market data)
 

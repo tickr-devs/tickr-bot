@@ -1,0 +1,12 @@
+{
+  "state": "idle",
+  "run_id": null,
+  "strategy": null,
+  "version": null,
+  "sessions": 20,
+  "started_at": null,
+  "finished_at": null,
+  "cause": null,
+  "summary": null,
+  "api_version": 1
+}

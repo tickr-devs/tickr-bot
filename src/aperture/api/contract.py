@@ -735,6 +735,60 @@ class JobsV1:
     api_version: int = _const(API_VERSION)
 
 
+# ---------------------------------------------------------------- lab replay
+
+
+class LabReplayState(StrEnum):
+    IDLE = "idle"  # no run yet
+    RUNNING = "running"
+    DONE = "done"  # finished with a report
+    FAILED = "failed"  # finished without a report: `cause` says why
+
+
+@dataclass(frozen=True)
+class LabReplaySummaryV1:
+    """The run's SIMULATED report (backtest report.json), only the numbers the Lab shows.
+    Every signal: `trades` ... `max_drawdown_r`, the mean R interval resampling whole days
+    (null when too few days). Bot limits: what the bot could have taken under its risk checks.
+    Null numbers mean no trades to compute them from."""
+
+    first_day: date  # the replayed window: the last `sessions` sessions of the fetched data
+    last_day: date
+    sessions: int
+    sessions_without_replayed_days: int  # no gainer that day, or incomplete fetched data
+    replayed_symbol_days: int
+    trades: int
+    win_rate_percent: Decimal | None
+    mean_r: Decimal | None
+    total_r: Decimal | None
+    profit_factor: Decimal | None
+    mean_r_interval_low: Decimal | None
+    mean_r_interval_high: Decimal | None
+    confidence_percent: Decimal
+    max_drawdown_r: Decimal | None
+    bot_trades: int
+    bot_total_usd: Decimal
+    bot_max_drawdown_usd: Decimal | None
+
+
+@dataclass(frozen=True)
+class LabReplayV1:
+    """GET and POST /lab/replay: the Lab's SIMULATED replay of the active strategy over the last
+    sessions of the already fetched backtest data (it never fetches). One run at a time; only
+    the latest is kept. `summary` when `state` is done; `cause` when failed."""
+
+    state: LabReplayState
+    run_id: str | None
+    strategy: str | None
+    version: str | None
+    sessions: int  # [api] lab_replay_sessions asked for
+    started_at: datetime | None
+    finished_at: datetime | None
+    cause: str | None
+    summary: LabReplaySummaryV1 | None
+    api_version: int = _const(API_VERSION)
+
+
 # ---------------------------------------------------------------- explain (read-only)
 
 
@@ -1392,6 +1446,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "chart-v1": ChartV1,
     "settings-v1": SettingsV1,
     "jobs-v1": JobsV1,
+    "lab-replay-v1": LabReplayV1,
     "explain-v1": ExplainV1,
     "observers-v1": ObserversV1,
     "decisions-v1": DecisionsV1,

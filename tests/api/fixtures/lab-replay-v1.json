@@ -1,0 +1,30 @@
+{
+  "state": "done",
+  "run_id": "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f",
+  "strategy": "price-action-v1",
+  "version": "1",
+  "sessions": 20,
+  "started_at": "2026-11-21T15:00:00.123Z",
+  "finished_at": "2026-11-21T15:04:31.123Z",
+  "cause": null,
+  "summary": {
+    "first_day": "2026-10-22",
+    "last_day": "2026-11-14",
+    "sessions": 20,
+    "sessions_without_replayed_days": 1,
+    "replayed_symbol_days": 143,
+    "trades": 37,
+    "win_rate_percent": "43.24",
+    "mean_r": "0.18",
+    "total_r": "6.66",
+    "profit_factor": "1.41",
+    "mean_r_interval_low": "-0.21",
+    "mean_r_interval_high": "0.57",
+    "confidence_percent": "95",
+    "max_drawdown_r": "4.20",
+    "bot_trades": 22,
+    "bot_total_usd": "412.50",
+    "bot_max_drawdown_usd": "187.00"
+  },
+  "api_version": 1
+}

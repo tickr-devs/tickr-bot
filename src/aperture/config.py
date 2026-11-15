@@ -175,6 +175,11 @@ class ApiConfig:
     performance_decimal_places: int
     price_after_minutes: tuple[int, ...]
     after_r_decimal_places: int
+    lab_replay_sessions: int
+    lab_replay_data_dir: str
+    lab_replay_results_dir: str
+    lab_replay_niceness: int
+    lab_replay_outside_session_only: bool
 
 
 @dataclass(frozen=True)

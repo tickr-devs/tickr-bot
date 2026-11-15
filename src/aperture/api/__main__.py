@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         cfg = config_module.load(args.config)
-        settings = settings_from_config(cfg)
+        settings = settings_from_config(cfg, args.config)
         if args.command == "pair":
             link_file = pair(settings)
     except config_module.ConfigError as exc:

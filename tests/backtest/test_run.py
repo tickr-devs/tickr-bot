@@ -201,3 +201,11 @@ def test_run_last_sessions_reports_its_window(tmp_path):
     text = (results / "report.md").read_text()
     assert "Last 3 sessions only: 2026-11-11 to 2026-11-13, 2 of them without" in text
     assert "wide by construction" in text
+    # The Lab's summary (GET /lab/replay) reads this report.
+    from aperture.api.lab_replay import summarize
+
+    summary = summarize(report)
+    assert (summary.first_day, summary.last_day, summary.sessions) == (
+        date(2026, 11, 11), TODAY, 3)
+    assert summary.sessions_without_replayed_days == 2 and summary.replayed_symbol_days == 1
+    assert summary.bot_trades == report["bot"]["trades"] <= summary.trades

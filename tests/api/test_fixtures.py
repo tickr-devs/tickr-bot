@@ -54,6 +54,9 @@ from aperture.api.contract import (
     FlowStopV1,
     FlowV1,
     JobsV1,
+    LabReplayState,
+    LabReplaySummaryV1,
+    LabReplayV1,
     LaunchdJobV1,
     ObserverDecisionV1,
     ObserversV1,
@@ -210,6 +213,24 @@ def documents() -> dict[str, object]:
             BackupJobV1(T0 + timedelta(days=4), T0 + timedelta(days=4, hours=7),
                         "OperationalError", None),
             _LAUNCHD, None, "2026-11-21 is a weekend"),
+        # Saturday: the replay of the last 20 sessions finished, with its SIMULATED numbers.
+        "lab-replay-v1": LabReplayV1(
+            LabReplayState.DONE, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1", "1", 20,
+            T0 + timedelta(days=5), T0 + timedelta(days=5, minutes=4, seconds=31), None,
+            LabReplaySummaryV1(
+                DAY - timedelta(days=25), DAY - timedelta(days=2), 20, 1, 143, 37,
+                Decimal("43.24"), Decimal("0.18"), Decimal("6.66"), Decimal("1.41"),
+                Decimal("-0.21"), Decimal("0.57"), Decimal("95"), Decimal("4.20"), 22,
+                Decimal("412.50"), Decimal("187.00"))),
+        "lab-replay-v1.idle": LabReplayV1(LabReplayState.IDLE, None, None, None, 20, None,
+                                          None, None, None),
+        "lab-replay-v1.running": LabReplayV1(
+            LabReplayState.RUNNING, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1",
+            "1", 20, T0 + timedelta(days=5), None, None, None),
+        "lab-replay-v1.failed": LabReplayV1(
+            LabReplayState.FAILED, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1", "1",
+            20, T0 + timedelta(days=5), T0 + timedelta(days=5, seconds=2),
+            "backtest/minutes is missing: run fetch first", None),
         "day-v1.empty": DayV1("sandbox", DAY - timedelta(days=3), (), Decimal("0"), ()),
         "bars-v1": BarsV1("sandbox", "ABCD", DAY, tuple(
             BarV1(T0 + timedelta(minutes=i), Decimal(o), Decimal(h), Decimal(lo), Decimal(c),

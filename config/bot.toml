@@ -218,6 +218,17 @@ performance_decimal_places = 4
 price_after_minutes = [1, 5, 15, 60]
 # Decimal places of the R quotients the API computes for display, overshoot_r in day-v1, rounded half-even; read by the api server (api/after.py).
 after_r_decimal_places = 4
+# Lab "replay the last days" (POST /lab/replay): sessions the backtest replays, ending at the last fetched pool day; read by the api server.
+lab_replay_sessions = 20
+# Folder of the fetched backtest data the Lab replay reads (never fetches), relative to data_dir; read by the api server.
+lab_replay_data_dir = "backtest"
+# Folder of the Lab replay's run and result, relative to data_dir; only the latest run is kept; read by the api server.
+lab_replay_results_dir = "lab-replay"
+# `nice` increment of the Lab replay process (0-19, higher = lower CPU priority), so it never starves the bot; read by the api server.
+lab_replay_niceness = 19
+# true = the Lab replay is refused during the regular session of a trading day (calendar), to keep the CPU for the bot;
+# read by the api server.
+lab_replay_outside_session_only = true
 
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).

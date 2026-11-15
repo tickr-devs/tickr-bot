@@ -1,0 +1,12 @@
+{
+  "state": "failed",
+  "run_id": "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f",
+  "strategy": "price-action-v1",
+  "version": "1",
+  "sessions": 20,
+  "started_at": "2026-11-21T15:00:00.123Z",
+  "finished_at": "2026-11-21T15:00:02.123Z",
+  "cause": "backtest/minutes is missing: run fetch first",
+  "summary": null,
+  "api_version": 1
+}
