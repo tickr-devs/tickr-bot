@@ -534,27 +534,58 @@ def test_flatten_of_a_symbol_without_a_position_is_refused(tmp_path):
 # ---------------------------------------------------------------- stop-bot
 
 
-def test_stop_bot_drains_leaves_the_stop_and_the_position_and_sticks(tmp_path):
+@pytest.mark.parametrize("fill", [D(0), D(1)])  # an entry working with no fill; partly filled
+def test_stop_bot_with_a_trade_open_is_refused_and_changes_nothing(tmp_path, fill):
     bot = Bot(tmp_path, broker=FakeBroker())
-    bot.engine.config = bot.service.config = config.load(ROOT / "config" / "bot.toml",
-                                                          root=tmp_path)
+    tmp_config(bot, tmp_path)
     t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1))
     entry = bot.engine.orders(t)[0].client_order_id
-    bot.broker.fill(entry, D(1), D(10))  # partial: the rest of the entry still works
+    if fill:
+        bot.broker.fill(entry, fill, D(10))  # the rest of the entry still works
     for _ in range(3):
         bot.engine.step()
+    before = sorted((o.client_order_id, o.state) for o in bot.broker.open_orders())
+    cmd = bot.command(api.CommandKind.STOP_BOT)
+    bot.service.process_commands()
+    assert bot.service.stopped_by is None
+    assert stopmarker.describe(bot.service.config) is None
+    assert sorted((o.client_order_id, o.state) for o in bot.broker.open_orders()) == before
+    assert not bot.broker.orders[entry].state.terminal
+    assert bot.engine.trade(t).exit_requested is None
+    assert str(Fence.ENTRY_STOP) not in bot.engine.fences()
+    (rec,) = bot.service.status().recent_commands
+    assert (rec.command_id, rec.outcome) == (cmd.command_id, api.CommandOutcome.REFUSED)
+    assert rec.cause == ("1 trade(s) open or entering; flatten first (or send emergency), "
+                         "then stop-bot")
+    assert list(bot.paths.inbox.iterdir()) == []
+    later = bot.command(api.CommandKind.ENTRY_STOP_ON)  # the bot keeps obeying commands
+    bot.service.process_commands()
+    records = {r.command_id: r for r in bot.service.status().recent_commands}
+    assert records[later.command_id].outcome is api.CommandOutcome.DONE
+
+
+def test_stop_bot_after_emergency_cancelled_an_unfilled_entry_is_obeyed(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    tmp_config(bot, tmp_path)
+    t = opened(bot, fill=False)  # an entry working, nothing bought
+    entry = bot.engine.orders(t)[0].client_order_id
+    bot.command(api.CommandKind.EMERGENCY)
+    bot.service.process_commands()
+    for _ in range(3):
+        bot.engine.step()
+    assert bot.broker.orders[entry].state.terminal
+    assert bot.engine.trade(t).state is TradeState.CLOSED
+    bot.now += timedelta(seconds=1)
     cmd = bot.command(api.CommandKind.STOP_BOT)
     assert bot.run(1000)  # ends on the command, long before the iterations run out
     assert bot.service.stopped_by == cmd.command_id
-    assert bot.broker.orders[entry].state.terminal  # working entry cancelled by the drain
-    assert [o.order_type for o in bot.broker.open_orders()] == ["STOP_LOSS"]
-    assert bot.engine.trade(t).exit_requested is None  # nothing flattened
+    assert bot.broker.open_orders() == [] and bot.broker.positions() == []
     assert bot.store.journal("shutdown-clean")
     status = bot.status()
     assert status.bot_state is api.BotState.STOPPED
-    assert status.position is not None and status.position.quantity == D(1)
-    (rec,) = status.recent_commands
-    assert (rec.kind, rec.outcome) == (api.CommandKind.STOP_BOT, api.CommandOutcome.DONE)
+    records = {r.command_id: r for r in status.recent_commands}
+    assert (records[cmd.command_id].outcome, records[cmd.command_id].cause) == (
+        api.CommandOutcome.DONE, None)
     stopped = stopmarker.describe(bot.service.config)
     assert stopped is not None and cmd.command_id in stopped
 
@@ -726,20 +757,46 @@ def test_stop_bot_after_a_close_request_is_refused(tmp_path, first):
     assert bot.service.stopped_by == again.command_id
 
 
-def test_commands_after_an_obeyed_stop_bot_are_refused_in_the_same_pass(tmp_path):
+def test_stop_bot_refused_then_emergency_then_stop_bot_obeyed_once_flat(tmp_path):
     bot = Bot(tmp_path, broker=FakeBroker())
     tmp_config(bot, tmp_path)
     t = opened(bot)
+    first = bot.command(api.CommandKind.STOP_BOT)
+    bot.service.process_commands()
+    assert bot.service.stopped_by is None
+    bot.now += timedelta(seconds=1)
+    bot.command(api.CommandKind.EMERGENCY)
+    bot.service.process_commands()
+    for _ in range(6):
+        bot.engine.step()
+        for order in bot.broker.open_orders():
+            if order.order_type == "MARKET":
+                bot.broker.fill(order.client_order_id, order.quantity, D(10))
+    assert bot.engine.trade(t).state is TradeState.CLOSED
+    bot.now += timedelta(seconds=1)
+    again = bot.command(api.CommandKind.STOP_BOT)
+    assert bot.run(1000)
+    assert bot.service.stopped_by == again.command_id
+    assert bot.broker.positions() == [] and bot.broker.open_orders() == []
+    records = {r.command_id: r for r in bot.status().recent_commands}
+    assert records[first.command_id].outcome is api.CommandOutcome.REFUSED
+    assert records[again.command_id].outcome is api.CommandOutcome.DONE
+    assert stopmarker.describe(bot.service.config) is not None
+
+
+def test_commands_after_an_obeyed_stop_bot_are_refused_in_the_same_pass(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    tmp_config(bot, tmp_path)
     stop = bot.command(api.CommandKind.STOP_BOT, offset_seconds=-1)
-    flatten = bot.command(api.CommandKind.FLATTEN)
+    entry_stop = bot.command(api.CommandKind.ENTRY_STOP_ON)
     bot.service.process_commands()
     assert bot.service.stopped_by == stop.command_id
-    assert bot.engine.trade(t).exit_requested is None
+    assert str(Fence.ENTRY_STOP) not in bot.engine.fences()
     records = {r.command_id: r for r in bot.service.status().recent_commands}
-    assert records[stop.command_id].outcome is api.CommandOutcome.DONE
-    assert records[stop.command_id].cause == "1 position(s) left open under their broker stop"
-    assert records[flatten.command_id].outcome is api.CommandOutcome.REFUSED
-    assert records[flatten.command_id].cause == (
+    assert (records[stop.command_id].outcome, records[stop.command_id].cause) == (
+        api.CommandOutcome.DONE, None)
+    assert records[entry_stop.command_id].outcome is api.CommandOutcome.REFUSED
+    assert records[entry_stop.command_id].cause == (
         f"read after stop-bot {stop.command_id}: the bot is stopping")
     assert list(bot.paths.inbox.iterdir()) == []
 

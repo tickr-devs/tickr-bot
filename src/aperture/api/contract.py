@@ -90,7 +90,7 @@ class CommandKind(StrEnum):
     ENTRY_STOP_OFF = "entry-stop-off"
     CANCEL_OWN_ORDERS = "cancel-own-orders"
     FLATTEN = "flatten"
-    STOP_BOT = "stop-bot"  # graceful stop: no flatten, stops rest, start refused until cleared
+    STOP_BOT = "stop-bot"  # graceful stop, only when flat; start refused until cleared
     EMERGENCY = "emergency"  # entry-stop on, then cancel own orders, then flatten all
 
 

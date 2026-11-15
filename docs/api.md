@@ -224,20 +224,23 @@ preconditions to every command.
   XYZ"), and while a closing order of a chosen trade was refused before (fence
   `exit-refused:<trade>`: look in the Webull app first). `{"symbol": null}`, a lower-case ticker
   or any other key is `400`: a client bug never widens a one-symbol flatten to everything.
-- **stop-bot**: a graceful stop. The bot writes its stop marker
-  (`<data_dir>/<[runtime] stop_marker_file>`), journals the command `done`, ends its loop at
-  once (no strategy pass after it) and drains as on SIGTERM: working entries cancelled, broker
-  stops left resting, nothing flattened, status `stopped`, exit 0 (run end cause
-  `stopped (operator command <id>)`). An open position stays open under its broker stop and is
-  no longer flattened at the session's flatten time; the watchdog then alerts
-  `bot-down-with-open-trade`. Flatten first if you want to be flat. When positions stay open
-  the record's cause says so: "N position(s) left open under their broker stop".
-  Stop-bot is refused while any trade has an exit requested or a closing order working (an
-  operator flatten, an emergency, the session flatten), with the cause "a close is in progress;
-  send stop-bot again after it completes": stopping then would leave an exit request that a
-  later start would carry out without anyone asking. Commands the bot reads after an obeyed
-  stop-bot, in the same pass, are refused ("read after stop-bot <id>: the bot is stopping"),
-  never recorded done.
+- **stop-bot**: a graceful stop, obeyed only when the bot is flat. The bot writes its stop
+  marker (`<data_dir>/<[runtime] stop_marker_file>`), journals the command `done`, ends its
+  loop at once (no strategy pass after it) and drains as on SIGTERM, status `stopped`, exit 0
+  (run end cause `stopped (operator command <id>)`).
+  Stop-bot is refused while any trade is not closed: a position open, or an entry working even
+  with no fill yet. The cause is "N trade(s) open or entering; flatten first (or send
+  emergency), then stop-bot": a broker stop is a DAY order and a stopped bot does not flatten
+  at the session's flatten time, so a position (or an entry that fills during the drain)
+  could go overnight unprotected. Nothing changes and the bot keeps running. Send emergency
+  (it also cancels working entries) or flatten, wait until every trade is closed, then send
+  stop-bot again.
+  Checked first: stop-bot is refused while any trade has an exit requested or a closing order
+  working (an operator flatten, an emergency, the session flatten), with the cause "a close is
+  in progress; send stop-bot again after it completes": stopping then would leave an exit
+  request that a later start would carry out without anyone asking. Commands the bot reads
+  after an obeyed stop-bot, in the same pass, are refused ("read after stop-bot <id>: the bot
+  is stopping"), never recorded done.
   The launchd bot job has `KeepAlive` false, so launchd does not restart it today, but its
   calendar start (`[runtime] bot_start_local` on `launch_weekdays`) would start it the next
   trading day. The marker stops that: while it exists preflight fails with cause

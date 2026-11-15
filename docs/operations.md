@@ -49,8 +49,12 @@ through the platform risk checks before any order is sent, and every decision is
 `data/decisions/<environment>/<date>/decisions.jsonl`. Without a trading calendar it never opens
 a trade and status shows `entries_not_wired`.
 
-From the apps, `POST /commands/stop-bot` stops the bot the same way and makes the stop stick:
-the bot writes `data/<[runtime] stop_marker_file>` and every later start is refused (preflight
+From the apps, `POST /commands/stop-bot` stops the bot the same way and makes the stop stick,
+but only when the bot is flat: with a position open, an entry working, or a close in progress,
+it is refused and the bot keeps running (send emergency or flatten first, wait for every trade
+to close, then stop-bot). A
+SIGTERM does not have this check: it leaves an open position under its DAY stop, and nothing
+flattens it while the bot is down. When obeyed, the bot writes `data/<[runtime] stop_marker_file>` and every later start is refused (preflight
 cause `stopped-by-operator`, with an alert) until you run `aperture clear-stop`. See
 docs/api.md, "Commands".
 
