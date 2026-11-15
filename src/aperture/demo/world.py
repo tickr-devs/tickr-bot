@@ -12,6 +12,10 @@ when the ask is at or below its limit, a STOP_LOSS SELL fills at the bid once th
 below its stop (a gap fills below the stop), a MARKET SELL fills at the bid. Only in the regular
 session of the world's market day.
 
+`Exchange.unverify_stops` is a demo fault for QA: from then on the symbol's stop orders show a
+status the adapter cannot map (`OrderState.UNKNOWN`), are not working and never fill, so the
+bot sees a position without a verified stop and the apps show it unprotected.
+
 `go_live` switches the clock from simulated to real time: from then on a bot sleep really
 sleeps and the world's time moves with the wall clock, shifted by a fixed offset.
 
@@ -26,7 +30,7 @@ import random
 import time
 import zlib
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as wall_time
 from decimal import ROUND_FLOOR, Decimal
@@ -35,7 +39,7 @@ from aperture.broker.base import Acknowledgement
 from aperture.broker.fake import FakeBroker
 from aperture.calendar import NEW_YORK, MarketDay, ny_date_of
 from aperture.data.base import BarSpan, FakeMarketData, ScreenerKind, ScreenerRow, SessionBar
-from aperture.types import Bar, OrderRequest, OrderType, Quote, Side
+from aperture.types import Bar, OrderRequest, OrderState, OrderType, Quote, Side
 
 M1 = timedelta(minutes=1)
 REGULAR_SESSION = "RTH"  # the provider's label of a regular-session bar (the world has no other)
@@ -46,6 +50,8 @@ SECONDS_PER_MINUTE = Decimal(60)
 SCREENER_EXCHANGE = "NSQ"
 SCREENER_CURRENCY = "USD"
 SCREENER_TYPE = "COMMON_STOCK"
+# Raw status a stop shows after the stop-unverified demo fault: one the adapter does not map.
+UNVERIFIED_STOP_STATUS = "DEMO_UNVERIFIED"
 
 # (from "HH:MM", to "HH:MM", price at the end, volume per minute): a straight price move.
 Leg = tuple[str, str, Decimal, Decimal]
@@ -257,12 +263,27 @@ class Exchange(FakeBroker):
         self.world = world
         self.requests: dict[str, OrderRequest] = {}
         self.fills: list[tuple[datetime, str, Side, OrderType, Decimal, Decimal]] = []
+        self.unverified_symbols: set[str] = set()
 
     def place(self, request: OrderRequest) -> Acknowledgement:
         ack = super().place(request)
         self.requests[request.client_order_id] = request
+        self._unverify(request.client_order_id)
         self._match(request.client_order_id)  # a marketable order fills on arrival
         return ack
+
+    def unverify_stops(self, symbol: str) -> None:
+        """The demo fault: `symbol`'s working stops, and every later one, stop being working."""
+        self.unverified_symbols.add(symbol)
+        for cid in list(self.orders):
+            self._unverify(cid)
+
+    def _unverify(self, cid: str) -> None:
+        order = self.orders[cid]
+        if (order.symbol in self.unverified_symbols and order.order_type is OrderType.STOP_LOSS
+                and not order.state.terminal):
+            self.orders[cid] = replace(order, state=OrderState.UNKNOWN,
+                                       raw_status=UNVERIFIED_STOP_STATUS)
 
     def match(self) -> None:
         for cid in list(self.orders):
@@ -270,8 +291,9 @@ class Exchange(FakeBroker):
 
     def _match(self, cid: str) -> None:
         order = self.orders[cid]
-        if order.state.terminal or not self.world.in_session():
-            return
+        if (order.state.terminal or order.state is OrderState.UNKNOWN
+                or not self.world.in_session()):
+            return  # an unverified stop is not working, so it never fills
         request = self.requests[cid]
         quote = self.world.quote(order.symbol, self.world.exchange_lead)
         price: Decimal | None = None

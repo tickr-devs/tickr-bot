@@ -21,8 +21,23 @@ from aperture.api.server import make_server, settings_from_config
 from aperture.calendar import SessionCalendar
 from aperture.data.base import ScreenerKind
 from aperture.demo import run as demo
-from aperture.demo.scenario import DemoCommand, ScenarioError, SymbolPlan, load
-from aperture.demo.world import Texture, day_bars, textured
+from aperture.demo.scenario import (
+    STOP_UNVERIFIED,
+    DemoCommand,
+    DemoFault,
+    ScenarioError,
+    SymbolPlan,
+    load,
+)
+from aperture.demo.world import UNVERIFIED_STOP_STATUS, Texture, World, day_bars, ny, textured
+from aperture.types import (
+    OrderRequest,
+    OrderState,
+    OrderType,
+    Side,
+    TimeInForce,
+    TradingSession,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 SUNDAY = date(2026, 11, 15)  # the demo day falls back to Friday 2026-11-13
@@ -272,3 +287,77 @@ def test_absolute_real_data_dir_stays_out_of_the_demo(tmp_path):
     scenario = load(root / "config" / "demo.toml")
     cfg = config.load(demo.build_folder(root, scenario))
     assert (cfg.root / cfg.run.data_dir).resolve().is_relative_to(root / scenario.root_dir)
+
+
+def test_faults_are_checked_when_loading(tmp_path):
+    text = (ROOT / "config" / "demo.toml").read_text("utf-8")
+    assert load(ROOT / "config" / "demo.toml").faults == ()  # off unless the owner turns it on
+    path = tmp_path / "demo.toml"
+    for fault, cause in (
+            ('{ at = "14:31", kind = "stop-missing", symbol = "MVLD" }', "is not one of"),
+            ('{ at = "14:31", kind = "stop-unverified", symbol = "NOPE" }',
+             "not a symbol of today"),
+            ('{ at = "2pm", kind = "stop-unverified", symbol = "MVLD" }', "is not a time")):
+        path.write_text(text.replace("\nfaults = []\n", f"\nfaults = [{fault}]\n"), "utf-8")
+        with pytest.raises(ScenarioError, match=cause):
+            load(path)
+    path.write_text(text.replace(
+        "\nfaults = []\n", '\nfaults = [{ at = "14:31", kind = "stop-unverified", '
+        'symbol = "MVLD" }]\n'), "utf-8")
+    assert load(path).faults == (DemoFault("14:31", STOP_UNVERIFIED, "MVLD"),)
+
+
+def test_an_unverified_stop_is_not_working_and_never_fills():
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+    market_day = calendar.day(FRIDAY)
+    world = World(ny(FRIDAY, "10:00"), market_day, D("0.01"), D(500), "demo")
+    for symbol in ("AAA", "BBB"):
+        world.add_symbol(symbol, day_bars(symbol, market_day, D(20), D(3000), (
+            ("10:10", "10:12", D(15), HOT),), D("0.05")), [])
+    exchange = world.exchange
+
+    def stop(cid, symbol):
+        exchange.place(OrderRequest(cid, symbol, Side.SELL, OrderType.STOP_LOSS, D(10),
+                                    TimeInForce.DAY, TradingSession.CORE, None, D(19)))
+
+    stop("a-1", "AAA")
+    stop("b-1", "BBB")
+    exchange.unverify_stops("AAA")
+    stop("a-2", "AAA")  # a later stop of the symbol is unverified too
+    assert {cid: exchange.order_detail(cid).state for cid in ("a-1", "a-2", "b-1")} == {
+        "a-1": OrderState.UNKNOWN, "a-2": OrderState.UNKNOWN, "b-1": OrderState.ACCEPTED}
+    assert exchange.order_detail("a-1").raw_status == UNVERIFIED_STOP_STATUS
+    world.advance(15 * 60)  # both symbols fall through 19
+    assert [(f[1], f[3]) for f in exchange.fills] == [("BBB", OrderType.STOP_LOSS)]
+    assert exchange.order_detail("a-1").state is OrderState.UNKNOWN
+    exchange.cancel("a-1")  # the bot can still cancel it before closing the position
+    assert exchange.order_detail("a-1").state is OrderState.CANCELLED
+
+
+def test_demo_fault_shows_the_open_position_unprotected(tmp_path):
+    root = repo(tmp_path)
+    bot = root / "config" / "bot.toml"
+    # Long enough that the bot has not closed the position yet when the demo day stops.
+    text, count = re.subn(r"(?m)^max_unprotected_seconds = \d+$",
+                          "max_unprotected_seconds = 600", bot.read_text("utf-8"))
+    assert count == 1
+    bot.write_text(text, "utf-8")
+    scenario = replace(small(root / "config" / "demo.toml"), past=(),  # the demo day only
+                       faults=(DemoFault("11:25", STOP_UNVERIFIED, "BBB"),))
+    # The real bot refuses a clean shutdown while a position has no verified stop.
+    assert demo.run_demo(root, scenario, SUNDAY, live=False,
+                         log=lambda line: None) == 5  # `aperture run`: work pending
+
+    cfg = config.load(root / scenario.root_dir / "config" / "bot.toml")
+    server = make_server(replace(settings_from_config(cfg), port=0))
+    try:
+        status = server.status_response().status
+        assert status is not None
+        (position,) = status.positions
+        assert position.symbol == "BBB"
+        assert position.stop.state is not api.StopState.VERIFIED
+        fences = {f.kind.split(":")[0] for f in status.fences}
+        assert {"unprotected", "status-unknown"} <= fences
+        assert status.entry_block is not None
+    finally:
+        server.server_close()

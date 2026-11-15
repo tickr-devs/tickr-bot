@@ -41,3 +41,25 @@ day's clock, so "today" in the apps is the demo day.
 The bot holds one position at a time in v1 (admission refuses a second), so the demo has one open
 position; the day's other trades come one after another. Everything the day contains is in
 `config/demo.toml`, each key commented.
+
+## An unprotected position, for checking the apps
+
+`[scenario] faults` in `config/demo.toml` is empty by default. To see the open position without a
+verified stop, add:
+
+```toml
+faults = [{ at = "14:31", kind = "stop-unverified", symbol = "MVLD" }]
+```
+
+From that New York time on, the simulated exchange shows that symbol's stops in a status the
+adapter cannot map (`DEMO_UNVERIFIED`, so `OrderState.UNKNOWN`). The stops are not working and
+never fill. The real bot reacts as it would live:
+
+- the position's stop is no longer `verified`;
+- the `unprotected` and `status-unknown` fences are set and new entries are blocked;
+- the unprotected-position alert goes to the terminal.
+
+After `[orders] max_unprotected_seconds` (30 s), the bot cancels the stop and closes the
+position (`unprotected-too-long`), so the apps then show that exit and its fence. Put `at`
+inside the live part of the day (after `[demo] clock`), so the 30 s happen in real time. Only
+the demo's exchange changes: `broker/fake.py` and the live path are untouched.

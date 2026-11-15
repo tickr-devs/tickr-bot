@@ -206,6 +206,9 @@ def _demo_day(session: Session, world: World, cfg: config_module.Config,
     inbox = cfg.root / cfg.run.data_dir / cfg.api.commands_dir / api.INBOX
     for command in scenario.commands:
         world.at(ny(session.day, command.at), _command_writer(inbox, world, command))
+    for fault in scenario.faults:  # one kind so far: STOP_UNVERIFIED, checked by the loader
+        world.at(ny(session.day, fault.at),
+                 lambda symbol=fault.symbol: world.exchange.unverify_stops(symbol))
 
     if server is None:
         world.at(ny(session.day, scenario.clock), _stop_self)

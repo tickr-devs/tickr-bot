@@ -87,6 +87,14 @@ commands = [
   { at = "10:24", kind = "flatten", symbol = "VLNQ" },
 ]
 
+# Demo faults for QA, off by default (empty list). Each: New York time `at`, `kind` and a
+# `symbol` of today. Kind "stop-unverified": from then on the simulated exchange shows that
+# symbol's stops in a status the bot cannot map, not working, so the apps show the open position
+# unprotected; after [orders] max_unprotected_seconds the bot closes it, as it would live. Example
+# for the open position a minute after the demo goes live:
+# faults = [{ at = "14:31", kind = "stop-unverified", symbol = "MVLD" }]
+faults = []
+
 # Past sessions for the day picker, oldest first, each a list of symbols like `today`. They run
 # the whole session, so a position still open at the flatten time is closed by the bot.
 past = [

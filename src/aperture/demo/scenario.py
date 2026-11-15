@@ -20,6 +20,9 @@ from aperture.demo.world import Leg, Texture
 
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9.]*$")
 LEG_FIELDS = 4  # from, to, price at the end, volume per minute
+# Demo fault kinds ([scenario] faults): the simulated exchange's stops of a symbol stop working.
+STOP_UNVERIFIED = "stop-unverified"
+FAULT_KINDS = (STOP_UNVERIFIED,)
 
 
 class ScenarioError(ValueError):
@@ -43,6 +46,13 @@ class DemoCommand:
 
 
 @dataclass(frozen=True)
+class DemoFault:
+    at: str
+    kind: str
+    symbol: str
+
+
+@dataclass(frozen=True)
 class Scenario:
     root_dir: str
     environment: str
@@ -60,6 +70,7 @@ class Scenario:
     today: tuple[SymbolPlan, ...]
     commands: tuple[DemoCommand, ...]
     past: tuple[tuple[SymbolPlan, ...], ...]
+    faults: tuple[DemoFault, ...] = ()
 
 
 def _keys(where: str, raw: Any, keys: set[str]) -> dict[str, Any]:
@@ -159,13 +170,23 @@ def _command(where: str, raw: Any) -> DemoCommand:
     return DemoCommand(_clock(f"{where}.at", row["at"]), kind, symbol)
 
 
+def _fault(where: str, raw: Any, today: tuple[SymbolPlan, ...]) -> DemoFault:
+    row = _keys(where, raw, {"at", "kind", "symbol"})
+    if row["kind"] not in FAULT_KINDS:
+        raise ScenarioError(f"{where}.kind {row['kind']!r} is not one of {list(FAULT_KINDS)}")
+    symbol = _text(f"{where}.symbol", row["symbol"])
+    if symbol not in {p.symbol for p in today}:
+        raise ScenarioError(f"{where}.symbol {symbol!r} is not a symbol of today")
+    return DemoFault(_clock(f"{where}.at", row["at"]), row["kind"], symbol)
+
+
 def load(path: Path) -> Scenario:
     try:
         raw = tomllib.loads(path.read_text("utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise ScenarioError(f"{path}: {exc}") from exc
     top = _keys("demo.toml", raw, {"demo", "market", "scenario"})
-    plan = _keys("[scenario]", top["scenario"], {"today", "commands", "past"})
+    plan = _keys("[scenario]", top["scenario"], {"today", "commands", "past", "faults"})
     demo = _keys("[demo]", top["demo"], {
         "root_dir", "environment", "api_port", "observers", "provider",
         "bot_start", "past_stop", "clock"})
@@ -175,11 +196,12 @@ def load(path: Path) -> Scenario:
     observers = demo["observers"]
     if not isinstance(observers, list) or not all(isinstance(o, str) for o in observers):
         raise ScenarioError("[demo] observers must be a list of strings")
-    if not isinstance(plan["commands"], list) or not isinstance(plan["past"], list):
-        raise ScenarioError("commands and past must be lists")
+    if not all(isinstance(plan[k], list) for k in ("commands", "past", "faults")):
+        raise ScenarioError("commands, past and faults must be lists")
     environment = _text("[demo] environment", demo["environment"])
     if not SYMBOL.match(environment.upper()):
         raise ScenarioError("[demo] environment must be a plain name")
+    today = _day("today", plan["today"])
     return Scenario(
         root_dir=_text("[demo] root_dir", demo["root_dir"]),
         environment=environment,
@@ -200,7 +222,8 @@ def load(path: Path) -> Scenario:
             move=_fraction("[market] texture_move", market["texture_move"], False),
             move_cap=_fraction("[market] texture_move_cap", market["texture_move_cap"], False),
             volume=_fraction("[market] texture_volume", market["texture_volume"], True)),
-        today=_day("today", plan["today"]),
+        today=today,
         commands=tuple(_command(f"commands[{n}]", c) for n, c in enumerate(plan["commands"])),
         past=tuple(_day(f"past[{n}]", day) for n, day in enumerate(plan["past"])),
+        faults=tuple(_fault(f"faults[{n}]", f, today) for n, f in enumerate(plan["faults"])),
     )
