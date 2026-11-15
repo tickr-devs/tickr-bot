@@ -1278,14 +1278,38 @@ class WatchingRowV1:
     closeness_cause_codes: tuple[ReasonV1, ...] = _reasons_of("closeness_cause")
     quote_age_cause_codes: tuple[ReasonV1, ...] = _reasons_of("quote_age_cause")
 
+class SizeBinding(StrEnum):
+    DAILY_ROOM = "daily_room"  # sized down to the room the daily loss ceiling leaves
+
+
+@dataclass(frozen=True)
+class LatestSizeV1:
+    """The size the active strategy gave its latest sized decision of the day: the measured
+    value of its recorded `quantity` check (whole shares; below 1 = too small to enter), on any
+    verdict: the last size given, not a forecast of the next one. `binding`: the limit that cut
+    it, only where the record proves it (`daily_room`: a `daily_loss_budget_usd` check and
+    floor(its room / the recorded `sizing_risk_per_share`) equal to the quantity); otherwise null
+    with `binding_cause`. Read from the decision record, never resized."""
+
+    symbol: str
+    at: datetime  # the decision's bar start
+    strategy: StrategyId
+    verdict: Verdict
+    quantity: Decimal
+    binding: SizeBinding | None
+    binding_cause: str | None
+
+
 @dataclass(frozen=True)
 class WatchingV1:
     """GET /watching?date=: the symbols the active strategy is closest to entering on, closest
-    first, at most `[api] watching_max_rows`; `total` counts them before the cap."""
+    first, at most `[api] watching_max_rows`; `total` counts them before the cap.
+    `latest_size`: see LatestSizeV1, null when no decision of the day was sized."""
 
     day: date
     total: int
     rows: tuple[WatchingRowV1, ...]
+    latest_size: LatestSizeV1 | None
     api_version: int = _const(API_VERSION)
 
 
@@ -1294,6 +1318,12 @@ QUOTE_AGE_NOT_RECORDED = "not recorded: decision records hold no quote time"
 _RISE = (">", ">=")  # passes once measured rises to the threshold
 _FALL = ("<", "<=")  # passes once measured falls to the threshold
 _NOT_WATCHING = (Verdict.ENTER, Verdict.HOLD, Verdict.EXIT)
+# Rule names the strategies record for their sizing (strategy/price_action_v1.py, simple.py).
+QUANTITY_RULE = "quantity"
+DAILY_ROOM_RULE = "daily_loss_budget_usd"
+SIZING_RISK_RULE = "sizing_risk_per_share"
+BINDING_NOT_RECORDED = ("not proven by the record: the planned loss, the notional cap or "
+                        "the daily room")
 
 
 def closeness(check: Check | None, places: int) -> tuple[Decimal | None, str | None]:
@@ -1365,7 +1395,35 @@ def watching_document(day: date, records: tuple[DecisionRecord, ...], max_rows: 
             closeness=value, closeness_cause=cause, quote_age_seconds=None,
             quote_age_cause=QUOTE_AGE_NOT_RECORDED))
     rows.sort(key=lambda w: (w.closeness is None, -(w.closeness or 0), w.symbol))
-    return WatchingV1(day=day, total=len(rows), rows=tuple(rows[:max_rows]))
+    return WatchingV1(day=day, total=len(rows), rows=tuple(rows[:max_rows]),
+                      latest_size=latest_size(records))
+
+
+def _room_binds(checks: dict[str, Check], quantity: Decimal) -> bool:
+    """True only when the record proves the daily room set the quantity: the planned loss was
+    lowered to the room AND floor(room / recorded sizing risk per share) is the quantity. The
+    room check alone does not prove it: the notional cap can still cut below that."""
+    room, risk = checks.get(DAILY_ROOM_RULE), checks.get(SIZING_RISK_RULE)
+    if room is None or risk is None or room.measured is None or risk.measured is None:
+        return False
+    if risk.measured <= 0:
+        return False
+    return (room.measured / risk.measured).to_integral_value(rounding=ROUND_FLOOR) == quantity
+
+
+def latest_size(records: tuple[DecisionRecord, ...]) -> LatestSizeV1 | None:
+    """The newest record of `records` with a measured `quantity` check, as LatestSizeV1."""
+    for r in reversed(_oldest_first(records)):
+        checks = {c.rule: c for c in r.decision.checks}
+        quantity = checks.get(QUANTITY_RULE)
+        if quantity is None or quantity.measured is None:
+            continue
+        binding = SizeBinding.DAILY_ROOM if _room_binds(checks, quantity.measured) else None
+        d = r.decision
+        return LatestSizeV1(r.symbol, r.bar_start, StrategyId(d.strategy, d.version), d.verdict,
+                            quantity.measured, binding,
+                            None if binding else BINDING_NOT_RECORDED)
+    return None
 
 
 # ---------------------------------------------------------------- performance (read-only)

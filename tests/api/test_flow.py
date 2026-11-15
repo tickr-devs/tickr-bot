@@ -154,6 +154,41 @@ def test_watching_decisive_check_rounds_away_from_passing(measured, operator, th
     assert row.closeness == unrounded.closeness  # computed from the recorded values
 
 
+def test_latest_size_is_the_newest_recorded_quantity_with_its_structured_binding(api, cfg):
+    sized = check("200", ">=", "1", contract.QUANTITY_RULE)
+    room = check("12.5", "<", "50", contract.DAILY_ROOM_RULE)
+    room = Check(room.rule, room.measured, room.operator, room.threshold, True)
+    small = check("37", ">=", "1", contract.QUANTITY_RULE)
+    small = Check(small.rule, small.measured, small.operator, small.threshold, True)
+    _write(DecisionLog.from_config(cfg),
+           _watch("ABCD", 0, PASS, sized, verdict=Verdict.ENTER, admission=Admission.TAKEN),
+           _watch("WXYZ", 2, FAIL),  # never sized: does not replace ABCD's size
+           _observer(symbol="SHADOW", minute=3, checks=(small,)))  # observers never count
+    body = _get(api, "/watching", "watching-v1")
+    assert body["latest_size"] == {
+        "symbol": "ABCD", "at": "2026-11-16T15:00:00.000Z",
+        "strategy": {"name": ACTIVE[0], "version": ACTIVE[1]}, "verdict": "ENTER",
+        "quantity": "200", "binding": None, "binding_cause": contract.BINDING_NOT_RECORDED}
+    risk = check("0.335", ">", "0", contract.SIZING_RISK_RULE)
+    risk = Check(risk.rule, risk.measured, risk.operator, risk.threshold, True)
+    records = (_watch("ABCD", 0, sized), _watch("QRST", 4, PASS, room, risk, small))
+    latest = contract.watching_document(DAY, records, 3, 4, 4).latest_size
+    assert (latest.symbol, latest.quantity, latest.binding, latest.binding_cause) == (
+        "QRST", Decimal("37"), contract.SizeBinding.DAILY_ROOM, None)  # floor(12.5/0.335) = 37
+    # Planned 100 lowered to room 95, risk 0.10: by loss 950, but the notional cap (5000 at
+    # 50.00) gives 100. The room check is there, yet the cap bound: no binding is claimed.
+    capped = (_watch("QRST", 5, PASS,
+                     Check(contract.DAILY_ROOM_RULE, Decimal(95), "<", Decimal(100), True),
+                     Check(contract.SIZING_RISK_RULE, Decimal("0.10"), ">", Decimal(0), True),
+                     Check(contract.QUANTITY_RULE, Decimal(100), ">=", Decimal(1), True)),)
+    latest = contract.watching_document(DAY, capped, 3, 4, 4).latest_size
+    assert (latest.binding, latest.binding_cause) == (None, contract.BINDING_NOT_RECORDED)
+    without_risk = (_watch("QRST", 6, PASS, room, small),)  # simple.py records no sizing risk
+    assert contract.watching_document(DAY, without_risk, 3, 4, 4).latest_size.binding is None
+    assert contract.watching_document(DAY, (_watch("ABCD", 0, FAIL),), 3, 4, 4
+                                      ).latest_size is None
+
+
 def test_check_decimal_places_is_configured(cfg):
     assert cfg.api.check_decimal_places >= 0
 

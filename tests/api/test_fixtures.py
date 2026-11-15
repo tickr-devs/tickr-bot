@@ -57,6 +57,7 @@ from aperture.api.contract import (
     LabReplayState,
     LabReplaySummaryV1,
     LabReplayV1,
+    LatestSizeV1,
     LaunchdJobV1,
     ObserverDecisionV1,
     ObserversV1,
@@ -69,6 +70,7 @@ from aperture.api.contract import (
     SessionSettings,
     SessionTimesV1,
     SettingsV1,
+    SizeBinding,
     SkippedSignalV1,
     SkippedV1,
     StatusResponseV1,
@@ -380,8 +382,15 @@ def documents() -> dict[str, object]:
                           Verdict.IGNORE, CheckV1("quote_valid", None, "is", None, False,
                                                   "own symbol, 0 < bid <= ask"),
                           None, "quote_valid: a yes/no check has no measured value", None,
-                          "not recorded: decision records hold no quote time"))),
-        "watching-v1.empty": WatchingV1(DAY - timedelta(days=3), 0, ()),
+                          "not recorded: decision records hold no quote time")),
+            LatestSizeV1("QRST", T0.replace(microsecond=0) - timedelta(minutes=3),
+                         StrategyId("price-action-v1", "1"), Verdict.ENTER, Decimal("200"),
+                         None, contract.BINDING_NOT_RECORDED)),
+        # Late in a losing day: the latest sized decision was cut to the daily room.
+        "watching-v1.daily-room": WatchingV1(DAY, 0, (), LatestSizeV1(
+            "QRST", T0.replace(microsecond=0), StrategyId("price-action-v1", "1"),
+            Verdict.WATCH, Decimal("37"), SizeBinding.DAILY_ROOM, None)),
+        "watching-v1.empty": WatchingV1(DAY - timedelta(days=3), 0, (), None),
         "performance-v1": performance("sandbox", DAY - timedelta(days=6), DAY, (
             _closed("t-0001", -3, "100", "50"), _closed("t-0002", -3, "-50", "50"),
             _closed("t-0003", 0, "0", "50"), _closed("t-0004", 0, "-25", "50"),

@@ -859,6 +859,19 @@ the strategy saw.
 Rows are closest first (`null` closeness last), then by symbol, at most
 `[api] watching_max_rows`; `total` counts every row before the cap.
 
+`latest_size` is the Overview's "next size · binding" line: the size the active strategy gave its
+newest sized decision that day (any verdict, entering included), read from the record, never
+recomputed. The strategy sizes each signal itself (owner decision 2026-11-14); the platform only
+verifies that quantity on admission, so there is no size before a signal. Fields: `symbol`, `at`,
+`strategy`, `verdict`, `quantity` (the measured value of the recorded `quantity` check: whole
+shares, below 1 means too small to enter), and `binding`: `daily_room` only when the record
+proves it: a `daily_loss_budget_usd` check (the planned loss was lowered to the room the daily
+loss ceiling leaves) and floor(that room / the recorded `sizing_risk_per_share`) equal to the
+quantity. The room check alone proves nothing: the notional cap can still cut below it.
+Otherwise `binding` is `null` with `binding_cause`. It is the last size given, not a forecast of
+the next one (that depends on the next signal's price and stop). `latest_size` is `null` when no
+decision that day reached sizing.
+
 ### Commands
 
 `202` means queued, not executed. The command's result appears later in
