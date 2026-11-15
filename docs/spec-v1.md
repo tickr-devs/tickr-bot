@@ -86,7 +86,7 @@ Admission (all must hold; the first failure is the single recorded cause):
 6. Quantity at least 1; notional within cap; planned loss within limit; daily rule passes (today's net realized loss + open reservations + new planned loss <= ceiling).
 7. Request budget available for the entry AND the stop.
 
-Operator controls (local API + CLI): `entry-stop set|clear` (blocks entries only, survives restart), `cancel-own-orders` (own entry orders only, never stops), `flatten` (closes own position through the normal exit path).
+Operator controls (local API + CLI): `entry-stop set|clear` (blocks entries only, survives restart), `cancel-own-orders` (own entry orders only, never stops), `flatten` (closes own position through the normal exit path; from the API optionally one symbol), and from the API `stop-bot` (graceful stop that sticks until `aperture clear-stop`) and `emergency` (entry-stop on, cancel own orders, flatten all); see docs/api.md.
 
 ## 8. Environments and the trading gate
 

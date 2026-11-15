@@ -18,7 +18,9 @@
               "entry-stop-on",
               "entry-stop-off",
               "cancel-own-orders",
-              "flatten"
+              "flatten",
+              "stop-bot",
+              "emergency"
             ]
           },
           "requested_at": {
@@ -27,6 +29,16 @@
           },
           "source": {
             "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "schema_version": {
             "type": "integer",
@@ -38,6 +50,7 @@
           "kind",
           "requested_at",
           "source",
+          "symbol",
           "schema_version"
         ],
         "additionalProperties": false

@@ -159,6 +159,9 @@ max_pending_commands = 20
 command_max_age_seconds = 60
 # How many of the latest processed commands the bot lists in status.json (recent_commands); read by the bot's status writer.
 status_recent_commands = 10
+# Seconds the API remembers an Idempotency-Key and the 202 answer it gave (a repeat returns that answer and queues
+# nothing); must be above command_max_age_seconds; keys are kept under <commands_dir>/idempotency; read by the api server.
+idempotency_key_ttl_seconds = 86400
 
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).
@@ -307,6 +310,9 @@ watchdog_journal_file = "watchdog.jsonl"
 # evaluation-slow journal row (the next Detail read waits for it; keep it near
 # [orders] detail_poll_seconds); read by runtime.service.
 evaluation_budget_seconds = 3
+# Stop marker the bot writes when it obeys a stop-bot command, relative to data_dir; while it exists preflight fails and
+# `aperture run` refuses, until `aperture clear-stop`; read by runtime.stopmarker (bot, preflight, cli).
+stop_marker_file = "stopped-by-operator.json"
 
 [alerts]
 # Same alert (kind + text) repeated within this many seconds is not shown again (still returned for the journal); read by runtime.alerts.

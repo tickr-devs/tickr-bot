@@ -90,6 +90,8 @@ class CommandKind(StrEnum):
     ENTRY_STOP_OFF = "entry-stop-off"
     CANCEL_OWN_ORDERS = "cancel-own-orders"
     FLATTEN = "flatten"
+    STOP_BOT = "stop-bot"  # graceful stop: no flatten, stops rest, start refused until cleared
+    EMERGENCY = "emergency"  # entry-stop on, then cancel own orders, then flatten all
 
 
 class CommandOutcome(StrEnum):
@@ -250,6 +252,7 @@ class CommandV1:
     kind: CommandKind
     requested_at: datetime
     source: str
+    symbol: str | None = None  # flatten only: close just this symbol; null = everything
     schema_version: int = _const(COMMAND_SCHEMA_VERSION)
 
 
@@ -620,6 +623,11 @@ def parse_date(text: str) -> date:
     return _decode("date", text, date)
 
 
+def parse_time(text: str) -> datetime:
+    """A wire time "2026-11-13T15:04:05.000Z"; anything else raises ContractError."""
+    return _decode("time", text, datetime)
+
+
 def to_jsonable(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
         return {f.name: to_jsonable(getattr(value, f.name)) for f in fields(value)}
@@ -879,8 +887,10 @@ def read_account(path: Path | str) -> AccountV1:
     return loads(AccountV1, Path(path).read_bytes())
 
 
-def new_command(kind: CommandKind, now: datetime, source: str) -> CommandV1:
-    return CommandV1(command_id=str(uuid.uuid4()), kind=kind, requested_at=now, source=source)
+def new_command(kind: CommandKind, now: datetime, source: str,
+                symbol: str | None = None) -> CommandV1:
+    return CommandV1(command_id=str(uuid.uuid4()), kind=kind, requested_at=now, source=source,
+                     symbol=symbol)
 
 
 def write_command(inbox: Path | str, command: CommandV1) -> Path:

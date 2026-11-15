@@ -83,14 +83,17 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
-| POST | `/commands/flatten` | Body `{}`. `202` `command-accepted-v1`. |
+| POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
+| POST | `/commands/stop-bot` | Body `{}`. Graceful stop that sticks. `202` `command-accepted-v1`. |
+| POST | `/commands/emergency` | Body `{}`. Entry-stop on, cancel own orders, flatten all. `202` `command-accepted-v1`. |
 
 Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
 `forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
 `unauthorized` 401 (remote request without the paired token),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
-`too_many_pending` 429, `internal` 500, `unavailable` 503 (history cannot be read now: database of
-another schema version, unreadable capture file).
+`too_many_pending` 429, `conflict` 409 (an `Idempotency-Key` already used for another command),
+`internal` 500, `unavailable` 503 (history cannot be read now: database of another schema
+version, unreadable capture file).
 
 ### GET /status
 
@@ -208,7 +211,75 @@ line for the symbol (`/decisions`) or an observer line (`/observers`) of that da
 
 `202` means queued, not executed. The command's result appears later in
 `status.recent_commands` (matched by `command_id`) with `outcome` `done` or `refused` and a cause.
-`warning` is non-null when the bot does not look alive at the time of the request.
+`warning` is non-null when the bot does not look alive at the time of the request (the command
+is still queued; the bot refuses it if it reads it later than `[api] command_max_age_seconds`).
+The server never relies on anything the client checked (Face ID on the phone is client-side
+only): the remote port needs the paired token for every request, and the bot applies its own
+preconditions to every command.
+
+`command.symbol` is the ticker of a flatten of one position, otherwise `null`.
+
+- **flatten**: every open trade, or only the trades of `symbol`, gets an exit request through
+  the normal exit path. Refused when `symbol` has no open position ("no open position in
+  XYZ"), and while a closing order of a chosen trade was refused before (fence
+  `exit-refused:<trade>`: look in the Webull app first). `{"symbol": null}`, a lower-case ticker
+  or any other key is `400`: a client bug never widens a one-symbol flatten to everything.
+- **stop-bot**: a graceful stop. The bot writes its stop marker
+  (`<data_dir>/<[runtime] stop_marker_file>`), journals the command `done`, ends its loop at
+  once (no strategy pass after it) and drains as on SIGTERM: working entries cancelled, broker
+  stops left resting, nothing flattened, status `stopped`, exit 0 (run end cause
+  `stopped (operator command <id>)`). An open position stays open under its broker stop and is
+  no longer flattened at the session's flatten time; the watchdog then alerts
+  `bot-down-with-open-trade`. Flatten first if you want to be flat. When positions stay open
+  the record's cause says so: "N position(s) left open under their broker stop".
+  Stop-bot is refused while any trade has an exit requested or a closing order working (an
+  operator flatten, an emergency, the session flatten), with the cause "a close is in progress;
+  send stop-bot again after it completes": stopping then would leave an exit request that a
+  later start would carry out without anyone asking. Commands the bot reads after an obeyed
+  stop-bot, in the same pass, are refused ("read after stop-bot <id>: the bot is stopping"),
+  never recorded done.
+  The launchd bot job has `KeepAlive` false, so launchd does not restart it today, but its
+  calendar start (`[runtime] bot_start_local` on `launch_weekdays`) would start it the next
+  trading day. The marker stops that: while it exists preflight fails with cause
+  `stopped-by-operator` (the bot job alerts `bot-did-not-start`, the morning preflight job
+  `preflight-failed`), `aperture run` refuses (exit 3) and `aperture status` says so. To trade
+  again: `aperture clear-stop`, then wait for the next scheduled start or
+  `launchctl kickstart gui/$(id -u)/local.aperture.bot`. `aperture resume` and `aperture exit`
+  still work while the marker exists.
+- **emergency**: three steps in this order, each the existing handler and each journaled as a
+  `command-step` row: entry-stop on (the same fence as `/commands/entry-stop`, survives
+  restarts), cancel own orders (working entry orders only), flatten all (exit cause
+  `operator-emergency`). A step that refuses does not stop the others; the command is `done`
+  with a cause listing every step, or `refused` with the cause of each refused step. Cancel own
+  orders never cancels a broker stop: the flatten's exit path cancels a trade's stop only right
+  before it sends the closing sale for the shares no live stop still covers, and restores
+  protection whenever that sale cannot be sent. Cancelling the stops in step 2 would leave the
+  position unprotected until the sale fills, so it is not done. After a crash in the middle the
+  bot reads the command again and runs only the steps not yet journaled; if by then it is
+  older than `[api] command_max_age_seconds`, nothing more is run and the command is recorded
+  `refused` with the steps done and the steps not run.
+
+#### Idempotency-Key
+
+Every `POST /commands/*` takes an optional `Idempotency-Key` header: 1-128 characters from
+`A-Z a-z 0-9 . _ : -`, else `400 bad_request`. Keys are case-sensitive. The first request with
+a key queues the command and the API remembers the key with its `202` answer for
+`[api] idempotency_key_ttl_seconds` (in `<data_dir>/<commands_dir>/idempotency/`, one file per
+key, named by the key's SHA-256; written atomically with fsync; expired files are deleted when a
+new key is stored). Within that lifetime:
+
+- the same key with the same command (kind, and the symbol of a flatten) answers `202` with the
+  first answer, byte for byte, and queues nothing, also after the bot consumed the command and
+  also when the inbox is full;
+- the same key with another command answers `409 conflict` and queues nothing;
+- an unreadable record of the key answers `500 internal` and queues nothing.
+
+After its lifetime a key is new again. The lifetime must be above
+`[api] command_max_age_seconds` (checked at startup), so a repeat can never queue a second copy of
+a command the bot may still execute. The command file is written before the key: if the API dies
+between the two, a repeat queues the command again, which every command tolerates (exit requests,
+the entry-stop fence and entry cancels are idempotent; a second stop-bot only writes the marker
+again).
 
 ## Bot side
 
@@ -222,3 +293,6 @@ line for the symbol (`/decisions`) or an observer line (`/observers`) of that da
   (moves the file to `<commands_dir>/processed/`). If the bot crashes between journal and retire,
   the file is read again: a `command_id` already in the journal is retired without acting.
   Commands older than `[api] command_max_age_seconds` are refused, never executed late.
+- Emergency steps are journaled one by one (`command-step`, keyed by `command_id`) and the
+  command record comes last, so a command read again after a crash finishes only its missing
+  steps.

@@ -29,6 +29,7 @@ from aperture.engine.manual import (
     run_until_closed,
 )
 from aperture.lock import AlreadyRunning, SingleInstanceLock, recorded_holder
+from aperture.runtime import stopmarker
 from aperture.store import DATABASE_FILE, MIGRATIONS, Store
 
 if TYPE_CHECKING:
@@ -53,6 +54,9 @@ def _status(path: Path) -> int:
     pid = recorded_holder(lock_path)
     print("bot: not running" if pid is None
           else f"bot: pid {pid} recorded, process exists (lock not verified)")
+    stopped = stopmarker.describe(cfg)
+    if stopped is not None:
+        print(f"starts refused: {stopped}")
     if not database.exists():
         print("database: not created yet")
         return 0
@@ -354,6 +358,16 @@ def _maintain(args: argparse.Namespace) -> int:
             raise ManualRefused(str(exc)) from exc
 
 
+def _clear_stop(path: Path) -> int:
+    cfg = config_module.load(path)
+    if not stopmarker.clear(cfg):
+        print("no stop marker: starts were not refused")
+        return 1
+    print("stop marker removed: the bot may start again (the next scheduled launchd start, or "
+          "launchctl kickstart)")
+    return 0
+
+
 def _clear_fence(args: argparse.Namespace) -> int:
     with _engine(args.config) as engine:
         if not engine.clear_operator_fence(args.name):
@@ -409,7 +423,8 @@ def _closer(observers: ObserverSet, cfg: config_module.Config) -> Callable[[], N
 
 def _run(path: Path) -> int:
     """The launchd bot job (via `aperture.runtime run-bot`): run until SIGTERM, then drain.
-    Exit 0 after a clean drain, 5 when the drain hit its deadline."""
+    Exit 0 after a clean drain (SIGTERM or a stop-bot command), 3 refused while the operator's
+    stop marker exists, 5 when the drain hit its deadline."""
     from aperture.data.capture import CaptureWriter
     from aperture.data.health import StreamHealth
     from aperture.observers.errors import ObserverError
@@ -420,6 +435,10 @@ def _run(path: Path) -> int:
     from aperture.runtime.watch import ALERT, Watch
 
     cfg = config_module.load(path)
+    stopped = stopmarker.describe(cfg)
+    if stopped is not None:
+        print(f"refused: {stopped}", file=sys.stderr)
+        return 3
     strategy = service.strategy_id(cfg)
     database, lock_path = data_paths(cfg)
     with SingleInstanceLock(lock_path):
@@ -481,8 +500,11 @@ def _run(path: Path) -> int:
                                   observers=observers, watch=watch)
             market.bind()
             adapters.start_stream()
-            clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP, monotonic=MONOTONIC)
-            cause = f"stopped ({stop.signal_name})" if clean else "shutdown-deadline"
+            clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP,
+                            monotonic=MONOTONIC)
+            how = (f"operator command {bot.stopped_by}" if bot.stopped_by is not None
+                   else stop.signal_name)
+            cause = f"stopped ({how})" if clean else "shutdown-deadline"
         finally:
             # Each step guarded: a failing SDK disconnect must not skip recording the run end.
             for step in ((adapters.stop_stream if adapters is not None else None),
@@ -557,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
     maint.add_argument("--apply", action="store_true", help="act; without it only print")
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
     fence.add_argument("name")
+    sub.add_parser("clear-stop", help="allow starts again after an operator stop-bot command")
     args = parser.parse_args(argv)
     try:
         if args.command == "trade":
@@ -577,6 +600,8 @@ def main(argv: list[str] | None = None) -> int:
             return _maintain(args)
         if args.command == "clear-fence":
             return _clear_fence(args)
+        if args.command == "clear-stop":
+            return _clear_stop(args.config)
         if args.command == "check-config":
             return _check_config(args.config)
         if args.command == "status":

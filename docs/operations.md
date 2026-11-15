@@ -49,6 +49,11 @@ through the platform risk checks before any order is sent, and every decision is
 `data/decisions/<environment>/<date>/decisions.jsonl`. Without a trading calendar it never opens
 a trade and status shows `entries_not_wired`.
 
+From the apps, `POST /commands/stop-bot` stops the bot the same way and makes the stop stick:
+the bot writes `data/<[runtime] stop_marker_file>` and every later start is refused (preflight
+cause `stopped-by-operator`, with an alert) until you run `aperture clear-stop`. See
+docs/api.md, "Commands".
+
 ## Exit codes
 
 `python -m aperture.runtime preflight` and `run-bot`:
@@ -77,6 +82,8 @@ Every run prints JSON lines (`"record": "preflight" | "alert" | "bot-exit"`) to 
    (cause `alert-recipient-missing`; blocks the start, because the phone is the alert channel
    that reaches you away from the Mac). Presence only, never the value.
 7. Broker token folder `<data_dir>/<token_dir>` exists.
+7b. No operator stop marker (cause `stopped-by-operator`): a stop-bot command from the apps
+   left `<data_dir>/<[runtime] stop_marker_file>`; `aperture clear-stop` removes it.
 8. The active strategy builds and `[market_data] history_sessions` covers its history need. A
    failure is reported, but the bot still starts with entries off so it can protect positions.
 9. Broker token usable (only when no earlier check blocks the start and today has a session):

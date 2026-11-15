@@ -255,3 +255,17 @@ def test_token_is_probed_when_only_the_strategy_is_refused(config_path, break_st
                            token_probe=_probe(None, calls))
     assert result.cause is PreflightCause.STRATEGY_REFUSED and not result.blocks_start
     assert len(calls) == 1 and result.checks[-1].name.value == "token"
+
+
+def test_operator_stop_marker_blocks_the_start_until_cleared(config_path):
+    from aperture.runtime import stopmarker
+
+    environ = _ready(config_path)
+    cfg = config_module.load(config_path)
+    stopmarker.write(cfg, "3f2c9a7e-5b1d-4c8e-9a0f-1e2d3c4b5a69", MONDAY)
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.STOPPED_BY_OPERATOR
+    assert result.exit_code is ExitCode.FAILED and result.blocks_start
+    assert "clear-stop" in result.summary()
+    assert stopmarker.clear(cfg)
+    assert _run(config_path, environ).exit_code is ExitCode.READY

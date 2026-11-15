@@ -4,6 +4,7 @@
     "kind": "flatten",
     "requested_at": "2026-11-16T15:00:00.123Z",
     "source": "api",
+    "symbol": null,
     "schema_version": 1
   },
   "warning": "the bot does not look alive; the command runs only if the bot reads it before it expires",

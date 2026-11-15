@@ -15,7 +15,7 @@ from aperture.calendar import NEW_YORK, SessionCalendar
 from aperture.config import GateResult
 from aperture.data.base import FakeMarketData
 from aperture.engine.core import Engine, Fence, TradeState
-from aperture.runtime import service
+from aperture.runtime import service, stopmarker
 from aperture.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -488,3 +488,281 @@ def test_status_blocks_entries_when_the_daily_room_is_below_one_trade(tmp_path):
     assert bot.engine.trades() == []
     block = bot.service.status().entry_block
     assert block is not None and block.cause == "daily_ceiling"
+
+
+# ---------------------------------------------------------------- flatten one symbol
+
+
+def two_trades(bot: Bot) -> tuple[str, str]:
+    from dataclasses import replace
+
+    wider = replace(CFG, risk=replace(CFG.risk, max_open_positions=2))
+    bot.engine.config = bot.service.config = wider
+    first = opened(bot)
+    second = bot.engine.open_trade("XYZ", D(2), D(10), D("9.80"), D(1))
+    bot.broker.fill(bot.engine.orders(second)[0].client_order_id, D(2), D(10))
+    for _ in range(3):
+        bot.engine.step()
+    return first, second
+
+
+def test_flatten_with_a_symbol_closes_only_that_position(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    abc, xyz = two_trades(bot)
+    cmd = api.new_command(api.CommandKind.FLATTEN, bot.now, "test", symbol="XYZ")
+    api.write_command(bot.paths.inbox, cmd)
+    bot.service.process_commands()
+    assert bot.engine.trade(xyz).exit_requested == "operator-flatten"
+    assert bot.engine.trade(abc).exit_requested is None
+    (rec,) = bot.service.status().recent_commands
+    assert (rec.outcome, rec.cause) == (api.CommandOutcome.DONE, None)
+
+
+def test_flatten_of_a_symbol_without_a_position_is_refused(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    t = opened(bot)
+    cmd = api.new_command(api.CommandKind.FLATTEN, bot.now, "test", symbol="ZZZ")
+    api.write_command(bot.paths.inbox, cmd)
+    bot.service.process_commands()
+    (rec,) = bot.service.status().recent_commands
+    assert (rec.command_id, rec.outcome) == (cmd.command_id, api.CommandOutcome.REFUSED)
+    assert rec.cause == "no open position in ZZZ"
+    assert bot.engine.trade(t).exit_requested is None
+    assert list(bot.paths.inbox.iterdir()) == []
+
+
+# ---------------------------------------------------------------- stop-bot
+
+
+def test_stop_bot_drains_leaves_the_stop_and_the_position_and_sticks(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    bot.engine.config = bot.service.config = config.load(ROOT / "config" / "bot.toml",
+                                                          root=tmp_path)
+    t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1))
+    entry = bot.engine.orders(t)[0].client_order_id
+    bot.broker.fill(entry, D(1), D(10))  # partial: the rest of the entry still works
+    for _ in range(3):
+        bot.engine.step()
+    cmd = bot.command(api.CommandKind.STOP_BOT)
+    assert bot.run(1000)  # ends on the command, long before the iterations run out
+    assert bot.service.stopped_by == cmd.command_id
+    assert bot.broker.orders[entry].state.terminal  # working entry cancelled by the drain
+    assert [o.order_type for o in bot.broker.open_orders()] == ["STOP_LOSS"]
+    assert bot.engine.trade(t).exit_requested is None  # nothing flattened
+    assert bot.store.journal("shutdown-clean")
+    status = bot.status()
+    assert status.bot_state is api.BotState.STOPPED
+    assert status.position is not None and status.position.quantity == D(1)
+    (rec,) = status.recent_commands
+    assert (rec.kind, rec.outcome) == (api.CommandKind.STOP_BOT, api.CommandOutcome.DONE)
+    stopped = stopmarker.describe(bot.service.config)
+    assert stopped is not None and cmd.command_id in stopped
+
+
+def test_stop_bot_ends_the_pass_before_the_strategy_runs(tmp_path):
+    bot = Bot(tmp_path)
+    bot.engine.config = bot.service.config = config.load(ROOT / "config" / "bot.toml",
+                                                          root=tmp_path)
+    evaluator = StubEvaluator()
+    bot.service.market, bot.service.evaluator = StubMarket(), evaluator  # type: ignore[assignment]
+    bot.command(api.CommandKind.STOP_BOT)
+    assert bot.run(5)
+    assert evaluator.calls == []
+
+
+def test_cli_run_obeys_stop_bot_then_refuses_until_cleared(tmp_path, monkeypatch, capsys):
+    bot_toml = copy_config(tmp_path)
+    cfg = config.load(bot_toml)
+    paths = service.ServicePaths.from_config(cfg)
+    cmd = api.new_command(api.CommandKind.STOP_BOT, MONDAY_11, "test")
+    api.write_command(paths.inbox, cmd)
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: None)
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    database, _ = cli.data_paths(cfg)
+    store = Store.open(database, busy_timeout_seconds=0)
+    assert store.last_run()["end_cause"] == f"stopped (operator command {cmd.command_id})"
+    runs = store.run_count()
+    store.close()
+    assert api.read_status(paths.status).bot_state is api.BotState.STOPPED
+    assert cli.main(["--config", str(bot_toml), "run"]) == 3
+    assert "aperture clear-stop" in capsys.readouterr().err
+    store = Store.open(database, busy_timeout_seconds=0)
+    assert store.run_count() == runs  # refused before any run was recorded
+    store.close()
+    assert cli.main(["--config", str(bot_toml), "status"]) == 0
+    assert "starts refused" in capsys.readouterr().out
+    assert cli.main(["--config", str(bot_toml), "clear-stop"]) == 0
+    assert stopmarker.describe(cfg) is None
+    assert cli.main(["--config", str(bot_toml), "clear-stop"]) == 1
+
+
+# ---------------------------------------------------------------- emergency
+
+
+class Recorder(FakeBroker):
+    """Records every place and cancel, in order; nothing fills on its own."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, str]] = []
+
+    def place(self, request):
+        self.calls.append(("place", request.order_type))
+        return super().place(request)
+
+    def cancel(self, client_order_id):
+        self.calls.append(("cancel", self.orders[client_order_id].order_type))
+        return super().cancel(client_order_id)
+
+
+def test_emergency_steps_run_in_order_and_never_leave_the_position_unprotected(tmp_path):
+    broker = Recorder()
+    bot = Bot(tmp_path, broker=broker)
+    t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1))
+    entry = bot.engine.orders(t)[0].client_order_id
+    broker.fill(entry, D(1), D(10))  # partial fill: a stop rests, the entry still works
+    for _ in range(3):
+        bot.engine.step()
+    broker.calls.clear()
+    cmd = bot.command(api.CommandKind.EMERGENCY)
+    bot.service.process_commands()
+    steps = [r.body["step"] for r in bot.store.journal(service.COMMAND_STEP, cmd.command_id)]
+    assert steps == ["entry-stop-on", "cancel-own-orders", "flatten"]
+    assert str(Fence.ENTRY_STOP) in bot.engine.fences()
+    assert broker.calls == [("cancel", "LIMIT")]  # the entry only: the stop still protects
+    assert [o.order_type for o in broker.open_orders()] == ["STOP_LOSS"]
+    assert bot.engine.trade(t).exit_requested == "operator-emergency"
+    (rec,) = bot.service.status().recent_commands
+    assert (rec.kind, rec.outcome) == (api.CommandKind.EMERGENCY, api.CommandOutcome.DONE)
+    assert rec.cause == ("entry-stop-on: done; cancel-own-orders: 1 entry cancel(s) "
+                         "requested; flatten: done")
+    for _ in range(6):  # the exit path: the stop goes only right before the closing sale
+        bot.engine.step()
+        for order in broker.open_orders():
+            if order.order_type == "MARKET":
+                broker.fill(order.client_order_id, order.quantity, D(10))
+    assert broker.calls[1:] == [("cancel", "STOP_LOSS"), ("place", "MARKET")]
+    assert bot.engine.trade(t).state is TradeState.CLOSED
+    assert broker.positions() == []
+
+
+def test_emergency_refused_flatten_does_not_hide_the_other_steps(tmp_path):
+    broker = Recorder()
+    bot = Bot(tmp_path, broker=broker)
+    t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1))
+    entry = bot.engine.orders(t)[0].client_order_id
+    broker.fill(entry, D(1), D(10))
+    for _ in range(3):
+        bot.engine.step()
+    with bot.store.transaction():
+        bot.engine._fence_row(Fence.EXIT_REFUSED, t, "test")
+    bot.command(api.CommandKind.EMERGENCY)
+    bot.service.process_commands()
+    assert str(Fence.ENTRY_STOP) in bot.engine.fences()
+    assert broker.orders[entry].state.terminal
+    assert not bot.engine.trade(t).exit_requested
+    (rec,) = bot.service.status().recent_commands
+    assert rec.outcome is api.CommandOutcome.REFUSED
+    assert rec.cause.startswith("flatten: closing order refused before for " + t)
+
+
+def test_emergency_after_a_crash_finishes_the_missing_steps_only(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    t = opened(bot)
+    cmd = bot.command(api.CommandKind.EMERGENCY)
+    real = bot.service._flatten_rows
+
+    def crash(*args):
+        raise RuntimeError("crash before the flatten step")
+
+    bot.service._flatten_rows = crash  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        bot.service.process_commands()
+    assert not bot.store.journal(service.COMMAND)
+    bot.service._flatten_rows = real  # type: ignore[method-assign]
+    bot.service.process_commands()  # the file is still in the inbox
+    steps = [r.body["step"] for r in bot.store.journal(service.COMMAND_STEP, cmd.command_id)]
+    assert steps == ["entry-stop-on", "cancel-own-orders", "flatten"]
+    assert len(bot.store.journal(service.COMMAND)) == 1
+    assert bot.engine.trade(t).exit_requested == "operator-emergency"
+    bot.service.process_commands()
+    assert len(bot.store.journal(service.COMMAND_STEP, cmd.command_id)) == 3
+
+
+# ---------------------------------------------------------------- stop-bot with closes
+
+
+def tmp_config(bot: Bot, tmp_path: Path) -> None:
+    """Stop markers go under tmp_path, never into the repository's data folder."""
+    bot.engine.config = bot.service.config = config.load(ROOT / "config" / "bot.toml",
+                                                          root=tmp_path)
+
+
+@pytest.mark.parametrize("first", [api.CommandKind.EMERGENCY, api.CommandKind.FLATTEN])
+def test_stop_bot_after_a_close_request_is_refused(tmp_path, first):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    tmp_config(bot, tmp_path)
+    t = opened(bot)
+    bot.command(first, offset_seconds=-1)
+    stop = bot.command(api.CommandKind.STOP_BOT)
+    bot.service.process_commands()  # both in one pass
+    assert bot.service.stopped_by is None
+    assert stopmarker.describe(bot.service.config) is None
+    assert bot.engine.trade(t).exit_requested is not None
+    records = {r.command_id: r for r in bot.service.status().recent_commands}
+    assert records[stop.command_id].outcome is api.CommandOutcome.REFUSED
+    assert records[stop.command_id].cause == service.CLOSE_IN_PROGRESS
+    for _ in range(6):  # the close goes on; a later stop-bot is obeyed
+        bot.engine.step()
+        for order in bot.broker.open_orders():
+            if order.order_type == "MARKET":
+                bot.broker.fill(order.client_order_id, order.quantity, D(10))
+    assert bot.engine.trade(t).state is TradeState.CLOSED
+    again = bot.command(api.CommandKind.STOP_BOT)
+    bot.service.process_commands()
+    assert bot.service.stopped_by == again.command_id
+
+
+def test_commands_after_an_obeyed_stop_bot_are_refused_in_the_same_pass(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    tmp_config(bot, tmp_path)
+    t = opened(bot)
+    stop = bot.command(api.CommandKind.STOP_BOT, offset_seconds=-1)
+    flatten = bot.command(api.CommandKind.FLATTEN)
+    bot.service.process_commands()
+    assert bot.service.stopped_by == stop.command_id
+    assert bot.engine.trade(t).exit_requested is None
+    records = {r.command_id: r for r in bot.service.status().recent_commands}
+    assert records[stop.command_id].outcome is api.CommandOutcome.DONE
+    assert records[stop.command_id].cause == "1 position(s) left open under their broker stop"
+    assert records[flatten.command_id].outcome is api.CommandOutcome.REFUSED
+    assert records[flatten.command_id].cause == (
+        f"read after stop-bot {stop.command_id}: the bot is stopping")
+    assert list(bot.paths.inbox.iterdir()) == []
+
+
+def test_interrupted_emergency_read_after_its_lifetime_is_recorded_refused(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    t = opened(bot)
+    cmd = bot.command(api.CommandKind.EMERGENCY)
+
+    def crash(*args):
+        raise RuntimeError("crash before the flatten step")
+
+    bot.service._flatten_rows = crash  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        bot.service.process_commands()
+    # The restart comes after the command's lifetime.
+    bot.now += timedelta(seconds=int(CFG.api.command_max_age_seconds) + 1)
+    restarted = service.Service(bot.engine, now=lambda: bot.now, calendar=CALENDAR,
+                                strategy=service.strategy_id(CFG), paths=bot.paths)
+    restarted.process_commands()
+    assert bot.engine.trade(t).exit_requested is None  # never executed late
+    (rec,) = restarted.status().recent_commands
+    assert (rec.command_id, rec.outcome) == (cmd.command_id, api.CommandOutcome.REFUSED)
+    assert rec.cause.startswith("expired: ")
+    assert rec.cause.endswith("; steps done: entry-stop-on, cancel-own-orders; not run: flatten")
+    assert list(bot.paths.inbox.iterdir()) == []

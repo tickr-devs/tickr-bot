@@ -193,6 +193,9 @@ def test_invalid_status_file_is_reported_not_guessed(api, settings):
     ("/commands/entry-stop", {"state": "off"}, CommandKind.ENTRY_STOP_OFF),
     ("/commands/cancel-own-orders", {}, CommandKind.CANCEL_OWN_ORDERS),
     ("/commands/flatten", {}, CommandKind.FLATTEN),
+    ("/commands/flatten", {"symbol": "ABCD"}, CommandKind.FLATTEN),
+    ("/commands/stop-bot", {}, CommandKind.STOP_BOT),
+    ("/commands/emergency", {}, CommandKind.EMERGENCY),
 ])
 def test_command_is_queued_for_the_bot(api, settings, path, body, kind):
     server, clock = api
@@ -207,6 +210,8 @@ def test_command_is_queued_for_the_bot(api, settings, path, body, kind):
     assert item.command.kind == kind
     assert item.command.command_id == answer["command"]["command_id"]
     assert item.command.source == "api"
+    assert item.command.symbol == body.get("symbol")
+    assert answer["command"]["symbol"] == body.get("symbol")
     pending = doc(request(server, "GET", "/commands/pending")[1])
     assert errors(schema("pending-commands-v1"), pending) == []
     assert [c["command_id"] for c in pending["commands"]] == [answer["command"]["command_id"]]
@@ -227,6 +232,15 @@ def test_command_warns_when_bot_looks_down(api, settings):
     ("/commands/flatten", []),
     ("/commands/flatten", b"{"),
     ("/commands/flatten", b'{"a":1,"a":2}'),
+    ("/commands/flatten", {"symbol": None}),  # never read as "everything"
+    ("/commands/flatten", {"symbol": "abcd"}),
+    ("/commands/flatten", {"symbol": ""}),
+    ("/commands/flatten", {"symbol": 5}),
+    ("/commands/flatten", {"symbol": "ABCD", "x": 1}),
+    ("/commands/stop-bot", {"now": True}),
+    ("/commands/stop-bot", {"symbol": "ABCD"}),
+    ("/commands/emergency", {"symbol": "ABCD"}),
+    ("/commands/cancel-own-orders", {"symbol": "ABCD"}),
 ])
 def test_bad_command_body_refused(api, settings, path, body):
     server, _ = api
@@ -316,3 +330,112 @@ def test_schema_endpoint(api):
     body = doc(request(server, "GET", "/schema")[1])
     assert set(body) == set(contract.SCHEMA_TYPES)
     assert body["status-v1"] == contract.json_schema(contract.StatusV1)
+
+
+# ---------------------------------------------------------------- Idempotency-Key
+
+
+def keyed(server, path, body, key):
+    return request(server, "POST", path, body, headers={"Idempotency-Key": key})
+
+
+@pytest.mark.parametrize("key", ["", "x" * 129, "a b", "a/b", "a,b", "ключ"])
+def test_bad_idempotency_key_refused(api, settings, key):
+    server, _ = api
+    headers = {"Idempotency-Key": key.encode("utf-8").decode("latin-1")}
+    resp, payload = request(server, "POST", "/commands/flatten", {}, headers=headers)
+    assert resp.status == 400
+    assert doc(payload)["error"] == "bad_request"
+    assert contract.count_inbox(settings.inbox) == 0
+
+
+def test_longest_allowed_key_accepted(api, settings):
+    server, _ = api
+    key = "aZ09._:-" * 16
+    assert len(key) == 128
+    assert keyed(server, "/commands/flatten", {}, key)[0].status == 202
+
+
+def test_repeated_key_returns_the_same_answer_and_queues_nothing(api, settings):
+    server, clock = api
+    first, body = keyed(server, "/commands/emergency", {}, "phone-1:a")
+    assert first.status == 202
+    clock.now += timedelta(seconds=5)
+    again, repeat = keyed(server, "/commands/emergency", {}, "phone-1:a")
+    assert again.status == 202 and repeat == body
+    assert errors(schema("command-accepted-v1"), doc(repeat)) == []
+    assert contract.count_inbox(settings.inbox) == 1
+    # The bot consumes the command: a repeat still answers the first command, queues nothing.
+    (item,) = contract.read_commands(settings.inbox, clock.now, Decimal("60"))
+    contract.retire_command(item, settings.inbox.parent / contract.PROCESSED)
+    resp, later = keyed(server, "/commands/emergency", {}, "phone-1:a")
+    assert resp.status == 202 and later == body
+    assert contract.count_inbox(settings.inbox) == 0
+    # Another key is another command.
+    assert keyed(server, "/commands/emergency", {}, "phone-1:b")[0].status == 202
+    assert contract.count_inbox(settings.inbox) == 1
+
+
+def test_keys_are_case_sensitive(api, settings):
+    server, _ = api
+    a = doc(keyed(server, "/commands/stop-bot", {}, "Key")[1])
+    b = doc(keyed(server, "/commands/stop-bot", {}, "key")[1])
+    assert a["command"]["command_id"] != b["command"]["command_id"]
+    assert contract.count_inbox(settings.inbox) == 2
+
+
+@pytest.mark.parametrize("first, second", [
+    (("/commands/flatten", {}), ("/commands/emergency", {})),
+    (("/commands/flatten", {}), ("/commands/flatten", {"symbol": "ABCD"})),
+    (("/commands/flatten", {"symbol": "ABCD"}), ("/commands/flatten", {"symbol": "WXYZ"})),
+    (("/commands/entry-stop", {"state": "on"}), ("/commands/entry-stop", {"state": "off"})),
+])
+def test_same_key_for_another_command_is_a_conflict(api, settings, first, second):
+    server, _ = api
+    assert keyed(server, *first, "k1")[0].status == 202
+    resp, payload = keyed(server, *second, "k1")
+    assert resp.status == 409
+    assert doc(payload)["error"] == "conflict"
+    assert errors(schema("error-v1"), doc(payload)) == []
+    assert contract.count_inbox(settings.inbox) == 1
+
+
+def test_key_is_forgotten_after_its_lifetime(api, settings):
+    server, clock = api
+    first = doc(keyed(server, "/commands/flatten", {}, "old")[1])
+    assert len(list(settings.idempotency.glob("*.json"))) == 1
+    clock.now += timedelta(seconds=settings.idempotency_ttl_seconds + 1)
+    again = doc(keyed(server, "/commands/flatten", {}, "old")[1])
+    assert again["command"]["command_id"] != first["command"]["command_id"]
+    assert keyed(server, "/commands/flatten", {}, "new")[0].status == 202
+    clock.now += timedelta(seconds=settings.idempotency_ttl_seconds + 1)
+    assert keyed(server, "/commands/flatten", {}, "newest")[0].status == 202
+    assert len(list(settings.idempotency.glob("*.json"))) == 1  # expired files pruned
+
+
+def test_repeat_is_answered_even_when_the_inbox_is_full(api, settings):
+    server, _ = api
+    _, body = keyed(server, "/commands/flatten", {}, "first")
+    for _ in range(settings.max_pending_commands - 1):
+        assert request(server, "POST", "/commands/flatten", {})[0].status == 202
+    assert request(server, "POST", "/commands/flatten", {})[0].status == 429
+    resp, repeat = keyed(server, "/commands/flatten", {}, "first")
+    assert resp.status == 202 and repeat == body
+
+
+def test_unreadable_key_record_queues_nothing(api, settings):
+    server, _ = api
+    assert keyed(server, "/commands/flatten", {}, "k")[0].status == 202
+    (record,) = settings.idempotency.glob("*.json")
+    record.write_text("{", "utf-8")
+    resp, payload = keyed(server, "/commands/flatten", {}, "k")
+    assert resp.status == 500 and doc(payload)["error"] == "internal"
+    assert contract.count_inbox(settings.inbox) == 1
+
+
+def test_key_lifetime_must_outlast_the_command_age(tmp_path):
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    bad = replace(cfg, api=replace(cfg.api, idempotency_key_ttl_seconds=int(
+        cfg.api.command_max_age_seconds)))
+    with pytest.raises(config.ConfigError, match="idempotency_key_ttl_seconds"):
+        settings_from_config(bad)

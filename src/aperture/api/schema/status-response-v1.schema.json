@@ -306,7 +306,9 @@
                       "entry-stop-on",
                       "entry-stop-off",
                       "cancel-own-orders",
-                      "flatten"
+                      "flatten",
+                      "stop-bot",
+                      "emergency"
                     ]
                   },
                   "requested_at": {

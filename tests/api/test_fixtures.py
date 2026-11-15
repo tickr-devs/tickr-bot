@@ -88,6 +88,9 @@ def documents() -> dict[str, object]:
         "command-accepted-v1.warning": CommandAcceptedV1(
             command=command, warning="the bot does not look alive; the command runs only if "
                                      "the bot reads it before it expires"),
+        "command-accepted-v1.flatten-symbol": CommandAcceptedV1(
+            command=CommandV1("8b1e4d2c-6a3f-4e9b-8c7d-2f1a0b9c8d7e", CommandKind.FLATTEN,
+                              T0, "api", "ABCD"), warning=None),
         "pending-commands-v1": PendingCommandsV1(commands=(command,)),
         "pending-commands-v1.empty": PendingCommandsV1(commands=()),
         "error-v1": ErrorV1("forbidden_host", "Host 'evil.example:8766' is not allowed"),

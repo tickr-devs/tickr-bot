@@ -113,6 +113,7 @@ class ApiConfig:
     max_pending_commands: int
     command_max_age_seconds: Decimal
     status_recent_commands: int
+    idempotency_key_ttl_seconds: int
 
 
 @dataclass(frozen=True)
@@ -183,6 +184,7 @@ class RuntimeConfig:
     watchdog_status_stale_seconds: int
     watchdog_journal_file: str
     evaluation_budget_seconds: Decimal
+    stop_marker_file: str
 
 
 @dataclass(frozen=True)

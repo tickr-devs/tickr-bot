@@ -24,6 +24,7 @@ from aperture.config import Config, trading_gate
 from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
 from aperture.engine.loop import drain
 from aperture.engine.manual import flatten_deadline
+from aperture.runtime import stopmarker
 from aperture.runtime.account import account_document
 from aperture.runtime.alerts import AlertKind
 from aperture.runtime.dayend import DayEnd
@@ -40,6 +41,9 @@ STRATEGY_FILE = "strategy.toml"
 COMMAND = "command"
 COMMAND_FILE_REFUSED = "command-file-refused"
 COMMAND_EFFECT = "command-effect"
+COMMAND_STEP = "command-step"  # one row per finished step of an emergency command
+EMERGENCY_STEPS = ("entry-stop-on", "cancel-own-orders", "flatten")
+CLOSE_IN_PROGRESS = "a close is in progress; send stop-bot again after it completes"
 OBSERVER_FAILURE = "observer-failure"
 OBSERVERS_STOPPED = "observers-stopped"
 OBSERVERS_NOT_LOADED = "observers-not-loaded"
@@ -122,6 +126,7 @@ class Service:
         self.day_end = DayEnd(engine, calendar, watch)
         self.latency: LatencyLog | None = LatencyLog(engine)
         self._skipping: str | None = None  # cause of the current protect-first episode
+        self.stopped_by: str | None = None  # command_id of an obeyed stop-bot command
         self._account_failing = False  # the last account file write failed (journaled once)
 
     # --- commands --------------------------------------------------------------------------
@@ -133,7 +138,9 @@ class Service:
         """Journal, act, retire (docs/api.md). Commands run in request order, so of two
         entry-stop commands the later one wins. A command already journaled (crash before
         retire) is not acted on again, except a cancel-own-orders whose effect was not yet
-        recorded: cancelling entries is idempotent, so it is finished instead of lost."""
+        recorded: cancelling entries is idempotent, so it is finished instead of lost.
+        Commands read after an obeyed stop-bot are refused, never acted on: the bot is
+        stopping and nothing it asked for would be finished."""
         store = self.engine.store
         items = api.read_commands(self.paths.inbox, self.now(),
                                   self.config.api.command_max_age_seconds)
@@ -144,12 +151,39 @@ class Service:
                     store.append(COMMAND_FILE_REFUSED,
                                  {"file": item.path.name, "cause": item.refusal},
                                  run_id=self.engine.run_id)
-            elif not self._seen(command.command_id):
+                    self._close_interrupted(item)
+            elif self._seen(command.command_id):
+                if (command.kind is api.CommandKind.CANCEL_OWN_ORDERS
+                        and store.journal(COMMAND, command.command_id)[-1].body["outcome"]
+                        == api.CommandOutcome.DONE
+                        and not store.journal(COMMAND_EFFECT, command.command_id)):
+                    self._cancel_entries(command)
+            elif self.stopped_by is not None:
+                with store.transaction():
+                    self._record(command, api.CommandOutcome.REFUSED,
+                                 f"read after stop-bot {self.stopped_by}: the bot is stopping")
+            else:
                 self._act(command)
-            elif (command.kind is api.CommandKind.CANCEL_OWN_ORDERS
-                  and not self.engine.store.journal(COMMAND_EFFECT, command.command_id)):
-                self._cancel_entries(command)
             api.retire_command(item, self.paths.processed)
+
+    def _close_interrupted(self, item: api.InboxItem) -> None:
+        """Inside the caller's transaction: an emergency that a crash interrupted and that
+        expired before the restart is never finished late; its record says refused, with the
+        steps done and the steps not run."""
+        cid = item.path.stem
+        done = [r.body["step"] for r in self.engine.store.journal(COMMAND_STEP, cid)]
+        if not done or self._seen(cid):
+            return
+        try:
+            command: api.CommandV1 = api.loads(api.CommandV1, item.path.read_bytes())
+        except (api.ContractError, OSError):
+            return  # not a command this bot can name; the file refusal row says why
+        if command.command_id != cid:
+            return
+        missing = [name for name in EMERGENCY_STEPS if name not in done]
+        self._record(command, api.CommandOutcome.REFUSED,
+                     f"{item.refusal}; steps done: {', '.join(done)}; "
+                     f"not run: {', '.join(missing) or 'none'}")
 
     def _record(self, command: api.CommandV1, outcome: api.CommandOutcome,
                 cause: str | None) -> None:
@@ -167,25 +201,97 @@ class Service:
                 engine.entry_stop_row(kind is api.CommandKind.ENTRY_STOP_ON,
                                       f"operator command {command.command_id}")
             return
-        trades = engine.trades()
         if kind is api.CommandKind.CANCEL_OWN_ORDERS:
             with store.transaction():
                 self._record(command, api.CommandOutcome.DONE, None)
             self._cancel_entries(command)
             return
-        # FLATTEN: through the normal exit path; refused while a close waits for the operator.
-        refused = [t.trade_id for t in trades
-                   if f"{Fence.EXIT_REFUSED}:{t.trade_id}" in engine.fences()]
+        if kind is api.CommandKind.STOP_BOT:
+            self._stop_bot(command)
+            return
+        if kind is api.CommandKind.EMERGENCY:
+            self._emergency(command)
+            return
         with store.transaction():  # the record and the exit requests are one write
+            outcome, cause = self._flatten_rows(command.symbol, "operator-flatten")
+            self._record(command, outcome, cause)
+
+    def _flatten_rows(self, symbol: str | None,
+                      reason: str) -> tuple[api.CommandOutcome, str | None]:
+        """FLATTEN inside the caller's transaction: exit requests through the normal exit path
+        for every open trade, or only those of `symbol`. Refused when `symbol` has no open
+        trade, and while a close of a chosen trade waits for the operator."""
+        engine = self.engine
+        trades = [t for t in engine.trades() if symbol is None or t.symbol == symbol]
+        if symbol is not None and not trades:
+            return api.CommandOutcome.REFUSED, f"no open position in {symbol}"
+        fences = engine.fences()
+        refused = [t.trade_id for t in trades if f"{Fence.EXIT_REFUSED}:{t.trade_id}" in fences]
+        if refused:
+            return api.CommandOutcome.REFUSED, (
+                f"closing order refused before for {', '.join(refused)}: look in the Webull "
+                "app, then clear the fence")
+        for trade in trades:
+            engine.exit_request_row(trade.trade_id, reason)
+        return api.CommandOutcome.DONE, None if trades else "nothing open"
+
+    def _stop_bot(self, command: api.CommandV1) -> None:
+        """Graceful stop: the marker first (durable, so no later start can miss it), then the
+        record; the loop then ends and drains as on SIGTERM: working entries cancelled, broker
+        stops left resting, nothing flattened. Refused while a close is requested or working
+        (an operator flatten, an emergency, the session flatten): stopping then would abandon
+        an exit request that a later start would carry out without anyone asking."""
+        engine = self.engine
+        held = 0
+        for trade in engine.trades():
+            orders = engine.orders(trade.trade_id)
+            if trade.exit_requested or any(o.leg is Leg.EXIT and o.live for o in orders):
+                with engine.store.transaction():
+                    self._record(command, api.CommandOutcome.REFUSED, CLOSE_IN_PROGRESS)
+                return
+            if engine.expected_quantity(orders) > 0:
+                held += 1
+        stopmarker.write(self.config, command.command_id, self.now())
+        with engine.store.transaction():
+            self._record(command, api.CommandOutcome.DONE,
+                         f"{held} position(s) left open under their broker stop" if held
+                         else None)
+        self.stopped_by = command.command_id
+
+    def _emergency(self, command: api.CommandV1) -> None:
+        """Entry-stop on, then cancel own orders, then flatten all: the existing handlers, each
+        step journaled and run whatever an earlier step did. cancel-own-orders never touches a
+        broker stop: the flatten's exit path cancels a stop only right before the close it
+        sends, and keeps protection when that close cannot be sent. Steps already journaled
+        (a crash before the command record) are not repeated; the record comes last."""
+        engine, store, cid = self.engine, self.engine.store, command.command_id
+        done = {r.body["step"]: r.body for r in store.journal(COMMAND_STEP, cid)}
+
+        def step(name: str, outcome: api.CommandOutcome, cause: str | None) -> None:
+            body = {"step": name, "outcome": outcome, "cause": cause}
+            store.append(COMMAND_STEP, body, key=cid, run_id=engine.run_id)
+            done[name] = body
+
+        if "entry-stop-on" not in done:
+            with store.transaction():
+                engine.entry_stop_row(True, f"operator emergency {cid}")
+                step("entry-stop-on", api.CommandOutcome.DONE, None)
+        if "cancel-own-orders" not in done:
+            asked = engine.cancel_entries()
+            with store.transaction():
+                step("cancel-own-orders", api.CommandOutcome.DONE,
+                     f"{asked} entry cancel(s) requested")
+        if "flatten" not in done:
+            with store.transaction():
+                step("flatten", *self._flatten_rows(None, "operator-emergency"))
+        refused = [f"{name}: {body['cause']}" for name, body in done.items()
+                   if body["outcome"] == api.CommandOutcome.REFUSED]
+        with store.transaction():
             if refused:
-                self._record(command, api.CommandOutcome.REFUSED,
-                             f"closing order refused before for {', '.join(refused)}: "
-                             "look in the Webull app, then clear the fence")
+                self._record(command, api.CommandOutcome.REFUSED, "; ".join(refused))
             else:
-                self._record(command, api.CommandOutcome.DONE,
-                             None if trades else "nothing open")
-                for trade in trades:
-                    engine.exit_request_row(trade.trade_id, "operator-flatten")
+                self._record(command, api.CommandOutcome.DONE, "; ".join(
+                    f"{name}: {body['cause'] or 'done'}" for name, body in done.items()))
 
     def _cancel_entries(self, command: api.CommandV1) -> None:
         asked = self.engine.cancel_entries()
@@ -505,6 +611,8 @@ class Service:
         last_reconcile = monotonic()
         while not should_stop():
             self.process_commands()
+            if self.stopped_by is not None:
+                break  # an operator stop-bot: nothing more this run, straight to the drain
             self.flatten_due()
             self.write_status()
             if self.watch is not None:

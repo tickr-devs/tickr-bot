@@ -14,6 +14,8 @@ Checks, all reported, the first failure is the single cause:
 4c. the iMessage recipient variable (`[alerts] imessage_recipient_variable`) present, the same
    way: it is personal data;
 5. broker token folder present;
+5b. no operator stop marker (runtime/stopmarker.py): after a stop-bot command the bot stays
+   stopped, and this check fails every morning, until the owner runs `aperture clear-stop`;
 6. active strategy builds from its file and `[market_data] history_sessions` covers the prior
    sessions it needs. A failure here is reported but does not stop the bot from starting: the
    bot then protects positions with entries off (`blocks_start`);
@@ -38,6 +40,7 @@ from aperture import config as config_module
 from aperture.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from aperture.observers.errors import ObserverError
 from aperture.observers.loader import load_active
+from aperture.runtime import stopmarker
 from aperture.runtime.alerts import default_notifier, recipient_missing
 from aperture.runtime.launchd import check_timings
 
@@ -66,6 +69,7 @@ class PreflightCause(StrEnum):
     TOKEN_DIR_MISSING = "token-dir-missing"
     TOKEN_UNUSABLE = "token-unusable"
     STRATEGY_REFUSED = "strategy-refused"
+    STOPPED_BY_OPERATOR = "stopped-by-operator"
 
 
 class CheckName(StrEnum):
@@ -78,6 +82,7 @@ class CheckName(StrEnum):
     TOKEN_DIR = "token-dir"
     TOKEN = "token"
     STRATEGY = "strategy"
+    STOP_MARKER = "stop-marker"
 
 
 @dataclass(frozen=True)
@@ -240,6 +245,13 @@ def _check_token_dir(cfg: config_module.Config) -> Check:
     return Check(CheckName.TOKEN_DIR, True, str(token_dir))
 
 
+def _check_stop_marker(cfg: config_module.Config) -> Check:
+    stopped = stopmarker.describe(cfg)
+    if stopped is not None:
+        return Check(CheckName.STOP_MARKER, False, stopped, PreflightCause.STOPPED_BY_OPERATOR)
+    return Check(CheckName.STOP_MARKER, True, "none")
+
+
 def _check_strategy(cfg: config_module.Config) -> Check:
     try:
         loaded = load_active(cfg)
@@ -268,7 +280,7 @@ def run_preflight(
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, disk, calendar, _check_credentials(cfg, environ),
               _check_alert_channel(cfg, platform, environ), _check_alert_recipient(cfg, environ),
-              _check_token_dir(cfg), _check_strategy(cfg))
+              _check_token_dir(cfg), _check_stop_marker(cfg), _check_strategy(cfg))
     blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED
                    for c in checks)
     if token_probe is not None and session_today and not blocking:

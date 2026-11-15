@@ -228,3 +228,18 @@ def test_pair_command_never_prints_the_token(tmp_path, capsys, monkeypatch):
     assert str(data / cfg.api.remote_pairing_file) in captured.out
     stored = (data / cfg.api.remote_token_hash_file).read_text().strip()
     assert stored == hashlib.sha256(token.encode()).hexdigest()
+
+
+def test_idempotency_key_does_not_replace_the_token(remote_api, remote_settings):
+    token = paired(remote_settings)
+    headers = {"Idempotency-Key": "phone:1"}
+    resp, _ = remote(remote_api, "POST", "/commands/emergency", body={}, headers=headers)
+    assert resp.status == 401
+    assert not remote_settings.idempotency.exists()
+    resp, first = remote(remote_api, "POST", "/commands/emergency", token=token, body={},
+                         headers=headers)
+    assert resp.status == 202
+    resp, again = remote(remote_api, "POST", "/commands/emergency", token=token, body={},
+                         headers=headers)
+    assert resp.status == 202 and again == first
+    assert contract.count_inbox(remote_settings.inbox) == 1
