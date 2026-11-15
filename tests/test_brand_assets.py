@@ -49,3 +49,10 @@ def test_launch_background_is_the_window_background():
     colorset = json.loads(path.read_text())
     reds = [c["color"]["components"]["red"] for c in colorset["colors"]]
     assert reds == [f"0x{light[:2]}", f"0x{dark[:2]}"]
+
+
+def test_opening_animation_starts_from_the_launch_mark_size():
+    """LaunchHandoff sizes the spark and the flight by Tokens.Size.launchMark: the image size."""
+    module = load()
+    tokens = (ROOT / "apps/shared/Sources/ApertureDesign/Tokens.swift").read_text()
+    assert f"public static let launchMark: CGFloat = {module.LAUNCH_MARK}\n" in tokens
