@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Tickr demo day: `tickr demo` at login, so the apps' "Demo day" switch always finds it
+     (docs/demo.md). It rebuilds demo/ in the repo, never reads the real data/, never talks to
+     Webull and needs no credentials, so no credentials file is sourced. Its API listens on
+     [api] demo_port; the real API forwards /demo/ there. At [demo] live_until it exits 0 and
+     launchd starts a fresh day (KeepAlive on a clean exit only: a refusal, such as a busy port,
+     is not retried in a loop). Background priority, so it never competes with the bot.
+     Rendered by `python -m tickr.runtime render-launchd`; see docs/operations.md. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.tickr.demo</string>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{PYTHON}}</string>
+    <string>-m</string>
+    <string>tickr.cli</string>
+    <string>--config</string>
+    <string>{{CONFIG}}</string>
+    <string>demo</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <true/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>{{LOG_DIR}}/demo.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/demo.log</string>
+</dict>
+</plist>

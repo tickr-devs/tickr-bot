@@ -9,7 +9,7 @@ import shutil
 import sys
 import threading
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -94,7 +94,16 @@ def test_real_demo_file_loads_and_is_commented():
     assert config.uncommented_keys(text) == []
     scenario = load(ROOT / "config" / "demo.toml")
     assert scenario.today and scenario.past
-    assert scenario.api_port != config.load(ROOT / "config" / "bot.toml").api.port
+    api = config.load(ROOT / "config" / "bot.toml").api
+    assert api.demo_port not in (0, api.port, api.remote_port)
+
+
+def test_live_until_must_follow_the_clock(tmp_path):
+    path = tmp_path / "demo.toml"
+    path.write_text((ROOT / "config" / "demo.toml").read_text("utf-8").replace(
+        'live_until = "15:40"', 'live_until = "14:30"'), "utf-8")
+    with pytest.raises(ScenarioError, match="live_until"):
+        load(path)
 
 
 def test_unknown_key_is_refused(tmp_path):
@@ -147,7 +156,9 @@ def test_folder_is_separate_and_only_a_demo_folder_is_replaced(tmp_path):
     path = demo.build_folder(root, scenario)
     cfg = config.load(path)
     assert cfg.environment_name == scenario.environment
-    assert cfg.api.port == scenario.api_port
+    real = config.load(root / "config" / "bot.toml").api
+    assert cfg.api.port == real.demo_port
+    assert cfg.api.demo_port == 0  # the demo's API forwards nowhere, never to itself
     assert cfg.strategy.observers == scenario.observers
     assert (cfg.root / cfg.run.data_dir).is_relative_to(root / scenario.root_dir)
     assert config.trading_gate(cfg).open
@@ -409,3 +420,31 @@ def test_chart_days_give_the_d_chart_a_long_history_the_bot_never_reads():
     assert minutes and all(r.bar.start >= market_day.regular_open for r in minutes)
     assert all(b.start >= market_day.regular_open
                for b in world.feed.bars_before("AAA", world.now, 100000))
+
+
+def test_live_demo_day_ends_at_live_until(tmp_path):
+    """The live demo day stops itself at [demo] live_until (exit 0), so the launchd job starts
+    a fresh day in the same window."""
+    root = repo(tmp_path)
+    scenario = load(root / "config" / "demo.toml")
+    cfg = config.load(demo.build_folder(root, scenario))
+    scheduled: dict[datetime, object] = {}
+
+    class FakeWorld:
+        def at(self, when, action):
+            scheduled[when] = action
+
+    class Server:
+        def shutdown(self):
+            pass
+
+    class Session:
+        def __init__(self):
+            self.scenario, self.day = scenario, FRIDAY
+
+        def run(self, world):
+            return 0
+
+    assert demo._demo_day(Session(), FakeWorld(), cfg, Server(), lambda _: None) == 0
+    assert scheduled[ny(FRIDAY, scenario.live_until)] is demo._stop_self
+    assert ny(FRIDAY, scenario.clock) in scheduled  # going live comes first

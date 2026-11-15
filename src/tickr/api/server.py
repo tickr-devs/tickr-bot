@@ -61,6 +61,12 @@ from tickr.api.contract import (
     StatusResponseV1,
 )
 from tickr.api.decision_cache import DecisionCache
+from tickr.api.demo_forward import (
+    FORWARDED_REQUEST_HEADERS,
+    DemoUnavailable,
+    forward,
+    is_demo_path,
+)
 from tickr.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
 from tickr.api.jobs import JobsSettings, jobs_document
 from tickr.api.journal import journal_document
@@ -119,6 +125,8 @@ class ApiSettings:
     pairing_path: Path
     pairing_code_path: Path  # SHA-256 of the waiting one-time code and its expiry
     pairing_code_ttl_seconds: int
+    demo_port: int  # the demo day's API, served under /demo/; 0 = none
+    demo_timeout_seconds: Decimal
     status_path: Path
     inbox: Path
     idempotency: Path  # <commands_dir>/idempotency: remembered Idempotency-Key answers
@@ -194,6 +202,11 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         raise ConfigError("[api] remote_port must differ from port")
     if api.request_timeout_seconds <= 0:
         raise ConfigError("[api] request_timeout_seconds must be positive")
+    if not 0 <= api.demo_port <= MAX_PORT or api.demo_port in (api.port, api.remote_port):
+        raise ConfigError(f"[api] demo_port must be 0 (off) or a port 1-{MAX_PORT} other than "
+                          "port and remote_port")
+    if api.demo_timeout_seconds <= 0:
+        raise ConfigError("[api] demo_timeout_seconds must be positive")
     if api.remote_token_bytes < MIN_SECRET_BYTES:
         raise ConfigError(f"[api] remote_token_bytes must be at least {MIN_SECRET_BYTES}")
     if api.remote_pairing_code_ttl_seconds <= 0:
@@ -245,6 +258,8 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         pairing_path=data / api.remote_pairing_file,
         pairing_code_path=data / api.remote_pairing_code_file,
         pairing_code_ttl_seconds=api.remote_pairing_code_ttl_seconds,
+        demo_port=api.demo_port,
+        demo_timeout_seconds=api.demo_timeout_seconds,
         status_path=data / api.status_file,
         inbox=data / api.commands_dir / contract.INBOX,
         idempotency=data / api.commands_dir / IDEMPOTENCY,
@@ -474,6 +489,17 @@ GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", 
               "/watching", "/performance", "/chart", "/jobs", "/journal", "/config",
               "/trades/whatif", "/advisor")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
+MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
+HTML_TYPE = "text/html; charset=utf-8"
+# Every HTML page this API serves, its own or the demo's through /demo/, carries these headers.
+PAGE_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'none'; script-src 'unsafe-inline'; "
+        "style-src 'unsafe-inline'; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
 LAB_REPLAY = "/lab/replay"  # GET reads, POST starts: outside the command inbox
 TRADE_WHATIF = "/trades/whatif"  # GET: another version on one trade's day, simulated
 # A strategy folder name: one path segment, never "." or "..".
@@ -607,15 +633,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             path = self._path()
+            if is_demo_path(path):
+                self._demo(None)
+                return
             if path == "/":
-                self._send(200, self.server.page, "text/html; charset=utf-8", {
-                    "Content-Security-Policy": (
-                        "default-src 'none'; script-src 'unsafe-inline'; "
-                        "style-src 'unsafe-inline'; connect-src 'self'; "
-                        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
-                    "X-Frame-Options": "DENY",
-                    "Referrer-Policy": "no-referrer",
-                })
+                self._send(200, self.server.page, HTML_TYPE, dict(PAGE_HEADERS))
             elif path == "/status":
                 self._json(200, self.server.status_response())
             elif path == "/commands/pending":
@@ -665,6 +687,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             path = self._path()
+            if is_demo_path(path):
+                self._demo_post()
+                return
             if path == LAB_REPLAY:
                 self._start_lab_replay()
                 return
@@ -738,6 +763,40 @@ class Handler(BaseHTTPRequestHandler):
             self._error("not_found" if exc.missing else "conflict", str(exc))
             return
         self._json(200, advisor_document(settings.advisor_dir, settings.advisor_runs))
+
+    def _demo_post(self) -> None:
+        """A POST under /demo/ (a command to the demo day): its body, within the size limit,
+        goes to the demo's API, which checks it as this API would; nothing reaches this bot."""
+        length_header = self.headers.get("Content-Length")
+        if length_header is None or not length_header.isdigit():
+            self._error("length_required", "Content-Length is required")
+            return
+        if int(length_header) > self.server.settings.max_request_body_bytes:
+            self._error("payload_too_large",
+                        f"body is limited to {self.server.settings.max_request_body_bytes} bytes")
+            return
+        self._demo(self.rfile.read(int(length_header)))
+
+    def _demo(self, body: bytes | None) -> None:
+        """Forward this request to the demo day's API (api/demo_forward.py) and pass its answer
+        back as it came; 404 when this API has no demo port, 503 when the demo is not running."""
+        settings = self.server.settings
+        if settings.demo_port == 0:
+            self._error("not_found", "this API forwards to no demo day ([api] demo_port is 0)")
+            return
+        try:
+            answer = forward(settings.host, settings.demo_port, settings.demo_timeout_seconds,
+                             self.command, self.path, {
+                                 name: value for name in FORWARDED_REQUEST_HEADERS
+                                 if (value := self.headers.get(name)) is not None}, body)
+        except DemoUnavailable as exc:
+            self._error("unavailable", str(exc))
+            return
+        content_type = answer.headers.pop("Content-Type", f"{JSON_TYPE}; charset=utf-8")
+        extra = answer.headers
+        if content_type.split(";", 1)[0].strip().lower() == HTML_TYPE.split(";", 1)[0]:
+            extra = {**extra, **PAGE_HEADERS}  # the demo's page gets this API's page headers
+        self._send(answer.status, answer.body, content_type, extra)
 
     def _redeem(self) -> None:
         """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`

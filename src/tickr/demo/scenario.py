@@ -56,12 +56,12 @@ class DemoFault:
 class Scenario:
     root_dir: str
     environment: str
-    api_port: int
     observers: tuple[str, ...]
     provider: str
     bot_start: str
     past_stop: str
     clock: str
+    live_until: str
     half_spread: Decimal
     quote_size: Decimal
     wick: Decimal
@@ -190,8 +190,8 @@ def load(path: Path) -> Scenario:
     top = _keys("demo.toml", raw, {"demo", "market", "scenario"})
     plan = _keys("[scenario]", top["scenario"], {"today", "commands", "past", "faults"})
     demo = _keys("[demo]", top["demo"], {
-        "root_dir", "environment", "api_port", "observers", "provider",
-        "bot_start", "past_stop", "clock"})
+        "root_dir", "environment", "observers", "provider",
+        "bot_start", "past_stop", "clock", "live_until"})
     market = _keys("[market]", top["market"], {
         "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume", "texture_drift",
         "texture_pull", "texture_wick", "texture_move", "texture_move_cap", "texture_volume",
@@ -205,15 +205,19 @@ def load(path: Path) -> Scenario:
     if not SYMBOL.match(environment.upper()):
         raise ScenarioError("[demo] environment must be a plain name")
     today = _day("today", plan["today"])
+    clock = _clock("[demo] clock", demo["clock"])
+    live_until = _clock("[demo] live_until", demo["live_until"])
+    if time.fromisoformat(live_until) <= time.fromisoformat(clock):
+        raise ScenarioError("[demo] live_until must be after [demo] clock")
     return Scenario(
         root_dir=_text("[demo] root_dir", demo["root_dir"]),
         environment=environment,
-        api_port=_count("[demo] api_port", demo["api_port"]),
         observers=tuple(observers),
         provider=_text("[demo] provider", demo["provider"]),
         bot_start=_clock("[demo] bot_start", demo["bot_start"]),
         past_stop=_clock("[demo] past_stop", demo["past_stop"]),
-        clock=_clock("[demo] clock", demo["clock"]),
+        clock=clock,
+        live_until=live_until,
         half_spread=_positive("[market] half_spread_usd", market["half_spread_usd"]),
         quote_size=_positive("[market] quote_size_shares", market["quote_size_shares"]),
         wick=_positive("[market] wick_usd", market["wick_usd"]),

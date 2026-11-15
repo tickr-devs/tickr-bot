@@ -45,6 +45,10 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    only says the alert is on its way (`"delivery": "sending"`, both channels pending); one
    line per channel follows, and both must say `"delivery": "shown"`.
 6. The Mac stays on power, awake and logged in all day. Messages is signed in.
+   **Demo day is off in both apps** («Демо-день выключен в обоих приложениях»): Mac Settings ›
+   General and iPhone Settings, "Demo day" switch off; no DEMO DAY pill in the Mac title bar and
+   no demo banner on the iPhone's Home or the menu-bar panel. While it is on, every command from
+   that app (flatten, stop, emergency) goes to the demo, not the bot.
 7. Keep the bot job from starting by itself at 09:00 (manual-trade.md, "Before the open",
    step 1). Leave the watchdog job alone.
    ```sh

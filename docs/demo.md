@@ -14,8 +14,9 @@ the demo sessions, minute bars).
 What it does:
 
 - Rebuilds `demo/` in the repo (git-ignored): a copy of `config/` and `strategies/` whose
-  `bot.toml` runs as environment `demo`, serves the API on `[demo] api_port` (8776) and runs the
-  observers listed in `config/demo.toml`. The demo's `data/` is inside that folder; the real
+  `bot.toml` runs as environment `demo`, serves the API on bot.toml `[api] demo_port` (8776, with
+  `demo_port = 0` in the copy, so the demo's API forwards nowhere) and runs the observers listed in
+  `config/demo.toml`. The demo's `data/` is inside that folder; the real
   `data/` is never read or written. A `demo/` folder it did not make is refused, never deleted.
 - Runs the real bot (`tickr run`) on a simulated exchange (`src/tickr/demo/world.py`):
   only the broker, market data, clock, `sleep` and alerts are replaced. Webull is never
@@ -36,11 +37,39 @@ What it does:
   bot never reads them: its history reads are minute bars.
 - Plays the past sessions in `config/demo.toml` fast, then the demo day (today if it is a session,
   otherwise the latest session before it) fast up to `[demo] clock`, then in real time with the
-  local API listening, until Ctrl-C. About two to three minutes before the API is up.
+  local API listening, until `[demo] live_until` (it then stops its bot and exits 0) or Ctrl-C.
+  About two to three minutes before the API is up.
 
-Point the apps at it: macOS Settings, API address `http://127.0.0.1:8776` (or
-`defaults write local.tickr.operator apiBaseURL http://127.0.0.1:8776`). The API's clock is the demo
-day's clock, so "today" in the apps is the demo day.
+## The "Demo day" switch in the apps
+
+Both apps have a "Demo day" switch (Mac: Settings › General; iPhone: Settings). On, the app shows
+the demo day and only that day: the day picker, the day menu and the previous/next buttons stand
+still and a DEMO chip sits next to the day. Off, the app is back on the bot, on today, and any
+recorded day can be picked again.
+
+How it reaches the demo, with one click and nothing to type:
+
+- **The demo runs on its own**: the `local.tickr.demo` launchd job (`ops/launchd`, rendered and
+  installed with the other jobs, docs/operations.md) runs `tickr demo` at login. At `[demo]
+  live_until` the demo exits 0 and launchd starts a fresh one (KeepAlive on a clean exit only), so
+  whenever the apps look, the day is inside the same window: the open position, before the last
+  entry and the flatten. About three minutes in every eighty the demo is rebuilding and the apps
+  show "not reachable". It never talks to Webull (broker hosts point at `.invalid`, credential
+  names are unset), needs no credentials file, runs at Background priority, and touches only
+  `demo/`. Why `tickr demo` and not a frozen copy of `demo/` served by the API alone: the frozen
+  copy's status goes stale and its "today" is not the demo day, so Overview, positions and the live
+  flow would all read as a dead bot; `tickr demo` is the real bot on a simulated exchange, the same
+  code path as production, with no second way of serving.
+- **The apps never change their address**: the bot's own API forwards every request under `/demo/`
+  to the demo's API on `[api] demo_port` (`api/demo_forward.py`, docs/api.md). The switch only puts
+  `/demo` in front of the path. So the Mac uses `http://127.0.0.1:8766/demo`, and the iPhone uses
+  its paired Tailscale address with `/demo`, through the same `tailscale serve` and the same pairing:
+  no second port, no second pairing. The token is checked by the bot's API and never forwarded; the
+  real address and token stay as they are and are used again the moment the switch is off.
+- The demo's port lives in one place, `[api] demo_port` in `config/bot.toml`; the apps hold no port.
+
+Without the job, `tickr demo` in a terminal serves the same day the same way. The API's clock is the
+demo day's clock, so "today" in the apps is the demo day.
 
 The bot holds one position at a time in v1 (admission refuses a second), so the demo has one open
 position; the day's other trades come one after another. Everything the day contains is in

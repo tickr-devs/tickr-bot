@@ -175,6 +175,10 @@ remote_hosts_file = "remote-hosts.txt"
 remote_port = 8767
 # File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m tickr.api pair`, never the token itself; read by the api server.
 remote_token_hash_file = "remote-token.sha256"
+# Local port of the demo day's API (`tickr demo`, docs/demo.md): it serves there, and this API forwards GET and POST under /demo/ to it on the same loopback host, so the apps reach the demo day through their usual address (the phone through its paired connection; its token stays here and is never forwarded); 0 = no forwarding (the demo's own copy of this file); read by the api server and `tickr demo`.
+demo_port = 8776
+# Seconds this API waits for the demo day's API to connect and answer one forwarded request before answering 503; read by the api server.
+demo_timeout_seconds = 10
 # Random bytes in a newly made bearer token and in a one-time pairing code (URL-safe text is about 4/3 as long), at least 16 (128 bits); read by `python -m tickr.api pair` and the api server (POST /pair).
 remote_token_bytes = 32
 # File where `pair` leaves the pairing link (it holds the one-time pairing code, never the token) for the owner to move to the phone, relative to data_dir; written 0600, never printed, deleted by the api server when the phone redeems the code or the code has expired; read by `pair` and the api server.

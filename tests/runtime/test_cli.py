@@ -115,7 +115,7 @@ def _render(config_path, env, out):
 def test_render_launchd(config_path, repo, tmp_path, capsys):
     out = tmp_path / "plists"
     assert _render(config_path, _env_file(tmp_path, 0o600), out) == 0
-    assert len(list(out.glob("*.plist"))) == 6  # the six jobs
+    assert len(list(out.glob("*.plist"))) == 7  # the seven jobs
 
 
 @pytest.mark.parametrize("mode", [0o640, 0o604, 0o644])

@@ -11,8 +11,6 @@ root_dir = "demo"
 # Environment name the demo copy of bot.toml runs as (a copy of the first environment whose trading
 # gate is open without an owner authorization); the apps show it, so it says this is a demo.
 environment = "demo"
-# Local API port the demo serves on, so it never collides with a real API on [api] port.
-api_port = 8776
 # [strategy] observers in the demo copy of bot.toml: shadow strategies whose decisions the apps show.
 observers = ["price-action-v2"]
 # Simulated-exchange provider name written into the demo's capture files.
@@ -21,8 +19,13 @@ provider = "demo"
 bot_start = "09:20"
 # New York time the bot is stopped on past sessions (after the session flatten).
 past_stop = "16:05"
-# New York time the demo day is fast-forwarded to; from then on it runs in real time until Ctrl-C.
+# New York time the demo day is fast-forwarded to; from then on it runs in real time with its API
+# on bot.toml [api] demo_port.
 clock = "14:30"
+# New York time the live demo day ends (after `clock`): the demo stops its bot and exits 0, and the
+# local.tickr.demo launchd job starts a fresh one, so the day stays inside the same window (open
+# position, before the last entry and the flatten) whenever the apps look at it.
+live_until = "15:40"
 
 [market]
 # Half of the bid/ask spread of every simulated quote, USD.

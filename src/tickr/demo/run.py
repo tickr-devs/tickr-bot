@@ -11,7 +11,8 @@ Steps:
    data_dir lands inside that folder, never in the real one.
 2. Each past session runs from `bot_start` to `past_stop` on a fast clock.
 3. The demo day (today if it is a session, else the latest session before it) runs fast up to
-   `clock`, then in real time with the local API on `[demo] api_port`, until Ctrl-C.
+   `clock`, then in real time with the local API on bot.toml `[api] demo_port`, until
+   `live_until` (then it exits 0, and the launchd job starts a fresh one) or Ctrl-C.
 """
 
 from __future__ import annotations
@@ -128,6 +129,8 @@ def build_folder(repo: Path, scenario: Scenario) -> Path:
     root = demo_root(repo, scenario)
     if root == repo.resolve() or repo.resolve().is_relative_to(root):
         raise DemoRefused(f"[demo] root_dir {scenario.root_dir!r} would replace the repo")
+    if base.api.demo_port == 0:
+        raise DemoRefused("bot.toml [api] demo_port is 0: the demo has no port to serve on")
     if root == (base.root / base.run.data_dir).resolve():
         raise DemoRefused("[demo] root_dir is the real data_dir")
     if root.exists():
@@ -142,7 +145,8 @@ def build_folder(repo: Path, scenario: Scenario) -> Path:
     text = path.read_text("utf-8")
     table = _environment_table(text, _open_environment(base))
     text = _set_line(text, "environment", f'"{scenario.environment}"')
-    text = _set_line(text, "port", str(scenario.api_port))
+    text = _set_line(text, "port", str(base.api.demo_port))
+    text = _set_line(text, "demo_port", "0")  # the demo's own API forwards nowhere
     text = _set_line(text, "observers", "[" + ", ".join(f'"{o}"' for o in scenario.observers)
                      + "]")
     text = _set_line(text, "data_dir", f'"{DEMO_DATA_DIR}"')
@@ -265,9 +269,11 @@ def _demo_day(session: Session, world: World, cfg: config_module.Config,
             live.chart.use(world.feed)  # GET /chart serves the simulated world
             threading.Thread(target=live.serve_forever, daemon=True).start()
             log(f"demo: live on http://{live.settings.host}:{live.server_port}/ "
-                f"(New York {scenario.clock} on {session.day.isoformat()}); Ctrl-C stops it")
+                f"(New York {scenario.clock} on {session.day.isoformat()}) until "
+                f"{scenario.live_until}; Ctrl-C stops it")
 
         world.at(ny(session.day, scenario.clock), go_live)
+        world.at(ny(session.day, scenario.live_until), _stop_self)
     log(f"demo: session {session.day.isoformat()} (the demo day)")
     try:
         return session.run(world)
@@ -298,7 +304,7 @@ def _run_demo(repo: Path, scenario: Scenario, today: date, *, live: bool,
             # GET /config shows the demo's copy; the Lab replay stays off as before.
             server = make_server(replace(settings_from_config(cfg), config_file=config_path))
         except OSError as exc:
-            raise DemoRefused(f"cannot listen on port {scenario.api_port}: {exc}") from exc
+            raise DemoRefused(f"cannot listen on port {cfg.api.port}: {exc}") from exc
     try:
         for n, plans in enumerate((*scenario.past, scenario.today)):
             index = history_count + n

@@ -158,6 +158,8 @@ class ApiConfig:
     remote_pairing_file: str
     remote_pairing_code_file: str
     remote_pairing_code_ttl_seconds: int
+    demo_port: int
+    demo_timeout_seconds: Decimal
     status_file: str
     account_file: str
     account_stale_seconds: Decimal
