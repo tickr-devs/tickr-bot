@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from aperture.research.records import Admission, DecisionRecord
-from aperture.strategy.base import Verdict
+from aperture.strategy.base import Decision, Role, Verdict
 
 API_VERSION = 1
 STATUS_SCHEMA_VERSION = 1
@@ -457,15 +457,133 @@ class ExplainV1:
     api_version: int = _const(API_VERSION)
 
 
+def checks_of(decision: Decision) -> tuple[CheckV1, ...]:
+    """The explain-v1 check shape, shared by every document that shows checks."""
+    return tuple(CheckV1(c.rule, c.measured, c.operator, c.threshold, c.passed, c.note)
+                 for c in decision.checks)
+
+
 def explain(environment: str, day: date, record: DecisionRecord) -> ExplainV1:
     d = record.decision
-    checks = tuple(CheckV1(c.rule, c.measured, c.operator, c.threshold, c.passed, c.note)
-                   for c in d.checks)
+    checks = checks_of(d)
     return ExplainV1(
         environment=environment, day=day, symbol=d.symbol, decided_at=record.time,
         bar_start=record.bar_start, strategy=d.strategy, version=d.version, verdict=d.verdict,
         setup=d.setup, admission=record.admission, refusal_cause=record.refusal_cause,
         first_failed_check=d.decisive.rule if d.decisive else None, checks=checks)
+
+
+# ---------------------------------------------------------------- recorded decisions (read-only)
+
+
+# `action` is the recorded Verdict, the same enum and values as explain-v1 `verdict`.
+
+
+@dataclass(frozen=True)
+class ObserverDecisionV1:
+    """One observer decision: `at` is the decision bar's start; `reasons` are the rules of the
+    checks that failed, in the order evaluated (empty when every check passed)."""
+
+    at: datetime
+    symbol: str
+    action: Verdict
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ObserverV1:
+    """One configured observer. `result_gross_usd` is its simulated day result when one is
+    recorded; the bot records none yet, so it is null."""
+
+    name: str
+    version: str
+    decisions: tuple[ObserverDecisionV1, ...]
+    result_gross_usd: Decimal | None
+
+
+@dataclass(frozen=True)
+class ObserversV1:
+    """GET /observers?date=: the observers configured in [strategy] observers, one entry per
+    (name, version) recorded on one New York date, with its decisions oldest first."""
+
+    day: date
+    observers: tuple[ObserverV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class DecisionV1:
+    """One recorded decision of the active strategy or an observer (`observer` true). `checks`
+    as in explain-v1. `entry_price` (top of the entry window) and `stop_price` only for an ENTER
+    that was not taken (refused, or never evaluated) and only when the record holds them."""
+
+    at: datetime
+    action: Verdict
+    strategy: StrategyId
+    observer: bool
+    checks: tuple[CheckV1, ...]
+    entry_price: Decimal | None
+    stop_price: Decimal | None
+
+
+@dataclass(frozen=True)
+class DecisionsV1:
+    """GET /decisions?symbol=&date=: every decision recorded for one symbol on one New York
+    date, oldest first."""
+
+    symbol: str
+    day: date
+    decisions: tuple[DecisionV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+def _oldest_first(records: tuple[DecisionRecord, ...]) -> list[DecisionRecord]:
+    return sorted(records, key=lambda r: (r.bar_start, r.time))
+
+
+def observers_document(day: date, identities: tuple[tuple[str, str], ...],
+                       records: tuple[DecisionRecord, ...]) -> ObserversV1:
+    """`identities`: (name, current version) of each configured observer, in configuration
+    order; `records`: observer records only. Observers are matched by name: one entry per
+    version recorded that day (config order, then version), or, when a name has no records,
+    one empty entry per current version, so a version bump never hides earlier records."""
+    ordered = _oldest_first(records)
+    names = list(dict.fromkeys(name for name, _ in identities))
+    entries: list[ObserverV1] = []
+    for name in names:
+        recorded = {r.decision.version for r in ordered if r.decision.strategy == name}
+        current = [v for n, v in identities if n == name]
+        for version in sorted(recorded or set(current), key=_version_order):
+            entries.append(ObserverV1(name=name, version=version, result_gross_usd=None,
+                                      decisions=tuple(
+                ObserverDecisionV1(r.bar_start, r.symbol, r.decision.verdict,
+                                   tuple(c.rule for c in r.decision.checks if not c.passed))
+                for r in ordered
+                if (r.decision.strategy, r.decision.version) == (name, version))))
+    return ObserversV1(day=day, observers=tuple(entries))
+
+
+def _version_order(version: str) -> tuple[bool, int, str]:
+    """Numeric versions in numeric order ("2" before "10"), then any other text."""
+    numeric = version.isdigit()
+    return (not numeric, int(version) if numeric else 0, version)
+
+
+_SKIPPED = (Admission.REFUSED, Admission.NOT_EVALUATED)
+
+
+def decisions_document(symbol: str, day: date,
+                       records: tuple[DecisionRecord, ...]) -> DecisionsV1:
+    out = []
+    for r in _oldest_first(records):
+        d = r.decision
+        skipped = d.verdict is Verdict.ENTER and r.admission in _SKIPPED
+        out.append(DecisionV1(
+            at=r.bar_start, action=d.verdict,
+            strategy=StrategyId(d.strategy, d.version), observer=r.role is Role.OBSERVER,
+            checks=checks_of(d), entry_price=d.entry_high if skipped else None,
+            stop_price=d.stop if skipped else None))
+    return DecisionsV1(symbol=symbol, day=day, decisions=tuple(out))
 
 
 SCHEMA_TYPES: dict[str, type] = {
@@ -480,6 +598,8 @@ SCHEMA_TYPES: dict[str, type] = {
     "bars-v1": BarsV1,
     "settings-v1": SettingsV1,
     "explain-v1": ExplainV1,
+    "observers-v1": ObserversV1,
+    "decisions-v1": DecisionsV1,
     "account-v1": AccountV1,
     "account-response-v1": AccountResponseV1,
 }

@@ -29,13 +29,19 @@ from aperture.api.contract import (
     DaysV1,
     DayTrade,
     DayV1,
+    DecisionsV1,
+    DecisionV1,
     ErrorV1,
     ExplainV1,
+    ObserverDecisionV1,
+    ObserversV1,
+    ObserverV1,
     PendingCommandsV1,
     RiskSettings,
     SessionSettings,
     SettingsV1,
     StatusResponseV1,
+    StrategyId,
 )
 from aperture.research.records import Admission
 from aperture.strategy.base import Verdict
@@ -125,6 +131,24 @@ def documents() -> dict[str, object]:
                 CheckV1("relative_volume", Decimal("2.4"), ">=", Decimal("1.5"), True, ""),
                 CheckV1("spread_ratio", Decimal("0.0031"), "<=", Decimal("0.002"), False,
                         ""))),
+        "observers-v1": ObserversV1(DAY, (
+            ObserverV1("price-action-v1", "2", (
+                ObserverDecisionV1(T0.replace(microsecond=0), "ABCD", Verdict.WATCH,
+                                   ("ask_above_trigger",)),
+                ObserverDecisionV1(T0.replace(microsecond=0) + timedelta(minutes=1), "ABCD",
+                                   Verdict.ENTER, ())), None),
+            ObserverV1("price-action-v2", "1", (), None))),
+        "observers-v1.empty": ObserversV1(DAY - timedelta(days=3), ()),
+        "decisions-v1": DecisionsV1("ABCD", DAY, (
+            DecisionV1(T0.replace(microsecond=0), Verdict.WATCH,
+                       StrategyId("price-action-v1", "1"), False, (
+                           CheckV1("ask_above_trigger", Decimal("12.33"), ">",
+                                   Decimal("12.35"), False, ""),), None, None),
+            DecisionV1(T0.replace(microsecond=0) + timedelta(minutes=1), Verdict.ENTER,
+                       StrategyId("price-action-v1", "2"), True, (
+                           CheckV1("ask_above_trigger", Decimal("12.37"), ">",
+                                   Decimal("12.35"), True, ""),),
+                       Decimal("12.40"), Decimal("12.10")))),
     }
 
 

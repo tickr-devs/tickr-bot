@@ -1,0 +1,49 @@
+{
+  "symbol": "ABCD",
+  "day": "2026-11-16",
+  "decisions": [
+    {
+      "at": "2026-11-16T15:00:00.000Z",
+      "action": "WATCH",
+      "strategy": {
+        "name": "price-action-v1",
+        "version": "1"
+      },
+      "observer": false,
+      "checks": [
+        {
+          "rule": "ask_above_trigger",
+          "measured": "12.33",
+          "operator": ">",
+          "threshold": "12.35",
+          "passed": false,
+          "note": ""
+        }
+      ],
+      "entry_price": null,
+      "stop_price": null
+    },
+    {
+      "at": "2026-11-16T15:01:00.000Z",
+      "action": "ENTER",
+      "strategy": {
+        "name": "price-action-v1",
+        "version": "2"
+      },
+      "observer": true,
+      "checks": [
+        {
+          "rule": "ask_above_trigger",
+          "measured": "12.37",
+          "operator": ">",
+          "threshold": "12.35",
+          "passed": true,
+          "note": ""
+        }
+      ],
+      "entry_price": "12.40",
+      "stop_price": "12.10"
+    }
+  ],
+  "api_version": 1
+}

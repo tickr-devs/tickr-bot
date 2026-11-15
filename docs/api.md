@@ -79,6 +79,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
+| GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first. |
+| GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}`. `202` `command-accepted-v1`. |
@@ -167,6 +169,40 @@ line for the symbol in the decision file is `503 unavailable` (lines of other sy
 parsed); a missing, repeated, extra or non-ticker parameter is
 `400 bad_request`. The command line has the same read: `aperture explain SYMBOL` (exit 0 found,
 1 none or unreadable).
+
+### GET /observers and GET /decisions (read-only)
+
+Both serve decisions already in the decision file of one New York date (the same file as
+`/explain`; an archived day's `decisions.jsonl.gz` is read the same way). They never read the
+broker, simulate nothing and record nothing. `at` is the start (UTC) of the decision's M1 bar;
+decisions are oldest first (bar start, then decision time). `action` is the recorded verdict,
+the same enum as explain-v1 `verdict`: `IGNORE` `WATCH` `ENTER` `HOLD` `EXIT`. A
+date without a decision file answers with empty lists; a last line still being written is not
+read yet.
+
+`/observers?date=` (date optional, default today in New York) lists the observers of
+`[strategy] observers`, matched by the strategy `name` their `strategy.toml` declares, with
+only observer records (`role` `observer`). There is one entry per (name, version) recorded that
+day, with the recorded version, so records made before a version bump stay listed under their
+old version. A configured observer with no records that day gets one entry with the version of
+its current `strategy.toml` and an empty list. Entries are in configuration order, then by
+version (numeric versions numerically). `reasons` are the rules of the checks that failed,
+in the order evaluated (empty when every check passed); the full checks are in `/decisions`.
+`result_gross_usd` is the observer's simulated day result once one is recorded; the bot records
+none yet, so it is always `null` (the offline report `python -m aperture.research observers`
+computes one). An observer folder whose `strategy.toml` cannot be read is `503 unavailable`.
+
+`/decisions?symbol=&date=` (both required) lists the active strategy's and the observers'
+decisions for the symbol, `observer` true for an observer record, `strategy` its `{name,
+version}`. `checks` have the explain-v1 shape (`rule` `measured` `operator` `threshold` `passed`
+`note`), as recorded. `entry_price` and `stop_price` are the what-if levels of a skipped ENTER
+(admission `refused`, or `not_evaluated` as for every observer ENTER): the top of the recorded
+entry window (`entry_high`, the price sizing and the what-if simulation use) and the recorded
+stop, each `null` when the record does not hold it, and both `null` for any other decision.
+
+A missing, repeated, extra, malformed or non-ticker parameter is `400 bad_request`; a malformed
+line for the symbol (`/decisions`) or an observer line (`/observers`) of that day is
+`503 unavailable` with the file, line and cause.
 
 ### Commands
 

@@ -49,8 +49,11 @@ from aperture.api.contract import (
 from aperture.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
 from aperture.calendar import ny_date_of
 from aperture.config import Config, ConfigError
+from aperture.observers.errors import ObserverError
+from aperture.observers.loader import read_identity
 from aperture.observers.log import DecisionLog
 from aperture.research.errors import RecordFileError
+from aperture.strategy.base import Role
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 COMMAND_SOURCE = "api"
@@ -88,6 +91,7 @@ class ApiSettings:
     history: HistoryPaths
     decisions: Path  # <decisions_dir>/<environment>, read by GET /explain
     shown: SettingsV1  # served at GET /settings
+    strategies_root: Path  # holds strategies/<folder>/strategy.toml, read by GET /observers
     account_path: Path  # the bot's account-v1 file, served at GET /account
     account_stale_seconds: Decimal
 
@@ -131,6 +135,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         history=HistoryPaths.from_config(cfg),
         decisions=DecisionLog.from_config(cfg).directory,
         shown=shown_settings(cfg),
+        strategies_root=cfg.root,
         account_path=data / api.account_file,
         account_stale_seconds=api.account_stale_seconds,
     )
@@ -252,7 +257,7 @@ _ERROR_CODES = {
     "internal": 500, "unavailable": 503, "unauthorized": 401,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
-              "/explain", "/account")
+              "/explain", "/observers", "/decisions", "/account")
 DAY_PREFIX = "/days/"
 
 
@@ -260,8 +265,10 @@ class BadQuery(ValueError):
     """The query string is not exactly what the route takes; the message is the cause."""
 
 
-def _query(raw: str, names: frozenset[str]) -> dict[str, str]:
-    """Exactly the parameters `names`, each once and non-empty; anything else is refused."""
+def _query(raw: str, names: frozenset[str],
+           optional: frozenset[str] = frozenset()) -> dict[str, str]:
+    """Exactly the parameters `names` (those in `optional` may be left out), each once and
+    non-empty; anything else is refused."""
     try:
         pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=bool(raw))
     except ValueError as exc:
@@ -275,7 +282,7 @@ def _query(raw: str, names: frozenset[str]) -> dict[str, str]:
         if not value:
             raise BadQuery(f"query parameter {name!r} is empty")
         found[name] = value
-    missing = sorted(names - set(found))
+    missing = sorted(names - optional - set(found))
     if missing:
         raise BadQuery(f"missing query parameters: {', '.join(missing)}")
     return found
@@ -394,6 +401,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.settings.shown)
             elif path == "/explain":
                 self._explain()
+            elif path in ("/observers", "/decisions"):
+                self._recorded_decisions(path)
             elif path == "/account":
                 self._account()
             elif path in COMMAND_ROUTES:
@@ -494,6 +503,41 @@ class Handler(BaseHTTPRequestHandler):
             self._error("not_found", f"no decision recorded for {symbol} on {day.isoformat()}")
             return
         self._json(200, contract.explain(self.server.settings.history.environment, day, record))
+
+    def _recorded_decisions(self, path: str) -> None:
+        """GET /observers?date= and /decisions?symbol=&date=: decisions already recorded in the
+        decision file of one New York date (plain or archived). Never reads the broker."""
+        settings = self.server.settings
+        query = urlsplit(self.path).query
+        try:
+            if path == "/observers":
+                params = _query(query, frozenset({"date"}), optional=frozenset({"date"}))
+            else:
+                params = _query(query, frozenset({"symbol", "date"}))
+                if not SYMBOL_PATTERN.match(params["symbol"]):
+                    raise BadQuery(f"symbol {params['symbol']!r} is not a ticker")
+            day = _day(params["date"]) if "date" in params else ny_date_of(self.server.clock())
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        log = DecisionLog(settings.decisions)
+        try:
+            if path == "/observers":
+                identities = tuple(read_identity(settings.strategies_root, folder)
+                                   for folder in settings.shown.observers)
+                document: Any = contract.observers_document(
+                    day, identities, log.records(day, role=Role.OBSERVER))
+            else:
+                symbol = params["symbol"]
+                document = contract.decisions_document(symbol, day,
+                                                       log.records(day, symbol=symbol))
+        except ObserverError as exc:
+            self._error("unavailable", f"observer strategy unreadable: {exc}")
+            return
+        except (RecordFileError, OSError) as exc:
+            self._error("unavailable", f"decision file unreadable: {exc}")
+            return
+        self._json(200, document)
 
     def _read_json_body(self) -> dict[str, Any] | None:
         media = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()

@@ -16,6 +16,7 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from aperture.config import Config
 from aperture.observers.errors import ObserverError
@@ -49,7 +50,8 @@ def parse_modules(entries: Sequence[str]) -> dict[str, str]:
     return modules
 
 
-def load_strategy(root: Path, folder: str, modules: Mapping[str, str]) -> LoadedStrategy:
+def _read_values(root: Path, folder: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """The folder's strategy.toml, its [strategy] table and name; ObserverError otherwise."""
     path = root / STRATEGIES_DIR / folder / STRATEGY_FILE
     try:
         with open(path, "rb") as handle:
@@ -60,6 +62,21 @@ def load_strategy(root: Path, folder: str, modules: Mapping[str, str]) -> Loaded
     name = table.get("name") if isinstance(table, dict) else None
     if not isinstance(name, str):
         raise ObserverError(f"{folder}: {STRATEGY_FILE} has no [strategy] name")
+    return values, table, name
+
+
+def read_identity(root: Path, folder: str) -> tuple[str, str]:
+    """(name, version) a strategy folder declares, read from its file only (nothing imported
+    or built): what its recorded decisions are tagged with. ObserverError when unreadable."""
+    _, table, name = _read_values(root, folder)
+    version = table.get("version")
+    if not isinstance(version, str) or not version:
+        raise ObserverError(f"{folder}: {STRATEGY_FILE} has no [strategy] version string")
+    return name, version
+
+
+def load_strategy(root: Path, folder: str, modules: Mapping[str, str]) -> LoadedStrategy:
+    values, table, name = _read_values(root, folder)
     module_name = modules.get(name)
     if module_name is None:
         raise ObserverError(f"{folder}: no module for strategy {name!r} in strategy_modules")
