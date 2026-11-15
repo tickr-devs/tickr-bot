@@ -1,0 +1,41 @@
+# Strategy "volume-shock-v1": early volume shock in a stock up a little (docs/strategy-ledger.md,
+# L4). An observer candidate for live forward testing; not the active strategy. Values are the
+# ones pre-registered for the history test. Changing any value means a new `version`.
+
+[strategy]
+# Strategy name; must equal this folder name; recorded with every decision.
+name = "volume-shock-v1"
+# Strategy version; bump on any value change; recorded with every decision and trade.
+version = "1"
+
+[signal]
+# Lowest close change vs the previous session's last close for the signal, percent. Read by volume_shock_v1.
+change_min_percent = 1.0
+# Highest close change vs the previous session's last close for the signal, percent. Read by volume_shock_v1.
+change_max_percent = 3.0
+# Bars (completed M1) whose summed volume is compared with the same minutes of prior sessions. Read by volume_shock_v1.
+volume_window_bars = 5
+# Window volume must be at least this multiple of the median same-minute window volume of prior sessions. Read by volume_shock_v1.
+volume_shock_multiple = 5.0
+# Prior sessions the median uses; all must be present (at most config/bot.toml [market_data] history_sessions). Read by volume_shock_v1.
+prior_sessions = 5
+# Minimum (close - low) / (high - low) of the signal bar, 0..1 (0.75 = closes in its top quarter). Read by volume_shock_v1.
+close_location_min = 0.75
+
+[entry]
+# Entry window around the signal close, percent each way; the ask must be inside it. Read by strategy.simple.
+entry_window_percent = 0.5
+# Minimum stop distance below the ask, percent; a closer signal-bar low is replaced by this distance. Read by strategy.simple.
+minimum_stop_percent = 0.5
+
+[liquidity]
+# Regular session: maximum (ask - bid) / mid. Read by strategy.simple.
+max_spread_ratio = 0.015
+# Minimum previous session close, USD (the history test's universe floor). Read by volume_shock_v1.
+min_previous_close_usd = 10
+
+[sizing]
+# Planned loss per trade the quantity is sized for, USD; must not exceed config/bot.toml [risk]. Read by strategy.simple.
+planned_loss_usd = 50
+# Maximum position notional, USD (quantity x top of entry window); must not exceed config/bot.toml [risk]. Read by strategy.simple.
+max_position_notional_usd = 2500
