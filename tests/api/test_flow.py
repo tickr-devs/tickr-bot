@@ -350,6 +350,30 @@ def test_flow_reads_a_half_written_last_line_later_and_refuses_a_malformed_one(a
     assert "capture file unreadable" in doc(payload)["cause"]
 
 
+def test_flow_parses_the_screener_capture_again_only_when_it_changed(api, cfg, monkeypatch):
+    from tickr.api import flow
+
+    _capture(cfg)
+    reads = []
+    original = flow.read_passes
+
+    def counted(path, *, open_tail):
+        reads.append(open_tail)
+        return original(path, open_tail=open_tail)
+
+    monkeypatch.setattr(flow, "read_passes", counted)
+    first = _get(api, "/flow", "flow-v1")["chips"]
+    assert _get(api, "/flow", "flow-v1")["chips"] == first
+    assert reads == [True]
+    path = api.settings.history.capture / DAY.isoformat() / "screener.jsonl"
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("\n")  # any change of the file
+    assert _get(api, "/flow", "flow-v1")["chips"] == first
+    assert reads == [True, True]
+    _get(api, f"/flow?date={PAST.isoformat()}", "flow-v1")  # a day without a capture
+    assert reads == [True, True]
+
+
 @pytest.mark.parametrize("path", [
     "/flow?date=16.11.2026", "/flow?date=", "/flow?symbol=ABCD",
     "/watching?date=2026-11-16&date=2026-11-16", "/watching?symbol=ABCD"])

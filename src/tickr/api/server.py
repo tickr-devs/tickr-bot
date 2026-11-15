@@ -55,6 +55,7 @@ from tickr.api.contract import (
     SettingsV1,
     StatusResponseV1,
 )
+from tickr.api.decision_cache import DecisionCache
 from tickr.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
 from tickr.api.jobs import JobsSettings, jobs_document
 from tickr.api.journal import journal_document
@@ -290,8 +291,11 @@ class ApiServer(ThreadingHTTPServer):
         self.lab = lab or LabReplay(settings.lab, clock)
         self.page = (STATIC_DIR / "status.html").read_bytes()
         self.history = History(settings.history, settings.after)
+        # Today's decision records, parsed once and read on as the bot appends.
+        self.decisions = DecisionCache(DecisionLog(settings.decisions))
         self.observer_results = ObserverResults(settings.simulation,
                                                 settings.observer_trades_max_rows)
+        self.screener_chips = flow.ScreenerChips(settings.universe, settings.change_pct_places)
         self.skipped = SkippedAfter(settings.simulation, settings.after.minutes,
                                     settings.check_places)
         # No source until one is attached (python -m tickr.api, or the demo's world).
@@ -792,7 +796,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         day = ny_date_of(self.server.clock())
         try:
-            record = DecisionLog(self.server.settings.decisions).latest_active(day, symbol)
+            found = [r for r in self.server.decisions.records(day, day, symbol=symbol)
+                     if r.role is Role.ACTIVE]  # as DecisionLog.latest_active filters
+            record = found[-1] if found else None
         except (RecordFileError, OSError) as exc:
             self._error("unavailable", f"decision file unreadable: {exc}")
             return
@@ -821,12 +827,13 @@ class Handler(BaseHTTPRequestHandler):
         except BadQuery as exc:
             self._error("bad_request", str(exc))
             return
-        log = DecisionLog(settings.decisions)
+        cache = self.server.decisions
+        log = cache.log
         try:
             if path == "/observers":
                 identities = tuple(read_identity(settings.strategies_root, folder)
                                    for folder in settings.shown.observers)
-                records = log.records(day, role=Role.OBSERVER)
+                records = cache.records(day, today, role=Role.OBSERVER)
                 configured = {name for name, _ in identities}
                 results = self.server.observer_results.results(
                     day, today, [r for r in records if r.decision.strategy in configured],
@@ -834,17 +841,17 @@ class Handler(BaseHTTPRequestHandler):
                 document: Any = contract.observers_document(day, identities, records, results)
             elif path == "/skipped":
                 document = self.server.skipped.document(
-                    day, today, log.records(day, role=Role.ACTIVE), log.path(day))
+                    day, today, cache.records(day, today, role=Role.ACTIVE), log.path(day))
             elif path == "/watching":
                 document = contract.watching_document(
-                    day, log.records(day, role=Role.ACTIVE), settings.watching_max_rows,
+                    day, cache.records(day, today, role=Role.ACTIVE), settings.watching_max_rows,
                     settings.closeness_places, settings.check_places)
             elif path == "/flow":
-                document = self._flow(day, today, log.records(day, role=Role.ACTIVE))
+                document = self._flow(day, today, cache.records(day, today, role=Role.ACTIVE))
             else:
                 symbol = params["symbol"]
                 document = contract.decisions_document(symbol, day,
-                                                       log.records(day, symbol=symbol),
+                                                       cache.records(day, today, symbol=symbol),
                                                        settings.check_places)
         except ObserverError as exc:
             self._error("unavailable", f"observer strategy unreadable: {exc}")
@@ -864,13 +871,9 @@ class Handler(BaseHTTPRequestHandler):
               records: tuple[DecisionRecord, ...]) -> contract.FlowV1:
         settings = self.server.settings
         path = flow.screener_path(settings.history.capture, day)
-        try:
-            passes = [] if path is None else flow.read_passes(path, open_tail=day == today)
-        except OSError as exc:
-            raise CaptureError(str(exc)) from exc
         return flow.flow_document(
             settings.history.environment, day,
-            flow.chips(passes, settings.universe, settings.change_pct_places), records,
+            self.server.screener_chips.chips(path, open_tail=day == today), records,
             self.server.history.entries(day, today),
             flow.reconcile(day, today, settings.status_path, settings.account_path))
 

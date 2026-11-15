@@ -58,11 +58,7 @@ class DecisionLog:
         path = self.path(day)
         if existing(path) is None:
             return ()
-        keys = []
-        if symbol is not None:
-            keys.append('"symbol": ' + json.dumps(symbol))
-        if role is not None:
-            keys.append('"role": ' + json.dumps(role.value))
+        keys = filter_keys(symbol, role)
         found = []
         with open_text(path) as handle:  # plain or archived (.gz)
             for number, text in enumerate(handle, start=1):
@@ -107,3 +103,14 @@ class DecisionLog:
             self._handle.close()
         self._handle = None
         self._day = None
+
+
+def filter_keys(symbol: str | None, role: Role | None) -> list[str]:
+    """The texts `DecisionLog.records` looks for in a line before parsing it: a line without
+    them cannot match the filter and is skipped unparsed."""
+    keys = []
+    if symbol is not None:
+        keys.append('"symbol": ' + json.dumps(symbol))
+    if role is not None:
+        keys.append('"role": ' + json.dumps(role.value))
+    return keys

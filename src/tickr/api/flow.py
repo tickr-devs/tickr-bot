@@ -13,6 +13,7 @@ Read-only. Sources (docs/api.md, "GET /flow"):
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -137,6 +138,37 @@ def chips(passes: Sequence[Sequence[ScreenerRow]], settings: DiscoverySettings,
             symbol=symbol, sources=tuple(k for k in ScreenerKind if k in sources[symbol]),
             change_pct=change, change_cause=cause, excluded_cause=outcome[symbol]))
     return tuple(result)
+
+
+class ScreenerChips:
+    """`chips` of one day's captured screeners, kept until that file changes. The bot appends a
+    pass about once a minute while the apps read GET /flow every few seconds; without this every
+    read parsed the whole day's capture again. Keyed by the file's path, size and mtime, as the
+    other API caches (observer_results.stamp), so an archived or rewritten file is read anew."""
+
+    def __init__(self, settings: DiscoverySettings, places: int) -> None:
+        self.settings = settings
+        self.places = places
+        self._lock = threading.Lock()
+        self._key: tuple[object, ...] | None = None
+        self._chips: tuple[api.FlowChipV1, ...] = ()
+
+    def chips(self, path: Path | None, open_tail: bool) -> tuple[api.FlowChipV1, ...]:
+        """Raises CaptureError (also for an unreadable file) like `read_passes`."""
+        if path is None:
+            return chips([], self.settings, self.places)
+        with self._lock:
+            try:
+                path = existing(path) or path  # archived meanwhile: its .gz twin
+                stat = path.stat()
+                key = (str(path), stat.st_mtime_ns, stat.st_size, open_tail)
+                if key != self._key:
+                    self._chips = chips(read_passes(path, open_tail=open_tail), self.settings,
+                                        self.places)
+                    self._key = key
+            except OSError as exc:
+                raise CaptureError(str(exc)) from exc
+            return self._chips
 
 
 def reconcile(day: date, today: date, status_path: Path,
