@@ -4,8 +4,9 @@ stdlib only. Binds a loopback address and refuses any request whose Host (or Ori
 is not in the configured allowlist, which blocks DNS rebinding and cross-site requests from a
 browser. Remote access (the phone, through an HTTPS proxy on this Mac such as `tailscale serve`)
 has its own loopback listener, `[api] remote_port`: every request there must carry the paired
-bearer token whatever its Host, and its Host must be one of `[api] remote_hosts`. Whether a token
-is needed is decided by the listener a request arrives on, never by a header the caller chooses.
+bearer token whatever its Host, and its Host must be one of the names in
+`[api] remote_hosts_file`. Whether a token is needed is decided by the listener a request
+arrives on, never by a header the caller chooses.
 The one exception is POST /pair there: the phone redeems the one-time pairing code `pair` left
 in the pairing link, once and before it expires, for a new token. The server keeps only SHA-256
 digests of the code and the token.
@@ -108,7 +109,8 @@ class ApiSettings:
     host: str
     port: int
     allowed_hosts: tuple[str, ...]
-    remote_hosts: tuple[str, ...]
+    remote_hosts: tuple[str, ...]  # read from remote_hosts_path at start; empty = remote off
+    remote_hosts_path: Path
     remote_port: int
     token_hash_path: Path
     token_bytes: int
@@ -149,6 +151,19 @@ class ApiSettings:
     config_digest: str  # sha256 of the file when this API loaded it
 
 
+def read_remote_hosts(path: Path) -> tuple[str, ...]:
+    """The Host names the remote port answers to: the non-blank lines of `path`, in order. A
+    missing file means remote access is off. The names are this machine's, so they live in its
+    data folder, never in the shared bot.toml."""
+    try:
+        text = path.read_text("utf-8")
+    except FileNotFoundError:
+        return ()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"remote_hosts_file {path}: unreadable ({type(exc).__name__})") from exc
+    return tuple(line.strip() for line in text.splitlines() if line.strip())
+
+
 def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSettings:
     """`config_path` is the file `cfg` was loaded from; without it POST /lab/replay refuses."""
     api = cfg.api
@@ -160,12 +175,16 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         raise ConfigError(f"[api] host {api.host!r} is not a loopback IP address")
     if not api.allowed_hosts:
         raise ConfigError("[api] allowed_hosts is empty")
-    for name in api.remote_hosts:
+    data = cfg.root / cfg.run.data_dir
+    remote_hosts_path = data / api.remote_hosts_file
+    remote_hosts = read_remote_hosts(remote_hosts_path)
+    for name in remote_hosts:
         if not REMOTE_HOST.match(name):
-            raise ConfigError(f"[api] remote_hosts entry {name!r} is not a lowercase DNS name "
-                              "(optionally with :port)")
+            raise ConfigError(f"remote_hosts_file {remote_hosts_path}: {name!r} is not a "
+                              "lowercase DNS name (optionally with :port)")
         if name.split(":", 1)[0] in api.allowed_hosts:
-            raise ConfigError(f"[api] remote_hosts entry {name!r} is also a local allowed host")
+            raise ConfigError(f"remote_hosts_file {remote_hosts_path}: {name!r} is also a "
+                              "local allowed host")
     if api.remote_port == api.port:
         raise ConfigError("[api] remote_port must differ from port")
     if api.request_timeout_seconds <= 0:
@@ -207,12 +226,12 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
     if PurePosixPath(api.lab_replay_data_dir) == PurePosixPath(api.lab_replay_results_dir):
         raise ConfigError("[api] lab_replay_data_dir and lab_replay_results_dir must be "
                           "two different folders")
-    data = cfg.root / cfg.run.data_dir
     return ApiSettings(
         host=api.host,
         port=api.port,
         allowed_hosts=api.allowed_hosts,
-        remote_hosts=api.remote_hosts,
+        remote_hosts=remote_hosts,
+        remote_hosts_path=remote_hosts_path,
         remote_port=api.remote_port,
         token_hash_path=data / api.remote_token_hash_file,
         token_bytes=api.remote_token_bytes,
@@ -996,7 +1015,8 @@ def pair(settings: ApiSettings, now: datetime | None = None) -> Path:
     that or after expiry. Nothing secret is printed or logged. Returns the link file's path.
     """
     if not settings.remote_hosts:
-        raise ConfigError("[api] remote_hosts is empty: set the Tailscale name of this Mac first")
+        raise ConfigError(f"no remote host: write the Tailscale name of this Mac into "
+                          f"{settings.remote_hosts_path} first")
     now = now or _now()
     code = secrets.token_urlsafe(settings.token_bytes)
     expires_at = now + timedelta(seconds=settings.pairing_code_ttl_seconds)

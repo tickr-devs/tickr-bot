@@ -151,7 +151,7 @@ class ApiConfig:
     host: str
     port: int
     allowed_hosts: tuple[str, ...]
-    remote_hosts: tuple[str, ...]
+    remote_hosts_file: str
     remote_port: int
     remote_token_hash_file: str
     remote_token_bytes: int

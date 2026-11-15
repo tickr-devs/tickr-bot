@@ -29,10 +29,17 @@ REMOTE = "mac.example-tailnet.ts.net"
 NOW = T0 + timedelta(seconds=2)  # the servers' clock in these tests
 
 
+def with_remote_hosts(cfg, *names):
+    """Write `names` into this machine's remote hosts file, as the owner does once."""
+    path = cfg.root / cfg.run.data_dir / cfg.api.remote_hosts_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{name}\n" for name in names), "utf-8")
+    return cfg
+
+
 @pytest.fixture
 def remote_settings(tmp_path):
-    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
-    cfg = replace(cfg, api=replace(cfg.api, remote_hosts=(REMOTE,)))
+    cfg = with_remote_hosts(config.load(ROOT / "config" / "bot.toml", root=tmp_path), REMOTE)
     return replace(settings_from_config(cfg), port=0, remote_port=0)
 
 
@@ -81,24 +88,40 @@ def paired(server, settings):
     return doc(payload)["token"]
 
 
-def test_shipped_config_has_remote_access_off(tmp_path):
+def test_remote_access_off_without_the_hosts_file(tmp_path):
     cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
-    assert cfg.api.remote_hosts == ()
+    assert settings_from_config(cfg).remote_hosts == ()
+
+
+def test_hosts_file_lines_read_in_order_blank_lines_skipped(tmp_path):
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    path = cfg.root / cfg.run.data_dir / cfg.api.remote_hosts_file
+    path.parent.mkdir(parents=True)
+    path.write_text(f"\n  {REMOTE}  \n\nmac.ts.net:8443\n", "utf-8")
+    assert settings_from_config(cfg).remote_hosts == (REMOTE, "mac.ts.net:8443")
+
+
+def test_unreadable_hosts_file_refused_at_startup(tmp_path):
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    path = cfg.root / cfg.run.data_dir / cfg.api.remote_hosts_file
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\xff\xfe")
+    with pytest.raises(config.ConfigError, match="remote_hosts_file"):
+        settings_from_config(cfg)
 
 
 @pytest.mark.parametrize("name", ["Mac.ts.net", "https://mac.ts.net", "localhost", "mac", "a..b",
                                   "127.0.0.1", "mac.ts.net/x"])
 def test_bad_remote_host_refused_at_startup(tmp_path, name):
-    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
-    bad = replace(cfg, api=replace(cfg.api, remote_hosts=(name,)))
-    with pytest.raises(config.ConfigError, match="remote_hosts"):
-        settings_from_config(bad)
+    cfg = with_remote_hosts(config.load(ROOT / "config" / "bot.toml", root=tmp_path), name)
+    with pytest.raises(config.ConfigError, match="remote_hosts_file"):
+        settings_from_config(cfg)
 
 
 def test_remote_host_with_port_allowed(tmp_path):
-    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
-    ok = replace(cfg, api=replace(cfg.api, remote_hosts=("mac.ts.net:8443",)))
-    assert settings_from_config(ok).remote_hosts == ("mac.ts.net:8443",)
+    cfg = with_remote_hosts(config.load(ROOT / "config" / "bot.toml", root=tmp_path),
+                            "mac.ts.net:8443")
+    assert settings_from_config(cfg).remote_hosts == ("mac.ts.net:8443",)
 
 
 def test_remote_refused_before_pairing(remote_api):
@@ -131,7 +154,7 @@ def test_pairing_stores_only_the_hashes(remote_api, remote_settings):
 
 def test_pairing_needs_a_remote_host(tmp_path):
     cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
-    with pytest.raises(config.ConfigError, match="remote_hosts is empty"):
+    with pytest.raises(config.ConfigError, match="no remote host"):
         pair(settings_from_config(cfg))
 
 
@@ -308,13 +331,12 @@ def test_pairing_replaces_a_leftover_temp_file_with_wide_permissions(remote_sett
 
 
 def test_pair_command_never_prints_the_code(tmp_path, capsys, monkeypatch):
-    text = (ROOT / "config" / "bot.toml").read_text("utf-8").replace(
-        "remote_hosts = []", f'remote_hosts = ["{REMOTE}"]', 1)
     path = tmp_path / "config" / "bot.toml"
     path.parent.mkdir()
-    path.write_text(text, "utf-8")
+    path.write_text((ROOT / "config" / "bot.toml").read_text("utf-8"), "utf-8")
     for name in ("calendar",):
         (tmp_path / "config" / name).symlink_to(ROOT / "config" / name)
+    with_remote_hosts(config.load(path), REMOTE)
     assert api_main.main(["--config", str(path), "pair"]) == 0
     captured = capsys.readouterr()
     cfg = config.load(path)

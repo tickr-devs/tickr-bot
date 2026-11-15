@@ -169,8 +169,8 @@ host = "127.0.0.1"
 port = 8766
 # Host names the API answers to; requests whose Host (name:port) or Origin (http://name:port) is not one of these are refused (DNS rebinding / cross-site guard); read by the api server.
 allowed_hosts = ["127.0.0.1", "localhost"]
-# Host headers (name, or name:port when not 443) the remote port answers to: the name of the HTTPS proxy in front of it, such as `tailscale serve` on this Mac, e.g. "mac.tailnet-name.ts.net"; empty = remote access off (the remote port is not opened); read by the api server.
-remote_hosts = []
+# File, relative to data_dir, listing the Host headers (name, or name:port when not 443) the remote port answers to, one per line: the name of the HTTPS proxy in front of it, such as `tailscale serve` on this Mac, e.g. "mac.tailnet-name.ts.net". It names this machine, so it lives with the machine's data, never in this file; missing or empty = remote access off (the remote port is not opened); read by the api server and `pair` at start.
+remote_hosts_file = "remote-hosts.txt"
 # Second loopback port, for remote access only: every request on it must carry the paired bearer token whatever its Host, and `tailscale serve` points here, never at `port`; read by the api server.
 remote_port = 8767
 # File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m tickr.api pair`, never the token itself; read by the api server.

@@ -26,7 +26,7 @@ The API still binds loopback only. The iPhone reaches it through an HTTPS proxy 
 [Tailscale](https://tailscale.com) `serve`, which is reachable only from devices signed in to the
 owner's tailnet (home Wi-Fi or cellular) and terminates TLS with a certificate for the Mac's
 tailnet name. The proxy points at a second loopback port, `[api] remote_port`, opened only when
-`[api] remote_hosts` is set. Every request on that port must carry the paired token, whatever its
+`[api] remote_hosts_file` names a host. Every request on that port must carry the paired token, whatever its
 `Host` header says, except `POST /pair`, which redeems a one-time pairing code for that token; the
 local port never accepts the remote name. Whether a token is needed is
 decided by the port a request arrives on, never by a header the caller chooses.
@@ -36,7 +36,9 @@ decided by the port a request arrives on, never by a header the caller chooses.
 2. On the Mac: `tailscale serve --bg --https=443 http://127.0.0.1:8767` (the `[api] remote_port`,
    never the `[api] port`). `tailscale serve status` shows the address, e.g.
    `https://mac.tailnet-name.ts.net`.
-3. In `config/bot.toml` set `[api] remote_hosts = ["mac.tailnet-name.ts.net"]` and restart the API.
+3. Write that name, one per line, into this Mac's `[api] remote_hosts_file` under `data_dir`
+   (`echo mac.tailnet-name.ts.net > data/remote-hosts.txt`) and restart the API. The name belongs
+   to this machine, so it lives with its data, never in the shared `config/bot.toml`.
 4. `python -m tickr.api --config config/bot.toml pair` revokes the current phone token at once and
    leaves a pairing link with a one-time code in a file readable by you only
    (`[api] remote_pairing_file` under `data_dir`); nothing secret is printed. With the API running,
@@ -47,7 +49,7 @@ decided by the port a request arrives on, never by a header the caller chooses.
    digests: of the waiting code (`[api] remote_pairing_code_file`, with its expiry) and of the
    token (`[api] remote_token_hash_file`).
 
-Rules on the remote port: `Host` must be one of `remote_hosts` (no port when 443, else
+Rules on the remote port: `Host` must be one of the names in `remote_hosts_file` (no port when 443, else
 `name:port`), else `403 forbidden_host`; `Authorization: Bearer <token>` is required, else
 `401 unauthorized` with `WWW-Authenticate: Bearer`; an `Origin`, if sent, must be `https://<host>`.
 An unreadable token hash file answers `503 unavailable`. The local port (the Mac app, the status
@@ -59,7 +61,8 @@ no token, body exactly `{"code": "<code from the link>"}`. `200` with `paired-v1
 stored one, and the link file is deleted. `401 unauthorized` when no pairing is waiting, the code
 is wrong (nothing changes) or it has expired (the code and the link file are deleted); `400` for
 any other body; `503` when the code file is unreadable. Neither the code nor the token appears in
-an error or the log. `remote_hosts = []` (the shipped value) turns remote access off.
+an error or the log. A missing or empty `remote_hosts_file` (the default) turns remote access off; an unreadable
+one, or a name in it that is not a lowercase DNS name, stops the API at start.
 
 The phone keeps the token in its Keychain (this device only) together with the address it was
 paired with, and sends it only over HTTPS to exactly that address; changing the address by hand

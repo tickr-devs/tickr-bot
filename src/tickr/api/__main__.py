@@ -1,6 +1,6 @@
 """Run the local API: `python -m tickr.api [--config config/bot.toml] [serve|pair]`.
 
-`serve` opens the local port and, when `[api] remote_hosts` is set, the phone-facing
+`serve` opens the local port and, when `[api] remote_hosts_file` names a host, the phone-facing
 `[api] remote_port` (bearer token always required). `pair` revokes the phone's token and leaves a
 pairing link with a one-time code in a 0600 file under data_dir for the owner to move to the
 phone; the phone redeems the code once, at POST /pair on the remote port, for its new token.
