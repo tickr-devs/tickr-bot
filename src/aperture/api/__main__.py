@@ -62,7 +62,10 @@ def attach_chart_source(
     tests. Until then GET /chart answers 503 with that cause; checked once, at start."""
     if not cfg.chart.webull_enabled:
         return None
-    refused = gate(cfg)
+    try:
+        refused = gate(cfg)
+    except Exception as exc:  # noqa: BLE001 - the chart never takes the API down at start
+        refused = f"the chart probe C1 gate failed ({type(exc).__name__})"
     if refused is not None:
         cause = f"chart market data is off: {refused}"
         server.chart.use(None, cause)

@@ -547,6 +547,24 @@ def test_no_chart_client_is_built_until_probe_c1_is_recorded_as_passed(served, t
     assert resp.status == 202
 
 
+def test_a_chart_gate_that_raises_refuses_the_chart_and_the_api_still_serves(served, tmp_path):
+    """The gate runs before the API serves: an error nobody listed must become a refusal, or
+    launchd would restart an API that never answers stop or emergency."""
+    def broken_gate(cfg: config.Config) -> str | None:
+        raise RecursionError("secret-ish")
+
+    def never(cfg: config.Config) -> FakeMarketData:
+        raise AssertionError("built although the gate failed")
+
+    assert attach_chart_source(served, chart_on(tmp_path), never, gate=broken_gate) is None
+    resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=5m&range=1d")
+    assert resp.status == 503
+    assert "the chart probe C1 gate failed (RecursionError)" in doc(payload)["cause"]
+    assert "secret-ish" not in payload.decode()
+    resp, _ = request(served, "POST", "/commands/emergency", {})
+    assert resp.status == 202
+
+
 def test_chart_off_builds_nothing(served, tmp_path):
     def never(cfg: config.Config) -> FakeMarketData:
         raise AssertionError("built while [chart] webull_enabled is false")

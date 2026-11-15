@@ -107,7 +107,9 @@ limit of 30 requests per 60 s per route that the bot uses.
   Sunday evening and do not touch the config after the bot starts. The API does
   not become a second Webull client by that setting: it builds no chart client until this
   probe is recorded as passed (GET /chart answers 503 and says so), and the launchd API job
-  is not given the Webull keys anyway. Then, any time the bot
+  is not given the Webull keys anyway. If that 503 names an unfinished run or a summary it
+  cannot read, run the probe again; for an unreadable one, first delete that run's folder
+  under `data/probes/`. Then, any time the bot
   runs: `python -m aperture.probes chart-client SYM`. It reads one bar every 30 s for 10
   minutes, watches that the bot keeps reading the broker and that the token folder does not
   change, and prints `passed` or `failed`. Do not open charts in the apps while it runs: they

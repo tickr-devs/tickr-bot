@@ -344,7 +344,8 @@ def test_the_chart_gate_stays_shut_on_a_summary_it_cannot_read(tmp_path, text):
     summary_file(cfg, "2026-11-16", "chart-client-150000", verdict=probes.PASSED,
                  started_at="2026-11-16T15:00:00+00:00")
     summary_file(cfg, "2026-11-17", "chart-client-150000").write_text(text)
-    assert "summary.json cannot be read" in probes.chart_client_gate(cfg)
+    cause = probes.chart_client_gate(cfg)
+    assert "summary.json cannot be read" in cause and "remove that run's folder" in cause
 
 
 def test_a_passed_chart_client_run_opens_the_chart_gate(tmp_path):

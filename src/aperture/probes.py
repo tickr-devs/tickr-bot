@@ -376,6 +376,7 @@ def chart_client_gate(cfg: Config) -> str | None:
     not pass, as new as the newest file in it."""
     how = ("run `python -m aperture.probes chart-client SYMBOL` next to the running bot, then "
            "start the API again")
+    remove = "remove that run's folder, then "
     root = cfg.root / cfg.run.data_dir / cfg.probe.evidence_dir
     newest: tuple[datetime, str] | None = None
     for folder in sorted(root.glob("*/chart-client-*")):
@@ -385,7 +386,7 @@ def chart_client_gate(cfg: Config) -> str | None:
                 changed = max(item.stat().st_mtime for item in (folder, *folder.iterdir()))
             except OSError as exc:
                 return (f"chart probe C1: {folder.name} cannot be read "
-                        f"({type(exc).__name__}); {how}")
+                        f"({type(exc).__name__}); {remove}{how}")
             run = (datetime.fromtimestamp(changed, UTC), UNFINISHED)
             if newest is None or run[0] > newest[0]:
                 newest = run
@@ -399,7 +400,7 @@ def chart_client_gate(cfg: Config) -> str | None:
                 raise ValueError("started_at has no time zone")
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return (f"chart probe C1: {path.parent.name}/{SUMMARY_FILE} cannot be read "
-                    f"({type(exc).__name__}); {how}")
+                    f"({type(exc).__name__}); {remove}{how}")
         if newest is None or run[0] > newest[0]:
             newest = run
     if newest is None:
