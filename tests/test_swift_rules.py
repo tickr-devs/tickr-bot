@@ -204,6 +204,17 @@ def test_ui_tests_may_use_xctest(tmp_path):
     assert load().legacy_violations(write(folder, "import XCTest\n", "LaunchTests.swift")) == []
 
 
+def test_ui_test_targets_get_only_the_legacy_rule(tmp_path, monkeypatch):
+    module = load()
+    folder = tmp_path / "ApertureUITests"
+    folder.mkdir()
+    write(folder, 'import XCTest\nlet cancel = button("Cancel")\n', "FlowTests.swift")
+    monkeypatch.setattr(module, "REPO", tmp_path)
+    monkeypatch.setattr(module, "ROOTS", (".",))
+    assert module.swift_files() == []
+    assert [path.name for path in module.test_swift_files()] == ["FlowTests.swift"]
+
+
 def test_every_form_of_an_outdated_import_fails(tmp_path):
     source = (
         "@preconcurrency import Combine\n"
