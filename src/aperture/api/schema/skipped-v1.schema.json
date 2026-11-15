@@ -270,6 +270,28 @@
                       "type": "null"
                     }
                   ]
+                },
+                "cause_codes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "params"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -277,7 +299,8 @@
                 "at",
                 "price",
                 "change_usd",
-                "cause"
+                "cause",
+                "cause_codes"
               ],
               "additionalProperties": false
             }
@@ -342,15 +365,60 @@
                     "type": "null"
                   }
                 ]
+              },
+              "cause_codes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "params"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
               "result_gross_usd",
               "result_r",
               "exit_reason",
-              "cause"
+              "cause",
+              "cause_codes"
             ],
             "additionalProperties": false
+          },
+          "prices_after_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -365,7 +433,8 @@
           "checks",
           "prices_after",
           "prices_after_cause",
-          "what_if"
+          "what_if",
+          "prices_after_cause_codes"
         ],
         "additionalProperties": false
       }

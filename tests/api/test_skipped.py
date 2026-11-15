@@ -121,6 +121,7 @@ def _research_total(cfg, records, path):
 
 
 NO_BARS = "no captured bars for 2026-11-16"
+NO_BARS_CODES = [{"code": "no_captured_bars", "params": {"day": "2026-11-16"}}]
 
 
 def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
@@ -143,7 +144,8 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
                      "threshold": "1.5", "passed": True, "note": ""}],
          "prices_after": [], "prices_after_cause": NO_BARS,
          "what_if": {"result_gross_usd": None, "result_r": None, "exit_reason": None,
-                     "cause": NO_BARS}},
+                     "cause": NO_BARS, "cause_codes": NO_BARS_CODES},
+         "prices_after_cause_codes": NO_BARS_CODES},
         {"at": "2026-11-16T15:07:00.000Z", "symbol": "ABCD",
          "strategy": {"name": "price-action-v1", "version": "1"},
          "admission": "refused",
@@ -155,7 +157,8 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
                      "threshold": "1.5", "passed": True, "note": ""}],
          "prices_after": [], "prices_after_cause": NO_BARS,
          "what_if": {"result_gross_usd": None, "result_r": None, "exit_reason": None,
-                     "cause": NO_BARS}},
+                     "cause": NO_BARS, "cause_codes": NO_BARS_CODES},
+         "prices_after_cause_codes": NO_BARS_CODES},
     ]
     # /decisions carries the same admission and cause
     decisions = _get(api, "/decisions?symbol=ABCD&date=2026-11-16", "decisions-v1")
@@ -441,11 +444,12 @@ def test_observer_trades_are_the_simulated_enters(api, cfg):
          "closed_at": contract.format_time(trade.exit_time),
          "exit_price": str(trade.exit_price.quantize(q)), "quantity": "10",
          "exit_reason": "stop", "result_gross_usd": str(filled.result_usd.quantize(q)),
-         "result_r": str(trade.r_multiple.quantize(q)), "cause": None},
+         "result_r": str(trade.r_multiple.quantize(q)), "cause": None, "cause_codes": []},
         {"symbol": "ABCD", "at": "2026-11-16T15:07:00.000Z", "opened_at": None,
          "entry_price": None, "closed_at": None, "exit_price": None, "quantity": None,
          "exit_reason": None, "result_gross_usd": None, "result_r": None,
-         "cause": "skipped_overlap: an earlier simulated trade of ABCD was still open"}]
+         "cause": "skipped_overlap: an earlier simulated trade of ABCD was still open",
+         "cause_codes": [{"code": "skipped_overlap", "params": {"symbol": "ABCD"}}]}]
     assert overlap.trade is None and Decimal(trades[0]["result_r"]) < 0
 
 

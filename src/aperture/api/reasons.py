@@ -227,3 +227,145 @@ def refusal_params(code: str, detail: str, since: datetime | None,
     if code == "SYMBOL_COOLDOWN" and params and until is not None:
         params = {**params, "until": _ny_time(until)}
     return params
+
+
+# ---------------------------------------------------------------- the API's own prose
+
+_WIRE = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
+_ERROR = r"[A-Z][A-Za-z]*(?:Error|Exception|Refused|Unavailable|Journal)"
+
+# Causes the API writes itself (api/history, after, observer_results, cleanday, performance,
+# contract closeness). Wire times in them are given as HH:MM New York.
+_PROSE = _shapes(
+    # entry send (history.entry_send) and paths that do not read it
+    ("entry_orders_count", r"trade \S+ has (?P<count>[0-9]+) entry orders, expected 1"),
+    ("no_intent_row", r"no order-intent row"),
+    ("never_attempted", r"never attempted: no order-attempted row"),
+    ("no_fill_row", r"no order-observed row shows the entry filled"),
+    ("journal_unreadable", r"journal unreadable: (?P<detail>.+)"),
+    ("not_read", r"not read on this path"),
+    ("not_computed", r"not computed on this path"),
+    # prices after and overshoot (api/after.py)
+    ("session_ended", r"the session ended at (?P<time>" + _WIRE + ")"),
+    ("no_bars_for_symbol", r"no bar recorded for (?P<symbol>\S+) that day"),
+    ("bars_end_before", r"the bars end at (?P<time>" + _WIRE + "), before (?P<until>" + _WIRE
+     + ")"),
+    ("bars_end", r"the bars end at (?P<time>" + _WIRE + ")"),
+    ("no_bar_for_minute", r"no bar recorded for the minute (?P<time>" + _WIRE + ")"),
+    ("no_reference_price", r"the decision bar was not captured: no reference price"),
+    ("calendar_refuses", r"calendar refuses (?P<day>" + _DAY + r"): (?P<detail>.+)"),
+    ("no_minute_before_close",
+     r"no minute after the exit before the close (?P<time>" + _WIRE + ")"),
+    ("no_bar_after_exit", r"no bar recorded after the exit minute up to (?P<until>" + _WIRE + ")"),
+    ("planned_loss_not_positive",
+     r"planned loss (?P<planned_loss>" + _NUM + r") is not positive: no R"),
+    # what-if and observer simulations (api/after.py, api/observer_results.py)
+    ("simulation_refused", r"simulation refused: (?P<detail>.+)"),
+    ("skipped_overlap", r"skipped_overlap: an earlier simulated trade of (?P<symbol>\S+) was "
+                        r"still open"),
+    ("skipped_same_signal", r"skipped_same_signal: the same signal \(setup (?P<setup>\S+), "
+                            r"trigger (?P<trigger>\S+)\) already made a simulated trade of "
+                            r"(?P<symbol>\S+) that day"),
+    ("simulation_outcome", r"(?P<outcome>filled|missed|rejected|ignored|not_simulated): "
+                           r"(?P<detail>.*)"),
+    ("no_decisions", r"no decisions recorded that day"),
+    ("no_captured_bars", r"no captured bars for (?P<day>" + _DAY + ")"),
+    ("capture_refused", r"capture file refused: (?P<detail>.+)"),
+    ("replay_settings_unreadable", r"replay settings unreadable: (?P<detail>.+)"),
+    ("calendar_unreadable", r"session calendar unreadable: (?P<detail>.+)"),
+    ("enters_not_simulated", r"(?P<count>[0-9]+) ENTER\(s\) could not be simulated: the "
+                             r"decision bar is not in the captured bars"),
+    ("trades_without_quantity",
+     r"(?P<count>[0-9]+) simulated trade\(s\) have no recorded whole quantity"),
+    ("result_in_r_only", r"no recorded whole quantity: result in R only"),
+    # clean-day verdict (api/cleanday.py)
+    ("day_not_over", r"the day is not over"),
+    ("reconcile_not_recorded",
+     r"not recorded: no reconcile-checked row that date \(the bot records them since "
+     r"\[orders\] reconcile_proof_seconds was added\)"),
+    ("no_day_end", r"no day-end row that date \(the bot was not running after the flatten "
+                   r"time\)"),
+    ("day_end_unknown", r"the day-end check had no broker reads \(day_clean null\)"),
+    ("no_calendar", r"the session calendar cannot be read"),
+    ("calendar_error", r"calendar: (?P<detail>.+)"),
+    ("reconcile_gap", r"no reconcile-checked row from (?P<since>" + _WIRE + ") to (?P<until>"
+                      + _WIRE + r") \((?P<seconds>[0-9]+) s, more than \[orders\] "
+                      r"reconcile_max_gap_seconds (?P<max_gap>" + _NUM + r")\)"),
+    ("reconcile_mismatch", r"reconcile: (?P<detail>.+)"),
+    ("fence_still_set", r"(?P<fence>[a-z-]+(?::\S+)?): still set at the end of the day"),
+    ("day_end_not_clean", r"day end: broker_flat (?P<broker_flat>\S+), agree (?P<agree>\S+), "
+                          r"open_trades (?P<open_trades>\S+)"),
+    ("unprotected_alert", r"alert: (?P<detail>.+)"),
+    ("safety_exit", r"exit (?P<exit>\S+) for trade (?P<trade>\S+)"),
+    ("emergency_command", r"emergency command \((?P<outcome>[^)]*)\)"),
+    # closeness of the decisive check (api/contract.closeness)
+    ("all_checks_passed", r"every recorded check passed"),
+    ("quote_age_not_recorded", r"not recorded: decision records hold no quote time"),
+    ("yes_no_check", r"(?P<rule>\S+): a yes/no check has no measured value"),
+    ("needs_positive_threshold", r"(?P<rule>\S+): needs threshold > 0 and measured >= 0"),
+    ("needs_positive_measured", r"(?P<rule>\S+): needs measured > 0 and threshold >= 0"),
+    ("no_direction", r"(?P<rule>\S+): operator '(?P<operator>[^']*)' has no direction"),
+    ("check_contradicts_record",
+     r"(?P<rule>\S+): recorded as failed but measured meets the threshold"),
+    # performance (api/performance.py)
+    ("planned_loss_not_positive_r", r"planned loss is not positive: no 1 R to divide by"),
+    ("no_trades", r"no counted trades in the range"),
+    ("no_wins", r"no winning trades in the range"),
+    ("no_losses", r"no losing trades in the range"),
+    # a display part that failed unexpectedly: `TypeName: message`
+    ("display_failed", r"(?P<error>" + _ERROR + r"): (?P<detail>.*)"),
+)
+_WIRE_PARAMS = ("time", "until", "since")
+_FENCE_CAUSE = re.compile(r"(?P<fence>[a-z-]+(?::\S+)?): (?P<cause>.+)")
+_SEPARATOR = "; "
+
+
+def _ny_wire(text: str) -> str:
+    """A wire time as HH:MM New York; a text the pattern matched but no calendar has (month
+    13, hour 25) stays as written."""
+    try:
+        return _ny_time(datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%f%z"))
+    except (ValueError, OverflowError):
+        return text
+
+
+def _prose_one(text: str) -> Reason:
+    found = _first(_PROSE, text)
+    if found.code == UNRECOGNIZED:
+        # A clean-day fault quoting a fence's own cause (`<fence name>: <cause>`).
+        match = _FENCE_CAUSE.fullmatch(text)
+        if match is not None:
+            fence = fence_reason(match["fence"], match["cause"])
+            if fence.code != UNRECOGNIZED:
+                return Reason("fence", {"fence": match["fence"], "fence_code": fence.code,
+                                        **fence.params})
+        return found
+    params = {k: _ny_wire(v) if k in _WIRE_PARAMS and re.fullmatch(_WIRE, v) else v
+              for k, v in found.params.items()}
+    return Reason(found.code, params)
+
+
+def prose_reasons(text: str | None) -> tuple[Reason, ...]:
+    """The codes of a cause the API wrote: empty for null, one reason when the whole text reads
+    as one, else one per `; `-joined part (an entry send's missing rows, a clean day's faults),
+    a part joined with the next when only the two read as one cause. A part in no known shape
+    is UNRECOGNIZED: clients then show the text. Never raises on a string."""
+    if text is None:
+        return ()
+    whole = _prose_one(text)
+    if whole.code != UNRECOGNIZED or _SEPARATOR not in text:
+        return (whole,)
+    parts = text.split(_SEPARATOR)
+    found: list[Reason] = []
+    start = 0
+    while start < len(parts):
+        # One part, or a part with the next: an engine fence cause quoted in a clean-day fault
+        # may itself hold one `; ` ("...; exiting"). Linear in the number of parts.
+        end, reason = start + 1, _prose_one(parts[start])
+        if reason.code == UNRECOGNIZED and start + 1 < len(parts):
+            pair = _prose_one(_SEPARATOR.join(parts[start:start + 2]))
+            if pair.code != UNRECOGNIZED:
+                end, reason = start + 2, pair
+        found.append(reason)
+        start = end
+    return tuple(found)

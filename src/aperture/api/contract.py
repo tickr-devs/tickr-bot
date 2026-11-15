@@ -30,7 +30,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-from aperture.api.reasons import refusal_params
+from aperture.api.reasons import UNRECOGNIZED as UNRECOGNIZED_CODE
+from aperture.api.reasons import Reason, prose_reasons, refusal_params
 from aperture.data.base import ScreenerKind
 from aperture.replay.engine import ExitReason
 from aperture.research.records import Admission, DecisionRecord
@@ -82,6 +83,26 @@ def _params_added_later() -> Any:
 
 # A reason's parameters: name -> plain text value (docs/api.md, "Reason codes").
 Params = dict[str, str]
+
+# A cause's code and parameters ({code, params}; docs/api.md, "Reason codes").
+ReasonV1 = Reason
+REASONS_OF = "reasons_of"
+
+
+def _reasons_of(source: str) -> Any:
+    """`<source>_codes`: the codes of the cause in field `source`. Computed only when a document
+    is encoded (`to_jsonable`), never when one is built or read, so no path that builds these
+    records (the daily-loss check reads `DayTrade`s) ever parses a cause; the attribute itself
+    stays empty. Added after version 1 shipped."""
+    return field(init=False, default=(), metadata={REASONS_OF: source, ADDED_AFTER_V1: True})
+
+
+def _codes_for(document: Any, source: str) -> tuple[Reason, ...]:
+    """Display only: a reason table that fails on a text shows it unrecognized, never raises."""
+    try:
+        return prose_reasons(getattr(document, source))
+    except Exception:  # noqa: BLE001 - see docstring
+        return (Reason(UNRECOGNIZED_CODE),)
 
 # The code of a reason the bot wrote before it recorded codes; clients show the text.
 UNRECORDED = "unrecorded"
@@ -216,6 +237,7 @@ class Position:
     entry: EntrySend
     entry_cause: str | None  # why a field of `entry` is null; null when none is
 
+    entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
 
 @dataclass(frozen=True)
 class Trade:
@@ -233,6 +255,7 @@ class Trade:
     entry: EntrySend
     entry_cause: str | None  # why a field of `entry` is null; null when none is
 
+    entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
 
 @dataclass(frozen=True)
 class Freshness:
@@ -402,6 +425,7 @@ class PriceAfterV1:
     change_usd: Decimal | None
     cause: str | None
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class WhatIfV1:
@@ -414,6 +438,7 @@ class WhatIfV1:
     exit_reason: ExitReason | None
     cause: str | None
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class DayTrade:
@@ -450,6 +475,9 @@ class DayTrade:
     overshoot_r: Decimal | None
     overshoot_cause: str | None
 
+    entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
+    prices_after_cause_codes: tuple[ReasonV1, ...] = _reasons_of("prices_after_cause")
+    overshoot_cause_codes: tuple[ReasonV1, ...] = _reasons_of("overshoot_cause")
 
 class CleanVerdict(StrEnum):
     """Did the broker and the bot's records agree all that New York day (docs/api.md)."""
@@ -473,6 +501,7 @@ class CleanCause:
     text: str  # plain words, from the rows
     journal_seqs: tuple[int, ...]  # the journal rows (seq) that prove it, oldest first
 
+    text_codes: tuple[ReasonV1, ...] = _reasons_of("text")
 
 @dataclass(frozen=True)
 class CleanDay:
@@ -487,6 +516,7 @@ class CleanDay:
     last_reconcile_at: datetime | None
     day_end_seq: int | None  # the date's `day-end` row, if any
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class DaySummary:
@@ -739,6 +769,7 @@ class ObserverTradeV1:
     result_r: Decimal | None
     cause: str | None
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class ObserverV1:
@@ -758,6 +789,8 @@ class ObserverV1:
     trades_cause: str | None
     trades_truncated: bool
 
+    result_cause_codes: tuple[ReasonV1, ...] = _reasons_of("result_cause")
+    trades_cause_codes: tuple[ReasonV1, ...] = _reasons_of("trades_cause")
 
 @dataclass(frozen=True)
 class ObserversV1:
@@ -983,6 +1016,7 @@ class SkippedSignalV1:
     prices_after_cause: str | None
     what_if: WhatIfV1
 
+    prices_after_cause_codes: tuple[ReasonV1, ...] = _reasons_of("prices_after_cause")
 
 @dataclass(frozen=True)
 class SkippedV1:
@@ -1122,6 +1156,8 @@ class WatchingRowV1:
     quote_age_seconds: Decimal | None
     quote_age_cause: str | None
 
+    closeness_cause_codes: tuple[ReasonV1, ...] = _reasons_of("closeness_cause")
+    quote_age_cause_codes: tuple[ReasonV1, ...] = _reasons_of("quote_age_cause")
 
 @dataclass(frozen=True)
 class WatchingV1:
@@ -1223,6 +1259,7 @@ class ExclusionV1:
     cause: str
     trades: int
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class PerformanceDayV1:
@@ -1268,6 +1305,14 @@ class PerformanceV1:
     days: tuple[PerformanceDayV1, ...]
     api_version: int = _const(API_VERSION)
 
+    win_rate_cause_codes: tuple[ReasonV1, ...] = _reasons_of("win_rate_cause")
+    expectancy_gross_r_cause_codes: tuple[ReasonV1, ...] = _reasons_of("expectancy_gross_r_cause")
+    expectancy_gross_usd_cause_codes: tuple[ReasonV1, ...] = (
+        _reasons_of("expectancy_gross_usd_cause"))
+    average_win_gross_r_cause_codes: tuple[ReasonV1, ...] = _reasons_of("average_win_gross_r_cause")
+    average_loss_gross_r_cause_codes: tuple[ReasonV1, ...] = (
+        _reasons_of("average_loss_gross_r_cause"))
+    profit_factor_gross_cause_codes: tuple[ReasonV1, ...] = _reasons_of("profit_factor_gross_cause")
 
 SCHEMA_TYPES: dict[str, type] = {
     "status-v1": StatusV1,
@@ -1315,7 +1360,9 @@ def parse_time(text: str) -> datetime:
 
 def to_jsonable(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
-        return {f.name: to_jsonable(getattr(value, f.name)) for f in fields(value)}
+        return {f.name: to_jsonable(_codes_for(value, f.metadata[REASONS_OF])
+                                    if REASONS_OF in f.metadata else getattr(value, f.name))
+                for f in fields(value)}
     if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, bool | int | str) or value is None:
@@ -1440,8 +1487,9 @@ def from_jsonable(cls: type, raw: Any, where: str = "$") -> Any:
     if missing:
         raise ContractError(f"{where}: missing keys: {', '.join(missing)}")
     meta = {f.name: f.metadata or None for f in fields(cls)}
+    computed = {f.name for f in fields(cls) if not f.init}  # rebuilt from their source field
     return cls(**{n: _decode(f"{where}.{n}", raw[n], hints[n], meta[n])
-                  for n in expected if n in raw})
+                  for n in expected if n in raw and n not in computed})
 
 
 def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

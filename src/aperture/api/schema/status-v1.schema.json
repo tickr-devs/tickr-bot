@@ -319,6 +319,28 @@
                   "type": "null"
                 }
               ]
+            },
+            "entry_cause_codes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "code",
+                  "params"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -328,7 +350,8 @@
             "opened_at",
             "stop",
             "entry",
-            "entry_cause"
+            "entry_cause",
+            "entry_cause_codes"
           ],
           "additionalProperties": false
         },
@@ -500,6 +523,28 @@
                 "type": "null"
               }
             ]
+          },
+          "entry_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -514,7 +559,8 @@
           "planned_loss_usd",
           "stop_confirmed_after_seconds",
           "entry",
-          "entry_cause"
+          "entry_cause",
+          "entry_cause_codes"
         ],
         "additionalProperties": false
       }
@@ -828,6 +874,28 @@
                 "type": "null"
               }
             ]
+          },
+          "entry_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -837,7 +905,8 @@
           "opened_at",
           "stop",
           "entry",
-          "entry_cause"
+          "entry_cause",
+          "entry_cause_codes"
         ],
         "additionalProperties": false
       }

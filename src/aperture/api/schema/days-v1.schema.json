@@ -76,12 +76,35 @@
                       "items": {
                         "type": "integer"
                       }
+                    },
+                    "text_codes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "params"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
                     "kind",
                     "text",
-                    "journal_seqs"
+                    "journal_seqs",
+                    "text_codes"
                   ],
                   "additionalProperties": false
                 }
@@ -120,6 +143,28 @@
                     "type": "null"
                   }
                 ]
+              },
+              "cause_codes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "params"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -129,7 +174,8 @@
               "reconcile_rows",
               "first_reconcile_at",
               "last_reconcile_at",
-              "day_end_seq"
+              "day_end_seq",
+              "cause_codes"
             ],
             "additionalProperties": false
           }

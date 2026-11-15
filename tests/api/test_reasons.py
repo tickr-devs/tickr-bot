@@ -4,6 +4,7 @@ anything else is `unrecognized` with no values, never a guess."""
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -132,3 +133,120 @@ def test_size_and_daily_refusals_carry_their_values():
 ])
 def test_refusal_params(code, detail, params):
     assert _refusal(code, detail) == params
+
+
+# ---------------------------------------------------------------- the API's own prose
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _codes(node: object) -> list[tuple[str, str]]:
+    """(source field, code) of every `<field>_codes` entry in a decoded document."""
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key.endswith("_codes") and isinstance(value, list):
+                found += [(key, reason["code"]) for reason in value]
+            found += _codes(value)
+    elif isinstance(node, list):
+        for item in node:
+            found += _codes(item)
+    return found
+
+
+def test_every_cause_in_the_fixtures_has_a_code():
+    import json
+    seen = [(path.name, key, code) for path in sorted(FIXTURES.glob("*.json"))
+            for key, code in _codes(json.loads(path.read_text("utf-8")))]
+    assert seen and [s for s in seen if s[2] == reasons.UNRECOGNIZED] == []
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    (None, ()),
+    ("no captured bars for 2026-11-16", (("no_captured_bars", {"day": "2026-11-16"}),)),
+    ("the bars end at 2026-11-16T15:49:00.000Z", (("bars_end", {"time": "10:49"}),)),
+    ("the bars end at 2026-11-16T15:49:00.000Z, before 2026-11-16T16:48:00.000Z",
+     (("bars_end_before", {"time": "10:49", "until": "11:48"}),)),
+    ("no order-intent row; never attempted: no order-attempted row",
+     (("no_intent_row", {}), ("never_attempted", {}))),
+    ("journal unreadable: KeyError: 'a'; 'b'",
+     (("journal_unreadable", {"detail": "KeyError: 'a'; 'b'"}),)),
+    ("unprotected-timeout:t1: no verified stop for 30 s; exiting; alert: t1",
+     (("fence", {"fence": "unprotected-timeout:t1", "fence_code": "unprotected_exiting",
+                 "seconds": "30"}), ("unprotected_alert", {"detail": "t1"}))),
+    ("no reconcile-checked row from 2026-11-16T14:30:00.000Z to 2026-11-16T15:00:00.000Z "
+     "(1800 s, more than [orders] reconcile_max_gap_seconds 900)",
+     (("reconcile_gap", {"since": "09:30", "until": "10:00", "seconds": "1800",
+                         "max_gap": "900"}),)),
+    ("relative_volume: needs threshold > 0 and measured >= 0",
+     (("needs_positive_threshold", {"rule": "relative_volume"}),)),
+    ("skipped_overlap: an earlier simulated trade of ABCD was still open",
+     (("skipped_overlap", {"symbol": "ABCD"}),)),
+    ("something new; no order-intent row", (("unrecognized", {}), ("no_intent_row", {}))),
+])
+def test_prose_reasons(text, expected):
+    assert tuple((r.code, r.params) for r in reasons.prose_reasons(text)) == expected
+
+
+def test_codes_are_computed_when_encoding_and_never_read_from_a_document():
+    trade = contract.WhatIfV1(None, None, None, "simulation refused: no bars")
+    assert trade.cause_codes == ()  # building a record parses nothing (the daily-loss path)
+    raw = contract.to_jsonable(trade)
+    assert raw["cause_codes"] == [{"code": "simulation_refused", "params": {"detail": "no bars"}}]
+    forged = {**raw, "cause_codes": [{"code": "forged", "params": {}}]}
+    assert contract.to_jsonable(contract.from_jsonable(contract.WhatIfV1, forged)) == raw
+    del forged["cause_codes"]  # a document from before the codes
+    assert contract.to_jsonable(contract.from_jsonable(contract.WhatIfV1, forged)) == raw
+
+
+def test_the_daily_loss_records_never_parse_a_cause(monkeypatch):
+    def boom(_text):
+        raise AssertionError("parsed on a build path")
+    monkeypatch.setattr(contract, "prose_reasons", boom)
+    contract.WhatIfV1(None, None, None, "simulation refused: x")  # builds without parsing
+    # and an encoder that meets a failing table shows the cause unrecognized, never raises
+    assert contract.to_jsonable(contract.WhatIfV1(None, None, None, "x"))["cause_codes"] == [
+        {"code": reasons.UNRECOGNIZED, "params": {}}]
+
+
+def test_planned_loss_texts_of_after_and_performance_read():
+    from aperture.api.performance import NOT_POSITIVE_PLANNED_LOSS
+    assert reasons.prose_reasons(NOT_POSITIVE_PLANNED_LOSS)[0].code == (
+        "planned_loss_not_positive_r")
+    assert reasons.prose_reasons("planned loss 0 is not positive: no R")[0].params == {
+        "planned_loss": "0"}
+
+
+@pytest.mark.parametrize(("text", "codes"), [
+    ("the bars end at 2026-13-45T25:61:00.000Z",
+     [("bars_end", {"time": "2026-13-45T25:61:00.000Z"})]),
+    ("the session ended at 0001-01-01T00:00:00.000Z",  # before New York's offset exists
+     [("session_ended", {"time": "0001-01-01T00:00:00.000Z"})]),
+    ("x; the bars end at 2026-02-30T10:00:00.000Z",
+     [("unrecognized", {}), ("bars_end", {"time": "2026-02-30T10:00:00.000Z"})]),
+    ("no reconcile-checked row from 2026-02-30T14:30:00.000Z to 2026-11-16T15:00:00.000Z "
+     "(1800 s, more than [orders] reconcile_max_gap_seconds 900)",
+     [("reconcile_gap", {"since": "2026-02-30T14:30:00.000Z", "until": "10:00",
+                         "seconds": "1800", "max_gap": "900"})]),
+])
+def test_an_impossible_wire_time_stays_as_written_and_never_raises(text, codes):
+    assert [(r.code, r.params) for r in reasons.prose_reasons(text)] == codes
+
+
+def test_a_status_with_an_odd_cause_writes_and_reads_back():
+    from .samples import status as sample_status
+    status = sample_status()
+    trade = status.trades_today[0]
+    odd = replace(trade, entry_cause="the session ended at 2026-13-45T25:61:61.000Z")
+    text = contract.dumps(replace(status, trades_today=(odd,)))
+    back = contract.loads(contract.StatusV1, text)
+    assert back.trades_today[0].entry_cause == odd.entry_cause
+    assert contract.dumps(back) == text
+
+
+def test_many_unknown_parts_stay_linear():
+    import time
+    text = "; ".join(f"odd part {i}" for i in range(5000))
+    started = time.monotonic()
+    assert len(reasons.prose_reasons(text)) == 5000
+    assert time.monotonic() - started < 2  # pair-wise only, never every run of parts

@@ -254,6 +254,28 @@
                       "type": "null"
                     }
                   ]
+                },
+                "cause_codes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "params"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -261,7 +283,8 @@
                 "at",
                 "price",
                 "change_usd",
-                "cause"
+                "cause",
+                "cause_codes"
               ],
               "additionalProperties": false
             }
@@ -307,6 +330,72 @@
                 "type": "null"
               }
             ]
+          },
+          "entry_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "prices_after_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "overshoot_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -330,7 +419,10 @@
           "prices_after_cause",
           "overshoot_usd",
           "overshoot_r",
-          "overshoot_cause"
+          "overshoot_cause",
+          "entry_cause_codes",
+          "prices_after_cause_codes",
+          "overshoot_cause_codes"
         ],
         "additionalProperties": false
       }

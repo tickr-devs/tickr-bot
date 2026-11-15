@@ -50,7 +50,8 @@
         "sends": 1,
         "filled_at": "2026-11-16T15:00:01.625Z"
       },
-      "entry_cause": null
+      "entry_cause": null,
+      "entry_cause_codes": []
     },
     "trades_today": [
       {
@@ -73,7 +74,8 @@
           "sends": 1,
           "filled_at": "2026-11-16T15:00:04.123Z"
         },
-        "entry_cause": null
+        "entry_cause": null,
+        "entry_cause_codes": []
       }
     ],
     "result_today_gross_usd": "-1.60",
@@ -115,7 +117,8 @@
           "sends": 1,
           "filled_at": "2026-11-16T15:00:01.625Z"
         },
-        "entry_cause": null
+        "entry_cause": null,
+        "entry_cause_codes": []
       }
     ],
     "schema_version": 1

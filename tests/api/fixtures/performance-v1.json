@@ -9,7 +9,13 @@
   "exclusions": [
     {
       "cause": "planned loss is not positive: no 1 R to divide by",
-      "trades": 1
+      "trades": 1,
+      "cause_codes": [
+        {
+          "code": "planned_loss_not_positive_r",
+          "params": {}
+        }
+      ]
     }
   ],
   "win_rate": "0.4000",
@@ -44,5 +50,11 @@
       "cumulative_gross_r": "2.0000"
     }
   ],
-  "api_version": 1
+  "api_version": 1,
+  "win_rate_cause_codes": [],
+  "expectancy_gross_r_cause_codes": [],
+  "expectancy_gross_usd_cause_codes": [],
+  "average_win_gross_r_cause_codes": [],
+  "average_loss_gross_r_cause_codes": [],
+  "profit_factor_gross_cause_codes": []
 }

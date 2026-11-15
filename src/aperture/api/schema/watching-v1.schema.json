@@ -145,6 +145,50 @@
                 "type": "null"
               }
             ]
+          },
+          "closeness_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "quote_age_cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -156,7 +200,9 @@
           "closeness",
           "closeness_cause",
           "quote_age_seconds",
-          "quote_age_cause"
+          "quote_age_cause",
+          "closeness_cause_codes",
+          "quote_age_cause_codes"
         ],
         "additionalProperties": false
       }

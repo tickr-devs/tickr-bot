@@ -154,6 +154,42 @@ clients show the text.
 - `code` and `params` were added after version 1 shipped: a reader takes a document without
   them as `unrecorded` and `{}`.
 
+The API's own causes carry their codes in a sibling `<field>_codes`: a list of `{code, params}`,
+empty when the cause is `null`, one entry for a cause that reads as one, else one per `; `-joined
+part (an entry send's missing rows, a clean day's faults). The bot computes it from the cause on
+every build, so the two always agree; a reader of a document without it rebuilds it the same
+way. Siblings: `entry_cause_codes` (positions, `trades_today`, day-v1 `trades`),
+`prices_after_cause_codes`, `overshoot_cause_codes` (day-v1 trades, skipped signals),
+`cause_codes` (each `prices_after` point, `what_if`, observer `trades`, `clean`, performance
+`exclusions`), `text_codes` (`clean.causes[]`), `result_cause_codes` / `trades_cause_codes`
+(observers), `closeness_cause_codes` / `quote_age_cause_codes` (watching), and one per
+performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` New York):
+- entry send: `entry_orders_count` {count}, `no_intent_row`, `never_attempted`, `no_fill_row`,
+  `journal_unreadable` {detail}, `not_read`, `not_computed`;
+- prices after and overshoot: `session_ended` {time}, `no_bars_for_symbol` {symbol}, `bars_end`
+  {time}, `bars_end_before` {time, until}, `no_bar_for_minute` {time}, `no_reference_price`,
+  `calendar_refuses` {day, detail}, `no_minute_before_close` {time}, `no_bar_after_exit`
+  {until}, `planned_loss_not_positive` {planned_loss};
+- simulations: `simulation_refused` {detail}, `simulation_outcome` {outcome, detail},
+  `skipped_overlap` {symbol}, `skipped_same_signal` {setup, trigger, symbol}, `no_decisions`,
+  `no_captured_bars` {day}, `capture_refused` {detail}, `replay_settings_unreadable` {detail},
+  `calendar_unreadable` {detail}, `enters_not_simulated` {count}, `trades_without_quantity`
+  {count}, `result_in_r_only`;
+- clean day: `day_not_over`, `reconcile_not_recorded`, `no_day_end`, `day_end_unknown`,
+  `no_calendar`, `calendar_error` {detail}, `reconcile_gap` {since, until, seconds, max_gap},
+  `reconcile_mismatch` {detail}, `fence` {fence, fence_code, ...} (a fence's cause, with the
+  fence codes above), `fence_still_set` {fence}, `day_end_not_clean` {broker_flat, agree,
+  open_trades}, `unprotected_alert` {detail}, `safety_exit` {exit, trade}, `emergency_command`
+  {outcome};
+- watching: `all_checks_passed`, `quote_age_not_recorded`, `yes_no_check` {rule},
+  `needs_positive_threshold` {rule}, `needs_positive_measured` {rule}, `no_direction` {rule,
+  operator}, `check_contradicts_record` {rule};
+- performance: `planned_loss_not_positive_r`, `no_trades`, `no_wins`, `no_losses`;
+- any of them: `display_failed` {error, detail} (a display part failed unexpectedly).
+`{detail}` is untranslated text (an error message, a calendar's own words). A check's `note` is
+the strategy's own fixed text per rule and has no code: translate it by `rule` and the exact
+text, or show it as is.
+
 Daily loss money (spec 7, check 6), exactly as the bot's admission computes it; `null` means
 unknown (a trade closed today has fills without a known price), never zero:
 `realized_loss_today_usd` is today's net realized loss (wins offset losses, never below 0),
