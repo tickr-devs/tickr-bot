@@ -114,15 +114,17 @@ def tradable_days(cfg: Config, calendar: SessionCalendar, pool: list[PoolEntry],
                             "cause": "SESSION_WITHOUT_BARS: "
                             + " ".join(d.isoformat() for d in missing)})
             continue
-        # Daily bars are forward-adjusted, M1 bars are not: the ratio daily/M1 is the same on
-        # both days unless a split falls between them.
-        before = entry.previous_close / closes[wanted[-1]] if wanted else None
-        after = entry.day_close / closes[day]
-        if before is not None and abs(before / after - 1) * 100 > tolerance_percent:
-            skipped.append({"symbol": symbol, "session_date": day.isoformat(),
-                            "cause": f"SPLIT_BETWEEN_SESSIONS: daily/M1 scale {before:.4f} "
-                            f"before, {after:.4f} on the day"})
-            continue
+        # Daily bars are forward-adjusted, M1 bars are not: on the day's M1 scale the pool's
+        # previous close matches the previous session's last M1 close unless a split (or a
+        # dividend above the tolerance) falls between them.
+        if wanted:
+            expected = entry.previous_close_on_minute_scale(closes[day])
+            raw = closes[wanted[-1]]
+            if abs(expected / raw - 1) * 100 > tolerance_percent:
+                skipped.append({"symbol": symbol, "session_date": day.isoformat(),
+                                "cause": f"SPLIT_BETWEEN_SESSIONS: previous close {raw} on M1, "
+                                f"{expected:.4f} on the day's M1 scale"})
+                continue
         days[symbol].append(day)
     return dict(days), skipped
 

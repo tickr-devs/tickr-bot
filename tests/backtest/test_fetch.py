@@ -217,3 +217,17 @@ def test_patiently_after_a_provider_429_waits_for_the_budget_pause():
 
     assert fetch.patiently(call, sleep, quiet) == "ok"
     assert len(waits) == 1 and waits[0] > 0
+
+
+def test_previous_close_on_minute_scale_undoes_split_and_dividend_adjustment():
+    from aperture.backtest.universe import PoolEntry
+    day = date(2026, 8, 17)
+    # 2:1 split overnight: adjusted daily previous close 80 (raw 160), day close 82 adjusted = raw
+    split = PoolEntry(day, 1, "APH", Decimal(80), Decimal(82), Decimal(3), Decimal(10**8))
+    assert split.previous_close_on_minute_scale(Decimal(82)) == Decimal(80)
+    # forward-adjusted series before a later dividend: daily 99.9 / 100.8, raw M1 close 101
+    dividend = PoolEntry(day, 1, "D", Decimal("99.9"), Decimal("100.8"), Decimal(1), Decimal(10**8))
+    scaled = dividend.previous_close_on_minute_scale(Decimal(101))
+    assert abs(scaled / Decimal(101) - Decimal("99.9") / Decimal("100.8")) < Decimal("1e-12")
+    with pytest.raises(BacktestError):
+        dividend.previous_close_on_minute_scale(Decimal(0))

@@ -13,6 +13,9 @@ candidates and drops, and the report shows where it bound.
 
 Daily bars are forward-adjusted; a ratio of two adjacent bars of the same series is unaffected.
 A symbol without a bar on the previous session is skipped for that day (no previous close).
+So `previous_close` and `day_close` are on the ADJUSTED daily scale, while M1 bars are raw: never
+compare a pool price with an M1 price directly (a split shows as a +100% gap, a dividend biases
+the gap up). `PoolEntry.previous_close_on_minute_scale` converts with the day's own M1 close.
 """
 
 from __future__ import annotations
@@ -45,6 +48,14 @@ class PoolEntry:
     day_close: Decimal
     day_high_change_percent: Decimal
     day_dollar_volume_usd: Decimal
+
+    def previous_close_on_minute_scale(self, minute_day_close: Decimal) -> Decimal:
+        """The previous close on the raw M1 scale of `session_date`: previous_close x (that day's
+        last M1 close / day_close). The adjusted ratio previous/day is kept, so a split or a
+        dividend between the two sessions does not appear as a price move."""
+        if self.day_close <= 0 or minute_day_close <= 0:
+            raise BacktestError(f"{self.symbol} {self.session_date}: close not positive")
+        return self.previous_close * minute_day_close / self.day_close
 
 
 @dataclass(frozen=True)
