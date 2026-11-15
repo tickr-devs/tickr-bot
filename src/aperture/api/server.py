@@ -105,6 +105,8 @@ class ApiSettings:
     account_path: Path  # the bot's account-v1 file, served at GET /account
     account_stale_seconds: Decimal
     simulation: SimulationPaths  # inputs of the observers' simulated day results
+    performance_max_range_days: int  # longest GET /performance range, both ends counted
+    performance_decimal_places: int  # rounding of GET /performance quotients
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -130,6 +132,10 @@ def settings_from_config(cfg: Config) -> ApiSettings:
     if api.idempotency_key_ttl_seconds <= api.command_max_age_seconds:
         raise ConfigError("[api] idempotency_key_ttl_seconds must be above "
                           "command_max_age_seconds, so a repeat can never queue a command twice")
+    if api.performance_max_range_days <= 0:
+        raise ConfigError("[api] performance_max_range_days must be positive")
+    if api.performance_decimal_places < 0:
+        raise ConfigError("[api] performance_decimal_places must not be negative")
     data = cfg.root / cfg.run.data_dir
     return ApiSettings(
         host=api.host,
@@ -155,6 +161,8 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         account_path=data / api.account_file,
         account_stale_seconds=api.account_stale_seconds,
         simulation=SimulationPaths.from_config(cfg),
+        performance_max_range_days=api.performance_max_range_days,
+        performance_decimal_places=api.performance_decimal_places,
     )
 
 
@@ -328,7 +336,7 @@ _ERROR_CODES = {
     "internal": 500, "unavailable": 503, "unauthorized": 401, "conflict": 409,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
-              "/explain", "/observers", "/decisions", "/skipped", "/account")
+              "/explain", "/observers", "/decisions", "/skipped", "/account", "/performance")
 DAY_PREFIX = "/days/"
 
 
@@ -478,7 +486,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._account()
             elif path in COMMAND_ROUTES:
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
-            elif path == "/days" or path.startswith(DAY_PREFIX) or path == "/bars":
+            elif path in ("/days", "/bars", "/performance") or path.startswith(DAY_PREFIX):
                 self._history(path)
             else:
                 self._error("not_found", f"no resource {path!r}")
@@ -534,7 +542,8 @@ class Handler(BaseHTTPRequestHandler):
             self._error("internal", type(exc).__name__)
 
     def _history(self, path: str) -> None:
-        """GET /days, /days/<YYYY-MM-DD>, /bars?symbol=&date=: read-only history."""
+        """GET /days, /days/<YYYY-MM-DD>, /bars?symbol=&date=, /performance?from=&to=:
+        read-only history."""
         history = self.server.history
         today = ny_date_of(self.server.clock())
         query = urlsplit(self.path).query
@@ -547,6 +556,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not SYMBOL_PATTERN.match(params["symbol"]):
                     raise BadQuery(f"symbol {params['symbol']!r} is not a ticker")
                 document = history.bars(params["symbol"], _day(params["date"]), today)
+            elif path == "/performance":
+                params = _query(query, frozenset({"from", "to"}))
+                first, last = _day(params["from"]), _day(params["to"])
+                if first > last:
+                    raise BadQuery(f"from {first.isoformat()} is after to {last.isoformat()}")
+                limit = self.server.settings.performance_max_range_days
+                if (last - first).days + 1 > limit:
+                    raise BadQuery(f"range of {(last - first).days + 1} days is longer than "
+                                   f"[api] performance_max_range_days ({limit})")
+                document = history.performance(
+                    first, last, self.server.settings.performance_decimal_places)
             else:
                 _query(query, frozenset())
                 document = history.day(_day(path[len(DAY_PREFIX):]), today)

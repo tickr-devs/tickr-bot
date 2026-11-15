@@ -116,6 +116,8 @@ class ApiConfig:
     status_recent_commands: int
     idempotency_key_ttl_seconds: int
     replay_settings_file: str
+    performance_max_range_days: int
+    performance_decimal_places: int
 
 
 @dataclass(frozen=True)

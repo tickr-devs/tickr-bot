@@ -76,6 +76,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first. |
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
+| GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
@@ -206,6 +207,45 @@ Computed by the reader from what the bot already records; `null` means unknown, 
   excursions, never an error. In the bot it is journaled once per trade
   (`stop-timing-failed`) and the step goes on. The daily-loss check never reads them: the
   bot computes them only for the status file.
+
+### GET /performance (read-only)
+
+`/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` (both required) summarizes the trades closed
+from `from` to `to`, New York dates, both included: the same closed trades as `day-v1` (bot
+database, this environment, a trade belongs to the date it closed), in close-time order.
+Everything is **gross**: fill prices only, no commissions or fees, as `result_gross_usd` in
+`day-v1`. It never reads the broker and is never used by the daily-loss check.
+
+- A trade's R is `result_gross_usd / planned_loss_usd`. A trade whose `planned_loss_usd` is not
+  positive has no 1 R: it is left out of **every** number below (USD ones too, so R and USD
+  describe the same trades) and counted in `exclusions` (`{cause, trades}`; empty when none).
+- `trades` counts the rest. `wins` have a result above 0, `losses` below 0, `scratches` exactly
+  0 (the same split as `days-v1`, which counts wins and losses by the same sign; no threshold).
+- `win_rate` = wins / trades, a ratio from 0 to 1. `expectancy_gross_r` and
+  `expectancy_gross_usd` are the mean R and mean USD per trade. `average_win_gross_r` is the
+  mean R of wins, `average_loss_gross_r` the mean R of losses (negative).
+  `profit_factor_gross` = USD won / USD lost (in USD, not R; `0` when there are losses and no
+  wins).
+- `max_drawdown_gross_r` / `max_drawdown_gross_usd`: the largest fall of the running total
+  (trade by trade, in close-time order) below its highest point so far, as a number >= 0. The
+  running total starts at 0 before the first trade, so a first trade at -1 R is a 1 R drawdown.
+- `result_gross_r` / `result_gross_usd`: the totals.
+- `days`: one entry per New York date with counted trades, oldest first: `day`, `trades`,
+  `result_gross_r`, `result_gross_usd` and `cumulative_gross_r` (the running R total at the
+  end of that day, from the first trade of the range). Dates without counted trades are left
+  out.
+
+Numbers that come from a division (every R value, `win_rate`, the expectancies, the averages,
+`profit_factor_gross`) are computed exactly and rounded half-even to
+`[api] performance_decimal_places` only in the answer; USD sums are exact. Each nullable number
+`x` has `x_cause`, `null` exactly when `x` is not: `no counted trades in the range` (every
+nullable number), `no winning trades in the range` (`average_win_gross_r`),
+`no losing trades in the range` (`average_loss_gross_r`, `profit_factor_gross`). Counts, totals
+and drawdowns are `0` for a range without trades, never `null`.
+
+`from` after `to`, a range longer than `[api] performance_max_range_days` days (both ends
+counted), a missing, repeated, extra or malformed parameter is `400 bad_request`. An
+unreadable database is `503 unavailable`, as for `/days`.
 
 ### GET /explain (read-only)
 

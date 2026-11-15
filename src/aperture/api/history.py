@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from aperture.api import contract as api
+from aperture.api.performance import performance
 from aperture.archive import existing
 from aperture.calendar import ny_date_of
 from aperture.config import Config
@@ -229,7 +230,8 @@ class HistoryPaths:
 
 
 class History:
-    """Answers GET /days, /days/<date> and /bars. Thread safe; caches the last bars file read."""
+    """Answers GET /days, /days/<date>, /bars and /performance. Thread safe; caches the last
+    bars file read."""
 
     def __init__(self, paths: HistoryPaths) -> None:
         self.paths = paths
@@ -338,3 +340,7 @@ class History:
         bars = self._bars_by_symbol(day, today).get(symbol, [])
         return api.BarsV1(environment=self.paths.environment, symbol=symbol, day=day,
                           bars=tuple(bars))
+
+    def performance(self, from_day: date, to_day: date, places: int) -> api.PerformanceV1:
+        trades, _ = self._read_db()
+        return performance(self.paths.environment, from_day, to_day, trades, places)

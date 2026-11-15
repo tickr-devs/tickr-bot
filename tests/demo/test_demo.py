@@ -153,6 +153,13 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
             ("price-action-v2", None)]
         assert any(d["action"] == "ENTER" for d in observers[0]["decisions"])
         assert D(observers[0]["result_gross_usd"]) != 0
+        # Performance over both demo sessions: one stop-out on each.
+        perf = _get(server, f"/performance?from=2026-11-12&to={FRIDAY.isoformat()}")
+        assert (perf["trades"], perf["losses"], perf["exclusions"]) == (2, 2, [])
+        assert [(d["day"], d["trades"]) for d in perf["days"]] == [
+            ("2026-11-12", 1), (FRIDAY.isoformat(), 1)]
+        assert D(perf["result_gross_r"]) == D(perf["days"][-1]["cumulative_gross_r"])
+        assert D(perf["max_drawdown_gross_usd"]) == -D(perf["result_gross_usd"]) > 0
     finally:
         if serving is not None:
             server.shutdown()

@@ -45,6 +45,7 @@ from aperture.api.contract import (
     StatusResponseV1,
     StrategyId,
 )
+from aperture.api.performance import performance
 from aperture.research.records import Admission
 from aperture.strategy.base import Verdict
 
@@ -180,7 +181,24 @@ def documents() -> dict[str, object]:
                                 CheckV1("ask_above_trigger", Decimal("5.31"), ">",
                                         Decimal("5.25"), True, ""),)))),
         "skipped-v1.empty": SkippedV1(DAY - timedelta(days=3), ()),
+        "performance-v1": performance("sandbox", DAY - timedelta(days=6), DAY, (
+            _closed("t-0001", -3, "100", "50"), _closed("t-0002", -3, "-50", "50"),
+            _closed("t-0003", 0, "0", "50"), _closed("t-0004", 0, "-25", "50"),
+            _closed("t-0005", 0, "37.50", "25"), _closed("t-0006", 0, "4.10", "0")), PLACES),
+        "performance-v1.empty": performance("sandbox", DAY - timedelta(days=6), DAY, (), PLACES),
     }
+
+
+PLACES = 4
+
+
+def _closed(trade_id: str, day_offset: int, result: str, planned_loss: str) -> DayTrade:
+    """A closed trade of 10 shares at 10.00 with the given gross result and 1 R."""
+    closed_at = T0 + timedelta(days=day_offset, minutes=int(trade_id[-1]))
+    exit_price = Decimal("10") + Decimal(result) / 10
+    return DayTrade(trade_id, "ABCD", Decimal("10"), Decimal("10.00"), exit_price,
+                    closed_at - timedelta(minutes=1), closed_at, "strategy_exit", None,
+                    Decimal(planned_loss), Decimal(result), None, None, None)
 
 
 def _text(document: object) -> str:
