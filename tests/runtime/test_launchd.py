@@ -27,7 +27,7 @@ def test_templates_render_to_valid_plists(config_path, repo, tmp_path):
     jobs = _render(config_path, repo, tmp_path / "out")
     assert set(jobs) == {"local.tickr.preflight.plist", "local.tickr.bot.plist",
                          "local.tickr.api.plist", "local.tickr.watchdog.plist",
-                         "local.tickr.test-alert.plist"}
+                         "local.tickr.test-alert.plist", "local.tickr.nightly-fetch.plist"}
     for job in jobs.values():
         assert job["WorkingDirectory"] == str(PATHS.repo)
 
@@ -53,6 +53,29 @@ def test_api_always_on_and_preflight_scheduled(config_path, repo, tmp_path):
     assert preflight["KeepAlive"] is False
     assert len(preflight["StartCalendarInterval"]) == len(
         config_module.load(config_path).runtime.launch_weekdays)
+
+
+def test_nightly_fetch_runs_after_the_close_with_its_folders(config_path, repo, tmp_path):
+    cfg = config_module.load(config_path)
+    job = _render(config_path, repo, tmp_path / "out")["local.tickr.nightly-fetch.plist"]
+    assert job["KeepAlive"] is False and job["RunAtLoad"] is False
+    hour, minute = map(int, cfg.runtime.nightly_fetch_start_local.split(":"))
+    assert job["StartCalendarInterval"] == [
+        {"Weekday": d, "Hour": hour, "Minute": minute} for d in cfg.runtime.launch_weekdays]
+    assert "tickr.backtest" in job["ProgramArguments"][2]
+    assert job["ProgramArguments"][-2:] == [cfg.runtime.nightly_fetch_out,
+                                            cfg.runtime.nightly_fetch_seed]
+
+
+def test_lab_must_replay_the_nightly_folder(config_path):
+    from dataclasses import replace
+
+    cfg = config_module.load(config_path)
+    launchd.check_lab_folder(cfg)
+    other = replace(cfg, api=replace(cfg.api, lab_replay_data_dir="backtest"))
+    with pytest.raises(config_module.ConfigError, match="lab_replay_data_dir"):
+        launchd.check_lab_folder(other)
+    launchd.check_timings(other)  # the bot's preflight never refuses over a Lab setting
 
 
 def test_templates_contain_no_numbers_or_paths_of_their_own(repo):

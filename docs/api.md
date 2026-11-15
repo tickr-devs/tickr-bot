@@ -515,6 +515,11 @@ reads and writes nothing for it.
 - `session`: today's New York date with `regular_open`, `last_entry_at`, `flatten_at` and
   `regular_close`, or null with `session_cause` (a weekend, a closure, a half day with
   `half_days_enabled = false`, a calendar that does not cover today).
+- `nightly_fetch`: the nightly backtest-data refresh's last outcome, from its `nightly.json`
+  (docs/backtest.md, "Nightly"): `finished_at`, `last_day` (where the Lab's data now ends),
+  `new_sessions` added (0 = already up to date) and `cause` when it was refused or stopped (the
+  data then stays as it was). All null with `cause` when it never ran or the file is unreadable.
+  `launchd` lists it as `nightly-fetch`.
 
 ### GET /journal (read-only)
 

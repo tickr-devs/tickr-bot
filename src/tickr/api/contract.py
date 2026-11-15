@@ -688,7 +688,7 @@ class LaunchdJobV1:
     the Mac's own time zone) on `weekdays` (launchd numbering: 1 = Monday ... 5 = Friday,
     0 and 7 = Sunday). The session calendar still decides whether the day trades."""
 
-    name: str  # preflight, bot or watchdog
+    name: str  # preflight, bot, watchdog or nightly-fetch
     local_time: str
     weekdays: tuple[int, ...]
 
@@ -750,6 +750,19 @@ class JournalV1:
 
 
 @dataclass(frozen=True)
+class NightlyFetchJobV1:
+    """The nightly backtest-data refresh's last outcome (its `nightly.json`): `finished_at`;
+    `last_day`, where the Lab's data now ends; `new_sessions` added that night (0 = already up to
+    date); `cause` when it was refused or stopped (the data stays as it was). All null with
+    `cause` when it never ran or its file cannot be read."""
+
+    finished_at: datetime | None
+    last_day: date | None
+    new_sessions: int | None
+    cause: str | None
+
+
+@dataclass(frozen=True)
 class JobsV1:
     """GET /jobs: when the bot's scheduled work last ran and runs next, for the Settings jobs
     strip. Read-only: from the status file, the database (read-only), config and calendar.
@@ -765,6 +778,7 @@ class JobsV1:
     launchd: tuple[LaunchdJobV1, ...]
     session: SessionTimesV1 | None
     session_cause: str | None
+    nightly_fetch: NightlyFetchJobV1
     api_version: int = _const(API_VERSION)
 
 

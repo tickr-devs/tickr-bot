@@ -61,6 +61,7 @@ from tickr.api.contract import (
     LabReplayV1,
     LatestSizeV1,
     LaunchdJobV1,
+    NightlyFetchJobV1,
     ObserverDecisionV1,
     ObserversV1,
     ObserverTradeV1,
@@ -212,14 +213,22 @@ def documents() -> dict[str, object]:
                 DAY, datetime(2026, 11, 16, 14, 30, tzinfo=UTC),
                 datetime(2026, 11, 16, 20, 45, tzinfo=UTC),
                 datetime(2026, 11, 16, 20, 55, tzinfo=UTC),
-                datetime(2026, 11, 16, 21, 0, tzinfo=UTC)), None),
+                datetime(2026, 11, 16, 21, 0, tzinfo=UTC)), None,
+            # Last night added Friday 2026-11-13 to the Lab's data.
+            NightlyFetchJobV1(datetime(2026, 11, 14, 1, 42, 7, tzinfo=UTC), DAY - timedelta(days=3),
+                              1, None)),
         # A Saturday with the bot stopped: no session, the last backup failed after Friday's.
         "jobs-v1.weekend": JobsV1(
             T0 + timedelta(days=5), BotState.STOPPED, True, None,
             ReconcileJobV1(Decimal("10"), T0 + timedelta(days=4, hours=6), None),
             BackupJobV1(T0 + timedelta(days=4), T0 + timedelta(days=4, hours=7),
                         "OperationalError", None),
-            _LAUNCHD, None, "2026-11-21 is a weekend"),
+            _LAUNCHD, None, "2026-11-21 is a weekend",
+            # Friday night stopped before the 429 window cleared: the data still ends Thursday.
+            NightlyFetchJobV1(T0 + timedelta(days=4, hours=21), None, 0,
+                              "stopped at 2026-11-23T12:30:00+00:00, before the next session "
+                              "([backtest] nightly_stop_minutes_before_open); current is "
+                              "unchanged")),
         # The Overview's journal card: the latest rows, oldest first; "line #731".
         "journal-v1": JournalV1(731, (
             JournalRowV1(728, T0 - timedelta(seconds=9), "order-intent", "ABCD"),
@@ -436,7 +445,8 @@ def _closed(trade_id: str, day_offset: int, result: str, planned_loss: str) -> D
 
 _LAUNCHD = (LaunchdJobV1("preflight", "08:30", (1, 2, 3, 4, 5)),
             LaunchdJobV1("bot", "09:00", (1, 2, 3, 4, 5)),
-            LaunchdJobV1("watchdog", "09:05", (1, 2, 3, 4, 5)))
+            LaunchdJobV1("watchdog", "09:05", (1, 2, 3, 4, 5)),
+            LaunchdJobV1("nightly-fetch", "19:00", (1, 2, 3, 4, 5)))
 
 
 def _text(document: object) -> str:

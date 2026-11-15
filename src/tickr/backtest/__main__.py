@@ -39,9 +39,13 @@ def _calendar(cfg: Config) -> SessionCalendar:
 
 
 def _history(cfg: Config, out: Path) -> fetch.HistorySource:
+    return history_from_config_raw(cfg, out / "raw")
+
+
+def history_from_config_raw(cfg: Config, raw: Path) -> fetch.HistorySource:
     from tickr.broker.webull import history_from_config
 
-    return history_from_config(cfg, raw_dir=out / "raw")
+    return history_from_config(cfg, raw_dir=raw)
 
 
 RULE_GAINERS = "gainers"
@@ -112,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
                               help="gainers (default) or liquid: top previous-day dollar volume")
             step.add_argument("--daily", type=Path,
                               help="data directory whose daily/ to read (default: --out)")
+    nightly = sub.add_parser("nightly", help="add the newest completed sessions to a rolling "
+                             "folder (docs/backtest.md, Nightly)")
+    nightly.add_argument("--out", type=Path, required=True,
+                         help="rolling folder (current/, staging/, raw/, nightly.json)")
+    nightly.add_argument("--seed", type=Path, default=None,
+                         help="a fetch-all folder to start from when current/ does not exist")
     run = sub.add_parser("run")
     run.add_argument("--out", type=Path, required=True, help="data directory (fetched)")
     run.add_argument("--results", type=Path, required=True, help="output directory")
@@ -138,6 +148,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.step == "select":
             step_select(cfg, settings, out, args.first, args.last, args.rule, args.daily)
+            return 0
+        if args.step == "nightly":
+            from datetime import UTC, datetime
+
+            from tickr.backtest.nightly import RAW, run_nightly
+
+            history = history_from_config_raw(cfg, out / RAW)
+            outcome = run_nightly(history, _calendar(cfg), cfg, settings,
+                                  replay_settings.history_sessions, out, args.seed,
+                                  lambda: datetime.now(UTC))
+            print(f"nightly: done, data ends {outcome.last_day}, {outcome.requests} requests")
             return 0
         source = _history(cfg, out)
         if args.step in ("fetch-universe", "fetch-all"):

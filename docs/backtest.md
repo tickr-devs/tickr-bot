@@ -54,6 +54,33 @@ names. The first response of each kind and every failed one are kept in `<out>/r
    and how many of its sessions had no replayed day (no gainer, or incomplete data). With few
    sessions, the interval and the hold-out are wide by construction, and report.md says so.
 
+## Nightly
+
+`python -m tickr.backtest nightly --out data/nightly --seed data/backtest` keeps a rolling folder
+of the last `[backtest] nightly_window_sessions` sessions for the Lab's replay
+(`[api] lab_replay_data_dir` is its `current/`). launchd runs it after the close
+(`local.tickr.nightly-fetch`, `[runtime] nightly_fetch_*`, docs/operations.md). A full fetch of
+that many sessions takes many hours under Webull's limits, so a night adds only what the newest
+completed sessions bring:
+
+1. Daily bars of every universe symbol for the new sessions (and the one before, for its close),
+   as their own `daily/n<last day>-<chunk>.jsonl` files. The universe is the folder's own.
+2. The new sessions' pool days (same gainer rule as `select`), appended to `pool.csv` and
+   `pool_cap.csv`.
+3. Minute bars only for the sessions the new pool days need (each day and `history_sessions`
+   before it) that the symbol's minute file holds no bar for, merged into that file.
+4. Pool days older than the window are dropped, with minute files no pool day uses any more.
+
+The night is built in `staging/` (minute and daily files hard-linked from `current/`, every file
+it changes written under a new name, so `current/` is never modified), then swapped in.
+`raw/` stays outside. Without `current/` it starts from `--seed` (a `fetch-all` folder).
+Refused, leaving `current/` as it was and the cause in `nightly.json`: during the regular
+session, with less free disk than `nightly_min_free_disk_mb`, with more missing sessions than
+`nightly_max_new_sessions` (run `fetch-all` instead), and once the next session's open minus
+`nightly_stop_minutes_before_open` is reached, so it never shares the market-data budget with
+the bot. GET /jobs shows the last outcome. The universe is not refreshed: a new listing enters
+the pool only after the next `fetch-all`.
+
 ## How a pool day is replayed
 
 - Skipped (with cause) when the symbol lacks bars on the day or on any of the `history_sessions`

@@ -31,6 +31,10 @@ KEYS = frozenset({
     "instrument_statuses",
     "liquid_top_count",
     "liquid_min_price_usd",
+    "nightly_window_sessions",
+    "nightly_max_new_sessions",
+    "nightly_min_free_disk_mb",
+    "nightly_stop_minutes_before_open",
 })
 
 
@@ -51,6 +55,10 @@ class BacktestSettings:
     instrument_statuses: tuple[str, ...]
     liquid_top_count: int
     liquid_min_price_usd: Decimal
+    nightly_window_sessions: int
+    nightly_max_new_sessions: int
+    nightly_min_free_disk_mb: int
+    nightly_stop_minutes_before_open: int
 
 
 def _count(key: str, raw: Any, minimum: int) -> int:
@@ -96,6 +104,14 @@ def settings_from_mapping(data: dict[str, Any]) -> BacktestSettings:
         instrument_statuses=_texts("instrument_statuses", table["instrument_statuses"]),
         liquid_top_count=_count("liquid_top_count", table["liquid_top_count"], 1),
         liquid_min_price_usd=_number("liquid_min_price_usd", table["liquid_min_price_usd"]),
+        nightly_window_sessions=_count("nightly_window_sessions",
+                                       table["nightly_window_sessions"], 1),
+        nightly_max_new_sessions=_count("nightly_max_new_sessions",
+                                        table["nightly_max_new_sessions"], 1),
+        nightly_min_free_disk_mb=_count("nightly_min_free_disk_mb",
+                                        table["nightly_min_free_disk_mb"], 0),
+        nightly_stop_minutes_before_open=_count("nightly_stop_minutes_before_open",
+                                                table["nightly_stop_minutes_before_open"], 0),
     )
 
 

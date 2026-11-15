@@ -47,6 +47,17 @@
         4,
         5
       ]
+    },
+    {
+      "name": "nightly-fetch",
+      "local_time": "19:00",
+      "weekdays": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
     }
   ],
   "session": {
@@ -57,5 +68,11 @@
     "regular_close": "2026-11-16T21:00:00.000Z"
   },
   "session_cause": null,
+  "nightly_fetch": {
+    "finished_at": "2026-11-14T01:42:07.000Z",
+    "last_day": "2026-11-13",
+    "new_sessions": 1,
+    "cause": null
+  },
   "api_version": 1
 }

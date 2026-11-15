@@ -559,6 +559,12 @@ def _check_config(path: Path) -> int:
     print(f"environment: {cfg.environment_name}")
     print(f"config digest: {cfg.digest}")
     print(f"active strategy: {cfg.strategy.active}")
+    from tickr.runtime.launchd import check_lab_folder
+    try:
+        check_lab_folder(cfg)
+    except config_module.ConfigError as exc:
+        print(f"lab refused: {exc}")
+        return 1
     print(f"trading gate: {'open' if gate.open else 'closed'} ({gate.cause})")
     from tickr.observers.errors import ObserverError
     from tickr.observers.loader import load_active

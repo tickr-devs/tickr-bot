@@ -234,7 +234,7 @@ after_r_decimal_places = 4
 # Lab "replay the last days" (POST /lab/replay): sessions the backtest replays, ending at the last fetched pool day; read by the api server.
 lab_replay_sessions = 20
 # Folder of the fetched backtest data the Lab replay reads (never fetches), relative to data_dir; read by the api server.
-lab_replay_data_dir = "backtest"
+lab_replay_data_dir = "nightly/current"
 # Folder of the Lab replay's run and result, relative to data_dir; only the latest run is kept; read by the api server.
 lab_replay_results_dir = "lab-replay"
 # `nice` increment of the Lab replay process (0-19, higher = lower CPU priority), so it never starves the bot; read by the api server.
@@ -404,6 +404,16 @@ bot_start_local = "09:00"
 launch_weekdays = [1, 2, 3, 4, 5]
 # Watchdog job start, Mac local time HH:MM, same weekdays; it then waits for its calendar-derived checks; read by runtime.launchd.
 watchdog_start_local = "09:05"
+# Nightly backtest-data refresh job start (`python -m tickr.backtest nightly`), Mac local time HH:MM, same weekdays: after the
+# close, so it never shares the market-data budget with the bot; it stops itself before the next open
+# (config/backtest.toml); read by runtime.launchd.
+nightly_fetch_start_local = "19:00"
+# Rolling folder the nightly job keeps (current/ is what the Lab replays: [api] lab_replay_data_dir must point at it),
+# relative to the repo root; read by runtime.launchd.
+nightly_fetch_out = "data/nightly"
+# A fetch-all folder the nightly job starts from while its folder has no current/ yet, relative to the repo root;
+# read by runtime.launchd.
+nightly_fetch_seed = "data/backtest"
 # First watchdog broker check this many seconds after the flatten time (15:57:30 ET on a normal day); must be above
 # [session] flatten_grace_seconds so the bot's own day-end check comes first; read by runtime.watchdog.
 watchdog_after_flatten_seconds = 150

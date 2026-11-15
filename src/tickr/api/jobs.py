@@ -12,19 +12,20 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from tickr.api import contract as api
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import Config
-from tickr.runtime.launchd import LocalTime, schedule
+from tickr.runtime.launchd import NIGHTLY_OUTCOME_FILE, LocalTime, schedule
 from tickr.runtime.watch import BACKUP, BACKUP_FAILED
 from tickr.store import DATABASE_FILE, Store
 
 NO_DATABASE = "the bot has not created its database yet"
 NO_BACKUP = "no backup recorded yet"
+NIGHTLY_NEVER_RAN = "the nightly fetch has not run yet"
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class JobsSettings:
     flatten_minutes_before_close: int
     half_days_enabled: bool
     launchd: tuple[api.LaunchdJobV1, ...]
+    nightly_outcome: Path  # the nightly job's nightly.json
 
     @classmethod
     def from_config(cls, config: Config) -> JobsSettings:
@@ -50,7 +52,9 @@ class JobsSettings:
             half_days_enabled=config.session.half_days_enabled,
             launchd=(api.LaunchdJobV1("preflight", _hhmm(plan.preflight), days),
                      api.LaunchdJobV1("bot", _hhmm(plan.bot), days),
-                     api.LaunchdJobV1("watchdog", _hhmm(plan.watchdog), days)))
+                     api.LaunchdJobV1("watchdog", _hhmm(plan.watchdog), days),
+                     api.LaunchdJobV1("nightly-fetch", _hhmm(plan.nightly), days)),
+            nightly_outcome=config.root / config.runtime.nightly_fetch_out / NIGHTLY_OUTCOME_FILE)
 
 
 def _hhmm(at: LocalTime) -> str:
@@ -79,7 +83,24 @@ def jobs_document(settings: JobsSettings, response: api.StatusResponseV1) -> api
         launchd=settings.launchd,
         session=session,
         session_cause=cause,
+        nightly_fetch=_nightly(settings.nightly_outcome),
     )
+
+
+def _nightly(path: Path) -> api.NightlyFetchJobV1:
+    """The nightly job's own outcome file, as it wrote it."""
+    if not path.exists():
+        return api.NightlyFetchJobV1(None, None, None, NIGHTLY_NEVER_RAN)
+    try:
+        body = json.loads(path.read_text("utf-8"))
+        last = body["last_day"]
+        return api.NightlyFetchJobV1(
+            datetime.fromisoformat(body["finished_at"]),
+            None if last is None else date.fromisoformat(last), int(body["new_sessions"]),
+            body["cause"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return api.NightlyFetchJobV1(None, None, None,
+                                     f"nightly.json unreadable ({type(exc).__name__})")
 
 
 def _from_database(settings: JobsSettings,

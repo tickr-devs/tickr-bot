@@ -12,7 +12,7 @@ import pytest
 
 from tickr import config
 from tickr.api import contract
-from tickr.api.jobs import NO_BACKUP, NO_DATABASE, jobs_document
+from tickr.api.jobs import NIGHTLY_NEVER_RAN, NO_BACKUP, NO_DATABASE, _nightly, jobs_document
 from tickr.api.server import make_server, settings_from_config
 from tickr.runtime.watch import BACKUP, BACKUP_FAILED
 from tickr.store import Store
@@ -63,7 +63,10 @@ def test_without_status_or_database_only_config_and_calendar_answer(cfg):
     assert [(j["name"], j["local_time"], j["weekdays"]) for j in body["launchd"]] == [
         ("preflight", runtime.preflight_start_local, list(runtime.launch_weekdays)),
         ("bot", runtime.bot_start_local, list(runtime.launch_weekdays)),
-        ("watchdog", runtime.watchdog_start_local, list(runtime.launch_weekdays))]
+        ("watchdog", runtime.watchdog_start_local, list(runtime.launch_weekdays)),
+        ("nightly-fetch", runtime.nightly_fetch_start_local, list(runtime.launch_weekdays))]
+    assert body["nightly_fetch"] == {"finished_at": None, "last_day": None,
+                                     "new_sessions": None, "cause": NIGHTLY_NEVER_RAN}
     session = body["session"]
     assert session["day"] == MONDAY.isoformat() and body["session_cause"] is None
     close = datetime(2026, 11, 16, 21, 0, tzinfo=UTC)
@@ -135,3 +138,18 @@ def test_half_day_off_is_no_session(cfg):
     jobs = jobs_document(on.jobs, _response(on, black_friday, status(written_at=black_friday)))
     assert jobs.session is not None
     assert jobs.session.regular_close == datetime(2026, 11, 27, 18, 0, tzinfo=UTC)
+
+
+def test_nightly_fetch_outcome_is_read_as_written(tmp_path):
+    from tickr.backtest.nightly import Outcome, _write_outcome
+
+    _write_outcome(tmp_path, Outcome("2026-11-17T00:42:07+00:00", "2026-11-16", "2026-11-16", 1,
+                                     812, None))
+    done = _nightly(tmp_path / "nightly.json")
+    assert (done.last_day, done.new_sessions, done.cause) == (date(2026, 11, 16), 1, None)
+    _write_outcome(tmp_path, Outcome("2026-11-17T00:42:07+00:00", None, None, 0, 3,
+                                     "refused during the regular session"))
+    refused = _nightly(tmp_path / "nightly.json")
+    assert refused.last_day is None and refused.cause == "refused during the regular session"
+    (tmp_path / "nightly.json").write_text("{")
+    assert _nightly(tmp_path / "nightly.json").cause.startswith("nightly.json unreadable")

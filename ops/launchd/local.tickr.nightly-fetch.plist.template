@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Tickr nightly backtest data: after the close on configured weekdays, adds the newest sessions
+     to the folder the Lab replays (python -m tickr.backtest nightly, docs/backtest.md). Reads market
+     data only; never trades. Rendered by `python -m tickr.runtime render-launchd`. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.tickr.nightly-fetch</string>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}</string>
+  <!-- The credentials file is sourced by sh so Tickr code never reads secret values. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; . "$0"; set +a; exec nice "$1" -m tickr.backtest --config "$2" nightly --out "$3" --seed "$4"</string>
+    <string>{{ENV_FILE}}</string>
+    <string>{{PYTHON}}</string>
+    <string>{{CONFIG}}</string>
+    <string>{{NIGHTLY_OUT}}</string>
+    <string>{{NIGHTLY_SEED}}</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  {{NIGHTLY_CALENDAR}}
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>{{LOG_DIR}}/nightly-fetch.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/nightly-fetch.log</string>
+</dict>
+</plist>

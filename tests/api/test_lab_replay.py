@@ -198,7 +198,7 @@ def test_both_listeners_share_one_replay(cfg):
 
 @pytest.mark.parametrize("key,value", [("lab_replay_sessions", 0),
                                        ("lab_replay_niceness", 20),
-                                       ("lab_replay_results_dir", "backtest"),
+                                       ("lab_replay_results_dir", "nightly/current"),
                                        ("lab_replay_results_dir", "."),
                                        ("lab_replay_results_dir", ""),
                                        ("lab_replay_results_dir", "../lab"),

@@ -48,3 +48,15 @@ instrument_statuses = ["OC", "CO"]
 liquid_top_count = 300
 # Rule "liquid": lowest previous-session close a symbol may have to be ranked, USD; read by backtest/universe.py.
 liquid_min_price_usd = 10
+# Nightly refresh (`nightly`, docs/backtest.md): sessions the rolling folder keeps, the newest ending at the last
+# completed session; older pool days and the minute files only they used are dropped; count; read by
+# backtest/nightly.py.
+nightly_window_sessions = 60
+# Most missing sessions one night adds; more (a long gap) is refused, run fetch-all instead: a night under Webull's
+# rate limits fits a few sessions, not weeks; count; read by backtest/nightly.py.
+nightly_max_new_sessions = 3
+# Free disk space the data volume must have before a night starts, megabytes; read by backtest/nightly.py.
+nightly_min_free_disk_mb = 5000
+# A night stops (and keeps the old data) this many minutes before the next session's regular open, so it never
+# shares the market-data budget with the bot's pre-market start; minutes; read by backtest/nightly.py.
+nightly_stop_minutes_before_open = 120

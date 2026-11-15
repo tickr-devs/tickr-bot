@@ -205,6 +205,60 @@
         }
       ]
     },
+    "nightly_fetch": {
+      "type": "object",
+      "properties": {
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_day": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "new_sessions": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "finished_at",
+        "last_day",
+        "new_sessions",
+        "cause"
+      ],
+      "additionalProperties": false
+    },
     "api_version": {
       "type": "integer",
       "const": 1
@@ -220,6 +274,7 @@
     "launchd",
     "session",
     "session_cause",
+    "nightly_fetch",
     "api_version"
   ],
   "additionalProperties": false

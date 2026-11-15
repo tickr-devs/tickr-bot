@@ -14,6 +14,7 @@ renders the job files, reads them, and loads them. Manual trades and the Sandbox
 
 The bot job has one starter besides its schedule: near the flatten time the watchdog may start it once a day (see "Watchdog", `watchdog-restarted-bot`).
 | test-alert | `local.tickr.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
+| nightly-fetch | `local.tickr.nightly-fetch` | `[runtime] nightly_fetch_start_local` on `launch_weekdays` (after the close); stops itself before the next open | never |
 | api | `local.tickr.api` | at login, always on, loopback only | launchd keeps it alive |
 
 Times in `[runtime]` are the **Mac's local time**. The calendar decides whether there is a
@@ -156,11 +157,24 @@ mkdir -p ~/Library/Logs/Tickr
     --env-file ~/.config/tickr/env \
     --log-dir ~/Library/Logs/Tickr \
     --out data/launchd
-# Read the five files in data/launchd, then:
+# Read the six files in data/launchd, then:
 for job in preflight bot watchdog api test-alert; do
   cp data/launchd/local.tickr.$job.plist ~/Library/LaunchAgents/
   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.$job.plist
 done
+```
+
+The nightly fetch is loaded on its own, and only when no other history fetch is running on the
+Mac: both draw on the same Webull request budget. Its first run seeds `nightly/current/` from a
+finished `data/backtest` folder; until then the Lab replay refuses (its folder does not exist).
+Run the seed once by hand, outside market hours, then load the job:
+
+```sh
+set -a; . ~/.config/tickr/env; set +a
+.venv/bin/python -m tickr.backtest --config config/bot.toml nightly \
+    --out data/nightly --seed data/backtest
+cp data/launchd/local.tickr.nightly-fetch.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.nightly-fetch.plist
 ```
 
 After changing `[runtime]` values, render again, then

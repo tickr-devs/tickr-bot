@@ -96,7 +96,7 @@ def test_render_launchd(config_path, repo, tmp_path, capsys):
     out = tmp_path / "plists"
     assert main(["--config", str(config_path), "render-launchd", "--python", "/x/python",
                  "--env-file", "/x/env", "--log-dir", "/x/logs", "--out", str(out)]) == 0
-    assert len(list(out.glob("*.plist"))) == 5
+    assert len(list(out.glob("*.plist"))) == 6  # the six jobs
 
 
 def test_token_probe_alerts_when_the_token_waits_for_the_owner(config_path, monkeypatch, capsys):

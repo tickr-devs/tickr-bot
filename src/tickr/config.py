@@ -270,6 +270,9 @@ class RuntimeConfig:
     bot_start_local: str
     launch_weekdays: tuple[int, ...]
     watchdog_start_local: str
+    nightly_fetch_start_local: str
+    nightly_fetch_out: str
+    nightly_fetch_seed: str
     watchdog_after_flatten_seconds: int
     watchdog_before_close_seconds: int
     watchdog_bot_check_seconds: int
