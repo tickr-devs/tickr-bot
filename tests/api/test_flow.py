@@ -270,7 +270,8 @@ def test_flow_stages_on_a_fake_broker_day(api, cfg):
         "agreement": "match", "agreement_cause": None, "read_at": "2026-11-16T15:00:00.000Z",
         "mismatch": None, "fences_cause": None,
         "fences": [{"kind": "foreign-position:EFGH", "since": "2026-11-16T15:00:00.123Z",
-                    "text": "position not opened by this bot"}]}
+                    "text": "position not opened by this bot", "code": "foreign_position",
+                    "params": {}}]}
 
 
 def test_flow_reconcile_mismatch_and_missing_or_old_files(api, cfg):

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aperture.api import contract as api
+from aperture.api import reasons
 from aperture.api.history import (
     NO_ENTRY,
     average_fill_price,
@@ -505,13 +506,17 @@ class Service:
         if self.state is not api.BotState.RUNNING:
             return api.EntryBlock(f"bot_{self.state}", f"The bot is {self.state}.")
         if not gate_open:
-            return api.EntryBlock("trading_gate_closed", f"Trading gate closed: {gate_cause}.")
+            gate = reasons.gate_reason(gate_cause)
+            return api.EntryBlock("trading_gate_closed", f"Trading gate closed: {gate_cause}.",
+                                  params={"gate": gate.code, **gate.params})
         names = [name for name, _, _ in fences]
         if str(Fence.ENTRY_STOP) in names:
             return api.EntryBlock("entry_stop", "Entries stopped by the operator.")
         if fences:
             name, cause, _ = fences[0]
-            return api.EntryBlock(name.split(":", 1)[0].replace("-", "_"), f"{name}: {cause}")
+            fence = reasons.fence_reason(name, cause)
+            return api.EntryBlock(name.split(":", 1)[0].replace("-", "_"), f"{name}: {cause}",
+                                  params={"fence": fence.code, **fence.params})
         money = self._daily_money_block()
         if money is not None:
             return money
@@ -547,29 +552,33 @@ class Service:
         if isinstance(day, CalendarRefused):
             if day.cause in (CalendarCause.WEEKEND, CalendarCause.HOLIDAY):
                 return api.EntryBlock("no_session_today", "No regular session today.",
-                                      attention=False)
+                                      attention=False, params={"day": day.cause.lower()})
             if self.calendar is None:
-                return api.EntryBlock("calendar_unknown", "No trading calendar is loaded.")
-            return api.EntryBlock("calendar_unknown", f"Trading calendar: {day.cause}.")
+                return api.EntryBlock("calendar_unknown", "No trading calendar is loaded.",
+                                      params={"calendar": "not_loaded"})
+            return api.EntryBlock("calendar_unknown", f"Trading calendar: {day.cause}.",
+                                  params={"calendar": day.cause.lower()})
         if refused.cause is AdmissionCause.HALF_DAY:
             return api.EntryBlock("no_session_today",
                                   "Half day: the bot does not trade half days.",
-                                  attention=False)
+                                  attention=False, params={"day": "half_day"})
         if refused.cause is AdmissionCause.OUTSIDE_REGULAR_SESSION:
+            opens = f"{day.regular_open.astimezone(NEW_YORK):%H:%M}"
+            closes = f"{day.regular_close.astimezone(NEW_YORK):%H:%M}"
             return api.EntryBlock(
                 "outside_regular_session",
-                f"Outside the regular session ({day.regular_open.astimezone(NEW_YORK):%H:%M}-"
-                f"{day.regular_close.astimezone(NEW_YORK):%H:%M} New York).", attention=False)
+                f"Outside the regular session ({opens}-{closes} New York).", attention=False,
+                params={"open": opens, "close": closes})
         if refused.cause is AdmissionCause.AFTER_LAST_ENTRY:
             session = self.config.session
             times = day.session_times(session.last_entry_minutes_before_close,
                                       session.flatten_minutes_before_close)
-            return api.EntryBlock(
-                "after_last_entry",
-                f"Past the last entry time ({times.last_entry.astimezone(NEW_YORK):%H:%M} "
-                "New York).",
-                attention=False)
-        return api.EntryBlock("calendar_unknown", f"Trading calendar: {refused.detail}.")
+            last = f"{times.last_entry.astimezone(NEW_YORK):%H:%M}"
+            return api.EntryBlock("after_last_entry",
+                                  f"Past the last entry time ({last} New York).",
+                                  attention=False, params={"time": last})
+        return api.EntryBlock("calendar_unknown", f"Trading calendar: {refused.detail}.",
+                              params={"calendar": str(refused.cause).lower()})
 
     def _daily_money_block(self) -> api.EntryBlock | None:
         """Entries the daily ceiling refuses anyway: the room left is below
@@ -585,8 +594,20 @@ class Service:
         if room < risk.min_daily_room_usd:
             return api.EntryBlock("daily_ceiling",
                                   f"Daily loss ceiling {risk.max_daily_loss_usd} USD: less than "
-                                  f"{risk.min_daily_room_usd} USD of room left today.")
+                                  f"{risk.min_daily_room_usd} USD of room left today.",
+                                  params={"limit_usd": str(risk.max_daily_loss_usd),
+                                          "min_room_usd": str(risk.min_daily_room_usd)})
         return None
+
+    @staticmethod
+    def _gate(open_: bool, cause: str) -> api.Gate:
+        reason = reasons.gate_reason(cause)
+        return api.Gate(open_, cause, reason.code, reason.params)
+
+    @staticmethod
+    def _fence(name: str, cause: str, set_at: str) -> api.Fence:
+        reason = reasons.fence_reason(name, cause)
+        return api.Fence(name, _iso(set_at), cause, reason.code, reason.params)
 
     def _stop(self, trade: TradeRow, stops: list[OrderRow]) -> api.Stop:
         live = [s for s in stops if s.live]
@@ -691,10 +712,10 @@ class Service:
         return api.StatusV1(
             written_at=self.now(), bot_state=self.state, run_id=self.engine.run_id,
             environment=self.config.environment_name,
-            trading_gate=api.Gate(gate.open, gate.cause), strategy=self.strategy,
+            trading_gate=self._gate(gate.open, gate.cause), strategy=self.strategy,
             entry_stop=any(name == Fence.ENTRY_STOP for name, _, _ in fences),
             entry_block=self._entry_block(gate.open, gate.cause, fences),
-            fences=tuple(api.Fence(name, _iso(set_at), cause) for name, cause, set_at in fences),
+            fences=tuple(self._fence(name, cause, set_at) for name, cause, set_at in fences),
             position=positions[0] if positions else None, trades_today=trades,
             result_today_gross_usd=sum((t.result_gross_usd for t in trades), ZERO),
             freshness=(self.market.freshness(self.last_broker_read_at)

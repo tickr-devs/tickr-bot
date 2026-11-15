@@ -7,7 +7,9 @@
     "environment": "sandbox",
     "trading_gate": {
       "open": true,
-      "cause": "trading enabled by configuration"
+      "cause": "trading enabled by configuration",
+      "code": "unrecorded",
+      "params": {}
     },
     "strategy": {
       "name": "price-action-v1",

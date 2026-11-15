@@ -199,12 +199,23 @@
                   },
                   "text": {
                     "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
                   }
                 },
                 "required": [
                   "kind",
                   "since",
-                  "text"
+                  "text",
+                  "code",
+                  "params"
                 ],
                 "additionalProperties": false
               }

@@ -14,7 +14,11 @@
         "code": "POSITION_LIMIT_REACHED",
         "message": "1 open position(s), limit 1",
         "since": null,
-        "until": null
+        "until": null,
+        "params": {
+          "open": "1",
+          "limit": "1"
+        }
       },
       "entry_price": "12.45",
       "stop_price": "12.15",
@@ -87,7 +91,11 @@
         "code": "SYMBOL_COOLDOWN",
         "message": "ZNTH closed at a loss; no new entry in it during the cooldown",
         "since": "2026-11-16T15:14:07.250Z",
-        "until": "2026-11-16T15:44:07.250Z"
+        "until": "2026-11-16T15:44:07.250Z",
+        "params": {
+          "symbol": "ZNTH",
+          "until": "10:44"
+        }
       },
       "entry_price": "0.9876",
       "stop_price": "0.9512",

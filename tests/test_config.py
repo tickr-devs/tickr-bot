@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from aperture import config
+from aperture.api.reasons import gate_reason
 from aperture.cli import main
 from aperture.risk.admission import AdmissionLimits
 
@@ -161,6 +162,7 @@ def test_gate_open_for_environment_without_authorization(tmp_path):
     cfg = config.load(BOT)
     loaded = config.load(_with_environment(tmp_path, _open_name(cfg)))
     assert config.trading_gate(loaded).open
+    assert gate_reason(config.trading_gate(loaded).cause).code == "trading_enabled"
 
 
 def test_gate_closed_when_trading_disabled(tmp_path):
@@ -169,6 +171,7 @@ def test_gate_closed_when_trading_disabled(tmp_path):
     gate = config.trading_gate(loaded)
     assert not gate.open
     assert "disabled" in gate.cause
+    assert gate_reason(gate.cause).params == {"environment": loaded.environment_name}
 
 
 def _enabled_gated(tmp_path: Path) -> config.Config:
@@ -196,12 +199,14 @@ def test_gate_requires_authorization_file(tmp_path):
     cfg = _enabled_gated(tmp_path)
     gate = config.trading_gate(cfg)
     assert not gate.open and "not found" in gate.cause
+    assert gate_reason(gate.cause).params == {"file": cfg.environment.authorization_file}
 
 
 def test_gate_opens_with_matching_authorization(tmp_path):
     cfg = _enabled_gated(tmp_path)
     _authorize(cfg)
     assert config.trading_gate(cfg).open
+    assert gate_reason(config.trading_gate(cfg).cause).code == "authorization_valid"
 
 
 def test_gate_refuses_stale_digest(tmp_path):
@@ -209,12 +214,14 @@ def test_gate_refuses_stale_digest(tmp_path):
     _authorize(cfg, config_digest="0" * 64)
     gate = config.trading_gate(cfg)
     assert not gate.open and "digest" in gate.cause
+    assert gate_reason(gate.cause).code == "authorization_digest_mismatch"
 
 
 def test_gate_refuses_other_environment(tmp_path):
     cfg = _enabled_gated(tmp_path)
     _authorize(cfg, environment="elsewhere")
     assert not config.trading_gate(cfg).open
+    assert gate_reason(config.trading_gate(cfg).cause).code == "authorization_other_environment"
 
 
 def test_gate_refuses_extra_fields(tmp_path):
@@ -223,6 +230,8 @@ def test_gate_refuses_extra_fields(tmp_path):
     _authorize(cfg)
     path.write_text(path.read_text("utf-8") + 'extra = "x"\n', "utf-8")
     assert not config.trading_gate(cfg).open
+    assert gate_reason(config.trading_gate(cfg).cause).params == {
+        "keys": "approved_on, config_digest, environment, statement"}
 
 
 def test_source_never_names_environments():

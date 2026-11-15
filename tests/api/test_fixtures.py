@@ -313,7 +313,8 @@ def documents() -> dict[str, object]:
             FlowStopV1("t-0002", "EFGH", FlowStopState.NEVER_VERIFIED),
             FlowStopV1("t-0003", "ABCD", FlowStopState.PENDING)),
             FlowReconcileV1(Agreement.MATCH, None, T0, None, (
-                Fence("foreign-position:EFGH", T0, "position not opened by this bot"),),
+                Fence("foreign-position:EFGH", T0, "position not opened by this bot",
+                      "foreign_position"),),
                 None)),
         "flow-v1.empty": FlowV1("sandbox", DAY - timedelta(days=3), (), tuple(
             FlowStageV1(stage, 0, ()) for stage in FlowStage), (), FlowReconcileV1(

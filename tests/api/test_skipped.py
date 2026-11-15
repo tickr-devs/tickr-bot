@@ -125,7 +125,7 @@ NO_BARS = "no captured bars for 2026-11-16"
 
 def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
     refused = _enter(ACTIVE, Role.ACTIVE, minute=7, admission=Admission.REFUSED,
-                     cause="POSITION_LIMIT_REACHED: 1 open position, limit 1")
+                     cause="POSITION_LIMIT_REACHED: 1 open position(s), limit 1")
     late = _enter(ACTIVE, Role.ACTIVE, minute=2, admission=Admission.NOT_EVALUATED,
                   symbol="WXYZ")
     taken = _enter(ACTIVE, Role.ACTIVE, minute=1, admission=Admission.TAKEN)
@@ -147,9 +147,9 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
         {"at": "2026-11-16T15:07:00.000Z", "symbol": "ABCD",
          "strategy": {"name": "price-action-v1", "version": "1"},
          "admission": "refused",
-         "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position, limit 1",
-         "refusal": {"code": "POSITION_LIMIT_REACHED", "message": "1 open position, limit 1",
-                     "since": None, "until": None},
+         "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position(s), limit 1",
+         "refusal": {"code": "POSITION_LIMIT_REACHED", "message": "1 open position(s), limit 1",
+                     "since": None, "until": None, "params": {"open": "1", "limit": "1"}},
          "entry_price": "12.10", "stop_price": "11.80",
          "checks": [{"rule": "relative_volume", "measured": "2.4", "operator": ">=",
                      "threshold": "1.5", "passed": True, "note": ""}],
@@ -163,7 +163,7 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
             for d in decisions["decisions"]] == [
         ("15:01", "taken", None), ("15:03", "not_applicable", None),
         ("15:04", "not_evaluated", None),
-        ("15:07", "refused", "POSITION_LIMIT_REACHED: 1 open position, limit 1")]
+        ("15:07", "refused", "POSITION_LIMIT_REACHED: 1 open position(s), limit 1")]
     assert [d["refusal"] for d in decisions["decisions"]][:3] == [None, None, None]
     assert decisions["decisions"][3]["refusal"] == body["signals"][1]["refusal"]
 
@@ -179,7 +179,7 @@ def test_skipped_archived_day_and_empty_day(api, cfg):
         ("ABCD", "SYMBOL_COOLDOWN: ABCD")]
     # not the shape admission writes for a cooldown: read as UNKNOWN, never guessed
     assert body["signals"][0]["refusal"] == {"code": "UNKNOWN", "message": "SYMBOL_COOLDOWN: ABCD",
-                                             "since": None, "until": None}
+                                             "since": None, "until": None, "params": {}}
     assert _get(api, "/skipped?date=2026-11-10", "skipped-v1")["signals"] == []
 
 
@@ -193,7 +193,8 @@ def test_cooldown_refusal_is_served_with_its_times(api, cfg):
     assert signal["refusal"] == {
         "code": "SYMBOL_COOLDOWN",
         "message": "ABCD closed at a loss; no new entry in it during the cooldown",
-        "since": "2026-11-16T14:51:30.123Z", "until": "2026-11-16T15:21:30.123Z"}
+        "since": "2026-11-16T14:51:30.123Z", "until": "2026-11-16T15:21:30.123Z",
+        "params": {"symbol": "ABCD", "until": "10:21"}}
 
 
 ENGINE_CAUSES = ["trading gate closed: disabled", "entries fenced: entry-stop",
@@ -203,7 +204,8 @@ ENGINE_CAUSES = ["trading gate closed: disabled", "entries fenced: entry-stop",
 @pytest.mark.parametrize("detail", ENGINE_CAUSES)
 def test_engine_refusal_after_admission_is_read(detail):
     refusal = contract.refusal_of(f"ENGINE_REFUSED: {detail}")
-    assert refusal == contract.RefusalV1(contract.RefusalCode.ENGINE_REFUSED, detail, None, None)
+    assert refusal == contract.RefusalV1(contract.RefusalCode.ENGINE_REFUSED, detail, None, None,
+                                         {})
 
 
 @pytest.mark.parametrize("cause", [
@@ -230,7 +232,7 @@ def test_engine_refusal_after_admission_is_read(detail):
 ])
 def test_unreadable_cause_is_unknown_with_the_recorded_text(cause):
     assert contract.refusal_of(cause) == contract.RefusalV1(
-        contract.RefusalCode.UNKNOWN, cause, None, None)
+        contract.RefusalCode.UNKNOWN, cause, None, None, {})
 
 
 def test_no_cause_is_no_refusal():

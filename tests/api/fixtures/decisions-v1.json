@@ -76,7 +76,11 @@
         "code": "POSITION_LIMIT_REACHED",
         "message": "1 open position(s), limit 1",
         "since": null,
-        "until": null
+        "until": null,
+        "params": {
+          "open": "1",
+          "limit": "1"
+        }
       }
     }
   ],

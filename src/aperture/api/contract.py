@@ -30,6 +30,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
+from aperture.api.reasons import refusal_params
 from aperture.data.base import ScreenerKind
 from aperture.replay.engine import ExitReason
 from aperture.research.records import Admission, DecisionRecord
@@ -72,6 +73,18 @@ def _added_later(default: Any) -> Any:
     `default`; writers always write it. Every other key stays required on read, whatever
     default its dataclass field has."""
     return field(default=default, metadata={ADDED_AFTER_V1: True})
+
+
+def _params_added_later() -> Any:
+    """`params` (docs/api.md, "Reason codes") added after version 1 shipped: empty when absent."""
+    return field(default_factory=dict, metadata={ADDED_AFTER_V1: True})
+
+
+# A reason's parameters: name -> plain text value (docs/api.md, "Reason codes").
+Params = dict[str, str]
+
+# The code of a reason the bot wrote before it recorded codes; clients show the text.
+UNRECORDED = "unrecorded"
 
 
 # ---------------------------------------------------------------- enums
@@ -130,8 +143,12 @@ class CommandOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class Gate:
+    """The trading gate. `code` and `params` name `cause` for translation (api/reasons.py)."""
+
     open: bool
     cause: str
+    code: str = _added_later(UNRECORDED)
+    params: Params = _params_added_later()
 
 
 @dataclass(frozen=True)
@@ -153,13 +170,19 @@ class EntryBlock:
     cause: str
     text: str
     attention: bool = _added_later(True)
+    params: Params = _params_added_later()  # the values in `text`, for a translated sentence
 
 
 @dataclass(frozen=True)
 class Fence:
+    """An engine fence. `kind` is the fence name; `code` and `params` name `text` for
+    translation (api/reasons.py)."""
+
     kind: str
     since: datetime
     text: str
+    code: str = _added_later(UNRECORDED)
+    params: Params = _params_added_later()
 
 
 @dataclass(frozen=True)
@@ -763,6 +786,7 @@ class RefusalV1:
     message: str
     since: datetime | None
     until: datetime | None
+    params: Params  # the values in the recorded detail (api/reasons.py); {} when none
 
 
 @dataclass(frozen=True)
@@ -883,7 +907,7 @@ def refusal_of(cause: str | None) -> RefusalV1 | None:
     its message, never a guess."""
     if cause is None:
         return None
-    unknown = RefusalV1(RefusalCode(UNKNOWN_CAUSE), cause, None, None)
+    unknown = RefusalV1(RefusalCode(UNKNOWN_CAUSE), cause, None, None, {})
     code_text, separator, detail = cause.partition(": ")
     if (not separator or not detail.strip() or code_text == UNKNOWN_CAUSE
             or code_text not in RefusalCode.__members__):
@@ -915,7 +939,7 @@ def refusal_of(cause: str | None) -> RefusalV1 | None:
         return unknown
     else:
         message = detail
-    return RefusalV1(code, message, since, until)
+    return RefusalV1(code, message, since, until, refusal_params(code_text, detail, since, until))
 
 
 def _what_if(price: Decimal | None) -> Decimal | None:
@@ -1385,6 +1409,10 @@ def _decode(where: str, raw: Any, hint: Any, meta: Any = None) -> Any:
         except ValueError as exc:
             allowed = ", ".join(m.value for m in hint)
             raise ContractError(f"{where}: {raw!r} is not one of: {allowed}") from exc
+    if hint == Params:
+        if not isinstance(raw, dict) or not all(isinstance(v, str) for v in raw.values()):
+            raise ContractError(f"{where}: expected an object of strings, got {raw!r}")
+        return dict(raw)
     if get_origin(hint) is tuple:
         (item,) = [a for a in get_args(hint) if a is not Ellipsis]
         if not isinstance(raw, list):
@@ -1464,6 +1492,8 @@ def _schema(hint: Any, meta: Any = None) -> dict[str, Any]:
         return {"type": "string", "pattern": DATE_PATTERN}
     if isinstance(hint, type) and issubclass(hint, StrEnum):
         return {"type": "string", "enum": [m.value for m in hint]}
+    if hint == Params:
+        return {"type": "object", "additionalProperties": {"type": "string"}}
     if get_origin(hint) is tuple:
         (item,) = [a for a in get_args(hint) if a is not Ellipsis]
         return {"type": "array", "items": _schema(item)}

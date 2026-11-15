@@ -132,13 +132,20 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
                   }
                 },
                 "required": [
                   "code",
                   "message",
                   "since",
-                  "until"
+                  "until",
+                  "params"
                 ],
                 "additionalProperties": false
               },

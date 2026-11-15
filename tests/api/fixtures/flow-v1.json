@@ -121,7 +121,9 @@
       {
         "kind": "foreign-position:EFGH",
         "since": "2026-11-16T15:00:00.123Z",
-        "text": "position not opened by this bot"
+        "text": "position not opened by this bot",
+        "code": "foreign_position",
+        "params": {}
       }
     ],
     "fences_cause": null

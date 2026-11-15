@@ -121,6 +121,39 @@ loaded, `calendar_unknown`). `attention: false` is an ordinary state that passes
 `attention` was added after version 1 shipped: a reader takes a document without it as
 `attention: true`; the bot always writes it.
 
+Reason codes, so clients can say these in the reader's language (the English text stays the
+fallback). Each `params` is an object of plain-text values: numbers as written, times `HH:MM`
+New York, days `YYYY-MM-DD`. Codes are read from the bot's own texts against the exact shapes
+it writes (`api/reasons.py`); a text of any other shape is code `unrecognized` with `{}`, and
+clients show the text.
+- `entry_block.params`: `outside_regular_session` `{open, close}`; `after_last_entry` `{time}`;
+  `daily_ceiling` `{limit_usd, min_room_usd}`; `no_session_today` `{day}` (`weekend`,
+  `holiday`, `half_day`); `calendar_unknown` `{calendar}` (`not_loaded`, or the calendar or
+  admission cause in lower case, e.g. `out_of_coverage`); `trading_gate_closed` `{gate, ...}`
+  (the gate's `code` and its params); a fence block `{fence, ...}` (the fence's `code` and its
+  params). Every other cause: `{}`.
+- `trading_gate.code` / `params`: `trading_enabled`, `authorization_valid`, `trading_disabled`
+  `{environment}`, `authorization_file_not_set`, `authorization_file_missing` `{file}`,
+  `authorization_not_toml`, `authorization_keys_wrong` `{keys}`,
+  `authorization_other_environment`, `authorization_digest_mismatch`.
+- `fences[].code` / `params`, by kind: `startup_reconcile_pending`; `positions_read_failed` /
+  `open_orders_read_failed` `{error}` (an exception type name); `detail_budget`;
+  `send_outcome_unknown`, `crashed_during_send`; `order_missing`; `status_unmapped` `{status}`;
+  `stop_covers_part` `{verified, expected}`; `stops_over_position` `{covered, held}`;
+  `unprotected_exiting` / `unprotected_close_by_hand` `{seconds}`; `stop_rejected_exiting`;
+  `exit_refused_no_stop`, `exit_refused_stop_again`; `cancel_outcome_unknown` `{outcome}`,
+  `cancel_crashed`;
+  `cancel_failed`; `cancel_not_sent` `{seconds}`; `given_up_order_filled`,
+  `working_not_in_records`; `foreign_position`; `foreign_order`; `quantity_mismatch`
+  `{held, expected}`; `shutting_down`; `operator_command`, `operator_emergency`;
+  `replace_unresolved` `{stop_price}`; `held_after_replace`, `held_untracked_sell`
+  `{orders, symbol}`; `exit_not_filled` `{order, quantity, symbol, seconds, filled, state}`;
+  `close_not_sent` `{quantity, expected, symbol}` plus why the close was not due: `{session}`
+  (no session, the calendar's text), `{open}` (before the open) or `{cutoff, cutoff_seconds,
+  close, day}` (at or after the last close time; `cutoff` is `HH:MM:SS`).
+- `code` and `params` were added after version 1 shipped: a reader takes a document without
+  them as `unrecorded` and `{}`.
+
 Daily loss money (spec 7, check 6), exactly as the bot's admission computes it; `null` means
 unknown (a trade closed today has fills without a known price), never zero:
 `realized_loss_today_usd` is today's net realized loss (wins offset losses, never below 0),
@@ -609,8 +642,8 @@ and observer records are left out. A date without a decision file answers with a
 Every refused minute is its own row: consecutive refusals are not merged.
 
 `refusal` (in `/skipped` and `/decisions`) is `null` unless admission is `refused`; then it is
-`{code, message, since, until}`, read from the recorded `CODE: detail` at the API (the decision
-file keeps the text):
+`{code, message, since, until, params}`, read from the recorded `CODE: detail` at the API (the
+decision file keeps the text):
 - `code`: the admission cause (`risk/causes.py`, in spec order: `GATE_CLOSED` ...
   `STOP_BUDGET_UNAVAILABLE`), `ENGINE_REFUSED` when admission passed but the engine refused to
   open the trade, or `UNKNOWN` (see below). The schema lists the closed set.
@@ -622,6 +655,24 @@ file keeps the text):
   the losing trade closed and `until` when the cooldown ends (no entry in that symbol before it).
   `AFTER_LAST_ENTRY`: `since` is the session's last entry time, `until` is `null`. Every other
   code: both `null`.
+- `params`: the values in the detail, for a translated sentence (`{}` when the code has none or
+  the detail is in no known shape; then show `message`): `POSITION_LIMIT_REACHED` `{open,
+  limit}`; `OWN_POSITION_OPEN` / `OWN_ORDER_WORKING` `{count}`; `BROKER_READ_STALE` and
+  `QUOTE_STALE` `{age, limit}`; `CLOCK_INVALID` `{seconds}` (a broker read in the future);
+  `QUOTE_TIME_INVALID` `{seconds, limit}`; `CALENDAR_UNKNOWN` `{calendar}`;
+  `CALENDAR_DAY_MISMATCH` `{calendar_day, today}`; `HALF_DAY` `{day}`;
+  `OUTSIDE_REGULAR_SESSION` `{open, close}`; `AFTER_LAST_ENTRY` `{time}`; `SYMBOL_COOLDOWN`
+  `{symbol, until}` (`until` as `HH:MM`); `DECISION_NOT_ENTER` `{verdict}`;
+  `DECISION_NOT_ACTIVE` `{strategy, version, active}`; `DECISION_INCOMPLETE` `{fields}`;
+  `DECISION_INVALID` `{stop, entry_low, entry_high}`; `ORDER_PRICES_INVALID` `{limit, entry_low,
+  entry_high}` or `{stop, limit}`; `QUOTE_SYMBOL_MISMATCH` `{quote_symbol, symbol}`;
+  `QUOTE_INVALID` `{bid, ask}`; `PRICE_OUTSIDE_WINDOW` `{ask, entry_low, limit}`;
+  `QUANTITY_NOT_WHOLE` `{quantity}`; `QUANTITY_BELOW_ONE` `{quantity, maximum}`;
+  `NOTIONAL_OVER_CAP` `{notional, cap}`; `PLANNED_LOSS_OVER_LIMIT` `{planned_loss, limit}`;
+  `DAILY_MONEY_UNKNOWN` `{missing}`; `DAILY_CEILING` `{room, ceiling, realized, reserved,
+  min_room}` (room below the minimum) or `{realized, reserved, new, total, ceiling}` (the new
+  trade would cross the ceiling); `GATE_CLOSED` `{gate, ...}` (the gate's code and params, as
+  `trading_gate` above). Every other code: `{}`.
 - A cause that is not exactly one of the shapes admission and the entry path write (no `: `,
   an unknown code, a detail of a timed code that does not match, or a detail of any other code
   that holds an ISO time) is `code` `UNKNOWN` with the recorded text as `message`, never a guess.

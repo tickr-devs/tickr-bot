@@ -38,11 +38,22 @@
         },
         "cause": {
           "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
         "open",
-        "cause"
+        "cause",
+        "code",
+        "params"
       ],
       "additionalProperties": false
     },
@@ -78,12 +89,19 @@
             },
             "attention": {
               "type": "boolean"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           },
           "required": [
             "cause",
             "text",
-            "attention"
+            "attention",
+            "params"
           ],
           "additionalProperties": false
         },
@@ -106,12 +124,23 @@
           },
           "text": {
             "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": [
           "kind",
           "since",
-          "text"
+          "text",
+          "code",
+          "params"
         ],
         "additionalProperties": false
       }
