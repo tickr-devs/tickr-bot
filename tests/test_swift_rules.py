@@ -215,6 +215,17 @@ def test_ui_test_targets_get_only_the_legacy_rule(tmp_path, monkeypatch):
     assert [path.name for path in module.test_swift_files()] == ["FlowTests.swift"]
 
 
+def test_an_unlisted_folder_ending_in_tests_gets_every_rule(tmp_path, monkeypatch):
+    module = load()
+    folder = tmp_path / "ScreenTests"
+    folder.mkdir()
+    write(folder, 'let cancel = button("Cancel")\n', "Screen.swift")
+    monkeypatch.setattr(module, "REPO", tmp_path)
+    monkeypatch.setattr(module, "ROOTS", (".",))
+    assert [path.name for path in module.swift_files()] == ["Screen.swift"]
+    assert module.test_swift_files() == []
+
+
 def test_every_form_of_an_outdated_import_fails(tmp_path):
     source = (
         "@preconcurrency import Combine\n"
