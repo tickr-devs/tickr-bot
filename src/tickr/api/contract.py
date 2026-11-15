@@ -30,6 +30,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
+from tickr.advisor_files import OwnerVerdict
+from tickr.advisor_files import Verdict as HoldoutVerdict
 from tickr.api.reasons import UNRECOGNIZED as UNRECOGNIZED_CODE
 from tickr.api.reasons import Reason, prose_reasons, refusal_params
 from tickr.data.base import ScreenerKind
@@ -785,6 +787,131 @@ class JournalV1:
 
     last_seq: int | None
     rows: tuple[JournalRowV1, ...]
+    cause: str | None
+    api_version: int = _const(API_VERSION)
+
+
+class AdvisorRunStatus(StrEnum):
+    """What one AI advisor run produced (advisor.run Status)."""
+
+    PROPOSED = "proposed"  # a new strategy version (`changes`, `proposed`)
+    IDEA = "idea"  # a new strategy idea only (`idea`): text for a developer, never code
+    NO_CHANGE = "no_change"  # `no_change_reason`
+    REFUSED = "refused"  # the answer failed the checks: `cause`
+
+
+class AdvisorMode(StrEnum):
+    LIVE = "live"  # evidence from recorded trading days
+    BACKTEST = "backtest"  # evidence from the fitting period of a SIMULATED backtest
+
+
+@dataclass(frozen=True)
+class AdvisorChangeV1:
+    """One changed strategy.toml value. `now` and `proposed` are the values as text (JSON
+    spelling of the TOML value: `0.5`, `true`, `"vwap"`)."""
+
+    section: str
+    key: str
+    now: str
+    proposed: str
+    reason: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class AdvisorIdeaV1:
+    """A new strategy idea, text for a developer (rule 8: a module is written in a PR)."""
+
+    name: str  # like "pullback-v1"
+    hypothesis: str
+    entry_rule: str
+    exit_rule: str
+    filters: str
+    evidence: str
+    test_plan: str
+
+
+@dataclass(frozen=True)
+class AdvisorStatsV1:
+    """SIMULATED backtest numbers of one period, as the backtest report wrote them; null =
+    not computed (no trades, or too few for the interval)."""
+
+    trades: int | None
+    win_rate_percent: Decimal | None
+    mean_r: Decimal | None
+    median_r: Decimal | None
+    total_r: Decimal | None
+    profit_factor: Decimal | None
+    mean_r_interval_low: Decimal | None  # bootstrap interval of mean R, resampling days
+    mean_r_interval_high: Decimal | None
+
+
+@dataclass(frozen=True)
+class AdvisorJudgeV1:
+    """One `python -m tickr.advisor.judge` result: a candidate against the base on the
+    hold-out the advisor never saw. Only `holdout` and `base_holdout` are evidence; `fitting` is
+    the candidate's fitting period, where it was tuned (shown as no evidence)."""
+
+    candidate: str  # "price-action-v1 v2"
+    base: str
+    holdout_starts: date
+    verdict: HoldoutVerdict
+    base_verdict: HoldoutVerdict
+    holdout: AdvisorStatsV1 | None
+    base_holdout: AdvisorStatsV1 | None
+    fitting: AdvisorStatsV1 | None
+
+
+@dataclass(frozen=True)
+class AdvisorDecisionV1:
+    verdict: OwnerVerdict
+    at: datetime
+
+
+@dataclass(frozen=True)
+class AdvisorRunV1:
+    """One advisor run folder (advisor-run-v1 `run.json`, its judge files and the owner's
+    decision). Texts are the advisor's own, unchanged. Nothing here is applied."""
+
+    id: str  # the run folder's name: "<UTC time>-<strategy>"
+    at: datetime
+    mode: AdvisorMode
+    status: AdvisorRunStatus
+    base: str  # "price-action-v1 v1"
+    proposed: str | None  # the new version when `status` is proposed
+    model: str
+    evidence: str  # what it learned from, one line
+    tuned_on: str  # hold-out rule: results on these days prove nothing
+    judge_on: str  # where it may be judged
+    summary: str
+    changes: tuple[AdvisorChangeV1, ...]
+    expected_effect: str
+    risks: tuple[str, ...]
+    no_change_reason: str
+    cause: str  # why the answer was refused, "" otherwise
+    idea: AdvisorIdeaV1 | None
+    judges: tuple[AdvisorJudgeV1, ...]  # by candidate name
+    decision: AdvisorDecisionV1 | None  # null = awaiting the owner's review
+
+
+@dataclass(frozen=True)
+class AdvisorUnreadableV1:
+    """A run folder GET /advisor could not read (refused, never guessed): one cause."""
+
+    id: str
+    cause: str
+
+
+@dataclass(frozen=True)
+class AdvisorRunsV1:
+    """GET /advisor: the newest `[api] advisor_runs` advisor run folders, newest first, read
+    from `[advisor] proposals_dir`. `awaiting_review`: runs (all of them, not only the listed)
+    with status proposed or idea and no owner decision, for the Overview tag. Every number is
+    SIMULATED. `cause` when the folder does not exist yet."""
+
+    runs: tuple[AdvisorRunV1, ...]
+    unreadable: tuple[AdvisorUnreadableV1, ...]
+    awaiting_review: int
     cause: str | None
     api_version: int = _const(API_VERSION)
 
@@ -1681,6 +1808,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "config-v1": ConfigV1,
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
+    "advisor-runs-v1": AdvisorRunsV1,
     "lab-replay-v1": LabReplayV1,
     "trade-whatif-v1": TradeWhatIfV1,
     "explain-v1": ExplainV1,

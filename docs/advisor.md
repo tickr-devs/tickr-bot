@@ -67,6 +67,16 @@ tuned by hand, is judged cleanly by `judge` on this window. A partial idea (no h
 evidence) or a malformed name refuses the answer. To see the logic its values steer, the
 request carries the strategy module's source code as well.
 
+## In the apps
+
+Every run folder also gets `run.json` (advisor-run-v1: status, versions, the changes with
+their old and new values as text, the idea, the hold-out rule), and `judge` writes
+`judge-<name>-v<N>.json` (advisor-judge-v1: verdict codes and the hold-out, base hold-out and
+fitting rows) next to its markdown. Formats: `src/tickr/advisor_files.py`. The API serves
+them at GET /advisor (`docs/api.md`) for the Lab's advisor card and the Overview tag. Runs from
+before these files show as unreadable; rerun `judge` to get its json. The owner's review
+(`decision.json`, written by POST /advisor/decision from the apps' Accept/Reject) is a note only: trying a proposal stays the hand steps above.
+
 ## What it sends (live mode)
 
 For each day it reads `<data_dir>/<decisions_dir>/<env>/<day>/decisions.jsonl` and

@@ -14,7 +14,10 @@ from pathlib import Path
 
 import pytest
 
+from tickr.advisor_files import OwnerVerdict
+from tickr.advisor_files import Verdict as HoldoutVerdict
 from tickr.api import contract
+from tickr.api.advisor import NO_FOLDER as NO_ADVISOR_FOLDER
 from tickr.api.contract import (
     AccountOrder,
     AccountPosition,
@@ -487,7 +490,73 @@ def documents() -> dict[str, object]:
             _closed("t-0003", 0, "0", "50"), _closed("t-0004", 0, "-25", "50"),
             _closed("t-0005", 0, "37.50", "25"), _closed("t-0006", 0, "4.10", "0")), PLACES),
         "performance-v1.empty": performance("sandbox", DAY - timedelta(days=6), DAY, (), PLACES),
+        "advisor-runs-v1": _advisor_runs(),
+        "advisor-runs-v1.empty": contract.AdvisorRunsV1((), (), 0, NO_ADVISOR_FOLDER),
     }
+
+
+def _stats(trades: int, win: str, mean: str, total: str, pf: str | None, low: str | None,
+           high: str | None) -> contract.AdvisorStatsV1:
+    return contract.AdvisorStatsV1(
+        trades, Decimal(win), Decimal(mean), Decimal("0.0"), Decimal(total),
+        None if pf is None else Decimal(pf), None if low is None else Decimal(low),
+        None if high is None else Decimal(high))
+
+
+def _advisor_runs() -> contract.AdvisorRunsV1:
+    """Lab: a backtest proposal judged on the hold-out and awaiting review, an accepted idea,
+    a refused answer, and a folder from before run.json."""
+    base = "price-action-v1 v1"
+    judged = contract.AdvisorRunV1(
+        "20261115T150000Z-price-action-v1", T0 - timedelta(days=1),
+        contract.AdvisorMode.BACKTEST, contract.AdvisorRunStatus.PROPOSED, base,
+        "price-action-v1 v2", "claude-opus-5-5",
+        "SIMULATED backtest out/backtest-v1, fitting period 2026-08-03 .. 2026-10-02; hold-out "
+        "from 2026-10-05 withheld",
+        "backtest sessions 2026-08-03 .. 2026-10-02 (before the hold-out from 2026-10-05)",
+        "the backtest hold-out from 2026-10-05 (python -m tickr.advisor.judge) or observer "
+        "days after the proposal",
+        "Stops are too tight: most stopped trades reach +1R later the same session.",
+        (contract.AdvisorChangeV1("exit", "stop_buffer_atr", "0.25", "0.5",
+                                  "half of the stops are inside one minute's noise",
+                                  "62% of stop exits later reached +1R"),
+         contract.AdvisorChangeV1("entry", "require_vwap_above", "false", "true",
+                                  "entries below VWAP lose", "mean R -0.31 below VWAP, 0.08 "
+                                  "above")),
+        "fewer stop exits; fewer trades", ("wider stops make 1 R bigger: smaller size",),
+        "", "", None,
+        (contract.AdvisorJudgeV1(
+            "price-action-v1 v2", base, date(2026, 10, 5), HoldoutVerdict.NO_EVIDENCE,
+            HoldoutVerdict.NEGATIVE_EDGE,
+            _stats(41, "46.3", "0.04", "1.64", "1.08", "-0.18", "0.27"),
+            _stats(57, "38.6", "-0.21", "-11.97", "0.71", "-0.39", "-0.03"),
+            _stats(188, "51.1", "0.22", "41.36", "1.52", "0.09", "0.35")),),
+        None)
+    idea = contract.AdvisorRunV1(
+        "20261114T150000Z-price-action-v1", T0 - timedelta(days=2),
+        contract.AdvisorMode.BACKTEST, contract.AdvisorRunStatus.IDEA, base, None,
+        "claude-opus-5-5", judged.evidence, judged.tuned_on, judged.judge_on,
+        "The entry idea itself fails; a pullback entry is worth a module.", (), "", (),
+        "no value change rescues the breakout entry", "", contract.AdvisorIdeaV1(
+            "pullback-v1", "gainers that hold the VWAP continue",
+            "buy the first higher low above VWAP after 10:00",
+            "stop under the higher low; flatten at the close", "price above 5 USD",
+            "stops after +0.6R, then 2.4R after the stop",
+            "backtest on sessions after the window"),
+        (), contract.AdvisorDecisionV1(OwnerVerdict.ACCEPTED, T0 - timedelta(days=1, hours=3)))
+    refused = contract.AdvisorRunV1(
+        "20261114T120000Z-price-action-v1", T0 - timedelta(days=2, hours=3),
+        contract.AdvisorMode.LIVE, contract.AdvisorRunStatus.REFUSED, base, None,
+        "claude-opus-5-5", "5 recorded days (2026-11-09 .. 2026-11-13)",
+        "2026-11-09, 2026-11-10, 2026-11-11, 2026-11-12, 2026-11-13",
+        "days after 2026-11-13 (observers) or on replay days outside that list", "", (), "", (),
+        "", "4 changes proposed, at most 3 allowed", None, (), None)
+    return contract.AdvisorRunsV1(
+        (judged, idea, refused),
+        (contract.AdvisorUnreadableV1(
+            "20261113T180000Z-price-action-v1",
+            "no run.json (a run written before the apps read runs, or an interrupted one)"),),
+        1, None)
 
 
 PLACES = 4

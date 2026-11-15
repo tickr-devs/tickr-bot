@@ -6,6 +6,7 @@ SIMULATED backtest (`run_backtest_advisor`, advisor.backtest_evidence). Both the
 Output folder: <data_dir>/<proposals_dir>/<UTC time>-<strategy>/ with
 - evidence.json, request.txt (system + user text), response.json (the raw answer);
 - report.md (always: proposed, idea, no change, or refused with causes);
+- run.json (always: the same outcome for the apps, advisor-run-v1 in advisor.record);
 - strategies/<name>-v<N>/strategy.toml when a change was proposed and accepted by the strategy;
 - idea.md when the model described a new strategy idea (text for a developer, never code);
 - tuning.json in backtest mode: the window and hold-out start, for advisor.judge.
@@ -36,7 +37,9 @@ from tickr.advisor.client import AdvisorClient
 from tickr.advisor.errors import AdvisorError
 from tickr.advisor.evidence import build_evidence
 from tickr.advisor.proposal import SCHEMA, Proposal, next_version, parse_reply, render_toml
+from tickr.advisor.record import run_record
 from tickr.advisor.report import render_idea, render_report
+from tickr.advisor_files import RUN_FILE
 from tickr.archive import existing
 from tickr.calendar import TIMEZONE_NAME, SessionCalendar
 from tickr.config import Config
@@ -331,6 +334,9 @@ def _finish(out: Path, status: Status, target: Path | None, cause: str,
     report = render_report(status=status.value, cause=cause, proposal=proposal,
                            new_identity=new_identity, target=target, out=out, **context)
     (out / "report.md").write_text(report, "utf-8")
+    summary = run_record(status=status.value, cause=cause, proposal=proposal,
+                         new_identity=new_identity, **context)
+    (out / RUN_FILE).write_text(json.dumps(summary, indent=1) + "\n", "utf-8")
     if record is not None:
         record = {**record, "status": status.value, "proposed": new_identity,
                   "idea": proposal.idea.name if proposal and proposal.idea else None}

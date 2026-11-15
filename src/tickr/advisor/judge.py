@@ -8,7 +8,8 @@ version backtested on the same data, window and hold-out split: the proposed
 values, or a module written from the advisor's idea. Only the hold-out decides; the fitting
 period is shown for contrast and marked as no evidence. Mismatched data, windows, splits or a
 candidate equal to the base are refused. Writes `judge-<name>-v<version>.md` into the run
-folder. Every number is SIMULATED.
+folder, and `judge-<name>-v<version>.json` (advisor-judge-v1, advisor.record) for the apps.
+Every number is SIMULATED.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from typing import Any
 from tickr.advisor.backtest_evidence import read_run
 from tickr.advisor.errors import AdvisorError
 from tickr.advisor.run import TUNING_FILE
+from tickr.advisor_files import JUDGE_PREFIX, Verdict, judge_record
 
 COLUMNS = ("trades", "win_rate_percent", "mean_r", "median_r", "total_r", "profit_factor")
 
@@ -39,14 +41,26 @@ def _interval(stats: dict[str, Any] | None) -> tuple[Decimal, Decimal] | None:
     return low, high
 
 
-def verdict(stats: dict[str, Any] | None) -> str:
+def verdict_code(stats: dict[str, Any] | None) -> Verdict:
     interval = _interval(stats)
     if interval is None:
-        return "too few trades or days for an interval: no evidence either way"
+        return Verdict.TOO_FEW
     low, high = interval
     if low > 0:
-        return f"interval {low} to {high} is above 0: evidence of an edge on the hold-out"
+        return Verdict.EDGE
     if high < 0:
+        return Verdict.NEGATIVE_EDGE
+    return Verdict.NO_EVIDENCE
+
+
+def verdict(stats: dict[str, Any] | None) -> str:
+    code = verdict_code(stats)
+    if code is Verdict.TOO_FEW:
+        return "too few trades or days for an interval: no evidence either way"
+    low, high = _interval(stats)  # type: ignore[misc]
+    if code is Verdict.EDGE:
+        return f"interval {low} to {high} is above 0: evidence of an edge on the hold-out"
+    if code is Verdict.NEGATIVE_EDGE:
         return f"interval {low} to {high} is below 0: evidence of a negative edge on the hold-out"
     return f"interval {low} to {high} includes 0: no evidence of an edge on the hold-out"
 
@@ -98,8 +112,14 @@ def judge(run_folder: Path, results: Path) -> str:
         "was fitted there. Fills are the replay's conservative model, gross of commissions.",
         "",
     ])
-    out = run_folder / f"judge-{candidate.strategy}-v{candidate.version}.md"
-    out.write_text(text, "utf-8")
+    stem = f"{JUDGE_PREFIX}{candidate.strategy}-v{candidate.version}"
+    (run_folder / f"{stem}.md").write_text(text, "utf-8")
+    record = judge_record(
+        candidate=identity, base=tuning["base"], window=window,
+        holdout_starts=tuning["holdout_starts"], verdict=verdict_code(held),
+        base_verdict=verdict_code(tuning.get("base_holdout")), holdout=held,
+        base_holdout=tuning.get("base_holdout"), fitting=split.get("before"))
+    (run_folder / f"{stem}.json").write_text(json.dumps(record, indent=1) + "\n", "utf-8")
     return text
 
 
