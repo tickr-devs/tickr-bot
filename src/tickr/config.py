@@ -187,6 +187,7 @@ class ApiConfig:
     lab_replay_results_dir: str
     lab_replay_niceness: int
     lab_replay_outside_session_only: bool
+    trade_whatif_outside_session_only: bool
 
 
 @dataclass(frozen=True)

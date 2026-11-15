@@ -85,6 +85,9 @@ from tickr.api.contract import (
     SkippedV1,
     StatusResponseV1,
     StrategyId,
+    TradeWhatIfSignalsV1,
+    TradeWhatIfTradeV1,
+    TradeWhatIfV1,
     WatchingRowV1,
     WatchingV1,
     WhatIfV1,
@@ -303,6 +306,24 @@ def documents() -> dict[str, object]:
             20, T0 + timedelta(days=5), T0 + timedelta(days=5, seconds=2),
             "backtest/minutes is missing: run fetch first", None, folder="price-action-v1",
             versions=LAB_VERSIONS, days=LAB_DAYS),
+        # Trades "Another strategy…": price-action-v2 on ABCD's day, SIMULATED.
+        "trade-whatif-v1": TradeWhatIfV1(
+            DAY - timedelta(days=3), "ABCD", "price-action-v2", "price-action-v2", "2",
+            TradeWhatIfSignalsV1(2, 1, 0, 0), (
+                TradeWhatIfTradeV1(T0 - timedelta(days=3, minutes=18),
+                                   T0 - timedelta(days=3, minutes=16), Decimal("12.3400"),
+                                   Decimal("11.9000"), T0 - timedelta(days=3, minutes=-41),
+                                   Decimal("12.9100"), ExitReason.STRATEGY_EXIT,
+                                   Decimal("1.2955"), Decimal("10"), Decimal("5.7000")),
+                TradeWhatIfTradeV1(T0 - timedelta(days=3, minutes=-72),
+                                   T0 - timedelta(days=3, minutes=-74), Decimal("13.0200"),
+                                   Decimal("12.7000"), T0 - timedelta(days=3, minutes=-80),
+                                   Decimal("12.6900"), ExitReason.STOP, Decimal("-1.0313"),
+                                   None, None)),
+            Decimal("0.2642"), None, None),
+        "trade-whatif-v1.failed": TradeWhatIfV1(
+            DAY - timedelta(days=3), "ABCD", "volume-shock-v1", "volume-shock-v1", "1", None,
+            (), None, None, "no cached prior sessions for ABCD on 2026-11-13"),
         "day-v1.empty": DayV1("sandbox", DAY - timedelta(days=3), (), Decimal("0"), ()),
         "bars-v1": BarsV1("sandbox", "ABCD", DAY, tuple(
             BarV1(T0 + timedelta(minutes=i), Decimal(o), Decimal(h), Decimal(lo), Decimal(c),

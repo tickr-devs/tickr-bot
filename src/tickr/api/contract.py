@@ -913,6 +913,56 @@ class LabReplayV1:
     api_version: int = _const(API_VERSION)
 
 
+# ---------------------------------------------------------------- trade what-if (simulated)
+
+
+@dataclass(frozen=True)
+class TradeWhatIfTradeV1:
+    """One trade the other version would have made that day, SIMULATED. `signal_at`: its
+    decision bar's start. R per share; `quantity` and `result_gross_usd` only when the version
+    chose a quantity."""
+
+    signal_at: datetime
+    opened_at: datetime
+    entry_price: Decimal
+    stop: Decimal
+    closed_at: datetime
+    exit_price: Decimal
+    exit_reason: ExitReason
+    result_r: Decimal
+    quantity: Decimal | None
+    result_gross_usd: Decimal | None
+
+
+@dataclass(frozen=True)
+class TradeWhatIfSignalsV1:
+    """What the simulation did with each ENTER of the version that day."""
+
+    filled: int
+    missed: int  # the price never came into the entry window
+    rejected: int  # live admission would refuse it on time alone
+    ignored: int  # a simulated position of the symbol was already open
+
+
+@dataclass(frozen=True)
+class TradeWhatIfV1:
+    """GET /trades/whatif: strategy folder `folder` replayed on `symbol`'s captured bars of
+    `day`, SIMULATED. Null numbers and no trades with `cause` when it could not be computed.
+    `result_gross_usd` is null when a trade has no quantity."""
+
+    day: date
+    symbol: str
+    folder: str
+    strategy: str | None
+    version: str | None
+    signals: TradeWhatIfSignalsV1 | None
+    trades: tuple[TradeWhatIfTradeV1, ...]
+    result_r: Decimal | None
+    result_gross_usd: Decimal | None
+    cause: str | None
+    api_version: int = _const(API_VERSION)
+
+
 # ---------------------------------------------------------------- explain (read-only)
 
 
@@ -1632,6 +1682,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
     "lab-replay-v1": LabReplayV1,
+    "trade-whatif-v1": TradeWhatIfV1,
     "explain-v1": ExplainV1,
     "observers-v1": ObserversV1,
     "decisions-v1": DecisionsV1,

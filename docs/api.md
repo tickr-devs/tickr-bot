@@ -105,6 +105,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
 | GET | `/lab/replay` | `200` `lab-replay-v1`: the Lab's latest SIMULATED replay of a strategy version (and the one compared with it) over the last sessions of fetched data or one day, plus the versions and days a run may ask for (see Lab replay below). |
 | POST | `/lab/replay` | Body `{}` or `{"version", "compare", "day"}` (any of them). Starts that replay: `202` `lab-replay-v1` (state `running`), or `409 conflict` with the cause it cannot start now. Not a bot command: nothing goes to the inbox. |
+| GET | `/trades/whatif?date=<YYYY-MM-DD>&symbol=<ticker>&version=<folder>` | `200` `trade-whatif-v1`: what strategy folder `version` would have done on that symbol and day, SIMULATED from the captured bars (see Another version on one trade below). `409 conflict` during the regular session. |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
 | GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first, its simulated day result and simulated trades. |
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
@@ -586,6 +587,32 @@ other key or a non-string value is `400 bad_request`.
   when too few days, `max_drawdown_r`) and what the bot's risk limits would have taken
   (`bot_trades`, `bot_total_usd`, `bot_max_drawdown_usd`). Twenty sessions are few: the interval
   is wide by construction.
+
+### GET /trades/whatif (another version on one trade, simulated)
+
+The Trades screen's "Another strategy…": strategy folder `version` (under `strategies/`, its
+module from `[observers] strategy_modules`) replayed by the replay engine (`docs/replay.md`, the
+same fill and exit rules and `[api] replay_settings_file`) on `symbol`'s captured M1 bars of
+`date`, with the prior sessions the bot cached for that symbol that day
+(`<history_dir>/<environment>/<date>/<symbol>-<[market_data] history_sessions>.jsonl`) as its
+history. Offline and read-only: nothing is fetched or written, the bot reads nothing of it.
+Code: `src/tickr/api/trade_whatif.py`.
+
+- All three query parameters are required; `symbol` is a ticker without `/`, `version` a single
+  folder name. Anything else is `400 bad_request`.
+- Refused (`409 conflict`) during the regular session of a trading day when
+  `[api] trade_whatif_outside_session_only = true`.
+- `signals`: what the simulation did with each ENTER of that day (`filled`, `missed`,
+  `rejected`, `ignored`). `trades`: each simulated trade of that day (`signal_at`, `opened_at`,
+  `entry_price`, `stop`, `closed_at`, `exit_price`, `exit_reason`, `result_r` per share, and the
+  version's own `quantity` with `result_gross_usd` when it chose one). `result_r`,
+  `result_gross_usd`: their sums; USD is null when a trade has no quantity. Gross: slippage in,
+  commissions and fees out.
+- When it cannot be computed (unreadable or unknown folder, no module, a version that needs more
+  history than the bot caches, replay.toml `history_sessions` differing from
+  `[market_data] history_sessions`, no captured bars for the symbol that day, no or empty cached
+  prior sessions, a refused simulation, a version that raises) `cause` says why, `signals` and the sums are null and `trades`
+  is empty. Paths in a cause are relative to the repo.
 
 ### GET /chart (read-only, market data)
 

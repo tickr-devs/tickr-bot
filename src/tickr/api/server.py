@@ -42,7 +42,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import contract, flow
+from tickr.api import contract, flow, trade_whatif
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from tickr.api.configview import config_document
@@ -69,6 +69,7 @@ from tickr.calendar import ny_date_of
 from tickr.config import Config, ConfigError
 from tickr.data.capture import CaptureError
 from tickr.data.discovery import DiscoverySettings
+from tickr.data.history import SYMBOL_PATTERN as TICKER_PATTERN
 from tickr.observers.errors import ObserverError
 from tickr.observers.loader import read_identity
 from tickr.observers.log import DecisionLog
@@ -146,6 +147,7 @@ class ApiSettings:
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
     lab: LabReplaySettings  # GET and POST /lab/replay: the Lab's simulated replay
+    trade_whatif: trade_whatif.TradeWhatIfSettings  # GET /trades/whatif
     config_file: Path | None  # the bot.toml this API loaded, shown at GET /config
     config_root: Path  # GET /config shows the file's path relative to this
     config_digest: str  # sha256 of the file when this API loaded it
@@ -268,6 +270,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
         lab=LabReplaySettings.from_config(cfg, config_path),
+        trade_whatif=trade_whatif.TradeWhatIfSettings.from_config(cfg),
         config_file=config_path,
         config_root=cfg.root,
         config_digest=cfg.digest,
@@ -461,9 +464,13 @@ _ERROR_CODES = {
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
-              "/watching", "/performance", "/chart", "/jobs", "/journal", "/config")
+              "/watching", "/performance", "/chart", "/jobs", "/journal", "/config",
+              "/trades/whatif")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 LAB_REPLAY = "/lab/replay"  # GET reads, POST starts: outside the command inbox
+TRADE_WHATIF = "/trades/whatif"  # GET: another version on one trade's day, simulated
+# A strategy folder name: one path segment, never "." or "..".
+FOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 DAY_PREFIX = "/days/"
 
 
@@ -621,6 +628,8 @@ class Handler(BaseHTTPRequestHandler):
                                                  self.server.settings.journal_rows))
             elif path == LAB_REPLAY:
                 self._json(200, self.server.lab.state())
+            elif path == TRADE_WHATIF:
+                self._trade_whatif()
             elif path == "/explain":
                 self._explain()
             elif path in ("/observers", "/decisions", "/skipped", "/flow", "/watching"):
@@ -836,6 +845,29 @@ class Handler(BaseHTTPRequestHandler):
             if exc.retry_after is not None and math.isfinite(exc.retry_after):
                 extra["Retry-After"] = str(math.ceil(exc.retry_after))
             self._error(exc.error, exc.cause, extra)
+            return
+        self._json(200, document)
+
+    def _trade_whatif(self) -> None:
+        """GET /trades/whatif?date=&symbol=&version=: another strategy version on one trade's
+        symbol and day, simulated; 409 with the cause during the session."""
+        try:
+            params = _query(urlsplit(self.path).query,
+                            frozenset({"date", "symbol", "version"}))
+            if not TICKER_PATTERN.match(params["symbol"]):
+                raise BadQuery(f"symbol {params['symbol']!r} is not a ticker")
+            if not FOLDER_PATTERN.match(params["version"]):
+                raise BadQuery(f"version {params['version']!r} is not a strategy folder name")
+            day = _day(params["date"])
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        try:
+            document = trade_whatif.what_if(self.server.settings.trade_whatif,
+                                            params["version"], params["symbol"], day,
+                                            self.server.clock())
+        except trade_whatif.TradeWhatIfRefused as exc:
+            self._error("conflict", str(exc))
             return
         self._json(200, document)
 
