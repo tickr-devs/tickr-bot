@@ -11,6 +11,8 @@ renders the job files, reads them, and loads them. Manual trades and the Sandbox
 | preflight | `local.aperture.preflight` | `[runtime] preflight_start_local` on `launch_weekdays` | never |
 | bot | `local.aperture.bot` | `[runtime] bot_start_local` on `launch_weekdays` | never (a crash raises an alert) |
 | watchdog | `local.aperture.watchdog` | `[runtime] watchdog_start_local` on `launch_weekdays`; runs until its last check | never |
+
+The bot job has one starter besides its schedule: near the flatten time the watchdog may start it once a day (see "Watchdog", `watchdog-restarted-bot`).
 | test-alert | `local.aperture.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
 | api | `local.aperture.api` | at login, always on, loopback only | launchd keeps it alive |
 
@@ -241,7 +243,8 @@ straight to the supervisor. Limits:
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
 `exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`, and from
-the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`. Every alert goes to
+the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
+`watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`. Every alert goes to
 the Mac notification and to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4).
 The iMessage is sent on a background thread, so the bot's loop never waits for Messages.app; its
 result is journaled as its own `alert` record (`"channel": "imessage"`) once known. An alert
@@ -312,9 +315,9 @@ broker stop while it works (the stop was cancelled before the close was sent).
 
 ## Watchdog
 
-The bot's own day-end check dies with the bot. The protective stop is a DAY order and a crashed
-bot is not restarted, so after a crash nothing would flatten at 15:55 ET and the position would
-go overnight without a broker-side stop. The watchdog job (`python -m aperture.runtime watchdog`)
+The bot's own day-end check dies with the bot. The protective stop is a DAY order and launchd
+never relaunches a crashed bot, so after a crash nothing would flatten at 15:55 ET and the
+position would go overnight without a broker-side stop. The watchdog job (`python -m aperture.runtime watchdog`)
 is a separate process that covers this:
 
 - It starts at `[runtime] watchdog_start_local` on `launch_weekdays` and exits after its last
@@ -327,6 +330,9 @@ is a separate process that covers this:
   regular close (15:59 ET). Preflight refuses values that do not fall after the bot's own
   day-end check and before the close. Started late (the Mac woke after these times), it checks
   once at once.
+- One restart a day (below): from `[runtime] watchdog_restart_before_flatten_seconds` before
+  the flatten time (15:50 ET on a normal day), if the bot is down while its database shows an
+  open trade, the watchdog starts the bot job once. It still sends nothing itself.
 - Every check and alert is one JSON line in `data/watchdog.jsonl` (`[runtime]
   watchdog_journal_file`) and in `~/Library/Logs/Aperture/watchdog.log`.
 - Exit 0: all checks clear; 1: something alerted; 2: config invalid (alert sent); 3: no session.
@@ -371,5 +377,39 @@ recovers (no live pid, or a status file not yet rewritten); if the next check is
 1. Open the Webull app: is the position still there, and is its stop working?
 2. Close the position by hand, or keep it with its stop and close it before 16:00 ET yourself.
 3. Do not restart the bot over an open position without reading the bot log; startup
-   reconciles first, but you decide.
+   reconciles first, but you decide. If you do nothing, the watchdog starts the bot job once
+   at 15:50 ET (below).
+
+### One restart a day: `watchdog-restarted-bot`
+
+From `[runtime] watchdog_restart_before_flatten_seconds` before the flatten time (300 s:
+15:50 ET on a normal day, 12:50 ET on a half day) until its last check, a watchdog bot check
+that finds the bot down while its database shows an open trade starts the bot job once:
+`[runtime] watchdog_restart_command`, by default `launchctl kickstart gui/<uid>/local.aperture.bot`
+(without `-k`, so a job launchd still sees running is left alone). That is the same job the
+schedule starts: preflight again (a failure alerts `bot-did-not-start`), the supervisor, the
+single-instance lock, then the normal startup: recovery, reconciliation, the stop verified.
+Config refuses a restart time at or before the last entry time, so the restarted bot can never
+open a trade; at the flatten time its own `flatten_due` closes the position through the
+normal exit path. The watchdog itself never places, cancels or replaces anything.
+
+- Once a day: the New York date is written to `data/watchdog-restart.json` (`[runtime]
+  watchdog_restart_file`) before the command runs, so there is never a second attempt that
+  day, also if the watchdog job itself is started again. Later bot checks that still find the
+  bot down alert `bot-down-with-open-trade` as before (the restarted bot may still be in
+  preflight or waiting for the token).
+- `watchdog-restart-refused`: it would restart but will not, with the cause in the text: the
+  operator's stop marker exists (the watchdog never overrides a stop-bot; a stop with an open
+  trade is yours to look at), the restart record is unreadable or cannot be written, or the
+  clock's New York date is not the calendar day. Close the position by hand before 16:00 ET.
+- `watchdog-restart-failed` (loudest; texts start with URGENT): the command failed or timed
+  out (`watchdog_restart_timeout_seconds`), or on the restart day a broker check after the
+  flatten time finds a position or open order, or the bot still down with an open trade. It
+  replaces `watchdog-not-flat` on that day. Open the Webull app now and close by hand.
+- On a quiet day nothing changes: a running bot, or a flat database, never triggers it.
+- To keep the bot down on purpose with a position open (a manual trade), unload the bot job, or
+  keep a stop marker left from an earlier stop made while flat. A new `stop-bot` is refused while
+  any trade is open, so it cannot create the marker then. See docs/manual-trade.md.
+- Owner check, once on the Mac: the exit code of `launchctl kickstart gui/$(id -u)/local.aperture.bot`
+  (no `-k`) for a job launchd still sees running, and for a booted-out job. Record both here.
 

@@ -83,7 +83,11 @@ def check_timings(config: Config) -> None:
     and unless both watchdog checks fall between the bot's day-end check and the close:
     flatten_grace_seconds < watchdog_after_flatten_seconds and
     watchdog_after_flatten_seconds + watchdog_before_close_seconds
-      < flatten_minutes_before_close (in seconds), watchdog_before_close_seconds > 0."""
+      < flatten_minutes_before_close (in seconds), watchdog_before_close_seconds > 0;
+    and unless the watchdog's restart of a down bot comes after the last entry time:
+    0 < watchdog_restart_before_flatten_seconds
+      < (last_entry_minutes_before_close - flatten_minutes_before_close) in seconds,
+    with a restart command and a positive timeout for it."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -112,6 +116,17 @@ def check_timings(config: Config) -> None:
         raise ConfigError(
             f"[runtime] watchdog_after_flatten_seconds ({after}) + watchdog_before_close_seconds "
             f"({before}) must be below the flatten-to-close time ({window} s), both positive")
+    restart = runtime.watchdog_restart_before_flatten_seconds
+    entry_gap = (config.session.last_entry_minutes_before_close
+                 - config.session.flatten_minutes_before_close) * SECONDS_PER_MINUTE
+    if not 0 < restart < entry_gap:
+        raise ConfigError(
+            f"[runtime] watchdog_restart_before_flatten_seconds ({restart}) must be positive and "
+            f"below the last-entry-to-flatten time ({entry_gap} s): a restarted bot must never "
+            "be able to open a trade")
+    if not runtime.watchdog_restart_command or runtime.watchdog_restart_timeout_seconds <= 0:
+        raise ConfigError("[runtime] watchdog_restart_command must be non-empty and "
+                          "watchdog_restart_timeout_seconds positive")
 
 
 def _calendar_xml(at: LocalTime, weekdays: tuple[int, ...]) -> str:

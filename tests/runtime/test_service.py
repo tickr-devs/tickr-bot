@@ -823,3 +823,23 @@ def test_interrupted_emergency_read_after_its_lifetime_is_recorded_refused(tmp_p
     assert rec.cause.startswith("expired: ")
     assert rec.cause.endswith("; steps done: entry-stop-on, cancel-own-orders; not run: flatten")
     assert list(bot.paths.inbox.iterdir()) == []
+
+
+def test_a_bot_started_after_the_flatten_time_flattens_the_previous_runs_trade(tmp_path):
+    """The watchdog's restart (runtime/watchdog.py): a run died with a protected trade; a new
+    run started after the flatten time recovers it and closes it through the normal path."""
+    first = Bot(tmp_path)
+    t = opened(first)
+    assert first.engine.trade(t).state is TradeState.OPEN
+    first.store.close()  # the crash: no drain, the stop rests at the broker
+    times = CALENDAR.day_at(MONDAY_11).session_times(
+        CFG.session.last_entry_minutes_before_close, CFG.session.flatten_minutes_before_close)
+    late = Bot(tmp_path, broker=first.broker, now=times.flatten + timedelta(seconds=60))
+    late.engine = Engine(late.store, late.broker, CFG, "svc00002",
+                         lambda: GateResult(True, "t"), clock=lambda: late.clock[0])
+    late.service = service.Service(late.engine, now=lambda: late.now, calendar=CALENDAR,
+                                   strategy=service.strategy_id(CFG), paths=late.paths)
+    assert late.run(12)
+    trade = late.engine.trade(t)
+    assert (trade.state, trade.exit_requested) == (TradeState.CLOSED, "session-flatten")
+    assert late.broker.positions() == [] and late.broker.open_orders() == []

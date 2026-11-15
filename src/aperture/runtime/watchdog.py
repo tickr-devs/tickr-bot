@@ -20,6 +20,20 @@ On an open market day (half days too: a position after the flatten time is wrong
   old. A pid alone is not proof: after a crash or a reboot it may belong to another process
   (or user), and a hung bot keeps its pid. A missing, unreadable or future-dated status file
   means not running.
+- from `watchdog_restart_before_flatten_seconds` before the flatten time (15:50 ET on a normal
+  day; config refuses a time inside the entry window), a bot that is not running while the
+  database shows an open trade is started ONCE a day: the watchdog runs
+  `watchdog_restart_command` (launchd's kickstart of the bot job: the same preflight and
+  supervised bot as the scheduled start, never a second instance). The bot then recovers,
+  reconciles, and its own `flatten_due` closes the trade; the watchdog still sends nothing.
+  The attempt is recorded in `<data_dir>/<watchdog_restart_file>` (the New York date) BEFORE
+  the command runs, so a day never gets a second one, also across a watchdog restart. Alerts
+  `watchdog-restarted-bot`. Refused, with `watchdog-restart-refused`, while the operator's stop
+  marker exists (the watchdog never overrides an operator stop; a stop with an open trade is
+  for the owner to look at), when the record is unreadable or cannot be written, or when the
+  clock's New York date is not the calendar day. After a restart, a broker check that is not
+  flat, or that finds the bot still down with an open trade, alerts `watchdog-restart-failed`
+  instead of `watchdog-not-flat`.
 Every broker check, every "bot down" finding and every alert is one JSON line on stdout (the
 job log) and in `<data_dir>/<watchdog_journal_file>`.
 """
@@ -27,9 +41,11 @@ job log) and in `<data_dir>/<watchdog_journal_file>`.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
-from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+import subprocess
+from collections.abc import Callable, Sequence
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -39,6 +55,7 @@ from aperture.calendar import NEW_YORK, CalendarCause, CalendarRefused, MarketDa
 from aperture.config import Config
 from aperture.engine.core import TradeState
 from aperture.lock import recorded_holder
+from aperture.runtime import stopmarker
 from aperture.runtime.alerts import Alerter, AlertKind
 from aperture.store import Store
 from aperture.types import OrderDetail, Position
@@ -47,10 +64,42 @@ START = "watchdog-start"
 CHECK = "watchdog-check"
 BOT_DOWN = "watchdog-bot-down"
 ALERT = "alert"
+RESTART = "watchdog-restart"
+UID_PLACEHOLDER = "{uid}"
 JOURNAL_FAILED = "watchdog-journal-failed"
 CHANNEL_REFUSED = "watchdog-alert-channel-refused"
 # Calendar answers that mean "no session today" (exit without an alert, like preflight).
 CLOSED_CAUSES = frozenset({CalendarCause.WEEKEND, CalendarCause.HOLIDAY})
+
+
+# Runs a command with a timeout in seconds and returns its exit code; replaced in tests.
+Runner = Callable[[Sequence[str], float], int]
+
+
+def run_command(command: Sequence[str], timeout: float) -> int:
+    """Run the restart command; its output is discarded, only the exit code counts."""
+    return subprocess.run(list(command), check=False, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          timeout=timeout).returncode
+
+
+def restart_command(config: Config) -> list[str]:
+    return [part.replace(UID_PLACEHOLDER, str(os.getuid()))
+            for part in config.runtime.watchdog_restart_command]
+
+
+def restart_file(config: Config) -> Path:
+    return config.root / config.run.data_dir / config.runtime.watchdog_restart_file
+
+
+def restarted_on(path: Path) -> date | None:
+    """New York date of the last recorded restart, None when there never was one. An
+    unreadable record raises (OSError, ValueError, KeyError, TypeError): never guessed."""
+    try:
+        text = path.read_text("utf-8")
+    except FileNotFoundError:
+        return None
+    return date.fromisoformat(json.loads(text)["ny_date"])
 
 
 class Reads(Protocol):
@@ -136,9 +185,15 @@ class Watchdog:
     def __init__(self, config: Config, day: MarketDay, *, connect: Callable[[], Reads],
                  alerter: Alerter, journal: Journal, clock: Callable[[], datetime],
                  sleep: Callable[[float], None], lock_path: Path, database: Path,
-                 status_path: Path) -> None:
+                 status_path: Path, runner: Runner) -> None:
+        self.config = config
         self.day = day
         self.times = check_times(config, day)
+        flatten = day.before_close(config.session.flatten_minutes_before_close).astimezone(UTC)
+        self.restart_at = flatten - timedelta(
+            seconds=config.runtime.watchdog_restart_before_flatten_seconds)
+        self._restart_file = restart_file(config)
+        self._runner = runner
         self.interval = float(config.runtime.watchdog_bot_check_seconds)
         self.stale_seconds = config.runtime.watchdog_status_stale_seconds
         self.max_lead_seconds = config.risk.max_clock_skew_seconds
@@ -199,7 +254,9 @@ class Watchdog:
                    for o in orders])
         self.journal.write(CHECK, {"at": now.isoformat(), "broker_read": True,
                                    "positions": len(positions), "open_orders": len(orders)})
-        if left:
+        if self._restarted_today():
+            self._after_restart(now, left)
+        elif left:
             self.alert(AlertKind.WATCHDOG_NOT_FLAT,
                        f"{_ny(now)}: not flat after the flatten time: " + "; ".join(left)
                        + ". Open the Webull app: close it, or place a stop by hand; the stop "
@@ -224,22 +281,108 @@ class Watchdog:
             return f"status file older than {self.stale_seconds} s"
         return None
 
-    def bot_check(self, now: datetime) -> None:
+    def down_with_open_trades(self, now: datetime) -> tuple[str, int] | None:
+        """(why not running, open trades) when the bot is down while the database shows an
+        open trade, else None. Raises sqlite3.Error when the database cannot be read."""
         why = self.not_running(now)
         if why is None:
-            return
+            return None
+        count = open_trades(self._database)
+        return (why, count) if count else None
+
+    def bot_check(self, now: datetime) -> None:
         try:
-            count = open_trades(self._database)
+            down = self.down_with_open_trades(now)
         except sqlite3.Error as exc:
             self.alert(AlertKind.WATCHDOG_CANNOT_CHECK,
                        f"bot not running and its database is unreadable ({type(exc).__name__})")
             return
-        if count == 0:
+        if down is None:
             return
+        why, count = down
         self.journal.write(BOT_DOWN, {"at": now.isoformat(), "open_trades": count,
                                       "why": why})
+        if now >= self.restart_at and self.restart(now, why, count):
+            return
         self.alert(AlertKind.BOT_DOWN_WITH_OPEN_TRADE,
                    f"the bot is not running ({why}) and the database shows {count} open "
                    "trade(s): "
                    "nothing will flatten it. Open the Webull app: check the stop, close by hand "
                    f"before {_ny(self.day.regular_close)}")
+
+    # --- the one restart a day -------------------------------------------------------------
+
+    def _restarted_today(self) -> bool:
+        try:
+            return restarted_on(self._restart_file) == self.day.ny_date
+        except (OSError, ValueError, KeyError, TypeError):
+            return False  # unknown: the plain alerts apply (the refusal was alerted)
+
+    def _refuse(self, now: datetime, cause: str) -> bool:
+        self.journal.write(RESTART, {"at": now.isoformat(), "started": False, "cause": cause})
+        self.alert(AlertKind.WATCHDOG_RESTART_REFUSED,
+                   "the bot is not running with an open trade and the watchdog will not start "
+                   f"it: {cause}. Open the Webull app: close the position by hand before "
+                   f"{_ny(self.day.regular_close)}; the stop is DAY")
+        return True
+
+    def restart(self, now: datetime, why: str, count: int) -> bool:
+        """Start the bot job once today; False when today's attempt was already made (the
+        caller then alerts bot-down as usual), True when this call alerted."""
+        if now.astimezone(NEW_YORK).date() != self.day.ny_date:
+            return self._refuse(now, "the clock's New York date is not the calendar day "
+                                     f"{self.day.ny_date.isoformat()}")
+        try:
+            last = restarted_on(self._restart_file)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return self._refuse(now, f"restart record {self._restart_file.name} unreadable "
+                                     f"({type(exc).__name__})")
+        if last == self.day.ny_date:
+            return False
+        marker = stopmarker.describe(self.config)
+        if marker is not None:
+            return self._refuse(now, f"{marker}; the watchdog never starts a bot the operator "
+                                     "stopped")
+        try:  # durable before the command: a day never gets a second attempt
+            contract.write_atomic(self._restart_file, json.dumps(
+                {"ny_date": self.day.ny_date.isoformat(), "at": now.isoformat(),
+                 "why": why, "open_trades": count}) + "\n")
+        except OSError as exc:
+            return self._refuse(now, f"restart record cannot be written ({type(exc).__name__})")
+        runtime = self.config.runtime
+        try:
+            code = self._runner(restart_command(self.config),
+                                float(runtime.watchdog_restart_timeout_seconds))
+            failure = None if code == 0 else f"restart command exited {code}"
+        except (OSError, subprocess.SubprocessError) as exc:
+            failure = f"restart command failed ({type(exc).__name__})"
+        self.journal.write(RESTART, {"at": now.isoformat(), "started": failure is None,
+                                     "why": why, "open_trades": count, "cause": failure,
+                                     "command": list(runtime.watchdog_restart_command)})
+        if failure is not None:
+            self.alert(AlertKind.WATCHDOG_RESTART_FAILED,
+                       f"URGENT: the bot is not running ({why}) with {count} open trade(s) and "
+                       f"the watchdog could not start it: {failure}. Open the Webull app now: "
+                       f"close the position by hand before {_ny(self.day.regular_close)}")
+        else:
+            self.alert(AlertKind.WATCHDOG_RESTARTED_BOT,
+                       f"the bot was not running ({why}) with {count} open trade(s): the "
+                       "watchdog started the bot job once so it flattens at the flatten time. "
+                       "Watch for a quiet check after the flatten time")
+        return True
+
+    def _after_restart(self, now: datetime, left: list[str]) -> None:
+        """A broker check on a day the watchdog restarted the bot: anything wrong is loud."""
+        problems = list(left)
+        try:
+            down = self.down_with_open_trades(now)
+        except sqlite3.Error as exc:
+            down = None
+            problems.append(f"bot database unreadable ({type(exc).__name__})")
+        if down is not None:
+            problems.append(f"bot still not running ({down[0]}) with {down[1]} open trade(s)")
+        if problems:
+            self.alert(AlertKind.WATCHDOG_RESTART_FAILED,
+                       f"URGENT {_ny(now)}: the watchdog restarted the bot today and it did not "
+                       "flatten: " + "; ".join(problems) + ". Open the Webull app now: close "
+                       f"by hand; the stop is DAY and expires at {_ny(self.day.regular_close)}")

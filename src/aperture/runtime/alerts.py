@@ -82,6 +82,13 @@ class AlertKind(StrEnum):
     WATCHDOG_CANNOT_CHECK = "watchdog-cannot-check"
     # during the session the bot process is not running while the database shows an open trade.
     BOT_DOWN_WITH_OPEN_TRADE = "bot-down-with-open-trade"
+    # near the flatten time the watchdog started the bot job (once a day) so it flattens;
+    WATCHDOG_RESTARTED_BOT = "watchdog-restarted-bot"
+    # it would have, but may not (stop marker present, restart record unreadable, day unknown);
+    WATCHDOG_RESTART_REFUSED = "watchdog-restart-refused"
+    # the restart failed: the command failed, or at a later check the bot is still down or the
+    # broker is still not flat. The loudest watchdog alert: act by hand now.
+    WATCHDOG_RESTART_FAILED = "watchdog-restart-failed"
     # A closing order is still not filled [orders] max_exit_seconds after it was sent.
     EXIT_NOT_FILLED = "exit-not-filled"
 

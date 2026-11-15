@@ -3,7 +3,8 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-from datetime import UTC, datetime, timedelta
+import subprocess
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from aperture.calendar import NEW_YORK
 from aperture.cli import data_paths
 from aperture.lock import SingleInstanceLock
 from aperture.runtime import __main__ as runtime_main
-from aperture.runtime import watchdog
+from aperture.runtime import stopmarker, watchdog
 from aperture.runtime.alerts import Alerter
 from aperture.store import Store
 from aperture.types import OrderDetail, OrderState, OrderType, Position, Side
@@ -74,14 +75,29 @@ def cfg(config_path):
     return config_module.load(config_path)
 
 
-def make(cfg, clock: Clock, connect, tmp_path: Path):
+class Runs:
+    """The injected command runner: records each command, never runs one."""
+
+    def __init__(self, result: int | Exception = 0) -> None:
+        self.calls: list[tuple[list[str], float]] = []
+        self.result = result
+
+    def __call__(self, command, timeout: float) -> int:
+        self.calls.append((list(command), timeout))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def make(cfg, clock: Clock, connect, tmp_path: Path, runner: Runs | None = None):
     database, lock_path = data_paths(cfg)
     recorder = Recorder()
     day = watchdog.market_day(cfg, clock())
     guard = watchdog.Watchdog(
         cfg, day, connect=connect, alerter=Alerter(cfg.alerts, "Aperture", recorder, clock),
         journal=watchdog.Journal(tmp_path / "watchdog.jsonl"), clock=clock, sleep=clock.sleep,
-        lock_path=lock_path, database=database, status_path=status_path(cfg))
+        lock_path=lock_path, database=database, status_path=status_path(cfg),
+        runner=runner if runner is not None else Runs())
     return guard, recorder
 
 
@@ -306,3 +322,181 @@ def test_cli_watchdog_without_a_channel_never_exits_0(config_path, monkeypatch, 
     refused = any(x["record"] == watchdog.CHANNEL_REFUSED
                   and x.get("cause") == "alert-channel-missing" for x in lines)
     assert refused is not channel
+
+
+# --- the one restart a day ----------------------------------------------------------------
+
+FLATTEN = datetime(2026, 11, 16, 20, 55, tzinfo=UTC)  # 15:55 ET
+
+
+@pytest.fixture(autouse=True)
+def no_real_restart(monkeypatch):
+    """No test ever runs launchctl: the CLI's runner fails the test if it is called."""
+    def refuse(command, timeout):
+        raise AssertionError(f"a test ran the restart command {command}")
+
+    monkeypatch.setattr(runtime_main, "WATCHDOG_RUNNER", refuse)
+
+
+def restart_at(cfg) -> datetime:
+    return FLATTEN - timedelta(seconds=cfg.runtime.watchdog_restart_before_flatten_seconds)
+
+
+def down_with_trade(cfg) -> None:
+    database, _ = data_paths(cfg)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    _open_trade(database)
+
+
+def kinds(recorder: Recorder) -> list[str]:
+    return [s.split(" | ")[0].split(": ")[1] for s in recorder.shown]
+
+
+def test_restart_time_is_before_the_flatten_and_after_the_last_entry(cfg, tmp_path):
+    guard, _ = make(cfg, Clock(AT), None, tmp_path)
+    assert guard.restart_at == restart_at(cfg)
+    last_entry = FLATTEN - timedelta(minutes=cfg.session.last_entry_minutes_before_close
+                                     - cfg.session.flatten_minutes_before_close)
+    assert last_entry < guard.restart_at < FLATTEN
+
+
+@pytest.mark.parametrize("case,expected,started", [
+    ("alive", [], False),
+    ("down-flat", [], False),
+    ("down-before", ["bot-down-with-open-trade"], False),
+    ("down-after", ["watchdog-restarted-bot"], True),
+    ("marker", ["watchdog-restart-refused"], False),
+    ("restarted-today", ["bot-down-with-open-trade"], False),
+    ("restarted-yesterday", ["watchdog-restarted-bot"], True),
+    ("record-unreadable", ["watchdog-restart-refused"], False),
+])
+def test_restart_decision_table(cfg, tmp_path, case, expected, started):
+    now = restart_at(cfg) - timedelta(seconds=1) if case == "down-before" else restart_at(cfg)
+    if case != "down-flat":
+        down_with_trade(cfg)
+    if case == "alive":
+        write_status(cfg, now)
+    record = watchdog.restart_file(cfg)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    if case == "marker":
+        stopmarker.write(cfg, "cmd-1", now)
+    elif case == "restarted-today":
+        record.write_text('{"ny_date": "2026-11-16"}')
+    elif case == "restarted-yesterday":
+        record.write_text('{"ny_date": "2026-11-13"}')
+    elif case == "record-unreadable":
+        record.write_text("{not json")
+    runs = Runs()
+    guard, recorder = make(cfg, Clock(now), None, tmp_path, runs)
+    _, lock_path = data_paths(cfg)
+    if case == "alive":
+        with SingleInstanceLock(lock_path):
+            guard.bot_check(now)
+    else:
+        guard.bot_check(now)
+    assert kinds(recorder) == expected
+    assert bool(runs.calls) is started
+    if started:
+        ((command, timeout),) = runs.calls
+        assert command == ["/bin/launchctl", "kickstart",
+                           f"gui/{os.getuid()}/local.aperture.bot"]
+        assert timeout == cfg.runtime.watchdog_restart_timeout_seconds
+        assert watchdog.restarted_on(record) == date(2026, 11, 16)
+
+
+def test_restart_happens_once_a_day_and_is_recorded_before_the_command(cfg, tmp_path):
+    down_with_trade(cfg)
+    record = watchdog.restart_file(cfg)
+    seen = []
+
+    def runner(command, timeout):
+        seen.append(watchdog.restarted_on(record))  # durable before the command runs
+        return 0
+
+    now = restart_at(cfg)
+    guard, recorder = make(cfg, Clock(now), None, tmp_path, runner)
+    guard.bot_check(now)
+    guard.bot_check(now + timedelta(seconds=60))
+    assert seen == [date(2026, 11, 16)]
+    assert kinds(recorder) == ["watchdog-restarted-bot", "bot-down-with-open-trade"]
+    # A new watchdog process the same day (job restarted) reads the record: no second attempt.
+    again, recorder = make(cfg, Clock(now), None, tmp_path, runner)
+    again.bot_check(now + timedelta(seconds=120))
+    assert seen == [date(2026, 11, 16)] and kinds(recorder) == ["bot-down-with-open-trade"]
+    lines = [r for r in records(tmp_path / "watchdog.jsonl") if r["record"] == watchdog.RESTART]
+    assert [(r["started"], r["command"][-1]) for r in lines] == [
+        (True, "gui/{uid}/local.aperture.bot")]
+
+
+@pytest.mark.parametrize("result,cause", [(1, "restart command exited 1"),
+                                          (FileNotFoundError(), "FileNotFoundError"),
+                                          (subprocess.TimeoutExpired("x", 1), "TimeoutExpired")])
+def test_a_failed_restart_command_is_the_loud_alert_and_is_not_repeated(cfg, tmp_path, result,
+                                                                        cause):
+    down_with_trade(cfg)
+    runs = Runs(result)
+    now = restart_at(cfg)
+    guard, recorder = make(cfg, Clock(now), None, tmp_path, runs)
+    guard.bot_check(now)
+    guard.bot_check(now + timedelta(seconds=60))
+    assert len(runs.calls) == 1
+    assert kinds(recorder) == ["watchdog-restart-failed", "bot-down-with-open-trade"]
+    assert cause in recorder.shown[0] and "URGENT" in recorder.shown[0]
+
+
+def test_unknown_calendar_day_refuses_the_restart(cfg, tmp_path):
+    down_with_trade(cfg)
+    runs = Runs()
+    guard, recorder = make(cfg, Clock(restart_at(cfg)), None, tmp_path, runs)
+    tomorrow = restart_at(cfg) + timedelta(days=1)
+    assert guard.restart(tomorrow, "no status file", 1)
+    assert runs.calls == [] and kinds(recorder) == ["watchdog-restart-refused"]
+    assert "not the calendar day" in recorder.shown[0]
+    assert not watchdog.restart_file(cfg).exists()
+
+
+def test_still_down_or_not_flat_after_a_restart_is_the_loud_alert(cfg, tmp_path):
+    """A full day: the bot dies with a trade, the watchdog starts it once, the started bot
+    never comes up, and both later checks say so loudly (not watchdog-not-flat)."""
+    down_with_trade(cfg)
+    broker = trap(FakeBroker())
+    broker.holdings["ABCD"] = Position("ABCD", Decimal(10), Decimal(10))
+    runs = Runs()
+    clock = Clock(datetime(2026, 11, 16, 20, 45, tzinfo=UTC))
+    guard, recorder = make(cfg, clock, lambda: watchdog.ReadOnlyBroker(broker), tmp_path, runs)
+    assert guard.run() == 1
+    assert len(runs.calls) == 1
+    loud = [s for s in recorder.shown if "watchdog-restart-failed" in s]
+    assert len(loud) == 2 and not any("watchdog-not-flat" in s for s in recorder.shown)
+    assert all("position ABCD 10" in s and "bot still not running" in s for s in loud)
+    assert broker.sent == [] and broker.replaced == []
+
+
+def test_after_a_restart_a_flat_broker_and_running_bot_are_quiet(cfg, tmp_path):
+    down_with_trade(cfg)
+    _, lock_path = data_paths(cfg)
+    clock = Clock(datetime(2026, 11, 16, 20, 45, tzinfo=UTC))
+    lock = SingleInstanceLock(lock_path)
+
+    def bot_comes_up(command, timeout):  # "launchd starts the bot": lock taken, status fresh
+        lock.__enter__()
+        clock.on_sleep = lambda now: write_status(cfg, now)
+        write_status(cfg, clock.now)
+        return 0
+
+    guard, recorder = make(cfg, clock, lambda: watchdog.ReadOnlyBroker(trap(FakeBroker())),
+                           tmp_path, bot_comes_up)
+    try:
+        assert guard.run() == 1  # it alerted the restart
+    finally:
+        lock.__exit__(None, None, None)
+    assert "watchdog-restarted-bot" in kinds(recorder)
+    assert not {"watchdog-restart-failed", "watchdog-not-flat"} & set(kinds(recorder))
+
+
+def test_restart_command_names_the_bot_job_label(config_path):
+    cfg = config_module.load(config_path)
+    template = (cfg.root / "ops" / "launchd" / "local.aperture.bot.plist.template").read_text()
+    label = cfg.runtime.watchdog_restart_command[-1].rsplit("/", 1)[1]
+    assert f"<key>Label</key>\n  <string>{label}</string>" in template
+    assert "-k" not in cfg.runtime.watchdog_restart_command  # never kills a running job

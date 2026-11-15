@@ -306,6 +306,18 @@ watchdog_bot_check_seconds = 60
 watchdog_status_stale_seconds = 60
 # Watchdog journal (JSON lines: checks and alerts), relative to data_dir; never the bot's database; read by runtime.watchdog.
 watchdog_journal_file = "watchdog.jsonl"
+# From this many seconds before the flatten time (15:50 ET on a normal day) the watchdog starts the bot job once a day
+# when the bot is not running and its database shows an open trade, so the bot's own flatten closes it; must be positive
+# and below the last-entry-to-flatten time so the restarted bot can never open a trade; read by runtime.watchdog.
+watchdog_restart_before_flatten_seconds = 300
+# Command the watchdog runs to start the bot job (the same job the schedule starts: preflight, then the supervised bot);
+# "{uid}" is replaced by the user id; kickstart without -k never touches a running job; read by runtime.watchdog.
+watchdog_restart_command = ["/bin/launchctl", "kickstart", "gui/{uid}/local.aperture.bot"]
+# Seconds the watchdog waits for the restart command to return before calling the attempt failed; read by runtime.watchdog.
+watchdog_restart_timeout_seconds = 10
+# Record of the watchdog's one restart a day (New York date), relative to data_dir; written before the command runs and
+# never removed, so a day never gets a second attempt; read by runtime.watchdog.
+watchdog_restart_file = "watchdog-restart.json"
 # Seconds one loop pass may spend on market upkeep, discovery and the strategy before an
 # evaluation-slow journal row (the next Detail read waits for it; keep it near
 # [orders] detail_poll_seconds); read by runtime.service.

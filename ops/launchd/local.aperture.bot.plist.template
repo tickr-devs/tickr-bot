@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Aperture bot: started before the open on configured weekdays; preflight runs again first.
-     Never relaunched automatically: KeepAlive is false and a crash raises an alert instead.
+     Never relaunched by launchd: KeepAlive is false and a crash raises an alert instead. The
+     watchdog may start it once a day near the flatten time to flatten a trade left open.
      launchd stops it with SIGTERM and waits ExitTimeOut seconds for a clean close.
      caffeinate -i -s -w holds a no-sleep assertion for exactly as long as this job's process
      lives (exec keeps the shell's pid); it is a side process, so SIGTERM from launchd still
