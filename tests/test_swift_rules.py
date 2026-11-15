@@ -300,6 +300,44 @@ def test_current_forms_of_those_calls_pass(tmp_path):
     assert load().legacy_violations(write(tmp_path, source)) == []
 
 
+def test_more_deprecated_swiftui_and_uikit_calls_fail(tmp_path):
+    source = (
+        "image.accessibility(label: Text(title))\n"
+        "row.accessibility(hidden: true)\n"
+        "view.actionSheet(isPresented: $shown) { sheet }\n"
+        "view.alert(isPresented: $shown) { Alert(title: Text(title)) }\n"
+        "list.navigationBarItems(trailing: button)\n"
+        "list.navigationBarHidden(true)\n"
+        "stack.navigationViewStyle(.stack)\n"
+        "view.statusBar(hidden: true)\n"
+        "field.disableAutocorrection(true)\n"
+        "TextField(title, text: $text, onEditingChanged: edit, onCommit: send)\n"
+        "card.overlay(Circle(), alignment: .topTrailing)\n"
+        "card.background(Color.clear, alignment: .top)\n"
+        "let window = UIApplication.shared.windows.first\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == list(range(1, 14))
+
+
+def test_current_forms_of_the_newer_checks_pass(tmp_path):
+    source = (
+        "image.accessibilityLabel(Text(title))\n"
+        "row.accessibilityHidden(true)\n"
+        "view.confirmationDialog(title, isPresented: $shown) { actions }\n"
+        "view.alert(title, isPresented: $shown) { actions } message: { message }\n"
+        "list.toolbarVisibility(.hidden, for: .navigationBar)\n"
+        "view.statusBarHidden()\n"
+        "field.autocorrectionDisabled()\n"
+        "TextField(title, text: $text).onSubmit(send)\n"
+        "card.overlay(alignment: .topTrailing) { Circle() }\n"
+        "card.overlay(Text(title).frame(maxWidth: .infinity, alignment: .leading))\n"
+        "card.background(alignment: .top) { Color.clear.frame(height: h, alignment: .top) }\n"
+        "card.overlay(Capsule().strokeBorder(color, lineWidth: width))\n"
+    )
+    assert load().legacy_violations(write(tmp_path, source)) == []
+
+
 def test_on_change_with_perform_over_several_lines_fails(tmp_path):
     source = (
         "view.onChange(\n"
@@ -333,6 +371,16 @@ def test_settings_below_swift_6_or_os_26_fail(tmp_path):
     )
     found = load().settings_violations(write(tmp_path, package, "Package.swift"))
     assert [line for line, _ in found] == [1, 2]
+    modes = (
+        'platforms: [.macOS("15.0")],\n'
+        "swiftLanguageModes: [.v5],\n"
+        "swiftSettings: [.swiftLanguageMode(.v5)],\n"
+        "swiftLanguageVersions: [.v5],\n"
+        'platforms: [.macOS("26.0")],\n'
+        "swiftLanguageModes: [.v6],\n"
+    )
+    found = load().settings_violations(write(tmp_path, modes, "Package.swift"))
+    assert [line for line, _ in found] == [1, 2, 3, 4]
     project = (
         "SWIFT_VERSION = 5.0;\n"
         "MACOSX_DEPLOYMENT_TARGET = 14.0;\n"
@@ -366,9 +414,11 @@ def test_settings_that_weaken_strict_concurrency_fail(tmp_path):
         '    SWIFT_STRICT_CONCURRENCY: "targeted"\n'
         "SWIFT_STRICT_CONCURRENCY = complete;\n"
         "// unsafeFlags are not allowed\n"
+        'OTHER_SWIFT_FLAGS = "-swift-version 5";\n'
+        'OTHER_SWIFT_FLAGS = "-swift-version 6";\n'
     )
     found = load().settings_violations(write(tmp_path, source, "project.pbxproj"))
-    assert [line for line, _ in found] == [1, 2, 3]
+    assert [line for line, _ in found] == [1, 2, 3, 6]
 
 
 def test_catalogs_must_be_in_xcode_form(tmp_path):
