@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import plistlib
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -41,13 +42,15 @@ _APPLESCRIPT = (
 )
 # Sends argv item 2 by iMessage to the address held by the environment variable NAMED in argv
 # item 1. A missing recipient is an AppleScript error (non-zero exit), never a silent skip.
+# AppleScript names are case-insensitive: a variable must not share a name with a Messages
+# term (`imessage` is the `iMessage` service type and fails with -10003 before sending).
 _IMESSAGE_SCRIPT = (
     "on run argv",
     "set recipient to system attribute (item 1 of argv)",
     'if recipient is "" then error "recipient variable not set"',
     'tell application "Messages"',
-    "set imessage to 1st account whose service type = iMessage",
-    "send (item 2 of argv) to participant recipient of imessage",
+    "set acct to 1st account whose service type = iMessage",
+    "send (item 2 of argv) to participant recipient of acct",
     "end tell",
     "end run",
 )
@@ -127,12 +130,15 @@ class Notifier(Protocol):
 
 
 Runner = Callable[..., subprocess.CompletedProcess[bytes]]
+# osascript ends an error line with its number in brackets, e.g. "... Access not allowed. (-10003)".
+_APPLESCRIPT_ERROR = re.compile(rb"\((-\d+)\)\s*$")
 
 
 def _osascript(runner: Runner, timeout: float, script: tuple[str, ...],
                args: list[str]) -> None:
     """Run one AppleScript with `args` as its argv (an argument list, never a shell string).
-    The error names the exit code only: stderr could echo the arguments."""
+    The error names the exit code and the AppleScript error number only: the rest of stderr
+    could echo the arguments."""
     argv = [OSASCRIPT]
     for line in script:
         argv += ["-e", line]
@@ -142,7 +148,9 @@ def _osascript(runner: Runner, timeout: float, script: tuple[str, ...],
     except (OSError, subprocess.SubprocessError) as exc:
         raise NotifyError(f"osascript did not run: {type(exc).__name__}") from exc
     if result.returncode != 0:
-        raise NotifyError(f"osascript exited with code {result.returncode}")
+        number = _APPLESCRIPT_ERROR.search(result.stderr or b"")
+        detail = f" (AppleScript error {number.group(1).decode()})" if number else ""
+        raise NotifyError(f"osascript exited with code {result.returncode}{detail}")
 
 
 class MacNotifier:

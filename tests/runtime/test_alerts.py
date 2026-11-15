@@ -121,6 +121,32 @@ def test_osascript_gets_text_as_arguments_not_script():
     assert kwargs["timeout"] == 5.0 and kwargs["check"] is False
 
 
+def test_imessage_script_variables_do_not_shadow_messages_terms():
+    # AppleScript is case-insensitive: `set imessage to ...` collided with the iMessage
+    # service type and failed with -10003 on every send.
+    import re
+
+    from tickr.runtime.alerts import _IMESSAGE_SCRIPT
+
+    terms = {"imessage", "sms", "rcs", "account", "participant", "chat", "service", "buddy"}
+    names = {m.group(1).lower() for line in _IMESSAGE_SCRIPT
+             for m in [re.match(r"set (\w+) to ", line)] if m}
+    assert names and not names & terms
+
+
+def test_osascript_error_keeps_only_the_applescript_number():
+    secret = "+15550000000"
+
+    def runner(argv, **kwargs):
+        stderr = f"184:196: execution error: {secret} not allowed. (-10003)\n".encode()
+        return subprocess.CompletedProcess(argv, 1, stderr=stderr)
+
+    with pytest.raises(NotifyError) as caught:
+        MacNotifier(Decimal(5), runner).notify("t", "x")
+    assert str(caught.value) == "osascript exited with code 1 (AppleScript error -10003)"
+    assert secret not in str(caught.value)
+
+
 @pytest.mark.parametrize("effect", ["exit", "timeout", "missing"])
 def test_osascript_failures_become_notify_error(effect):
     def runner(argv, **kwargs):
