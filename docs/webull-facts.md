@@ -104,7 +104,7 @@ Route: SDK `get_batch_history_bar(["AAPL"], "US_STOCK", "M1", ...)` → `POST /m
 - **start_time is honored, but returns one extra bar before it.** Window start 09:00, end 10:00 (2026-11-12) returned 61 bars, 08:59 … 09:59. Consistent with filtering on bar end inclusive on both sides (`start_time ≤ bar_start + 1 min ≤ end_time`). A caller wanting `[start, end)` by bar start must drop the bar labelled `start − 1 min`.
 - **count is honored exactly up to 1200** (SDK doc maximum); there is no pagination key. To go further back, repeat with `end_time` = oldest returned bar time (exclusive end means no duplicate).
 - **Order:** newest first.
-- **Depth:** a 3-month-old window (end 2026-08-14 15:00 EDT) returned full bars; no depth limit was reached. Larger depth not tested.
+- **Depth:** a 3-month-old window (end 2026-08-14 15:00 EDT) returned full bars. **Minute bars stop at 180 days:** a request whose `end_time` is older than 180 days is refused with HTTP `417`, `ILLEGAL_PARAMETER`, "end_time cannot be earlier than 180 days ago for minute-level timespan." (seen 2026-11-15 by the backtest minutes fetch for May 2026). The limit moves daily, so a long fetch must start its window with margin. Daily bars (D) reached back past it.
 - **Sessions:**
   - `trading_sessions` omitted → RTH only, 09:30–15:59 (count 1200 from 2026-11-10 10:00 reached back to 2026-11-05 09:30, skipping the weekend with no bars).
   - `["PRE","RTH","ATH"]` → PRE 04:00–09:29, RTH 09:30–15:59, ATH 16:00–19:59. No overnight bars (20:00–03:59) are returned with these values.
