@@ -188,6 +188,9 @@ launchctl bootout gui/$(id -u)/local.aperture.bot          # remove a job
 tail -f ~/Library/Logs/Aperture/bot.log
 ```
 
+To look at the apps with a full made-up day (never Webull, its own folder): `aperture demo`,
+see [demo.md](demo.md).
+
 ## Disk upkeep: `aperture maintain`
 
 What grows under `data/`, per environment and New York date: `capture/<env>/<date>/`

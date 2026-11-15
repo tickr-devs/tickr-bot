@@ -1,0 +1,31 @@
+# Demo day (`aperture demo`)
+
+A made-up trading day, so every screen of the macOS and iOS apps can be looked at with full data
+(open position with its stop, wins and losses, daily room near the ceiling, decisions and their
+checks, observers, account, past days for the day picker, minute bars).
+
+```
+.venv/bin/aperture demo          # or: python -m aperture.cli demo
+```
+
+What it does:
+
+- Rebuilds `demo/` in the repo (git-ignored): a copy of `config/` and `strategies/` whose
+  `bot.toml` runs as environment `demo`, serves the API on `[demo] api_port` (8776) and runs the
+  observers listed in `config/demo.toml`. The demo's `data/` is inside that folder; the real
+  `data/` is never read or written. A `demo/` folder it did not make is refused, never deleted.
+- Runs the real bot (`aperture run`) on a simulated exchange (`src/aperture/demo/world.py`):
+  only the broker, market data, clock, `sleep` and alerts are replaced. Webull is never
+  contacted, alerts go to the terminal. So the database, status, account, capture and decision
+  files have exactly the format of a real day.
+- Plays the past sessions in `config/demo.toml` fast, then the demo day (today if it is a session,
+  otherwise the latest session before it) fast up to `[demo] clock`, then in real time with the
+  local API listening, until Ctrl-C. About two to three minutes before the API is up.
+
+Point the apps at it: macOS Settings, API address `http://127.0.0.1:8776` (or
+`defaults write local.aperture.operator apiBaseURL http://127.0.0.1:8776`). The API's clock is the demo
+day's clock, so "today" in the apps is the demo day.
+
+The bot holds one position at a time in v1 (admission refuses a second), so the demo has one open
+position; the day's other trades come one after another. Everything the day contains is in
+`config/demo.toml`, each key commented.

@@ -588,6 +588,8 @@ def main(argv: list[str] | None = None) -> int:
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
     fence.add_argument("name")
     sub.add_parser("clear-stop", help="allow starts again after an operator stop-bot command")
+    sub.add_parser("demo", help="a made-up trading day in its own folder (config/demo.toml) "
+                   "served to the apps; never talks to Webull")
     args = parser.parse_args(argv)
     try:
         if args.command == "trade":
@@ -614,6 +616,10 @@ def main(argv: list[str] | None = None) -> int:
             return _check_config(args.config)
         if args.command == "status":
             return _status(args.config)
+        if args.command == "demo":
+            from aperture.demo.run import main as demo_main
+            repo = config_module.load(args.config).root
+            return demo_main(repo, repo / "config" / "demo.toml")
     except config_module.ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2

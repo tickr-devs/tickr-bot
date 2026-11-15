@@ -1,0 +1,88 @@
+# `aperture demo`: a made-up trading day for looking at the apps with full data. The real bot runs
+# on a simulated exchange (aperture.demo.world) inside its own folder; it never talks to Webull and
+# never reads or writes the real data_dir. Every key has a comment: what it is, its unit, who reads it.
+# Tickers are invented. Times are New York wall times "HH:MM"; prices are USD strings; volumes are
+# shares per minute. Read by aperture.demo.
+
+[demo]
+# Folder the demo builds, relative to the repo root: its own copy of config/ and strategies/ plus its
+# data/; deleted and rebuilt by every `aperture demo` (only when it holds the demo marker file).
+root_dir = "demo"
+# Environment name the demo copy of bot.toml runs as (a copy of the first environment whose trading
+# gate is open without an owner authorization); the apps show it, so it says this is a demo.
+environment = "demo"
+# Local API port the demo serves on, so it never collides with a real API on [api] port.
+api_port = 8776
+# [strategy] observers in the demo copy of bot.toml: shadow strategies whose decisions the apps show.
+observers = ["price-action-v2"]
+# Simulated-exchange provider name written into the demo's capture files.
+provider = "demo"
+# New York time the bot starts each simulated session (before the open, for warm-up).
+bot_start = "09:20"
+# New York time the bot is stopped on past sessions (after the session flatten).
+past_stop = "16:05"
+# New York time the demo day is fast-forwarded to; from then on it runs in real time until Ctrl-C.
+clock = "14:30"
+
+[market]
+# Half of the bid/ask spread of every simulated quote, USD.
+half_spread_usd = "0.01"
+# Bid and ask size of every simulated quote, shares.
+quote_size_shares = "500"
+# How far each simulated bar's high and low stick out beyond its open and close, USD.
+wick_usd = "0.05"
+# Volume per minute of the flat prior sessions every symbol gets as history (relative volume base).
+history_volume = "3000"
+
+[scenario]
+# Symbols of the demo day (today if it is a trading session, else the latest session before it).
+# Each: symbol; open price `base`; quiet `volume` per minute; `screener` list it appears on
+# (GAINERS, LOSERS or TOP_ACTIVES); `legs` = [from, to, price at the end, volume per minute] moves,
+# the price holds between them. The v1 bot holds one position at a time, so the breakouts come one
+# after another: five stop-outs and one operator-flattened win use up most of the daily loss room,
+# and the last breakout is the open position when the demo goes live.
+today = [
+  # Breakout at the open, bought, then collapses through its stop: a loss.
+  { symbol = "KXTR", base = "20.00", volume = "3000", screener = "GAINERS", legs = [["09:30", "09:45", "24.50", "30000"], ["10:00", "10:02", "21.00", "30000"]] },
+  # Breakout that keeps climbing; the operator's flatten command at 10:24 takes a small win.
+  { symbol = "VLNQ", base = "30.00", volume = "4000", screener = "GAINERS", legs = [["10:05", "10:20", "34.50", "30000"], ["10:20", "10:50", "35.60", "6000"]] },
+  # Stopped out, then breaks out again inside the 30-minute pause after a loss: refused, see "why".
+  { symbol = "ZNTH", base = "15.00", volume = "5000", screener = "TOP_ACTIVES", legs = [["11:00", "11:15", "18.20", "40000"], ["11:25", "11:27", "13.80", "40000"], ["11:35", "11:50", "17.40", "40000"]] },
+  # Midday breakout that fails: a loss.
+  { symbol = "PRQX", base = "42.00", volume = "6000", screener = "GAINERS", legs = [["12:00", "12:15", "47.50", "30000"], ["12:30", "12:32", "39.00", "30000"]] },
+  # Another failed breakout: a loss.
+  { symbol = "TRXQ", base = "26.00", volume = "7000", screener = "TOP_ACTIVES", legs = [["12:40", "12:55", "30.50", "40000"], ["13:10", "13:12", "24.00", "40000"]] },
+  # And one more: the day is now close to its loss ceiling.
+  { symbol = "HLQN", base = "11.00", volume = "9000", screener = "GAINERS", legs = [["13:20", "13:35", "14.20", "60000"], ["13:45", "13:47", "10.00", "60000"]] },
+  # The open position: bought on the breakout into the room left, drifting up while the demo runs.
+  { symbol = "MVLD", base = "24.00", volume = "9000", screener = "GAINERS", legs = [["13:55", "14:10", "28.50", "40000"], ["14:10", "15:30", "29.60", "9000"]] },
+  # On the losers list all day: the strategy sees it and never finds a setup.
+  { symbol = "BXVR", base = "36.00", volume = "5000", screener = "LOSERS", legs = [["09:30", "11:00", "31.50", "9000"], ["11:00", "15:30", "30.80", "5000"]] },
+]
+
+# Operator commands sent through the API inbox during the demo day: New York time, kind
+# (contract CommandKind value) and symbol (flatten only; empty = everything).
+commands = [
+  { at = "10:24", kind = "flatten", symbol = "VLNQ" },
+]
+
+# Past sessions for the day picker, oldest first, each a list of symbols like `today`. They run
+# the whole session, so a position still open at the flatten time is closed by the bot.
+past = [
+  [
+    { symbol = "KXTR", base = "18.00", volume = "3000", screener = "GAINERS", legs = [["09:30", "09:45", "22.00", "30000"], ["10:10", "10:12", "18.60", "30000"]] },
+    { symbol = "PRQX", base = "40.00", volume = "5000", screener = "GAINERS", legs = [["10:30", "10:45", "45.00", "30000"], ["10:45", "15:30", "46.80", "6000"]] },
+  ],
+  [
+    { symbol = "ZNTH", base = "14.00", volume = "4000", screener = "TOP_ACTIVES", legs = [["09:40", "09:55", "17.00", "40000"], ["10:20", "10:22", "14.40", "40000"]] },
+    { symbol = "VLNQ", base = "28.00", volume = "5000", screener = "GAINERS", legs = [["10:40", "10:55", "32.00", "30000"], ["11:30", "11:32", "28.50", "30000"]] },
+  ],
+  [
+    { symbol = "MVLD", base = "22.00", volume = "3000", screener = "GAINERS", legs = [["09:30", "09:45", "26.00", "30000"], ["09:45", "15:30", "27.10", "5000"]] },
+    { symbol = "HLQN", base = "10.00", volume = "6000", screener = "LOSERS", legs = [["09:30", "12:00", "8.90", "8000"]] },
+  ],
+  [
+    { symbol = "HLQN", base = "10.00", volume = "6000", screener = "GAINERS", legs = [["10:00", "10:15", "12.80", "60000"], ["11:00", "11:02", "9.00", "60000"]] },
+    { symbol = "TRXQ", base = "25.00", volume = "6000", screener = "GAINERS", legs = [["11:30", "11:45", "29.00", "40000"], ["11:45", "15:30", "30.20", "8000"]] },
+  ],
+]

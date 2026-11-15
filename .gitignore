@@ -15,3 +15,5 @@ dist/
 authorization/
 # Xcode per-user state (window layout, breakpoints, schemes order).
 xcuserdata/
+# The `aperture demo` folder (rebuilt by the command, never real data).
+/demo/
