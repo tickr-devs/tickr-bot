@@ -376,3 +376,28 @@ def test_catalogs_must_be_in_xcode_form(tmp_path):
     plain = json.dumps(json.loads(xcode), indent=2, sort_keys=True) + "\n"
     found = rules.catalog_form_violations(write(tmp_path, plain, "Localizable.xcstrings"))
     assert [line for line, _ in found] == [1]
+
+
+def test_loop_rule_flags_self_running_motion(tmp_path):
+    source = (
+        "withAnimation(.easeInOut.repeatForever()) { on = true }\n"
+        "TimelineView(.animation) { context in Text(\"\") }\n"
+        "TimelineView(.periodic(from: .now, by: 1)) { context in Text(\"\") }\n"
+        "// .repeatForever() in a comment\n"
+        "layer.repeatCount = .infinity\n"
+        "animation.repeatCount = Float.greatestFiniteMagnitude\n"
+        "animation.repeatCount = 3\n"
+    )
+    found = load().loop_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 5, 6]
+
+
+def test_loop_rule_allows_a_decorative_marker(tmp_path):
+    source = (
+        "// decorative: the brand mark's spark\n"
+        "withAnimation(.easeOut.repeatForever()) { on = true }\n"
+        "TimelineView(.animation) { c in Text(\"\") } // decorative: radar ornament\n"
+        "// decorative: the ticker scrolls as an ornament\n"
+        "scroll.repeatCount = .infinity\n"
+    )
+    assert load().loop_violations(write(tmp_path, source)) == []
