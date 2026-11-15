@@ -27,6 +27,7 @@ from .test_server import Clock, doc, request
 ROOT = Path(__file__).resolve().parents[2]
 TODAY = T0.date() - timedelta(days=3)  # the last fetched pool day: Friday 2026-11-13
 SATURDAY = T0 + timedelta(days=5)  # T0 is 10:00 New York on Monday 2026-11-16
+DEAD_PID = 2 ** 22 + 7  # above Linux's and macOS's pid limits: no such process
 
 
 class Child:
@@ -164,10 +165,176 @@ def test_a_refused_backtest_fails_with_its_cause_without_the_home_folder(cfg, sp
     assert failed.state is contract.LabReplayState.FAILED
     assert failed.cause == "data/backtest/minutes is missing"
     # The next start keeps only its own run folder (and never touches other folders).
-    keep = results.parent / "notes"
+    keep = results.parent.parent / "notes"
     keep.mkdir()
     lab.start()
-    assert not results.exists() and keep.exists()
+    assert not results.parent.exists() and keep.exists()
+
+
+def _results(command):
+    return Path(command[command.index("--results") + 1])
+
+
+def test_compare_runs_the_second_version_after_the_first_over_the_same_window(cfg, spawner):
+    _pool(cfg)
+    spawn = spawner()
+    lab = _lab(cfg, SATURDAY, spawn)
+    started = lab.start(None, "price-action-v2")
+    assert started.folder == "price-action-v1" and started.compare is not None
+    assert (started.compare.folder, started.compare.version) == ("price-action-v2", "2")
+    assert started.compare.state is contract.LabReplayState.RUNNING  # waits for the first
+    assert len(spawn.calls) == 1
+    (_results(spawn.calls[0][0]) / "report.json").write_text(json.dumps(_report()))
+    first = spawn.child
+    first.done.set()
+    for _ in range(500):  # the waiter starts the second version
+        if len(spawn.calls) == 2:
+            break
+        threading.Event().wait(0.01)
+    command, _ = spawn.calls[1]
+    assert command[command.index("--strategy") + 1] == "tickr.strategy.price_action_v2"
+    assert command[command.index("--last-sessions") + 1] == "20"
+    middle = lab.state()
+    assert middle.state is contract.LabReplayState.RUNNING and middle.finished_at is None
+    with pytest.raises(LabReplayRefused, match="already running"):
+        lab.start()
+    second = _report()
+    second["all_signals"]["trades"] = 5
+    (_results(command) / "report.json").write_text(json.dumps(second))
+    spawn.child.done.set()
+    for _ in range(500):
+        if lab.state().compare.state is contract.LabReplayState.DONE:
+            break
+        threading.Event().wait(0.01)
+    done = lab.state()
+    assert done.state is contract.LabReplayState.DONE and done.finished_at is not None
+    assert done.summary.trades == 3 and done.compare.summary.trades == 5
+    assert errors(contract.json_schema(contract.LabReplayV1),
+                  json.loads(contract.dumps(done))) == []
+
+
+def test_the_moment_between_the_two_versions_still_reads_running(cfg, spawner):
+    """The first child has exited and the second is not started yet: the run is running, and
+    a start is refused instead of deleting the folder the second version is about to use."""
+    _pool(cfg)
+    spawn = spawner()
+    lab = _lab(cfg, SATURDAY, spawn)
+    gate, release = threading.Event(), threading.Event()
+    plain = spawn.__call__
+
+    def slow(command, **kwargs):
+        if spawn.calls:  # the second version: hold its start
+            gate.set()
+            release.wait(5)
+        return plain(command, **kwargs)
+
+    lab.spawn = slow
+    lab.start(None, "price-action-v2")
+    (_results(spawn.calls[0][0]) / "report.json").write_text(json.dumps(_report()))
+    spawn.child.done.set()  # the first child exits
+    assert gate.wait(5)
+    current_path = lab.settings.results / "current.json"
+    current = json.loads(current_path.read_text())
+    current["legs"][0]["pid"] = DEAD_PID  # as for a real child that has exited
+    current_path.write_text(json.dumps(current))
+    try:
+        gap = lab.state()
+        assert gap.state is contract.LabReplayState.RUNNING and gap.summary is None
+        assert gap.compare.state is contract.LabReplayState.RUNNING
+        with pytest.raises(LabReplayRefused, match="already running"):
+            lab.start()
+    finally:
+        release.set()
+    for _ in range(500):
+        if len(spawn.calls) == 2:
+            break
+        threading.Event().wait(0.01)
+    assert len(spawn.calls) == 2 and _results(spawn.calls[1][0]).parent.exists()
+
+
+def test_an_unreadable_current_file_fails_and_the_next_start_replaces_it(cfg, spawner):
+    _pool(cfg)
+    lab = _lab(cfg, SATURDAY, spawner())
+    lab.settings.results.mkdir(parents=True)
+    for text in ("{not json", json.dumps({"run_id": "0" * 32, "legs": []})):
+        (lab.settings.results / "current.json").write_text(text)
+        broken = lab.state()
+        assert broken.state is contract.LabReplayState.FAILED
+        assert "current.json unreadable" in broken.cause
+    assert lab.start().state is contract.LabReplayState.RUNNING
+
+
+def test_one_day_replays_a_single_session_ending_at_that_day(cfg, spawner):
+    _pool(cfg)
+    spawn = spawner()
+    lab = _lab(cfg, SATURDAY, spawn)
+    started = lab.start("volume-shock-v1", None, TODAY)
+    assert started.day == TODAY and started.sessions == 1 and started.compare is None
+    assert (started.strategy, started.folder) == ("volume-shock-v1", "volume-shock-v1")
+    command, _ = spawn.calls[0]
+    assert command[command.index("--last-sessions") + 1] == "1"
+    assert command[command.index("--end-day") + 1] == TODAY.isoformat()
+
+
+def test_choices_list_every_version_and_the_pool_days(cfg, spawner):
+    _pool(cfg)
+    lab = _lab(cfg, SATURDAY, spawner())
+    idle = lab.state()
+    assert idle.days == (TODAY,)
+    roles = {v.folder: (v.role, v.cause) for v in idle.versions}
+    assert idle.versions[0].folder == "price-action-v1"
+    assert roles["price-action-v1"] == (contract.LabVersionRole.ACTIVE, None)
+    assert roles["price-action-v2"] == (contract.LabVersionRole.CANDIDATE, None)
+    broken = cfg.root / "strategies" / "my-idea"
+    broken.mkdir()
+    (broken / "strategy.toml").write_text("[strategy]\nversion = \"1\"\n")
+    cause = {v.folder: v.cause for v in lab.state().versions}["my-idea"]
+    assert "no [strategy] name" in cause and str(cfg.root) not in cause
+    with pytest.raises(LabReplayRefused, match="no \\[strategy\\] name"):
+        lab.start("my-idea")
+
+
+@pytest.mark.parametrize("args,match", [
+    (("nope", None, None), "no strategy folder 'nope'"),
+    ((None, "price-action-v1", None), "same version twice"),
+    ((None, None, TODAY - timedelta(days=1)), "not a day of the fetched data"),
+])
+def test_start_refuses_a_bad_choice(cfg, spawner, args, match):
+    _pool(cfg)
+    spawn = spawner()
+    with pytest.raises(LabReplayRefused, match=match):
+        _lab(cfg, SATURDAY, spawn).start(*args)
+    assert spawn.calls == []
+
+
+def test_a_run_from_before_comparisons_still_reads(cfg, spawner):
+    lab = _lab(cfg, SATURDAY, spawner())
+    run = lab.settings.results / ("0" * 32)
+    run.mkdir(parents=True)
+    (run / "report.json").write_text(json.dumps(_report()))
+    (run / "exit.json").write_text(json.dumps({"finished_at": "2026-11-21T15:04:00.000Z",
+                                                "code": 0}))
+    (lab.settings.results / "current.json").write_text(json.dumps({
+        "run_id": "0" * 32, "started_at": "2026-11-21T15:00:00.000Z", "pid": 1,
+        "strategy": "price-action-v1", "version": "1", "sessions": 20}))
+    old = lab.state()
+    assert old.state is contract.LabReplayState.DONE and old.summary.trades == 3
+    assert old.folder is None and old.compare is None and old.day is None
+
+
+def test_post_body_shapes(cfg):
+    settings = replace(settings_from_config(cfg, ROOT / "config" / "bot.toml"), port=0)
+    server = make_server(settings, Clock(SATURDAY))
+    thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
+    thread.start()
+    try:
+        for body in ({"day": "13-11-2026"}, {"version": 1}, {"other": "x"}, {"version": ""}):
+            assert request(server, "POST", "/lab/replay", body)[0].status == 400
+        resp, payload = request(server, "POST", "/lab/replay", {"compare": "price-action-v2"})
+        assert resp.status == 409 and "pool.csv is missing" in doc(payload)["cause"]
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_refused_without_config_path_or_strategy_module(cfg, spawner):

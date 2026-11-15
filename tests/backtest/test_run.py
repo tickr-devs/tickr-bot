@@ -180,6 +180,14 @@ def test_last_sessions_cuts_the_pool_to_the_latest_calendar_sessions():
     assert window == [TODAY] and kept == pool[2:]
     kept, window = last_sessions(calendar, pool, 6, 30)
     assert window[0] == date(2026, 11, 6) and kept == pool[1:]
+    kept, window = last_sessions(calendar, pool, 1, 30, date(2026, 11, 6))  # one chosen day
+    assert window == [date(2026, 11, 6)] and kept == pool[1:2]
+    try:
+        last_sessions(calendar, pool, 1, 30, date(2026, 11, 5))
+    except BacktestError as exc:
+        assert "not a pool day" in str(exc)
+    else:
+        raise AssertionError("an end day outside the pool must be refused")
     for bad in (0, -1):
         try:
             last_sessions(calendar, pool, bad, 30)

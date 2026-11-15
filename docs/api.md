@@ -100,8 +100,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
-| GET | `/lab/replay` | `200` `lab-replay-v1`: the Lab's latest SIMULATED replay of the active strategy over the last sessions of fetched data (see Lab replay below). |
-| POST | `/lab/replay` | Body `{}`. Starts that replay: `202` `lab-replay-v1` (state `running`), or `409 conflict` with the cause it cannot start now. Not a bot command: nothing goes to the inbox. |
+| GET | `/lab/replay` | `200` `lab-replay-v1`: the Lab's latest SIMULATED replay of a strategy version (and the one compared with it) over the last sessions of fetched data or one day, plus the versions and days a run may ask for (see Lab replay below). |
+| POST | `/lab/replay` | Body `{}` or `{"version", "compare", "day"}` (any of them). Starts that replay: `202` `lab-replay-v1` (state `running`), or `409 conflict` with the cause it cannot start now. Not a bot command: nothing goes to the inbox. |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
 | GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first, its simulated day result and simulated trades. |
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
@@ -540,23 +540,43 @@ words) and `symbol` (when the row's body names one). The body itself is not serv
 database yet, it cannot be read, or the journal has no rows yet.
 ### GET and POST /lab/replay (simulated, never the bot)
 
-The Lab's "replay the last days": the active strategy (`[strategy] active`, its module from
+The Lab's "replay the last days", "compare with another version" and "replay one day": a strategy
+version (a folder under `strategies/`, the active one unless asked; its module from
 `[observers] strategy_modules`) replayed by the backtest (`docs/backtest.md`) over the last
 `[api] lab_replay_sessions` sessions of the data already fetched into `[api] lab_replay_data_dir`,
-ending at its last pool day. It never fetches: `summary.last_day` is where the data ends, and the
-app shows it. Code: `src/tickr/api/lab_replay.py`.
+ending at its last pool day, or over one pool day; optionally a second version over the same
+window. It never fetches: `summary.last_day` is where the data ends, and the app shows it. Code:
+`src/tickr/api/lab_replay.py`.
 
-POST starts `python -m tickr.backtest run --last-sessions N` as a child process of the API
-under `nice -n [api] lab_replay_niceness`, writing into `[api] lab_replay_results_dir`; the bot
-reads nothing of it. One run at a time, shared by both listeners; each start deletes the previous
-run. It is refused (`409 conflict`, one cause) while a run is going, during the regular session
-of a trading day when `[api] lab_replay_outside_session_only = true`, without fetched data
-(`pool.csv`), without a module for the strategy, or when the API was started without its config
-file path (the demo).
+POST body: `{}`, or any of `version` (folder to replay, default the active one), `compare` (a
+second folder, replayed after the first) and `day` (`YYYY-MM-DD`, one of `days`: replay that
+session only). It starts `python -m tickr.backtest run --last-sessions N` (`--last-sessions 1
+--end-day D` for one day) as a child process of the API under `nice -n [api] lab_replay_niceness`,
+writing into `[api] lab_replay_results_dir`; a comparison starts the second child when the first
+ends, never both at once. The bot reads nothing of it. One run at a time, shared by both
+listeners; each start deletes the previous run. It is refused (`409 conflict`, one cause) while a
+run is going, during the regular session of a trading day when
+`[api] lab_replay_outside_session_only = true`, without fetched data (`pool.csv`), for a day that
+is not in it, for a folder that is missing, unreadable or has no module, when `compare` names the
+first version again, or when the API was started without its config file path (the demo). Any
+other key or a non-string value is `400 bad_request`.
 
 - `state`: `idle` (no run yet), `running`, `done` (with `summary`) or `failed` (with `cause`:
   the backtest's own refusal, paths relative to the repo).
-- `strategy`, `version`: what was replayed; `sessions`: the number asked for.
+- `strategy`, `version`, `folder`: the first version replayed; `sessions`: the number asked for
+  (1 for one day); `day`: the one day replayed, null for the last sessions.
+- `compare`: null, or the second version (`folder`, `strategy`, `version`, its own `state`,
+  `cause` and `summary`). It is `running` while the first one runs, and `failed` with a cause if
+  the API stopped before it started. The run's `state` is `running` until both ended (the first
+  version's `summary` and `cause` stay null until then); otherwise it is the first version's.
+  An unreadable `current.json` reads as `failed` with that cause, and the next start replaces it.
+- `versions`: every folder under `strategies/` a run may name, the active one first, then the
+  observers, then the others: `folder`, `strategy` and `version` as its strategy.toml says (null
+  when unreadable), `role` (`active`, `observer`, `candidate`) and `cause` (null when it can be
+  replayed). `days`: the latest `[api] lab_replay_sessions` session dates of the fetched pool,
+  newest first (empty without data): the days "replay one day" offers.
+- `folder`, `day`, `compare`, `versions` and `days` were added after version 1 shipped: a reader
+  takes a document without them as null or empty.
 - `summary`: the window (`first_day` ... `last_day`, `sessions_without_replayed_days`: no gainer
   or incomplete data that day), every signal (`trades`, `win_rate_percent`, `mean_r`, `total_r`,
   `profit_factor`, the day-resampled `mean_r_interval_low`/`high` at `confidence_percent`, null

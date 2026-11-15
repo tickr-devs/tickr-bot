@@ -52,7 +52,9 @@ names. The first response of each kind and every failed one are kept in `<out>/r
    A run that cannot be completed (no older bars, page limit, conflict) is recorded with its cause.
 5. **Run** (`trades.csv`, `signals.csv`, `summary.json`, `skipped.csv`, `report.json`,
    `report.md`): see below. `--last-sessions N` replays only the pool days of the latest N
-   calendar sessions, ending at the pool's last day (the Lab's "replay the last days"). The
+   calendar sessions, ending at the pool's last day (the Lab's "replay the last days");
+   `--end-day D` ends the window at pool day D instead (`--last-sessions 1 --end-day D` is the
+   Lab's "replay one day"). The
    report then has `last_sessions`: the count asked for, the first and last day of the window,
    and how many of its sessions had no replayed day (no gainer, or incomplete data). With few
    sessions, the interval and the hold-out are wide by construction, and report.md says so.

@@ -3,10 +3,59 @@
   "run_id": "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f",
   "strategy": "price-action-v1",
   "version": "1",
-  "sessions": 20,
+  "sessions": 1,
   "started_at": "2026-11-21T15:00:00.123Z",
   "finished_at": null,
   "cause": null,
   "summary": null,
+  "folder": "price-action-v1",
+  "day": "2026-11-13",
+  "compare": {
+    "folder": "volume-shock-v1",
+    "strategy": "volume-shock-v1",
+    "version": "1",
+    "state": "running",
+    "cause": null,
+    "summary": null
+  },
+  "versions": [
+    {
+      "folder": "price-action-v1",
+      "strategy": "price-action-v1",
+      "version": "1",
+      "role": "active",
+      "cause": null
+    },
+    {
+      "folder": "price-action-v2",
+      "strategy": "price-action-v2",
+      "version": "2",
+      "role": "observer",
+      "cause": null
+    },
+    {
+      "folder": "volume-shock-v1",
+      "strategy": "volume-shock-v1",
+      "version": "1",
+      "role": "candidate",
+      "cause": null
+    },
+    {
+      "folder": "my-idea",
+      "strategy": null,
+      "version": null,
+      "role": "candidate",
+      "cause": "my-idea: strategy.toml has no [strategy] name"
+    }
+  ],
+  "days": [
+    "2026-11-13",
+    "2026-11-12",
+    "2026-11-11",
+    "2026-11-10",
+    "2026-11-09",
+    "2026-11-06",
+    "2026-11-05"
+  ],
   "api_version": 1
 }

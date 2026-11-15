@@ -59,9 +59,12 @@ from tickr.api.contract import (
     JobsV1,
     JournalRowV1,
     JournalV1,
+    LabReplayLegV1,
     LabReplayState,
     LabReplaySummaryV1,
     LabReplayV1,
+    LabVersionRole,
+    LabVersionV1,
     LatestSizeV1,
     LaunchdJobV1,
     NightlyFetchJobV1,
@@ -103,6 +106,17 @@ COOLDOWN_CAUSE = ("SYMBOL_COOLDOWN: ZNTH closed at a loss at 2026-11-16T10:14:07
                   "no entry before 2026-11-16T10:44:07.250000-05:00")
 POLL = Decimal("3")
 DAY = date(2026, 11, 16)
+LAB_SUMMARY = LabReplaySummaryV1(
+    DAY - timedelta(days=25), DAY - timedelta(days=2), 20, 1, 143, 37, Decimal("43.24"),
+    Decimal("0.18"), Decimal("6.66"), Decimal("1.41"), Decimal("-0.21"), Decimal("0.57"),
+    Decimal("95"), Decimal("4.20"), 22, Decimal("412.50"), Decimal("187.00"))
+LAB_VERSIONS = (
+    LabVersionV1("price-action-v1", "price-action-v1", "1", LabVersionRole.ACTIVE, None),
+    LabVersionV1("price-action-v2", "price-action-v2", "2", LabVersionRole.OBSERVER, None),
+    LabVersionV1("volume-shock-v1", "volume-shock-v1", "1", LabVersionRole.CANDIDATE, None),
+    LabVersionV1("my-idea", None, None, LabVersionRole.CANDIDATE,
+                 "my-idea: strategy.toml has no [strategy] name"))
+LAB_DAYS = tuple(DAY - timedelta(days=d) for d in (3, 4, 5, 6, 7, 10, 11))
 
 
 def _response(st, age, stale, cause=None) -> StatusResponseV1:
@@ -260,24 +274,35 @@ def documents() -> dict[str, object]:
             JournalRowV1(730, T0 - timedelta(seconds=4), "reconcile-checked", None),
             JournalRowV1(731, T0, "stop-from-fill", "ABCD")), None),
         "journal-v1.empty": JournalV1(None, (), "the bot has not created its database yet"),
-        # Saturday: the replay of the last 20 sessions finished, with its SIMULATED numbers.
+        # Saturday: the last 20 sessions replayed for the active version, then compared with
+        # the price-action-v2 candidate over the same window; both SIMULATED.
         "lab-replay-v1": LabReplayV1(
             LabReplayState.DONE, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1", "1", 20,
-            T0 + timedelta(days=5), T0 + timedelta(days=5, minutes=4, seconds=31), None,
-            LabReplaySummaryV1(
-                DAY - timedelta(days=25), DAY - timedelta(days=2), 20, 1, 143, 37,
-                Decimal("43.24"), Decimal("0.18"), Decimal("6.66"), Decimal("1.41"),
-                Decimal("-0.21"), Decimal("0.57"), Decimal("95"), Decimal("4.20"), 22,
-                Decimal("412.50"), Decimal("187.00"))),
+            T0 + timedelta(days=5), T0 + timedelta(days=5, minutes=9, seconds=2), None,
+            LAB_SUMMARY, folder="price-action-v1",
+            compare=LabReplayLegV1("price-action-v2", "price-action-v2", "2",
+                                   LabReplayState.DONE, None, LabReplaySummaryV1(
+                                       DAY - timedelta(days=25), DAY - timedelta(days=2), 20, 1,
+                                       143, 29, Decimal("48.28"), Decimal("0.27"),
+                                       Decimal("7.83"), Decimal("1.66"), Decimal("-0.12"),
+                                       Decimal("0.64"), Decimal("95"), Decimal("3.10"), 19,
+                                       Decimal("488.00"), Decimal("142.50"))),
+            versions=LAB_VERSIONS, days=LAB_DAYS),
         "lab-replay-v1.idle": LabReplayV1(LabReplayState.IDLE, None, None, None, 20, None,
-                                          None, None, None),
+                                          None, None, None, versions=LAB_VERSIONS, days=LAB_DAYS),
+        # One day replayed: the first version runs, the second waits for it.
         "lab-replay-v1.running": LabReplayV1(
             LabReplayState.RUNNING, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1",
-            "1", 20, T0 + timedelta(days=5), None, None, None),
+            "1", 1, T0 + timedelta(days=5), None, None, None, folder="price-action-v1",
+            day=DAY - timedelta(days=3),
+            compare=LabReplayLegV1("volume-shock-v1", "volume-shock-v1", "1",
+                                   LabReplayState.RUNNING, None, None),
+            versions=LAB_VERSIONS, days=LAB_DAYS),
         "lab-replay-v1.failed": LabReplayV1(
             LabReplayState.FAILED, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1", "1",
             20, T0 + timedelta(days=5), T0 + timedelta(days=5, seconds=2),
-            "backtest/minutes is missing: run fetch first", None),
+            "backtest/minutes is missing: run fetch first", None, folder="price-action-v1",
+            versions=LAB_VERSIONS, days=LAB_DAYS),
         "day-v1.empty": DayV1("sandbox", DAY - timedelta(days=3), (), Decimal("0"), ()),
         "bars-v1": BarsV1("sandbox", "ABCD", DAY, tuple(
             BarV1(T0 + timedelta(minutes=i), Decimal(o), Decimal(h), Decimal(lo), Decimal(c),

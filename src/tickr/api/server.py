@@ -718,16 +718,24 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, PairedV1(token=token))
 
     def _start_lab_replay(self) -> None:
-        """POST /lab/replay with {}: start the simulated replay, 202 with its state, or 409
-        with the single cause it cannot start now."""
+        """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated
+        replay, 202 with its state, or 409 with the single cause it cannot start now."""
         body = self._read_json_body()
         if body is None:
             return
-        if body:
-            self._error("bad_request", "body must be an empty JSON object {}")
+        shape = ('body must be {} or hold only "version" and "compare" (folders under '
+                 'strategies/) and "day" (YYYY-MM-DD), each a non-empty string')
+        if not set(body) <= {"version", "compare", "day"} or not all(
+                isinstance(v, str) and v for v in body.values()):
+            self._error("bad_request", shape)
             return
         try:
-            self._json(202, self.server.lab.start())
+            day = None if "day" not in body else _day(body["day"])
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        try:
+            self._json(202, self.server.lab.start(body.get("version"), body.get("compare"), day))
         except LabReplayRefused as exc:
             self._error("conflict", str(exc))
 

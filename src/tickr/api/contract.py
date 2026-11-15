@@ -858,21 +858,58 @@ class LabReplaySummaryV1:
     bot_max_drawdown_usd: Decimal | None
 
 
+class LabVersionRole(StrEnum):
+    ACTIVE = "active"  # [strategy] active: the version that trades
+    OBSERVER = "observer"  # listed in [strategy] observers: decides live, never trades
+    CANDIDATE = "candidate"  # any other folder under strategies/
+
+
+@dataclass(frozen=True)
+class LabVersionV1:
+    """A strategy folder the Lab may replay. `strategy`/`version` as its strategy.toml says;
+    `cause` (null when it can be replayed): its file is unreadable or no module builds it."""
+
+    folder: str
+    strategy: str | None
+    version: str | None
+    role: LabVersionRole
+    cause: str | None
+
+
+@dataclass(frozen=True)
+class LabReplayLegV1:
+    """The second version of a comparison, replayed after the first over the same window."""
+
+    folder: str
+    strategy: str
+    version: str
+    state: LabReplayState
+    cause: str | None
+    summary: LabReplaySummaryV1 | None
+
+
 @dataclass(frozen=True)
 class LabReplayV1:
-    """GET and POST /lab/replay: the Lab's SIMULATED replay of the active strategy over the last
-    sessions of the already fetched backtest data (it never fetches). One run at a time; only
-    the latest is kept. `summary` when `state` is done; `cause` when failed."""
+    """GET and POST /lab/replay: the Lab's SIMULATED replay of a strategy version (the active
+    one unless asked) over the last sessions of the already fetched backtest data, or over one
+    of its days (it never fetches), optionally compared with a second version. One run at a
+    time; only the latest is kept. `summary` when `state` is done; `cause` when failed.
+    `versions` and `days` are what a run may ask for."""
 
     state: LabReplayState
     run_id: str | None
     strategy: str | None
     version: str | None
-    sessions: int  # [api] lab_replay_sessions asked for
+    sessions: int  # [api] lab_replay_sessions asked for (1 for one day)
     started_at: datetime | None
     finished_at: datetime | None
     cause: str | None
     summary: LabReplaySummaryV1 | None
+    folder: str | None = _added_later(None)  # strategies/<folder> replayed
+    day: date | None = _added_later(None)  # the one day replayed; null: the last sessions
+    compare: LabReplayLegV1 | None = _added_later(None)
+    versions: tuple[LabVersionV1, ...] = _added_later(())
+    days: tuple[date, ...] = _added_later(())  # pool days of the last sessions, newest first
     api_version: int = _const(API_VERSION)
 
 
