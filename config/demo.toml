@@ -48,7 +48,7 @@ texture_pull = "0.9"
 texture_wick = "0.0015"
 # Extra spread of that step on a moving bar, of the bar's planned move: red bars and pullbacks
 # inside a run-up.
-texture_move = "1.3"
+texture_move = "0.25"
 # The most that extra spread can be, of the price, so a two-minute collapse stays a collapse.
 texture_move_cap = "0.012"
 # Largest change of a minute's volume either way, of that volume (below 1).
@@ -86,19 +86,34 @@ today = [
   { symbol = "TRXQ", base = "26.00", volume = "7000", screener = "TOP_ACTIVES", legs = [["12:40", "12:55", "30.50", "40000"], ["13:10", "13:12", "24.00", "40000"]] },
   # And one more: the day is now close to its loss ceiling.
   { symbol = "HLQN", base = "11.00", volume = "9000", screener = "GAINERS", legs = [["13:20", "13:35", "14.20", "60000"], ["13:45", "13:47", "10.00", "60000"]] },
-  # The open position: bought on the breakout into the room left, drifting up while the demo runs.
-  { symbol = "MVLD", base = "24.00", volume = "9000", screener = "GAINERS", legs = [["13:55", "14:10", "28.50", "40000"], ["14:10", "15:30", "29.60", "9000"]] },
+  # The open position when the demo goes live: bought on the breakout into the room left, drifting
+  # up, then flattened by the operator just after [demo] clock (see commands), which gives the
+  # live loop ([live] below) its room back.
+  { symbol = "MVLD", base = "24.00", volume = "9000", screener = "GAINERS", legs = [["13:55", "14:10", "28.50", "40000"], ["14:10", "14:30", "29.20", "9000"]] },
   # Breaks out while MVLD is held: risk refuses it (one position at a time), so the live flow's
   # refused tray has a symbol in it.
   { symbol = "QRTZ", base = "18.00", volume = "5000", screener = "GAINERS", legs = [["14:12", "14:24", "21.60", "40000"]] },
   # On the losers list all day: the strategy sees it and never finds a setup.
   { symbol = "BXVR", base = "36.00", volume = "5000", screener = "LOSERS", legs = [["09:30", "11:00", "31.50", "9000"], ["11:00", "15:30", "30.80", "5000"]] },
+  # Quiet until the live loop ([live] below) moves them, one role each per cycle.
+  { symbol = "NVRA", base = "22.00", volume = "9000", screener = "GAINERS", legs = [] },
+  { symbol = "QELM", base = "31.00", volume = "9000", screener = "GAINERS", legs = [] },
+  { symbol = "SKYV", base = "17.00", volume = "9000", screener = "TOP_ACTIVES", legs = [] },
+  { symbol = "TRVX", base = "26.00", volume = "9000", screener = "GAINERS", legs = [] },
+  { symbol = "VDMQ", base = "38.00", volume = "9000", screener = "TOP_ACTIVES", legs = [] },
+  { symbol = "FYRE", base = "14.00", volume = "9000", screener = "GAINERS", legs = [] },
+  { symbol = "GLDX", base = "29.00", volume = "9000", screener = "GAINERS", legs = [] },
+  { symbol = "JNTR", base = "19.00", volume = "9000", screener = "TOP_ACTIVES", legs = [] },
+  { symbol = "ORVN", base = "33.00", volume = "9000", screener = "GAINERS", legs = [] },
+  { symbol = "PLMZ", base = "12.00", volume = "9000", screener = "GAINERS", legs = [] },
+  { symbol = "WXYR", base = "27.00", volume = "9000", screener = "TOP_ACTIVES", legs = [] },
 ]
 
 # Operator commands sent through the API inbox during the demo day: New York time, kind
 # (contract CommandKind value) and symbol (flatten only; empty = everything).
 commands = [
   { at = "10:24", kind = "flatten", symbol = "VLNQ" },
+  { at = "14:30:20", kind = "flatten", symbol = "MVLD" },
 ]
 
 # Demo faults for QA, off by default (empty list). Each: New York time `at`, `kind` and a
@@ -128,4 +143,45 @@ past = [
     { symbol = "HLQN", base = "10.00", volume = "6000", screener = "GAINERS", legs = [["10:00", "10:15", "12.80", "60000"], ["11:00", "11:02", "9.00", "60000"]] },
     { symbol = "TRXQ", base = "25.00", volume = "6000", screener = "GAINERS", legs = [["11:30", "11:45", "29.00", "40000"], ["11:45", "15:30", "30.20", "8000"]] },
   ],
+]
+
+# The live part of the demo day (from [demo] clock to live_until, in real time) as a loop, so the
+# apps keep getting real bot events to animate (docs/design-system.md rule 5) instead of one
+# drifting position: every cycle the real bot buys a breakout (entry sent, filled, broker stop
+# placed and verified), refuses a second breakout while it holds one, is flattened by the operator
+# for a win, buys another breakout that collapses through its stop (stop-out), refuses a breakout
+# under the operator's entry stop and refuses the stopped-out symbol's re-breakout inside its pause
+# after a loss. Quotes tick, minute bars close, discovery, reconciliation and the account update
+# all the time. Cycles start at [demo] clock and repeat for every whole cycle before live_until
+# (the launchd job then starts a fresh demo). Read by tickr.demo.scenario (`unroll`).
+[live]
+# Length of one cycle, minutes (whole minutes).
+cycle_minutes = 10
+# Each role moves one symbol per cycle: cycle k uses symbols[k % len(symbols)], so a symbol comes
+# back every len(symbols) cycles from the price it was left at. `legs` = [from minute, to minute
+# of the cycle, change of the price over the leg (ratio, "0.08" = +8 %), volume per minute]; the
+# price holds between legs. A stopped-out symbol must not come back within [risk]
+# symbol_cooldown_minutes_after_loss of its loss, hence four "loss" symbols with ten-minute cycles.
+roles = [
+  # Breaks out at the start of the cycle and is bought; keeps climbing until the flatten below.
+  { role = "win", symbols = ["NVRA", "QELM", "SKYV"], legs = [[0, 2, "0.015", "40000"], [2, 4, "0.035", "40000"], [4, 5, "-0.01", "15000"]] },
+  # Breaks out while "win" is held: refused (one position at a time); then collapses.
+  { role = "busy", symbols = ["TRVX", "VDMQ"], legs = [[1, 4, "0.03", "40000"], [4, 5, "-0.03", "30000"]] },
+  # Bought on its breakout after the flatten, then collapses through its stop: a stop-out.
+  { role = "loss", symbols = ["FYRE", "GLDX", "JNTR", "ORVN"], legs = [[5, 9, "0.035", "40000"], [9, 10, "-0.05", "40000"]] },
+  # The previous cycle's "loss" symbol breaks out again inside its pause after the loss: refused;
+  # then collapses (through its stop, should it have been bought) and recovers slowly. Lists as
+  # many symbols as there are cycles, so each cycle names the one stopped out just before it (the
+  # first cycle has none: MVLD then breaks out once more and is refused while "win" is held).
+  { role = "cooldown", symbols = ["MVLD", "FYRE", "GLDX", "JNTR", "ORVN", "FYRE", "GLDX"], legs = [[1, 5, "0.06", "40000"], [5, 6, "-0.08", "30000"], [6, 10, "0.04", "9000"]] },
+  # Drifts back up, breaks out while "loss" is held and then under the operator's entry stop:
+  # refused; then collapses (through its stop, should it have been bought).
+  { role = "blocked", symbols = ["PLMZ", "WXYR"], legs = [[0, 4, "0.01", "9000"], [5, 9, "0.035", "40000"], [9, 10, "-0.045", "40000"]] },
+]
+# Operator commands of every cycle, seconds after the cycle starts: kind (contract CommandKind
+# value) and role (flatten only: that cycle's symbol of the role; empty = none).
+commands = [
+  { at_seconds = 285, kind = "flatten", role = "" },
+  { at_seconds = 470, kind = "entry-stop-on", role = "" },
+  { at_seconds = 590, kind = "entry-stop-off", role = "" },
 ]

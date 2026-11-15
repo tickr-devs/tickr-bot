@@ -9,7 +9,7 @@ import shutil
 import sys
 import threading
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -18,16 +18,21 @@ import pytest
 from tickr import config
 from tickr.api import contract as api
 from tickr.api.server import make_server, settings_from_config
-from tickr.calendar import SessionCalendar
+from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.data.base import BarSpan, ScreenerKind
 from tickr.demo import run as demo
 from tickr.demo.scenario import (
     STOP_UNVERIFIED,
     DemoCommand,
     DemoFault,
+    LiveLoop,
+    LoopCommand,
+    LoopRole,
     ScenarioError,
     SymbolPlan,
     load,
+    loop_cycles,
+    unroll,
 )
 from tickr.demo.world import (
     UNVERIFIED_STOP_STATUS,
@@ -448,3 +453,120 @@ def test_live_demo_day_ends_at_live_until(tmp_path):
     assert demo._demo_day(Session(), FakeWorld(), cfg, Server(), lambda _: None) == 0
     assert scheduled[ny(FRIDAY, scenario.live_until)] is demo._stop_self
     assert ny(FRIDAY, scenario.clock) in scheduled  # going live comes first
+
+
+# --- the live loop ([live] in demo.toml) -------------------------------------------------------
+
+
+def _loop_file(tmp_path: Path, old: str, new: str) -> Path:
+    path = tmp_path / "demo.toml"
+    text = (ROOT / "config" / "demo.toml").read_text("utf-8")
+    assert old in text
+    path.write_text(text.replace(old, new, 1), "utf-8")
+    return path
+
+
+def test_live_loop_unrolls_the_same_way_every_time():
+    scenario = load(ROOT / "config" / "demo.toml")
+    assert scenario == load(ROOT / "config" / "demo.toml")  # deterministic, no randomness
+    loop = scenario.live
+    assert loop is not None
+    cycles = loop_cycles(scenario.clock, scenario.live_until, loop.cycle_minutes)
+    assert cycles >= 1
+    clock = datetime.combine(FRIDAY, datetime.strptime(scenario.clock, "%H:%M").time())
+    plans = {p.symbol: p for p in scenario.today}
+    for cycle in range(cycles):
+        start = clock + cycle * timedelta(minutes=loop.cycle_minutes)
+        used = [role.symbols[cycle % len(role.symbols)] for role in loop.roles]
+        assert len(set(used)) == len(used)  # one symbol, one role, in every cycle
+        for role, symbol in zip(loop.roles, used, strict=True):
+            for first, last, _change, volume in role.legs:
+                begin = (start + timedelta(minutes=first)).time().isoformat()
+                end = (start + timedelta(minutes=last)).time().isoformat()
+                assert [leg for leg in plans[symbol].legs if leg[0] == begin] == [
+                    next(leg for leg in plans[symbol].legs if leg[0] == begin)]
+                (leg,) = [leg for leg in plans[symbol].legs if leg[0] == begin]
+                assert (leg[1], leg[3]) == (end, volume)
+        for command in loop.commands:
+            at = (start + timedelta(seconds=command.at_seconds)).time().isoformat()
+            assert any(c.at == at and c.kind is command.kind for c in scenario.commands)
+    # Every cycle fits before live_until, and the commands are in time order.
+    last_end = max(leg[1] for p in scenario.today for leg in p.legs)
+    assert last_end <= time.fromisoformat(scenario.live_until).isoformat()
+    ats = [time.fromisoformat(c.at) for c in scenario.commands]
+    assert ats == sorted(ats)
+
+
+def test_live_loop_prices_compound_from_where_each_symbol_was_left():
+    base = load(ROOT / "config" / "demo.toml")
+    plan = SymbolPlan("AAA", D(20), D(3000), ScreenerKind.GAINERS,
+                      (("09:30", "09:40", D(22), HOT),))
+    legs = ((0, 2, D("0.10"), HOT), (3, 4, D("-0.5"), HOT))
+    loop = LiveLoop(5, (LoopRole("up", ("AAA",), legs),),
+                    (LoopCommand(90, api.CommandKind.FLATTEN, "up"),
+                     LoopCommand(150, api.CommandKind.ENTRY_STOP_ON, None)))
+    scenario = unroll(replace(base, today=(plan,), commands=(), clock="10:00",
+                              live_until="10:12", live=loop))
+    (aaa,) = scenario.today
+    assert aaa.legs == (("09:30", "09:40", D(22), HOT),
+                        ("10:00:00", "10:02:00", D("24.20"), HOT),
+                        ("10:03:00", "10:04:00", D("12.10"), HOT),
+                        ("10:05:00", "10:07:00", D("13.31"), HOT),
+                        ("10:08:00", "10:09:00", D("6.66"), HOT))  # two whole cycles only
+    assert [(c.at, c.kind, c.symbol) for c in scenario.commands] == [
+        ("10:01:30", api.CommandKind.FLATTEN, "AAA"),
+        ("10:02:30", api.CommandKind.ENTRY_STOP_ON, None),
+        ("10:06:30", api.CommandKind.FLATTEN, "AAA"),
+        ("10:07:30", api.CommandKind.ENTRY_STOP_ON, None)]
+
+
+@pytest.mark.parametrize(("old", "new", "cause"), [
+    ('{ role = "busy", symbols = ["TRVX"', '{ role = "busy", symbols = ["NOPE"', "not a symbol"),
+    ('kind = "flatten", role = ""', 'kind = "flatten", role = "nobody"', "not a role"),
+    ('kind = "entry-stop-on", role = ""', 'kind = "entry-stop-on", role = "win"', "only flatten"),
+    ("cycle_minutes = 10", "cycle_minutes = 0", "cycle_minutes"),
+    ('[[0, 2, "0.015", "40000"], [2, 4,', '[[0, 3, "0.015", "40000"], [2, 4,', "overlaps"),
+    ('[4, 5, "-0.01", "15000"]', '[4, 11, "-0.01", "15000"]', "whole minute from 0 to 10"),
+    ('[4, 5, "-0.01", "15000"]', '[4, 5, "-1", "15000"]', "above -1"),
+    ("at_seconds = 285", "at_seconds = 600", "inside the cycle"),
+])
+def test_bad_live_loop_is_refused(tmp_path, old, new, cause):
+    with pytest.raises(ScenarioError, match=cause):
+        load(_loop_file(tmp_path, old, new))
+
+
+def test_a_loop_symbol_moving_again_before_its_leg_ends_is_refused(tmp_path):
+    # FYRE is the "loss" symbol of the first cycle and must not also be its "cooldown" symbol.
+    with pytest.raises(ScenarioError, match="FYRE.*before its leg"):
+        load(_loop_file(tmp_path, 'symbols = ["MVLD", "FYRE"', 'symbols = ["FYRE", "FYRE"'))
+
+
+def test_live_loop_makes_the_real_bot_trade_and_refuse_every_cycle(tmp_path):
+    """Two cycles of the real loop on the real bot (fast clock): each cycle the bot buys a
+    breakout, is flattened for a win, buys another and is stopped out, and refuses breakouts
+    while it holds one and under the operator's entry stop."""
+    root = repo(tmp_path)
+    full = load(root / "config" / "demo.toml")
+    assert full.live is not None
+    roles = {s for role in full.live.roles for s in role.symbols}
+    quiet = tuple(replace(p, legs=()) for p in full.today if p.symbol in roles)
+    scenario = unroll(replace(full, past=(), today=quiet, commands=(), clock="10:00",
+                              live_until="10:20"))
+    scenario = replace(scenario, clock=scenario.live_until)  # run the loop fast, no API
+    assert demo.run_demo(root, scenario, SUNDAY, live=False, log=lambda line: None) == 0
+    cfg = config.load(root / scenario.root_dir / "config" / "bot.toml")
+    server = make_server(replace(settings_from_config(cfg), port=0))
+    try:
+        trades = server.history.day(FRIDAY, FRIDAY).trades
+    finally:
+        server.server_close()
+    for cycle in ("10:0", "10:1"):
+        reasons = {t.exit_reason for t in trades if t.opened_at.astimezone(
+            NEW_YORK).strftime("%H:%M").startswith(cycle)}
+        assert {"operator-flatten", "stopped-out"} <= reasons, (cycle, reasons)
+    decisions = (cfg.root / cfg.run.data_dir / cfg.observers.decisions_dir
+                 / scenario.environment / FRIDAY.isoformat() / "decisions.jsonl")
+    refused = {json.loads(line)["refusal_cause"].split(":")[0]
+               for line in decisions.read_text("utf-8").splitlines()
+               if json.loads(line)["admission"] == "refused"}
+    assert {"OWN_POSITION_OPEN", "ENTRY_STOP_SET"} <= refused

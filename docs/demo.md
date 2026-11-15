@@ -1,7 +1,8 @@
 # Demo day (`tickr demo`)
 
 A made-up trading day, so every screen of the macOS and iOS apps can be looked at with full data
-(open position with its stop, wins and losses, daily room near the ceiling, decisions and their
+and live events (open position with its stop, wins and losses, daily room near the ceiling in
+the morning, decisions and their
 checks, skipped signals for "Not taken" (ZNTH's re-breakout inside its cooldown after a loss is
 refused, with the cooldown's `until`), the Overview's live flow and "Watching closely", observers
 with their simulated day results, account, past days for the day picker, performance in R over
@@ -40,6 +41,34 @@ What it does:
   local API listening, until `[demo] live_until` (it then stops its bot and exits 0) or Ctrl-C.
   About two to three minutes before the API is up.
 
+## The live loop (`[live]`)
+
+The real-time part of the demo day is a loop, so the apps keep getting real bot events to animate
+(docs/design-system.md rule 5: data animations move only on real events). Every `[live]
+cycle_minutes` (10) from `[demo] clock` on, for every whole cycle before `live_until`, the loader
+(`scenario.unroll`) adds legs to the symbols named by `[live] roles` and queues `[live] commands`;
+nothing else changes, the bot is the real one. One cycle, in minutes from its start:
+
+| Minute | Role / command | What the real bot does, what the apps get |
+| --- | --- | --- |
+| 0-4 | `win` breaks out | WATCH, then ENTER around minute 2: entry sent, filled, broker stop placed and verified; flow stages advance, position appears |
+| 1-4 | `busy` breaks out | ENTER refused `OWN_POSITION_OPEN` (one position at a time): refused tray, "Not taken" |
+| 1-5 | `cooldown` (last cycle's `loss` symbol) breaks out | refused `SYMBOL_COOLDOWN` once flat (or `OWN_POSITION_OPEN` before), with its `until` |
+| 4:45 | flatten (everything) | operator command toast, exit `operator-flatten` with a win, day result and curve move |
+| 5-9 | `loss` breaks out, collapses at 9-10 | entry, fill, stop verified, then `stopped-out`: a loss, daily room shrinks |
+| 5-9 | `blocked` breaks out | refused `OWN_POSITION_OPEN`, then `ENTRY_STOP_SET` |
+| 7:50 / 9:50 | entry-stop on / off | entries pill and entry block change, command toasts |
+
+All the time: quotes tick, minute bars close, discovery runs every minute (screener chips move),
+reconciliation every 10 s (account and reconcile ages), the observer decides on every bar. The
+textured tape makes the exact minute of an entry vary by a minute or so from day to day (the
+noise is seeded by symbol and day): most cycles show every row of the table; the cooldown refusal
+needs its symbol to have been stopped out in the cycle before, so it shows in about every second or
+third cycle. A symbol a role did not mean to be bought (it broke out while the bot was flat) is
+stopped out by its own collapse or closed by the next flatten, so the loop never sticks.
+Wins are bigger than the losses, so the day stays inside its loss ceiling. The AI advisor is not
+part of the loop: it is an offline tool that needs the Anthropic API.
+
 ## The "Demo day" switch in the apps
 
 Both apps have a "Demo day" switch (Mac: Settings › General; iPhone: Settings). On, the app shows
@@ -52,7 +81,7 @@ How it reaches the demo, with one click and nothing to type:
 - **The demo runs on its own**: the `local.tickr.demo` launchd job (`ops/launchd`, rendered and
   installed with the other jobs, docs/operations.md) runs `tickr demo` at login. At `[demo]
   live_until` the demo exits 0 and launchd starts a fresh one (KeepAlive on a clean exit only), so
-  whenever the apps look, the day is inside the same window: the open position, before the last
+  whenever the apps look, the day is inside the same window: the live loop above, before the last
   entry and the flatten. About three minutes in every eighty the demo is rebuilding and the apps
   show "not reachable". It never talks to Webull (broker hosts point at `.invalid`, credential
   names are unset), needs no credentials file, runs at Background priority, and touches only
@@ -71,8 +100,8 @@ How it reaches the demo, with one click and nothing to type:
 Without the job, `tickr demo` in a terminal serves the same day the same way. The API's clock is the
 demo day's clock, so "today" in the apps is the demo day.
 
-The bot holds one position at a time in v1 (admission refuses a second), so the demo has one open
-position; the day's other trades come one after another. Everything the day contains is in
+The bot holds one position at a time in v1 (admission refuses a second), so the demo has at most
+one open position; the day's trades come one after another. Everything the day contains is in
 `config/demo.toml`, each key commented.
 
 ## An unprotected position, for checking the apps
