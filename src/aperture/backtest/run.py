@@ -136,17 +136,40 @@ def _last_closes(path: Path) -> dict[date, Decimal]:
     return closes
 
 
+def last_sessions(calendar: SessionCalendar, pool: list[PoolEntry], count: int,
+                  max_lookback_days: int) -> tuple[list[PoolEntry], list[date]]:
+    """The pool cut to the `count` latest open sessions that end at its last day, and those
+    sessions (oldest first). Sessions without a pool day stay counted: the window is calendar
+    sessions, not days that happened to have gainers."""
+    if count <= 0:
+        raise BacktestError(f"--last-sessions must be positive, got {count}")
+    if not pool:
+        raise BacktestError("the pool is empty")
+    last = max(e.session_date for e in pool)
+    before = sessions_before(calendar, last, count - 1, max_lookback_days) if count > 1 else []
+    sessions = [d.ny_date for d in before] + [last]
+    kept = set(sessions)
+    return [e for e in pool if e.session_date in kept], sessions
+
+
 def run_backtest(cfg: Config, settings: BacktestSettings, replay_settings: ReplaySettings,
-                 out: Path, results: Path, strategy_module: str, values_path: Path) -> None:
+                 out: Path, results: Path, strategy_module: str, values_path: Path,
+                 last_session_count: int | None = None) -> None:
     calendar_dir = (cfg.root / cfg.session.calendar_file).parent
     calendar = SessionCalendar.load(calendar_dir)
     with open(values_path, "rb") as handle:
         values = tomllib.load(handle)
     factory(strategy_module, values)  # refuse bad values before any work
     pool = read_pool(out / POOL_FILE)
+    window: list[date] | None = None
+    if last_session_count is not None:
+        pool, window = last_sessions(calendar, pool, last_session_count,
+                                     cfg.market_data.history_max_lookback_days)
     days, skipped = tradable_days(cfg, calendar, pool, out, replay_settings.history_sessions,
                                   settings.split_tolerance_percent)
     caps = read_caps(out / CAP_FILE)
+    if window is not None:
+        caps = [c for c in caps if c.session_date in set(window)]
     floor = cfg.market_data.min_session_dollar_volume_usd
     tasks = [Task(symbol, out / fetch.MINUTES_DIR / f"{symbol}.jsonl", tuple(sorted(d)),
                   strategy_module, values, settings.gainer_change_percent, floor, calendar_dir,
@@ -165,8 +188,13 @@ def run_backtest(cfg: Config, settings: BacktestSettings, replay_settings: Repla
         writer.writeheader()
         writer.writerows(skipped)
     traded_days = sum(len(t.pool_days) for t in tasks)
+    recent = None
+    if window is not None:
+        replayed = {d for ds in days.values() for d in ds}
+        recent = report.LastSessions(last_session_count, window[0], window[-1],
+                                     sum(1 for d in window if d not in replayed))
     text = report.write_report(merged, pool, caps, traded_days, skipped, cfg, settings,
-                               replay_settings, results)
+                               replay_settings, results, recent)
     print(text)
 
 

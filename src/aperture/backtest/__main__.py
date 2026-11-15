@@ -117,6 +117,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--results", type=Path, required=True, help="output directory")
     run.add_argument("--strategy", required=True, help="strategy module exposing create()")
     run.add_argument("--values", type=Path, required=True, help="strategy.toml for create()")
+    run.add_argument("--last-sessions", type=int, default=None,
+                     help="replay only the pool days of the latest N sessions (ending at the "
+                          "pool's last day)")
     return parser
 
 
@@ -131,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             from aperture.backtest.run import run_backtest
 
             run_backtest(cfg, settings, replay_settings, out, args.results, args.strategy,
-                         args.values)
+                         args.values, args.last_sessions)
             return 0
         if args.step == "select":
             step_select(cfg, settings, out, args.first, args.last, args.rule, args.daily)

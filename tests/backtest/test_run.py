@@ -149,3 +149,55 @@ def test_bot_view_applies_live_sizing_positions_and_the_daily_ceiling():
     assert view["sized_down_to_daily_room"] == 1
     assert view["refused"] == {"DAILY_CEILING": 1, "NOTIONAL_OVER_CAP": 1,
                                "PLANNED_LOSS_OVER_LIMIT": 1, "POSITION_OPEN": 1}
+
+
+def test_last_sessions_cuts_the_pool_to_the_latest_calendar_sessions():
+    from aperture.backtest.errors import BacktestError
+    from aperture.backtest.run import last_sessions
+    from aperture.calendar import SessionCalendar
+
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+
+    def entry(day, symbol="ABCD"):
+        return PoolEntry(day, 1, symbol, Decimal(20), Decimal(21), Decimal(50), Decimal(10**8))
+
+    pool = [entry(date(2026, 10, 30)), entry(date(2026, 11, 6)), entry(TODAY),
+            entry(TODAY, "WXYZ")]
+    kept, window = last_sessions(calendar, pool, 5, 30)
+    # Friday 11-13 back to Monday 11-09: five sessions, 11-06 is the sixth.
+    assert window == [date(2026, 11, d) for d in (9, 10, 11, 12, 13)]
+    assert kept == pool[2:]
+    kept, window = last_sessions(calendar, pool, 1, 30)  # only the pool's last day
+    assert window == [TODAY] and kept == pool[2:]
+    kept, window = last_sessions(calendar, pool, 6, 30)
+    assert window[0] == date(2026, 11, 6) and kept == pool[1:]
+    for bad in (0, -1):
+        try:
+            last_sessions(calendar, pool, bad, 30)
+        except BacktestError as exc:
+            assert "positive" in str(exc)
+        else:
+            raise AssertionError("a count below 1 must be refused")
+
+
+def test_run_last_sessions_reports_its_window(tmp_path):
+    out, results = tmp_path / "data", tmp_path / "results"
+    prior = [b for d in PRIOR for b in flat_bars("ABCD", d, "20", "3000")]
+    write_symbol(out, "ABCD", prior + rising("ABCD", "20", "0.30", 30, "300000"))
+    old = date(2026, 10, 1)  # outside the window: never replayed, never reported as skipped
+    write_pool([PoolEntry(old, 1, "OLD", Decimal(20), Decimal(21), Decimal(50), Decimal(10**8)),
+                PoolEntry(TODAY, 1, "ABCD", Decimal(20), Decimal(29), Decimal(50),
+                          Decimal(10**8))], out / "pool.csv")
+    write_caps([CapRecord(old, 1, 1), CapRecord(TODAY, 1, 1)], out / "pool_cap.csv")
+    run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
+                 "aperture.strategy.price_action_v1",
+                 ROOT / "strategies" / "price-action-v1" / "strategy.toml", 3)
+    report = json.loads((results / "report.json").read_text())
+    assert report["last_sessions"] == {"requested": 3, "first": "2026-11-11",
+                                       "last": TODAY.isoformat(),
+                                       "sessions_without_replayed_days": 2}
+    assert report["window"] == [TODAY.isoformat(), TODAY.isoformat()]
+    assert report["pool"]["symbol_days"] == 1 and report["pool"]["skipped"] == {}
+    text = (results / "report.md").read_text()
+    assert "Last 3 sessions only: 2026-11-11 to 2026-11-13, 2 of them without" in text
+    assert "wide by construction" in text

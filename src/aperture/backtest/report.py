@@ -21,6 +21,7 @@ import json
 import random
 from collections import defaultdict
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
@@ -308,6 +309,12 @@ def markdown(data: dict[str, Any]) -> str:
         _row("bot limits", b),
         "",
     ]
+    recent = data.get("last_sessions")
+    if recent:
+        lines += [f"Last {recent['requested']} sessions only: {recent['first']} to "
+                  f"{recent['last']}, {recent['sessions_without_replayed_days']} of them without "
+                  "a replayed day. Few days: the interval and the hold-out below are wide by "
+                  "construction.", ""]
     lines.append(f"Mean R per trade, {a['confidence_percent']}% interval (days resampled): "
                  f"{_interval_text(a)}.")
     h = data.get("holdout")
@@ -333,11 +340,29 @@ def markdown(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+@dataclass(frozen=True)
+class LastSessions:
+    """`run --last-sessions`: the requested count, the calendar window it covers, and how many
+    of its sessions had no pool day that could be replayed (no gainer, or no complete data)."""
+
+    requested: int
+    first: date
+    last: date
+    sessions_without_replayed_days: int
+
+
 def write_report(result: ReplayResult, pool: Sequence[PoolEntry], caps: Sequence[CapRecord],
                  traded_days: int,
                  skipped: Sequence[dict[str, str]], cfg: Config, settings: BacktestSettings,
-                 replay_settings: ReplaySettings, out: Path) -> str:
+                 replay_settings: ReplaySettings, out: Path,
+                 recent: LastSessions | None = None) -> str:
     data = build(result, pool, caps, traded_days, skipped, cfg, settings)
+    if recent is not None:
+        data["last_sessions"] = {"requested": recent.requested,
+                                 "first": recent.first.isoformat(),
+                                 "last": recent.last.isoformat(),
+                                 "sessions_without_replayed_days":
+                                     recent.sessions_without_replayed_days}
     places = replay_settings.output_decimal_places
     (out / REPORT_JSON).write_text(json.dumps(_plain(data, places), indent=2) + "\n", "utf-8")
     text = markdown(data)
