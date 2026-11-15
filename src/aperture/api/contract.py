@@ -22,6 +22,7 @@ import os
 import re
 import types
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -495,13 +496,15 @@ class ObserverDecisionV1:
 
 @dataclass(frozen=True)
 class ObserverV1:
-    """One configured observer. `result_gross_usd` is its simulated day result when one is
-    recorded; the bot records none yet, so it is null."""
+    """One configured observer. `result_gross_usd` is its simulated gross day result (the
+    research observers report's what-if simulation of its ENTERs on that day's captured bars);
+    null when it cannot be computed, and then `result_cause` says why (else null)."""
 
     name: str
     version: str
     decisions: tuple[ObserverDecisionV1, ...]
     result_gross_usd: Decimal | None
+    result_cause: str | None
 
 
 @dataclass(frozen=True)
@@ -527,6 +530,8 @@ class DecisionV1:
     checks: tuple[CheckV1, ...]
     entry_price: Decimal | None
     stop_price: Decimal | None
+    admission: Admission
+    refusal_cause: str | None
 
 
 @dataclass(frozen=True)
@@ -544,12 +549,20 @@ def _oldest_first(records: tuple[DecisionRecord, ...]) -> list[DecisionRecord]:
     return sorted(records, key=lambda r: (r.bar_start, r.time))
 
 
+# (gross USD or None, cause when None) of one observer identity's simulated day.
+ObserverResult = tuple[Decimal | None, str | None]
+NO_DECISIONS = "no decisions recorded that day"
+
+
 def observers_document(day: date, identities: tuple[tuple[str, str], ...],
-                       records: tuple[DecisionRecord, ...]) -> ObserversV1:
+                       records: tuple[DecisionRecord, ...],
+                       results: Mapping[tuple[str, str], ObserverResult]) -> ObserversV1:
     """`identities`: (name, current version) of each configured observer, in configuration
     order; `records`: observer records only. Observers are matched by name: one entry per
     version recorded that day (config order, then version), or, when a name has no records,
-    one empty entry per current version, so a version bump never hides earlier records."""
+    one empty entry per current version, so a version bump never hides earlier records.
+    `results`: the simulated result of every (name, version) recorded that day; an entry
+    without records gets null with the cause NO_DECISIONS."""
     ordered = _oldest_first(records)
     names = list(dict.fromkeys(name for name, _ in identities))
     entries: list[ObserverV1] = []
@@ -557,8 +570,14 @@ def observers_document(day: date, identities: tuple[tuple[str, str], ...],
         recorded = {r.decision.version for r in ordered if r.decision.strategy == name}
         current = [v for n, v in identities if n == name]
         for version in sorted(recorded or set(current), key=_version_order):
-            entries.append(ObserverV1(name=name, version=version, result_gross_usd=None,
-                                      decisions=tuple(
+            if (name, version) in results:
+                gross, cause = results[(name, version)]
+            elif version in recorded:  # a caller bug: refuse rather than mislabel it
+                raise ContractError(f"no simulated result for observer {name} v{version}")
+            else:
+                gross, cause = None, NO_DECISIONS
+            entries.append(ObserverV1(name=name, version=version, result_gross_usd=gross,
+                                      result_cause=cause, decisions=tuple(
                 ObserverDecisionV1(r.bar_start, r.symbol, r.decision.verdict,
                                    tuple(c.rule for c in r.decision.checks if not c.passed))
                 for r in ordered
@@ -585,8 +604,48 @@ def decisions_document(symbol: str, day: date,
             at=r.bar_start, action=d.verdict,
             strategy=StrategyId(d.strategy, d.version), observer=r.role is Role.OBSERVER,
             checks=checks_of(d), entry_price=d.entry_high if skipped else None,
-            stop_price=d.stop if skipped else None))
+            stop_price=d.stop if skipped else None, admission=r.admission,
+            refusal_cause=r.refusal_cause))
     return DecisionsV1(symbol=symbol, day=day, decisions=tuple(out))
+
+
+@dataclass(frozen=True)
+class SkippedSignalV1:
+    """One ENTER of the active strategy that did not become a position: admission `refused`
+    (`refusal_cause` holds the single `CAUSE: detail`) or `not_evaluated` (made too late to act
+    on). `entry_price` / `stop_price` and `checks` as in decisions-v1."""
+
+    at: datetime
+    symbol: str
+    strategy: StrategyId
+    admission: Admission
+    refusal_cause: str | None
+    entry_price: Decimal | None
+    stop_price: Decimal | None
+    checks: tuple[CheckV1, ...]
+
+
+@dataclass(frozen=True)
+class SkippedV1:
+    """GET /skipped?date=: every skipped ENTER of the active strategy on one New York date,
+    oldest first."""
+
+    day: date
+    signals: tuple[SkippedSignalV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+def skipped_document(day: date, records: tuple[DecisionRecord, ...]) -> SkippedV1:
+    """`records`: active-strategy records of `day`; keeps the ENTERs admission did not take."""
+    return SkippedV1(day=day, signals=tuple(
+        SkippedSignalV1(
+            at=r.bar_start, symbol=r.symbol,
+            strategy=StrategyId(r.decision.strategy, r.decision.version),
+            admission=r.admission, refusal_cause=r.refusal_cause,
+            entry_price=r.decision.entry_high, stop_price=r.decision.stop,
+            checks=checks_of(r.decision))
+        for r in _oldest_first(records)
+        if r.decision.verdict is Verdict.ENTER and r.admission in _SKIPPED))
 
 
 SCHEMA_TYPES: dict[str, type] = {
@@ -603,6 +662,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "explain-v1": ExplainV1,
     "observers-v1": ObserversV1,
     "decisions-v1": DecisionsV1,
+    "skipped-v1": SkippedV1,
     "account-v1": AccountV1,
     "account-response-v1": AccountResponseV1,
 }

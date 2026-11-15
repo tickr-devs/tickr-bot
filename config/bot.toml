@@ -166,6 +166,8 @@ status_recent_commands = 10
 # Seconds the API remembers an Idempotency-Key and the 202 answer it gave (a repeat returns that answer and queues
 # nothing); must be above command_max_age_seconds; keys are kept under <commands_dir>/idempotency; read by the api server.
 idempotency_key_ttl_seconds = 86400
+# Replay settings file (fill model) the API uses to simulate each observer's day result at GET /observers, the same simulation as `python -m aperture.research observers`, relative to the repo root; read by the api server.
+replay_settings_file = "config/replay.toml"
 
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).

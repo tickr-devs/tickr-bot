@@ -40,6 +40,8 @@ from aperture.api.contract import (
     RiskSettings,
     SessionSettings,
     SettingsV1,
+    SkippedSignalV1,
+    SkippedV1,
     StatusResponseV1,
     StrategyId,
 )
@@ -139,19 +141,45 @@ def documents() -> dict[str, object]:
                 ObserverDecisionV1(T0.replace(microsecond=0), "ABCD", Verdict.WATCH,
                                    ("ask_above_trigger",)),
                 ObserverDecisionV1(T0.replace(microsecond=0) + timedelta(minutes=1), "ABCD",
-                                   Verdict.ENTER, ())), None),
-            ObserverV1("price-action-v2", "1", (), None))),
+                                   Verdict.ENTER, ())), Decimal("-12.4000"), None),
+            ObserverV1("price-action-v2", "1", (), None, "no decisions recorded that day"),
+            ObserverV1("price-action-v2", "2", (
+                ObserverDecisionV1(T0.replace(microsecond=0) + timedelta(minutes=2), "WXYZ",
+                                   Verdict.ENTER, ()),), None,
+                "no captured bars for 2026-11-16"))),
         "observers-v1.empty": ObserversV1(DAY - timedelta(days=3), ()),
         "decisions-v1": DecisionsV1("ABCD", DAY, (
             DecisionV1(T0.replace(microsecond=0), Verdict.WATCH,
                        StrategyId("price-action-v1", "1"), False, (
                            CheckV1("ask_above_trigger", Decimal("12.33"), ">",
-                                   Decimal("12.35"), False, ""),), None, None),
+                                   Decimal("12.35"), False, ""),), None, None,
+                       Admission.NOT_APPLICABLE, None),
             DecisionV1(T0.replace(microsecond=0) + timedelta(minutes=1), Verdict.ENTER,
                        StrategyId("price-action-v1", "2"), True, (
                            CheckV1("ask_above_trigger", Decimal("12.37"), ">",
                                    Decimal("12.35"), True, ""),),
-                       Decimal("12.40"), Decimal("12.10")))),
+                       Decimal("12.40"), Decimal("12.10"), Admission.NOT_EVALUATED, None),
+            DecisionV1(T0.replace(microsecond=0) + timedelta(minutes=2), Verdict.ENTER,
+                       StrategyId("price-action-v1", "1"), False, (
+                           CheckV1("ask_above_trigger", Decimal("12.41"), ">",
+                                   Decimal("12.35"), True, ""),),
+                       Decimal("12.45"), Decimal("12.15"), Admission.REFUSED,
+                       "POSITION_LIMIT_REACHED: 1 open position, limit 1"))),
+        "skipped-v1": SkippedV1(DAY, (
+            SkippedSignalV1(T0.replace(microsecond=0) + timedelta(minutes=2), "ABCD",
+                            StrategyId("price-action-v1", "1"), Admission.REFUSED,
+                            "POSITION_LIMIT_REACHED: 1 open position, limit 1", Decimal("12.45"),
+                            Decimal("12.15"), (
+                                CheckV1("relative_volume", Decimal("2.4"), ">=",
+                                        Decimal("1.5"), True, ""),
+                                CheckV1("ask_above_trigger", Decimal("12.41"), ">",
+                                        Decimal("12.35"), True, ""))),
+            SkippedSignalV1(T0.replace(microsecond=0) + timedelta(minutes=47), "WXYZ",
+                            StrategyId("price-action-v1", "1"), Admission.NOT_EVALUATED, None,
+                            None, None, (
+                                CheckV1("ask_above_trigger", Decimal("5.31"), ">",
+                                        Decimal("5.25"), True, ""),)))),
+        "skipped-v1.empty": SkippedV1(DAY - timedelta(days=3), ()),
     }
 
 

@@ -121,6 +121,25 @@
                 "type": "null"
               }
             ]
+          },
+          "admission": {
+            "type": "string",
+            "enum": [
+              "taken",
+              "refused",
+              "not_evaluated",
+              "not_applicable"
+            ]
+          },
+          "refusal_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -130,7 +149,9 @@
           "observer",
           "checks",
           "entry_price",
-          "stop_price"
+          "stop_price",
+          "admission",
+          "refusal_cause"
         ],
         "additionalProperties": false
       }

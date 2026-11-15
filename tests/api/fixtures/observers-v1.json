@@ -20,13 +20,29 @@
           "reasons": []
         }
       ],
-      "result_gross_usd": null
+      "result_gross_usd": "-12.4000",
+      "result_cause": null
     },
     {
       "name": "price-action-v2",
       "version": "1",
       "decisions": [],
-      "result_gross_usd": null
+      "result_gross_usd": null,
+      "result_cause": "no decisions recorded that day"
+    },
+    {
+      "name": "price-action-v2",
+      "version": "2",
+      "decisions": [
+        {
+          "at": "2026-11-16T15:02:00.000Z",
+          "symbol": "WXYZ",
+          "action": "ENTER",
+          "reasons": []
+        }
+      ],
+      "result_gross_usd": null,
+      "result_cause": "no captured bars for 2026-11-16"
     }
   ],
   "api_version": 1

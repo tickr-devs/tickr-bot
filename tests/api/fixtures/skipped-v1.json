@@ -1,0 +1,58 @@
+{
+  "day": "2026-11-16",
+  "signals": [
+    {
+      "at": "2026-11-16T15:02:00.000Z",
+      "symbol": "ABCD",
+      "strategy": {
+        "name": "price-action-v1",
+        "version": "1"
+      },
+      "admission": "refused",
+      "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position, limit 1",
+      "entry_price": "12.45",
+      "stop_price": "12.15",
+      "checks": [
+        {
+          "rule": "relative_volume",
+          "measured": "2.4",
+          "operator": ">=",
+          "threshold": "1.5",
+          "passed": true,
+          "note": ""
+        },
+        {
+          "rule": "ask_above_trigger",
+          "measured": "12.41",
+          "operator": ">",
+          "threshold": "12.35",
+          "passed": true,
+          "note": ""
+        }
+      ]
+    },
+    {
+      "at": "2026-11-16T15:47:00.000Z",
+      "symbol": "WXYZ",
+      "strategy": {
+        "name": "price-action-v1",
+        "version": "1"
+      },
+      "admission": "not_evaluated",
+      "refusal_cause": null,
+      "entry_price": null,
+      "stop_price": null,
+      "checks": [
+        {
+          "rule": "ask_above_trigger",
+          "measured": "5.31",
+          "operator": ">",
+          "threshold": "5.25",
+          "passed": true,
+          "note": ""
+        }
+      ]
+    }
+  ],
+  "api_version": 1
+}

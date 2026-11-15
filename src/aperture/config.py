@@ -115,6 +115,7 @@ class ApiConfig:
     command_max_age_seconds: Decimal
     status_recent_commands: int
     idempotency_key_ttl_seconds: int
+    replay_settings_file: str
 
 
 @dataclass(frozen=True)

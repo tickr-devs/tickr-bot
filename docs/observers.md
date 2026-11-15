@@ -116,4 +116,5 @@ an ENTER while an earlier simulated trade of the same identity in that symbol is
 `skipped_overlap`), trades, wins, losses, total and average R, gross USD for ENTERs with a
 recorded quantity; for observers the bar-by-bar diff against the active decisions and the
 number of ENTER bars shared with it. Outputs `observers.csv` and `observers.json`, labelled
-`simulated`.
+`simulated`. The local API serves each observer's gross USD from this same simulation at
+`GET /observers` (`result_gross_usd`, or `null` with `result_cause`; docs/api.md).

@@ -81,6 +81,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
 | GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first. |
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
+| GET | `/skipped?date=<YYYY-MM-DD>` | `200` `skipped-v1`: every ENTER of the active strategy that date (default today) that did not become a position (admission `refused` or `not_evaluated`), oldest first, with checks. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
@@ -173,11 +174,11 @@ parsed); a missing, repeated, extra or non-ticker parameter is
 `400 bad_request`. The command line has the same read: `aperture explain SYMBOL` (exit 0 found,
 1 none or unreadable).
 
-### GET /observers and GET /decisions (read-only)
+### GET /observers, GET /decisions and GET /skipped (read-only)
 
-Both serve decisions already in the decision file of one New York date (the same file as
+All three serve decisions already in the decision file of one New York date (the same file as
 `/explain`; an archived day's `decisions.jsonl.gz` is read the same way). They never read the
-broker, simulate nothing and record nothing. `at` is the start (UTC) of the decision's M1 bar;
+broker and record nothing; only `/observers` simulates (each observer's day result, below). `at` is the start (UTC) of the decision's M1 bar;
 decisions are oldest first (bar start, then decision time). `action` is the recorded verdict,
 the same enum as explain-v1 `verdict`: `IGNORE` `WATCH` `ENTER` `HOLD` `EXIT`. A
 date without a decision file answers with empty lists; a last line still being written is not
@@ -191,9 +192,26 @@ old version. A configured observer with no records that day gets one entry with 
 its current `strategy.toml` and an empty list. Entries are in configuration order, then by
 version (numeric versions numerically). `reasons` are the rules of the checks that failed,
 in the order evaluated (empty when every check passed); the full checks are in `/decisions`.
-`result_gross_usd` is the observer's simulated day result once one is recorded; the bot records
-none yet, so it is always `null` (the offline report `python -m aperture.research observers`
-computes one). An observer folder whose `strategy.toml` cannot be read is `503 unavailable`.
+`result_gross_usd` is the observer's simulated gross day result in USD: exactly the simulation
+of the offline report `python -m aperture.research observers` (every ENTER replayed alone like
+`whatif`, an ENTER inside an earlier simulated trade of the same symbol skipped, slippage in,
+commissions out, for the recorded quantity), run on that day's captured bars
+(`bars.jsonl`, or its archived `.gz`) with `[api] replay_settings_file` and the session
+calendar, rounded to its `output_decimal_places`. An observer that recorded no ENTER that day
+simulates no trade: `"0"`. When it cannot be computed it is `null` and `result_cause` says why
+(otherwise `result_cause` is `null`); it is never guessed or set to 0:
+`no decisions recorded that day`, `no captured bars for <date>`, `capture file refused: ...`,
+`replay settings unreadable: ...`, `session calendar unreadable: ...`,
+`simulation refused: ...`, `N ENTER(s) could not be simulated: ...` (the decision bar is not in
+the captured bars), `N simulated trade(s) have no recorded whole quantity`. Today's result is
+provisional: it uses the bars captured so far, and a simulated trade still open ends at the last
+bar's close. The API simulates on request and keeps the last answer in memory, keyed by the
+date, whether it is today, and the size and modification time of the decision file, the capture
+file, the replay settings file and the calendar files, so polling the same day re-simulates only
+after one of them changed (a demo day of about 40 ENTERs takes well under a second). An answer
+decided by a failure that can pass without a file changing (an OSError, a calendar or
+simulation refusal) is never kept. Nothing is written to disk. An observer folder whose `strategy.toml` cannot be read
+is `503 unavailable`.
 
 `/decisions?symbol=&date=` (both required) lists the active strategy's and the observers'
 decisions for the symbol, `observer` true for an observer record, `strategy` its `{name,
@@ -202,10 +220,20 @@ version}`. `checks` have the explain-v1 shape (`rule` `measured` `operator` `thr
 (admission `refused`, or `not_evaluated` as for every observer ENTER): the top of the recorded
 entry window (`entry_high`, the price sizing and the what-if simulation use) and the recorded
 stop, each `null` when the record does not hold it, and both `null` for any other decision.
+`admission` and `refusal_cause` are the recorded admission, as in explain-v1 (`not_evaluated`
+for every observer ENTER, `not_applicable` for every other verdict).
+
+`/skipped?date=` (date optional, default today in New York) lists, for the apps' "Not taken"
+list, every record of the active strategy (role `active`, as `/explain`) with verdict `ENTER`
+and admission `refused` or `not_evaluated`, oldest first: `at` (bar start), `symbol`,
+`strategy {name, version}`, `admission`, `refusal_cause` (the single `CAUSE: detail` of a
+refusal, else `null`), the what-if `entry_price` and `stop_price` (the same rule as
+`/decisions`) and `checks` (explain-v1 shape). Taken ENTERs, other verdicts and observer
+records are left out. A date without a decision file answers with an empty list.
 
 A missing, repeated, extra, malformed or non-ticker parameter is `400 bad_request`; a malformed
-line for the symbol (`/decisions`) or an observer line (`/observers`) of that day is
-`503 unavailable` with the file, line and cause.
+line for the symbol (`/decisions`), an observer line (`/observers`) or an active line
+(`/skipped`) of that day is `503 unavailable` with the file, line and cause.
 
 ### Commands
 

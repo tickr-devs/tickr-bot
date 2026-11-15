@@ -21,7 +21,9 @@
         }
       ],
       "entry_price": null,
-      "stop_price": null
+      "stop_price": null,
+      "admission": "not_applicable",
+      "refusal_cause": null
     },
     {
       "at": "2026-11-16T15:01:00.000Z",
@@ -42,7 +44,32 @@
         }
       ],
       "entry_price": "12.40",
-      "stop_price": "12.10"
+      "stop_price": "12.10",
+      "admission": "not_evaluated",
+      "refusal_cause": null
+    },
+    {
+      "at": "2026-11-16T15:02:00.000Z",
+      "action": "ENTER",
+      "strategy": {
+        "name": "price-action-v1",
+        "version": "1"
+      },
+      "observer": false,
+      "checks": [
+        {
+          "rule": "ask_above_trigger",
+          "measured": "12.41",
+          "operator": ">",
+          "threshold": "12.35",
+          "passed": true,
+          "note": ""
+        }
+      ],
+      "entry_price": "12.45",
+      "stop_price": "12.15",
+      "admission": "refused",
+      "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position, limit 1"
     }
   ],
   "api_version": 1

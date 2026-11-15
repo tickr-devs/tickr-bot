@@ -48,6 +48,7 @@ from aperture.api.contract import (
     StatusResponseV1,
 )
 from aperture.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
+from aperture.api.observer_results import ObserverResults, SimulationPaths
 from aperture.calendar import ny_date_of
 from aperture.config import Config, ConfigError
 from aperture.observers.errors import ObserverError
@@ -103,6 +104,7 @@ class ApiSettings:
     strategies_root: Path  # holds strategies/<folder>/strategy.toml, read by GET /observers
     account_path: Path  # the bot's account-v1 file, served at GET /account
     account_stale_seconds: Decimal
+    simulation: SimulationPaths  # inputs of the observers' simulated day results
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -152,6 +154,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         strategies_root=cfg.root,
         account_path=data / api.account_file,
         account_stale_seconds=api.account_stale_seconds,
+        simulation=SimulationPaths.from_config(cfg),
     )
 
 
@@ -195,6 +198,7 @@ class ApiServer(ThreadingHTTPServer):
         self.inbox_lock = inbox_lock or threading.Lock()
         self.page = (STATIC_DIR / "status.html").read_bytes()
         self.history = History(settings.history)
+        self.observer_results = ObserverResults(settings.simulation)
         port = settings.remote_port if remote else settings.port
         super().__init__((settings.host, port), Handler)
 
@@ -324,7 +328,7 @@ _ERROR_CODES = {
     "internal": 500, "unavailable": 503, "unauthorized": 401, "conflict": 409,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
-              "/explain", "/observers", "/decisions", "/account")
+              "/explain", "/observers", "/decisions", "/skipped", "/account")
 DAY_PREFIX = "/days/"
 
 
@@ -468,7 +472,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.settings.shown)
             elif path == "/explain":
                 self._explain()
-            elif path in ("/observers", "/decisions"):
+            elif path in ("/observers", "/decisions", "/skipped"):
                 self._recorded_decisions(path)
             elif path == "/account":
                 self._account()
@@ -588,18 +592,20 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, contract.explain(self.server.settings.history.environment, day, record))
 
     def _recorded_decisions(self, path: str) -> None:
-        """GET /observers?date= and /decisions?symbol=&date=: decisions already recorded in the
-        decision file of one New York date (plain or archived). Never reads the broker."""
+        """GET /observers?date=, /skipped?date= and /decisions?symbol=&date=: decisions already
+        recorded in the decision file of one New York date (plain or archived). Never reads the
+        broker; /observers adds each observer's simulated day result."""
         settings = self.server.settings
         query = urlsplit(self.path).query
+        today = ny_date_of(self.server.clock())
         try:
-            if path == "/observers":
+            if path in ("/observers", "/skipped"):
                 params = _query(query, frozenset({"date"}), optional=frozenset({"date"}))
             else:
                 params = _query(query, frozenset({"symbol", "date"}))
                 if not SYMBOL_PATTERN.match(params["symbol"]):
                     raise BadQuery(f"symbol {params['symbol']!r} is not a ticker")
-            day = _day(params["date"]) if "date" in params else ny_date_of(self.server.clock())
+            day = _day(params["date"]) if "date" in params else today
         except BadQuery as exc:
             self._error("bad_request", str(exc))
             return
@@ -608,8 +614,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/observers":
                 identities = tuple(read_identity(settings.strategies_root, folder)
                                    for folder in settings.shown.observers)
-                document: Any = contract.observers_document(
-                    day, identities, log.records(day, role=Role.OBSERVER))
+                records = log.records(day, role=Role.OBSERVER)
+                configured = {name for name, _ in identities}
+                results = self.server.observer_results.results(
+                    day, today, [r for r in records if r.decision.strategy in configured],
+                    log.path(day))
+                document: Any = contract.observers_document(day, identities, records, results)
+            elif path == "/skipped":
+                document = contract.skipped_document(day, log.records(day, role=Role.ACTIVE))
             else:
                 symbol = params["symbol"]
                 document = contract.decisions_document(symbol, day,

@@ -67,13 +67,24 @@
                 "type": "null"
               }
             ]
+          },
+          "result_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "name",
           "version",
           "decisions",
-          "result_gross_usd"
+          "result_gross_usd",
+          "result_cause"
         ],
         "additionalProperties": false
       }
