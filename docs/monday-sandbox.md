@@ -58,10 +58,21 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
 10. Before 09:30: the chart C2 probe (below). From 09:30: "Probe day" in manual-trade.md from
     top to bottom (step 0 and step 1 right after 09:30, steps 2 and 3 from 10:00). Manual
     trades are accepted until 15:30; ending by midday leaves the bot a useful afternoon.
-11. End the probes flat (manual-trade.md, step 4): the last `tickr exit` printed no
-    `fence ...` line, `tickr status` shows `bot: not running`, the Webull app shows no
-    position and no working order. A fence still set: resolve it first, do not start the bot.
-12. Enable and start the bot:
+    **If Webull's answers cannot be read:** the step 2 trade must close by itself about 90 s
+    after its stop appears. If it does not, goes silent, or prints `needs the operator` or
+    `fence`: close the position and cancel the orders by hand in the Webull app, confirm the
+    app is empty, and do not start the bot on Monday. Paste the probe files into the project
+    chat.
+11. **Go or no-go for the bot.** Start the bot only if the step 2 trade printed
+    `closed (hold-elapsed)` by itself, with no `fence` and no `needs the operator` line, and
+    nobody touched it in the Webull app. That one result proves the fill was read, the stop
+    was verified, non-empty positions were read, and the stop cancel and the MARKET SELL work.
+    A fence cleared by hand after closing in the app does not count: the bot would meet the
+    same unreadable answer. Otherwise the bot does not start on Monday; skip step 12.
+    If it is a go, end the probes flat (manual-trade.md, step 4): the last `tickr exit`
+    printed no `fence ...` line, `tickr status` shows `bot: not running`, the Webull app
+    shows no position and no working order.
+12. Only after a go in step 11, enable and start the bot:
     ```sh
     launchctl enable gui/$(id -u)/local.tickr.bot
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.bot.plist
@@ -91,6 +102,10 @@ In the apps (they read the bot's local API):
   watchdog has sent no alert.
 
 In the Webull app, a few times in the day: positions and working orders match what the apps show.
+
+**Never buy or sell by hand a symbol the bot holds.** If foreign shares turn up in the bot's
+symbol, the bot does not close its own position at the 15:55 flatten either: close it by hand
+in the Webull app and confirm no position and no working order is left.
 
 ## Probes (read-only unless said)
 
