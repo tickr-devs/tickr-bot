@@ -120,6 +120,9 @@ def _research_total(cfg, records, path):
 # ---------------------------------------------------------------- GET /skipped
 
 
+NO_BARS = "no captured bars for 2026-11-16"
+
+
 def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
     refused = _enter(ACTIVE, Role.ACTIVE, minute=7, admission=Admission.REFUSED,
                      cause="POSITION_LIMIT_REACHED: 1 open position, limit 1")
@@ -137,7 +140,10 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
          "admission": "not_evaluated", "refusal_cause": None, "refusal": None,
          "entry_price": "12.10", "stop_price": "11.80",
          "checks": [{"rule": "relative_volume", "measured": "2.4", "operator": ">=",
-                     "threshold": "1.5", "passed": True, "note": ""}]},
+                     "threshold": "1.5", "passed": True, "note": ""}],
+         "prices_after": [], "prices_after_cause": NO_BARS,
+         "what_if": {"result_gross_usd": None, "result_r": None, "exit_reason": None,
+                     "cause": NO_BARS}},
         {"at": "2026-11-16T15:07:00.000Z", "symbol": "ABCD",
          "strategy": {"name": "price-action-v1", "version": "1"},
          "admission": "refused",
@@ -146,7 +152,10 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
                      "since": None, "until": None},
          "entry_price": "12.10", "stop_price": "11.80",
          "checks": [{"rule": "relative_volume", "measured": "2.4", "operator": ">=",
-                     "threshold": "1.5", "passed": True, "note": ""}]},
+                     "threshold": "1.5", "passed": True, "note": ""}],
+         "prices_after": [], "prices_after_cause": NO_BARS,
+         "what_if": {"result_gross_usd": None, "result_r": None, "exit_reason": None,
+                     "cause": NO_BARS}},
     ]
     # /decisions carries the same admission and cause
     decisions = _get(api, "/decisions?symbol=ABCD&date=2026-11-16", "decisions-v1")
@@ -353,21 +362,21 @@ def test_observer_result_null_with_cause(api, cfg, case, cause):
 def test_observer_result_is_recomputed_only_when_its_files_change(cfg):
     log = DecisionLog.from_config(cfg)
     _write(log, _enter())
-    results = ObserverResults(SimulationPaths.from_config(cfg))
+    results = ObserverResults(SimulationPaths.from_config(cfg), cfg.api.observer_trades_max_rows)
     records = log.records(DAY, role=Role.OBSERVER)
     first = results.results(DAY, DAY, records, log.path(DAY))
-    assert first[OBSERVER][0] is None  # no capture file yet
+    assert first[OBSERVER].gross_usd is None  # no capture file yet
     assert results.results(DAY, DAY, records, log.path(DAY)) is first  # same files: memo
     _capture(cfg)
     second = results.results(DAY, DAY, records, log.path(DAY))
-    assert second[OBSERVER][0] is not None and second[OBSERVER][1] is None
+    assert second[OBSERVER].gross_usd is not None and second[OBSERVER].cause is None
 
 
 def test_changed_replay_settings_trigger_a_recompute(cfg):
     log = DecisionLog.from_config(cfg)
     _write(log, _enter())
     _capture(cfg)
-    results = ObserverResults(SimulationPaths.from_config(cfg))
+    results = ObserverResults(SimulationPaths.from_config(cfg), cfg.api.observer_trades_max_rows)
     records = log.records(DAY, role=Role.OBSERVER)
     first = results.results(DAY, DAY, records, log.path(DAY))
     assert results.results(DAY, DAY, records, log.path(DAY)) is first
@@ -378,7 +387,7 @@ def test_changed_replay_settings_trigger_a_recompute(cfg):
                         "utf-8")
     second = results.results(DAY, DAY, records, log.path(DAY))
     assert second is not first
-    assert second[OBSERVER][0] < first[OBSERVER][0]  # more slippage, a worse result
+    assert second[OBSERVER].gross_usd < first[OBSERVER].gross_usd  # more slippage, a worse result
     # the same day seen as a past day is a different key too
     assert results.results(DAY, DAY + timedelta(days=1), records, log.path(DAY)) is not second
 
@@ -388,18 +397,100 @@ def test_transient_failure_is_not_remembered(cfg):
     _write(log, _enter())
     _capture(cfg)
     paths = SimulationPaths.from_config(cfg)
-    results = ObserverResults(replace(paths, calendar=paths.calendar.parent / "missing"))
+    results = ObserverResults(replace(paths, calendar=paths.calendar.parent / "missing"), 10)
     records = log.records(DAY, role=Role.OBSERVER)
     failed = results.results(DAY, DAY, records, log.path(DAY))
-    assert failed[OBSERVER][1].startswith("session calendar unreadable: ")
+    assert failed[OBSERVER].cause.startswith("session calendar unreadable: ")
     results.paths = paths  # the calendar is back, no data file changed
-    assert results.results(DAY, DAY, records, log.path(DAY))[OBSERVER][1] is None
+    assert results.results(DAY, DAY, records, log.path(DAY))[OBSERVER].cause is None
 
 
 def test_a_recorded_observer_without_result_is_refused():
     record = _enter()
     with pytest.raises(contract.ContractError, match="no simulated result"):
         contract.observers_document(DAY, (OBSERVER,), (record,), {})
+
+
+def _trades(api):
+    (entry,) = _get(api, "/observers", "observers-v1")["observers"]
+    return entry["trades"], entry["trades_cause"], entry["trades_truncated"]
+
+
+def test_observer_trades_are_the_simulated_enters(api, cfg):
+    """The filled ENTER at 10:05 is stopped out at 10:10; the ENTER at 10:07 falls inside it."""
+    records = (_enter(), _enter(minute=7))
+    _write(DecisionLog.from_config(cfg), *records)
+    bars = _capture(cfg)
+    read = read_captured_bars(bars)
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    settings = load_settings(cfg.root / cfg.api.replay_settings_file)
+    report = observer_report.report(
+        records, {"ABCD": [b for _, b in sorted(read.bars.items())]}, settings,
+        calendar_clock(calendar, cfg.session))
+    (filled, overlap) = report.enters[(*OBSERVER, Role.OBSERVER.value)]
+    trade = filled.trade
+    q = Decimal(1).scaleb(-settings.output_decimal_places)
+    trades, cause, truncated = _trades(api)
+    assert (cause, truncated) == (None, False)
+    assert trades == [
+        {"symbol": "ABCD", "at": "2026-11-16T15:05:00.000Z",
+         "opened_at": contract.format_time(trade.entry_time),
+         "entry_price": str(trade.entry_price.quantize(q)),
+         "closed_at": contract.format_time(trade.exit_time),
+         "exit_price": str(trade.exit_price.quantize(q)), "quantity": "10",
+         "exit_reason": "stop", "result_gross_usd": str(filled.result_usd.quantize(q)),
+         "result_r": str(trade.r_multiple.quantize(q)), "cause": None},
+        {"symbol": "ABCD", "at": "2026-11-16T15:07:00.000Z", "opened_at": None,
+         "entry_price": None, "closed_at": None, "exit_price": None, "quantity": None,
+         "exit_reason": None, "result_gross_usd": None, "result_r": None,
+         "cause": "skipped_overlap: an earlier simulated trade of ABCD was still open"}]
+    assert overlap.trade is None and Decimal(trades[0]["result_r"]) < 0
+
+
+def test_observer_trade_without_quantity_has_r_only(api, cfg):
+    _write(DecisionLog.from_config(cfg), _enter(quantity=None))
+    _capture(cfg)
+    (trade,), cause, _ = _trades(api)
+    assert cause is None and trade["result_r"] is not None
+    assert trade["quantity"] is None and trade["result_gross_usd"] is None
+    assert trade["cause"] == "no recorded whole quantity: result in R only"
+
+
+def test_observer_trade_repeating_a_traded_signal_is_listed_with_its_cause(api, cfg):
+    """After the 10:05 trade is stopped out, the same signal at 10:20 is deduplicated."""
+    def signal(record):
+        return replace(record, decision=replace(record.decision, setup="x",
+                                                trigger=Decimal("12.05")))
+    _write(DecisionLog.from_config(cfg), signal(_enter()), signal(_enter(minute=20)))
+    _capture(cfg)
+    trades, cause, _ = _trades(api)
+    assert cause is None and trades[0]["cause"] is None
+    assert [t["at"] for t in trades] == ["2026-11-16T15:05:00.000Z", "2026-11-16T15:20:00.000Z"]
+    assert trades[1]["result_r"] is None and trades[1]["cause"] == (
+        "skipped_same_signal: the same signal (setup x, trigger 12.05) already made a "
+        "simulated trade of ABCD that day")
+
+
+def test_observer_trades_are_capped_oldest_first(cfg):
+    log = DecisionLog.from_config(cfg)
+    _write(log, _enter(minute=7, symbol="WXYZ"), _enter(), _enter(minute=6, symbol="EFGH"))
+    _capture(cfg)
+    results = ObserverResults(SimulationPaths.from_config(cfg), 2)
+    got = results.results(DAY, DAY, log.records(DAY, role=Role.OBSERVER), log.path(DAY))
+    result = got[OBSERVER]
+    assert result.trades_truncated and result.trades_cause is None
+    assert [(t.symbol, t.cause) for t in result.trades] == [
+        ("ABCD", None), ("EFGH", "not_simulated: no captured bars for the symbol")]
+
+
+def test_observer_trades_null_with_cause_when_nothing_is_simulated(api, cfg):
+    _write(DecisionLog.from_config(cfg), _enter())
+    assert _trades(api) == (None, NO_BARS, False)
+
+
+def test_observer_without_enter_has_no_trades(api, cfg):
+    _write(DecisionLog.from_config(cfg), _observer(checks=(PASS, FAIL)))
+    assert _trades(api) == ([], None, False)
 
 
 def test_observer_result_never_writes(api, cfg):

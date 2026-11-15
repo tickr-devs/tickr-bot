@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from aperture.api import contract as api
+from aperture.api.after import AfterSettings, Closes, trade_after
 from aperture.api.cleanday import clean_days
 from aperture.api.performance import performance
 from aperture.archive import existing
@@ -293,7 +294,8 @@ def closed_trades(store: Store, environment: str | None = None,
             # Display metrics are never read here (see `trade_metrics`): this path feeds the
             # daily-loss check and stays as it was.
             stop_confirmed_after_seconds=None, mae_usd=None, mfe_usd=None,
-            entry=NO_ENTRY, entry_cause=NOT_READ))
+            entry=NO_ENTRY, entry_cause=NOT_READ, prices_after=(), prices_after_cause=NOT_READ,
+            overshoot_usd=None, overshoot_r=None, overshoot_cause=NOT_READ))
     return result
 
 
@@ -316,10 +318,12 @@ class HistoryPaths:
 
 class History:
     """Answers GET /days, /days/<date>, /bars and /performance. Thread safe; caches the last
-    bars file read."""
+    bars file read. Without `after`, day-v1 trades carry no prices after and no overshoot."""
 
-    def __init__(self, paths: HistoryPaths) -> None:
+    def __init__(self, paths: HistoryPaths, after: AfterSettings | None = None) -> None:
         self.paths = paths
+        self.after = after
+        self.closes = None if after is None else Closes(after.calendar)
         self._lock = threading.Lock()
         self._bars_key: tuple[str, int, int, bool] | None = None
         self._bars: dict[str, list[api.BarV1]] = {}
@@ -415,9 +419,11 @@ class History:
         except MalformedJournal as exc:
             entry, cause = NO_ENTRY, f"journal unreadable: {exc}"
         trade = replace(trade, entry=entry, entry_cause=cause)
+        bars = self._bars_by_symbol(day, today).get(trade.symbol, [])
+        if self.after is not None and self.closes is not None:
+            trade = trade_after(trade, bars, self.closes.close(day), self.after)
         try:
-            return trade_metrics(store, trade,
-                                 self._bars_by_symbol(day, today).get(trade.symbol, []))
+            return trade_metrics(store, trade, bars)
         except MalformedJournal:
             return trade
 

@@ -14,6 +14,8 @@ Per strategy identity (name + version + role):
   signal stays valid, where live the symbol pause or the open position would stop a second
   entry. The active strategy's ENTERs are not deduplicated. R per trade; USD only for ENTERs with a
   recorded whole quantity (gross: slippage in, commissions out);
+- every ENTER as simulated (`ObserverReport.enters`, read by GET /observers for its trades;
+  not written to the report files);
 - for observers, a bar-by-bar diff against the active decisions (aperture.research.compare)
   and how many ENTER bars it shares with the active strategy.
 """
@@ -28,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 from aperture.calendar import TIMEZONE_NAME
 from aperture.replay.clock import ClockFor
+from aperture.replay.engine import SimulatedTrade
 from aperture.replay.settings import ReplaySettings
 from aperture.research.compare import diff
 from aperture.research.errors import ResearchError
@@ -62,10 +65,32 @@ class IdentityReport:
     shared_enter_bars: int | None = None
 
 
+SKIPPED_OVERLAP = "skipped_overlap"
+SKIPPED_SAME_SIGNAL = "skipped_same_signal"
+
+
+@dataclass(frozen=True)
+class SimulatedEnter:
+    """One ENTER of an identity as the report simulated it. `outcome`: a WhatIfOutcome value,
+    SKIPPED_OVERLAP or SKIPPED_SAME_SIGNAL; `trade` only when filled; `result_usd` only with a
+    recorded whole quantity (without one the trade is simulated for one share, R only)."""
+
+    record: DecisionRecord
+    outcome: str
+    cause: str
+    trade: SimulatedTrade | None
+    result_usd: Decimal | None
+
+
+Identity = tuple[str, str, str]  # (strategy, version, role)
+
+
 @dataclass(frozen=True)
 class ObserverReport:
     active: str | None
     identities: tuple[IdentityReport, ...]
+    # Every ENTER of each identity, in simulation order (symbol, then bar start).
+    enters: dict[Identity, tuple[SimulatedEnter, ...]] = field(default_factory=dict)
 
 
 def _whole(quantity: Decimal | None) -> bool:
@@ -79,16 +104,18 @@ def _simulate(
     settings: ReplaySettings,
     clock_for: ClockFor,
     dedupe_signals: bool,
-) -> None:
-    outcomes = {o.value: 0 for o in WhatIfOutcome} | {"skipped_overlap": 0,
-                                                      "skipped_same_signal": 0}
+) -> tuple[SimulatedEnter, ...]:
+    out: list[SimulatedEnter] = []
+    outcomes = {o.value: 0 for o in WhatIfOutcome} | {SKIPPED_OVERLAP: 0, SKIPPED_SAME_SIGNAL: 0}
     busy_until: dict[str, datetime] = {}
     traded: set[tuple[date, str, str | None, Decimal]] = set()
     zone = ZoneInfo(TIMEZONE_NAME)
     r_values: list[Decimal] = []
     for record in sorted(enters, key=lambda r: (r.symbol, r.bar_start)):
         if record.bar_start < busy_until.get(record.symbol, record.bar_start):
-            outcomes["skipped_overlap"] += 1
+            outcomes[SKIPPED_OVERLAP] += 1
+            out.append(SimulatedEnter(record, SKIPPED_OVERLAP, "an earlier simulated trade of "
+                                      f"{record.symbol} was still open", None, None))
             continue
         trigger = record.decision.trigger
         signal = None
@@ -96,25 +123,33 @@ def _simulate(
             signal = (record.bar_start.astimezone(zone).date(), record.symbol,
                       record.decision.setup, trigger)
         if signal in traded:
-            outcomes["skipped_same_signal"] += 1
+            outcomes[SKIPPED_SAME_SIGNAL] += 1
+            out.append(SimulatedEnter(record, SKIPPED_SAME_SIGNAL, "the same signal (setup "
+                                      f"{record.decision.setup}, trigger {trigger}) already made "
+                                      f"a simulated trade of {record.symbol} that day", None,
+                                      None))
             continue
         bars = bars_by_symbol.get(record.symbol)
         if not bars:
             outcomes[WhatIfOutcome.NOT_SIMULATED.value] += 1
+            out.append(SimulatedEnter(record, WhatIfOutcome.NOT_SIMULATED.value,
+                                      "no captured bars for the symbol", None, None))
             continue
         quantity = record.decision.quantity
         has_usd = _whole(quantity)
         result = simulate_one(record, bars, settings, clock_for, quantity if has_usd else ONE)
         outcomes[result.outcome.value] += 1
         trade = result.trade
+        usd = result.result_usd if has_usd and trade is not None else None
+        out.append(SimulatedEnter(record, result.outcome.value, result.cause, trade, usd))
         if trade is None:
             continue
         busy_until[record.symbol] = trade.exit_time
         if signal is not None:
             traded.add(signal)
         r_values.append(trade.r_multiple)
-        if has_usd and result.result_usd is not None:
-            row.total_usd += result.result_usd
+        if usd is not None:
+            row.total_usd += usd
             row.usd_trades += 1
     row.simulated = outcomes
     row.trades = len(r_values)
@@ -122,6 +157,7 @@ def _simulate(
     row.losses = sum(1 for r in r_values if r < 0)
     row.total_r = sum(r_values, Decimal(0))
     row.average_r = row.total_r / len(r_values) if r_values else None
+    return tuple(out)
 
 
 def report(
@@ -141,6 +177,7 @@ def report(
     active_key = actives[0] if actives else None
     zone = ZoneInfo(TIMEZONE_NAME)
     rows = []
+    simulated: dict[Identity, tuple[SimulatedEnter, ...]] = {}
     for key in sorted(groups, key=lambda k: (k != active_key, k)):
         group = groups[key]
         row = IdentityReport(*key)
@@ -153,8 +190,8 @@ def report(
         row.enters = len(enters)
         row.enters_taken = sum(1 for r in enters if r.admission is Admission.TAKEN)
         row.enters_refused = sum(1 for r in enters if r.admission is Admission.REFUSED)
-        _simulate(row, enters, bars_by_symbol, settings, clock_for,
-                  dedupe_signals=key[2] == Role.OBSERVER.value)
+        simulated[key] = _simulate(row, enters, bars_by_symbol, settings, clock_for,
+                                   dedupe_signals=key[2] == Role.OBSERVER.value)
         if active_key is not None and key != active_key:
             active = groups[active_key]
             row.vs_active = dict(diff(active, group, zone).counts)
@@ -164,4 +201,4 @@ def report(
             row.shared_enter_bars = len({(r.symbol, r.bar_start) for r in enters} & active_enters)
         rows.append(row)
     active_name = f"{active_key[0]} v{active_key[1]}" if active_key else None
-    return ObserverReport(active_name, tuple(rows))
+    return ObserverReport(active_name, tuple(rows), simulated)

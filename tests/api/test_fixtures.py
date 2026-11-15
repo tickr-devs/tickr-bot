@@ -53,8 +53,10 @@ from aperture.api.contract import (
     FlowV1,
     ObserverDecisionV1,
     ObserversV1,
+    ObserverTradeV1,
     ObserverV1,
     PendingCommandsV1,
+    PriceAfterV1,
     RiskSettings,
     SessionSettings,
     SettingsV1,
@@ -64,10 +66,12 @@ from aperture.api.contract import (
     StrategyId,
     WatchingRowV1,
     WatchingV1,
+    WhatIfV1,
 )
 from aperture.api.history import NO_ENTRY, NOT_READ
 from aperture.api.performance import performance
 from aperture.data.base import ScreenerKind
+from aperture.replay.engine import ExitReason
 from aperture.research.records import Admission
 from aperture.strategy.base import Verdict
 
@@ -149,13 +153,32 @@ def documents() -> dict[str, object]:
             DayTrade("t-0001", "WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0,
                      T0 + timedelta(minutes=7), "stop", Decimal("5.02"), Decimal("50"),
                      Decimal("-1.60"), Decimal("1.250"), Decimal("-2.20"), Decimal("0.80"),
-                     entry("ap-0002-e", T0), None),
+                     entry("ap-0002-e", T0), None, (
+                         PriceAfterV1(1, T0 + timedelta(minutes=8), Decimal("5.00"),
+                                      Decimal("-0.02"), None),
+                         PriceAfterV1(5, T0 + timedelta(minutes=12), Decimal("5.06"),
+                                      Decimal("0.04"), None),
+                         PriceAfterV1(15, T0 + timedelta(minutes=22), None, None,
+                                      "no bar recorded for the minute 2026-11-16T15:22:00.000Z"),
+                         PriceAfterV1(60, T0 + timedelta(minutes=67), Decimal("5.21"),
+                                      Decimal("0.19"), None)),
+                     None, Decimal("0.24"), Decimal("0.0960"), None),
             DayTrade("t-0002", "ABCD", Decimal("10"), Decimal("12.34"), Decimal("12.75"),
                      T0 + timedelta(minutes=20), T0 + timedelta(minutes=48), "strategy_exit",
                      None, Decimal("50"), Decimal("4.10"), None, None, None,
                      EntrySend(None, None, None, None, None, None, None),
                      "journal unreadable: journal row 812 (order-observed ap-0003-e): "
-                     "KeyError: 'filled_quantity'")),
+                     "KeyError: 'filled_quantity'", (
+                         PriceAfterV1(1, T0 + timedelta(minutes=49), Decimal("12.70"),
+                                      Decimal("-0.05"), None),
+                         PriceAfterV1(5, T0 + timedelta(minutes=53), None, None,
+                                      "the bars end at 2026-11-16T15:49:00.000Z"),
+                         PriceAfterV1(15, T0 + timedelta(minutes=63), None, None,
+                                      "the bars end at 2026-11-16T15:49:00.000Z"),
+                         PriceAfterV1(60, T0 + timedelta(minutes=108), None, None,
+                                      "the bars end at 2026-11-16T15:49:00.000Z")),
+                     None, None, None,
+                     "the bars end at 2026-11-16T15:49:00.000Z, before 2026-11-16T16:48:00.000Z")),
             Decimal("2.50"), ("ABCD", "WXYZ")),
         "settings-v1": SettingsV1(
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
@@ -203,12 +226,25 @@ def documents() -> dict[str, object]:
                 ObserverDecisionV1(T0.replace(microsecond=0), "ABCD", Verdict.WATCH,
                                    ("ask_above_trigger",)),
                 ObserverDecisionV1(T0.replace(microsecond=0) + timedelta(minutes=1), "ABCD",
-                                   Verdict.ENTER, ())), Decimal("-12.4000"), None),
-            ObserverV1("price-action-v2", "1", (), None, "no decisions recorded that day"),
+                                   Verdict.ENTER, ()),
+                ObserverDecisionV1(T0.replace(microsecond=0) + timedelta(minutes=4), "ABCD",
+                                   Verdict.ENTER, ())), Decimal("-12.4000"), None, (
+                ObserverTradeV1("ABCD", T0.replace(microsecond=0) + timedelta(minutes=1),
+                                T0.replace(microsecond=0) + timedelta(minutes=2),
+                                Decimal("10.0700"), T0.replace(microsecond=0) +
+                                timedelta(minutes=9), Decimal("9.9460"), Decimal(100),
+                                ExitReason.STOP, Decimal("-12.4000"), Decimal("-1.0333"), None),
+                ObserverTradeV1("ABCD", T0.replace(microsecond=0) + timedelta(minutes=4), None,
+                                None, None, None, None, None, None, None,
+                                "skipped_overlap: an earlier simulated trade of ABCD was still "
+                                "open")), None, False),
+            ObserverV1("price-action-v2", "1", (), None, "no decisions recorded that day", None,
+                       "no decisions recorded that day", False),
             ObserverV1("price-action-v2", "2", (
                 ObserverDecisionV1(T0.replace(microsecond=0) + timedelta(minutes=2), "WXYZ",
                                    Verdict.ENTER, ()),), None,
-                "no captured bars for 2026-11-16"))),
+                "no captured bars for 2026-11-16", None, "no captured bars for 2026-11-16",
+                False))),
         "observers-v1.empty": ObserversV1(DAY - timedelta(days=3), ()),
         "decisions-v1": DecisionsV1("ABCD", DAY, (
             DecisionV1(T0.replace(microsecond=0), Verdict.WATCH,
@@ -236,18 +272,27 @@ def documents() -> dict[str, object]:
                                 CheckV1("relative_volume", Decimal("2.4"), ">=",
                                         Decimal("1.5"), True, ""),
                                 CheckV1("ask_above_trigger", Decimal("12.41"), ">",
-                                        Decimal("12.35"), True, ""))),
+                                        Decimal("12.35"), True, "")),
+                            _after(T0 + timedelta(minutes=2), "12.38", "12.44", "12.52", "12.20"),
+                            None, WhatIfV1(Decimal("-6.20"), Decimal("-1.0000"),
+                                           ExitReason.STOP, None)),
             SkippedSignalV1(T0.replace(microsecond=0) + timedelta(minutes=35), "ZNTH",
                             StrategyId("price-action-v1", "1"), Admission.REFUSED,
                             COOLDOWN_CAUSE, contract.refusal_of(COOLDOWN_CAUSE),
                             Decimal("0.9876"), Decimal("0.9512"), (
                                 CheckV1("ask_above_trigger", Decimal("0.9881"), ">",
-                                        Decimal("0.9850"), True, ""),)),
+                                        Decimal("0.9850"), True, ""),),
+                            _after(T0 + timedelta(minutes=35), "0.9870", "0.9910", "1.0040",
+                                   "0.9950"),
+                            None, WhatIfV1(Decimal("17.05"), Decimal("0.4620"),
+                                           ExitReason.FLATTEN, None)),
             SkippedSignalV1(T0.replace(microsecond=0) + timedelta(minutes=47), "WXYZ",
                             StrategyId("price-action-v1", "1"), Admission.NOT_EVALUATED, None,
                             None, None, None, (
                                 CheckV1("ask_above_trigger", Decimal("5.31"), ">",
-                                        Decimal("5.25"), True, ""),)))),
+                                        Decimal("5.25"), True, ""),),
+                            (), "no captured bars for 2026-11-16",
+                            WhatIfV1(None, None, None, "no captured bars for 2026-11-16")))),
         "skipped-v1.empty": SkippedV1(DAY - timedelta(days=3), ()),
         "flow-v1": FlowV1("sandbox", DAY, (
             FlowChipV1("ABCD", (ScreenerKind.GAINERS, ScreenerKind.TOP_ACTIVES),
@@ -301,6 +346,16 @@ def documents() -> dict[str, object]:
 PLACES = 4
 
 
+def _after(at: datetime, reference: str, *prices: str) -> tuple[PriceAfterV1, ...]:
+    """Points at 1, 5 and 15 minutes after `at`; the 60-minute one is after the bars' end."""
+    points = tuple(PriceAfterV1(m, at.replace(microsecond=0) + timedelta(minutes=m),
+                                Decimal(p), Decimal(p) - Decimal(reference), None)
+                   for m, p in zip((1, 5, 15), prices, strict=True))
+    end = at.replace(microsecond=0) + timedelta(minutes=40)
+    return (*points, PriceAfterV1(60, at.replace(microsecond=0) + timedelta(minutes=60), None,
+                                  None, f"the bars end at {contract.format_time(end)}"))
+
+
 def _closed(trade_id: str, day_offset: int, result: str, planned_loss: str) -> DayTrade:
     """A closed trade of 10 shares at 10.00 with the given gross result and 1 R."""
     closed_at = T0 + timedelta(days=day_offset, minutes=int(trade_id[-1]))
@@ -308,7 +363,7 @@ def _closed(trade_id: str, day_offset: int, result: str, planned_loss: str) -> D
     return DayTrade(trade_id, "ABCD", Decimal("10"), Decimal("10.00"), exit_price,
                     closed_at - timedelta(minutes=1), closed_at, "strategy_exit", None,
                     Decimal(planned_loss), Decimal(result), None, None, None, NO_ENTRY,
-                    NOT_READ)
+                    NOT_READ, (), NOT_READ, None, None, NOT_READ)
 
 
 def _text(document: object) -> str:

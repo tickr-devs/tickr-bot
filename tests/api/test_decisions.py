@@ -138,7 +138,8 @@ def test_observers_today(api, cfg):
              "reasons": ["bars_consistent", "spread_ratio"]},
             {"at": "2026-11-16T15:05:00.000Z", "symbol": "ABCD", "action": "ENTER",
              "reasons": []},
-        ], "result_cause": "no captured bars for 2026-11-16"}]
+        ], "result_cause": "no captured bars for 2026-11-16", "trades": None,
+        "trades_cause": "no captured bars for 2026-11-16", "trades_truncated": False}]
 
 
 def test_observer_without_decisions_and_no_observers(api, cfg, tmp_path_factory):

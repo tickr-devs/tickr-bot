@@ -75,16 +75,16 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/commands/pending` | `200` `pending-commands-v1`: commands written but not yet consumed. |
 | GET | `/schema` | `200` all schemas by name. |
 | GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first, each with its clean-day verdict (`clean`). |
-| GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
+| GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date (with prices after the exit and overshoot) and the symbols with captured M1 bars. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
 | GET | `/chart?symbol=<ticker>&interval=<1m\|5m\|30m\|1h\|1d\|1w\|1mo>&range=<1d\|5d\|1m\|3m\|1y>` | `200` `chart-v1`: candles of any US stock from market data; `400`, `429` `rate_limited`, `503` `unavailable`. |
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
-| GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first. |
+| GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first, its simulated day result and simulated trades. |
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
-| GET | `/skipped?date=<YYYY-MM-DD>` | `200` `skipped-v1`: every ENTER of the active strategy that date (default today) that did not become a position (admission `refused` or `not_evaluated`), oldest first, with checks. |
+| GET | `/skipped?date=<YYYY-MM-DD>` | `200` `skipped-v1`: every ENTER of the active strategy that date (default today) that did not become a position (admission `refused` or `not_evaluated`), oldest first, with checks, prices after the signal and the simulated what-if. |
 | GET | `/flow?date=<YYYY-MM-DD>` | `200` `flow-v1`: the Overview's live flow that date (default today): screener chips and the pipeline stages from screeners to verified broker stops, with reconciliation. |
 | GET | `/watching?date=<YYYY-MM-DD>` | `200` `watching-v1`: the symbols the active strategy is closest to entering on that date (default today), closest first, capped by `[api] watching_max_rows`. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
@@ -293,6 +293,62 @@ Computed by the reader from what the bot already records; `null` means unknown, 
   (`stop-timing-failed`) and the step goes on. The daily-loss check never reads them: the
   bot computes them only for the status file.
 
+#### Prices after, overshoot and what if
+
+Display only (`day-v1` trades and `skipped-v1` rows): computed by the API from the captured M1
+bars (`bars.jsonl` or its `.gz`) and the session calendar; never read by the bot, the risk
+checks or the daily-loss path (`closed_trades` fills them with `prices_after: []` and the
+cause `not read on this path`). `null` means unknown, never zero; every `null` has a cause.
+Code: `src/aperture/api/after.py`.
+
+- `prices_after` (trades and skipped rows): one `{minutes, at, price, change_usd, cause}` per
+  `[api] price_after_minutes` (1, 5, 15, 60). `at` = anchor + `minutes`; `price` is the
+  **close of the captured M1 bar covering `at`** (the bar whose start is `at` floored to the
+  minute), `change_usd` is `price` minus the reference, per share. Anchor and reference: for a
+  trade, `closed_at` (the journal time the bot recorded the close, at or after the exit fill)
+  and `exit_price`; for a skipped signal, its decision bar start `at` and that bar's close, so
+  a point is the bar ending `minutes` after the decision bar ends (the price research
+  `outcomes` measures). A point is `null` with `cause`: `the session ended at <close>` (`at`
+  at or after the regular close; post-market bars are never used), `no bar recorded for
+  <symbol> that day`, `the bars end at <last bar start>` (also today, until the bars arrive),
+  `no bar recorded for the minute <minute>` (a minute without a bar is never filled from
+  another minute), `session calendar unreadable: ...`, `calendar refuses <date>: ...`. A
+  skipped signal whose decision bar was not captured keeps `price` with `change_usd` `null`
+  and that cause. `prices_after` is `[]` with `prices_after_cause` when no point could be
+  computed (`no captured bars for <date>`, `capture file refused: ...`); otherwise
+  `prices_after_cause` is `null`.
+- `overshoot_usd` / `overshoot_r` / `overshoot_cause` (trades): how far the price went beyond
+  the exit in the trade's favour (long only): the highest high of the captured bars that start
+  after the minute of `closed_at` (that minute's bar is left out: it may hold prices from before
+  the exit) up to the bar covering `closed_at` + the longest `price_after_minutes`, or the last
+  bar before the regular close if that is sooner, minus `exit_price`, in USD per share. Signed:
+  below 0 the price never came back to the exit. `overshoot_r` = `overshoot_usd x quantity /
+  planned_loss_usd`, rounded half-even to `[api] after_r_decimal_places`. `null` with the
+  cause when the symbol has no bar that day, the bars end before the window does, no bar was
+  recorded inside it, the exit was in the session's last minute, or the calendar is unreadable
+  (`overshoot_r` alone is `null` when `planned_loss_usd` is not positive).
+- `what_if` (skipped rows): `{result_gross_usd, result_r, exit_reason, cause}`, SIMULATED: the
+  signal entered alone with the research what-if simulator (`research.whatif.simulate_one`,
+  the replay's conservative fill model, `[api] replay_settings_file`, the session clock as
+  live), for the recorded quantity, gross (slippage in, commissions out), rounded to the
+  replay settings' `output_decimal_places` like `/observers`. `result_r` is per share against
+  the simulated entry and stop; `exit_reason` is `stop`, `strategy_exit`, `flatten` or
+  `end_of_data` (today: a simulated trade still open ends at the last captured bar's close,
+  so the result is provisional). Unlike `/observers`, an earlier simulated trade of the same
+  symbol does not skip a row: each row answers "what if this one had been entered". All three
+  `null` with `cause`: `missed: ...` (price never traded inside the window in time),
+  `rejected: ...` (live admission would refuse it on time alone), `not_simulated: ...` (no
+  whole quantity, decision bar not captured), `simulation refused: ...`, or an unreadable
+  input as above (`replay settings unreadable: ...`).
+- Any unexpected error in these values shows `null` with `<Error>: <detail>` as the cause,
+  never an error answer for the whole document.
+
+The `/skipped` answer is kept in memory with the same key as `/observers` (date, whether it is
+today, size and modification time of the decision, capture, replay settings and calendar
+files), so polling re-simulates only after a new bar or record; an answer an unreadable
+calendar or an OSError decided is not kept. `day-v1` points are a few dictionary lookups per
+trade on the bars the history reader already caches.
+
 #### Entry send
 
 The protection chain per position is: entry sent once -> filled -> broker stop verified
@@ -463,7 +519,8 @@ parsed); a missing, repeated, extra or non-ticker parameter is
 
 All three serve decisions already in the decision file of one New York date (the same file as
 `/explain`; an archived day's `decisions.jsonl.gz` is read the same way). They never read the
-broker and record nothing; only `/observers` simulates (each observer's day result, below). `at` is the start (UTC) of the decision's M1 bar;
+broker and record nothing; only `/observers` and `/skipped` simulate (each observer's day
+result, below; each skipped row's what-if). `at` is the start (UTC) of the decision's M1 bar;
 decisions are oldest first (bar start, then decision time). `action` is the recorded verdict,
 the same enum as explain-v1 `verdict`: `IGNORE` `WATCH` `ENTER` `HOLD` `EXIT`. A
 date without a decision file answers with empty lists; a last line still being written is not
@@ -498,6 +555,31 @@ decided by a failure that can pass without a file changing (an OSError, a calend
 simulation refusal) is never kept. Nothing is written to disk. An observer folder whose `strategy.toml` cannot be read
 is `503 unavailable`.
 
+`trades` (for the Lab chart "Today if each version traded") lists every ENTER of that same
+simulation, so it comes from the same memo and costs no extra simulation: one
+`{symbol, at, opened_at, entry_price, closed_at, exit_price, quantity, exit_reason,
+result_gross_usd, result_r, cause}` per ENTER, oldest first (`at`, the decision bar start, then
+symbol), SIMULATED and display only. A filled trade has `opened_at` / `entry_price` (the
+simulated fill, slippage in) and `closed_at` / `exit_price`, `exit_reason` (`stop`,
+`strategy_exit`, `flatten`, `end_of_data`; today an open trade ends at the last captured bar,
+provisional), `result_r` per share against the simulated entry and the recorded stop, and
+`quantity` with `result_gross_usd` for the recorded whole quantity; prices, USD and R are
+rounded to the replay settings' `output_decimal_places`, each trade on its own, so their sum may
+differ from the observer's `result_gross_usd` in the last place by one unit per trade. Without
+a recorded whole quantity the trade is simulated for one share: `quantity` and
+`result_gross_usd` are `null` with the cause `no recorded whole quantity: result in R only`. An
+ENTER without a trade has every price, time and result `null` and a `cause` of the form
+`<outcome>: <detail>`: `missed: ...`, `rejected: ...`, `not_simulated: ...` (no captured bars
+for the symbol, decision bar not captured), `skipped_overlap: an earlier simulated trade of
+<symbol> was still open`, `skipped_same_signal: the same signal (setup ..., trigger ...) already
+made a simulated trade of <symbol> that day`; otherwise `cause` is `null`. At most `[api] observer_trades_max_rows`
+are listed; `trades_truncated` is `true` when that cap left later ones out. An observer without
+an ENTER that day has `trades: []`. `trades` is `null` with `trades_cause` when the simulation
+could not run: the same cause as `result_cause` (no decisions, no captured bars, unreadable
+inputs, simulation refused) or, for an unexpected error while listing them, `<Error>: <detail>`;
+otherwise `trades_cause` is `null`. The active strategy's trades are not here: `/observers`
+holds observers only, and the bot's real trades are in `day-v1`.
+
 `/decisions?symbol=&date=` (both required) lists the active strategy's and the observers'
 decisions for the symbol, `observer` true for an observer record, `strategy` its `{name,
 version}`. `checks` have the explain-v1 shape (`rule` `measured` `operator` `threshold` `passed`
@@ -517,7 +599,8 @@ list, every record of the active strategy (role `active`, as `/explain`) with ve
 and admission `refused` or `not_evaluated`, oldest first: `at` (bar start), `symbol`,
 `strategy {name, version}`, `admission`, `refusal_cause` (the single `CAUSE: detail` of a
 refusal, else `null`), `refusal` (below), the what-if `entry_price` and `stop_price` (the same
-rule and rounding as `/decisions`) and `checks` (explain-v1 shape). Taken ENTERs, other verdicts
+rule and rounding as `/decisions`), `checks` (explain-v1 shape), and `prices_after`,
+`prices_after_cause` and `what_if` (see "Prices after, overshoot and what if"). Taken ENTERs, other verdicts
 and observer records are left out. A date without a decision file answers with an empty list.
 Every refused minute is its own row: consecutive refusals are not merged.
 

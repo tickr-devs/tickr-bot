@@ -18,17 +18,56 @@
           "symbol": "ABCD",
           "action": "ENTER",
           "reasons": []
+        },
+        {
+          "at": "2026-11-16T15:04:00.000Z",
+          "symbol": "ABCD",
+          "action": "ENTER",
+          "reasons": []
         }
       ],
       "result_gross_usd": "-12.4000",
-      "result_cause": null
+      "result_cause": null,
+      "trades": [
+        {
+          "symbol": "ABCD",
+          "at": "2026-11-16T15:01:00.000Z",
+          "opened_at": "2026-11-16T15:02:00.000Z",
+          "entry_price": "10.0700",
+          "closed_at": "2026-11-16T15:09:00.000Z",
+          "exit_price": "9.9460",
+          "quantity": "100",
+          "exit_reason": "stop",
+          "result_gross_usd": "-12.4000",
+          "result_r": "-1.0333",
+          "cause": null
+        },
+        {
+          "symbol": "ABCD",
+          "at": "2026-11-16T15:04:00.000Z",
+          "opened_at": null,
+          "entry_price": null,
+          "closed_at": null,
+          "exit_price": null,
+          "quantity": null,
+          "exit_reason": null,
+          "result_gross_usd": null,
+          "result_r": null,
+          "cause": "skipped_overlap: an earlier simulated trade of ABCD was still open"
+        }
+      ],
+      "trades_cause": null,
+      "trades_truncated": false
     },
     {
       "name": "price-action-v2",
       "version": "1",
       "decisions": [],
       "result_gross_usd": null,
-      "result_cause": "no decisions recorded that day"
+      "result_cause": "no decisions recorded that day",
+      "trades": null,
+      "trades_cause": "no decisions recorded that day",
+      "trades_truncated": false
     },
     {
       "name": "price-action-v2",
@@ -42,7 +81,10 @@
         }
       ],
       "result_gross_usd": null,
-      "result_cause": "no captured bars for 2026-11-16"
+      "result_cause": "no captured bars for 2026-11-16",
+      "trades": null,
+      "trades_cause": "no captured bars for 2026-11-16",
+      "trades_truncated": false
     }
   ],
   "api_version": 1

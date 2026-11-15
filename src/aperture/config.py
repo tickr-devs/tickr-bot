@@ -132,12 +132,15 @@ class ApiConfig:
     status_recent_commands: int
     idempotency_key_ttl_seconds: int
     replay_settings_file: str
+    observer_trades_max_rows: int
     watching_max_rows: int
     watching_closeness_decimal_places: int
     watching_check_decimal_places: int
     flow_change_pct_decimal_places: int
     performance_max_range_days: int
     performance_decimal_places: int
+    price_after_minutes: tuple[int, ...]
+    after_r_decimal_places: int
 
 
 @dataclass(frozen=True)

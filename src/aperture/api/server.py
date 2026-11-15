@@ -38,6 +38,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from aperture.api import contract, flow
+from aperture.api.after import AfterSettings, SkippedAfter
 from aperture.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from aperture.api.contract import (
     AccountResponseV1,
@@ -112,6 +113,7 @@ class ApiSettings:
     account_path: Path  # the bot's account-v1 file, served at GET /account
     account_stale_seconds: Decimal
     simulation: SimulationPaths  # inputs of the observers' simulated day results
+    observer_trades_max_rows: int  # most simulated trades per observer at GET /observers
     universe: DiscoverySettings  # the universe filter GET /flow applies to captured passes
     watching_max_rows: int
     closeness_places: int  # decimal places of GET /watching closeness
@@ -120,6 +122,7 @@ class ApiSettings:
     performance_max_range_days: int  # longest GET /performance range, both ends counted
     performance_decimal_places: int  # rounding of GET /performance quotients
     chart: ChartSettings  # GET /chart: source switch, cache and calendar
+    after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -145,6 +148,8 @@ def settings_from_config(cfg: Config) -> ApiSettings:
     if api.idempotency_key_ttl_seconds <= api.command_max_age_seconds:
         raise ConfigError("[api] idempotency_key_ttl_seconds must be above "
                           "command_max_age_seconds, so a repeat can never queue a command twice")
+    if api.observer_trades_max_rows <= 0:
+        raise ConfigError("[api] observer_trades_max_rows must be positive")
     if api.watching_max_rows <= 0:
         raise ConfigError("[api] watching_max_rows must be positive")
     if min(api.watching_closeness_decimal_places, api.flow_change_pct_decimal_places,
@@ -154,6 +159,11 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         raise ConfigError("[api] performance_max_range_days must be positive")
     if api.performance_decimal_places < 0:
         raise ConfigError("[api] performance_decimal_places must not be negative")
+    minutes = api.price_after_minutes
+    if not minutes or minutes[0] <= 0 or list(minutes) != sorted(set(minutes)):
+        raise ConfigError("[api] price_after_minutes must be strictly increasing minutes > 0")
+    if api.after_r_decimal_places < 0:
+        raise ConfigError("[api] after_r_decimal_places must not be negative")
     data = cfg.root / cfg.run.data_dir
     return ApiSettings(
         host=api.host,
@@ -179,6 +189,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         account_path=data / api.account_file,
         account_stale_seconds=api.account_stale_seconds,
         simulation=SimulationPaths.from_config(cfg),
+        observer_trades_max_rows=api.observer_trades_max_rows,
         universe=DiscoverySettings.from_config(cfg),
         watching_max_rows=api.watching_max_rows,
         closeness_places=api.watching_closeness_decimal_places,
@@ -187,6 +198,8 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         performance_max_range_days=api.performance_max_range_days,
         performance_decimal_places=api.performance_decimal_places,
         chart=ChartSettings.from_config(cfg),
+        after=AfterSettings(minutes, api.after_r_decimal_places,
+                            (cfg.root / cfg.session.calendar_file).parent),
     )
 
 
@@ -229,8 +242,10 @@ class ApiServer(ThreadingHTTPServer):
         # Shared with the other listener so both count the inbox under one lock.
         self.inbox_lock = inbox_lock or threading.Lock()
         self.page = (STATIC_DIR / "status.html").read_bytes()
-        self.history = History(settings.history)
-        self.observer_results = ObserverResults(settings.simulation)
+        self.history = History(settings.history, settings.after)
+        self.observer_results = ObserverResults(settings.simulation,
+                                                settings.observer_trades_max_rows)
+        self.skipped = SkippedAfter(settings.simulation, settings.after.minutes)
         # No source until one is attached (python -m aperture.api, or the demo's world).
         self.chart = Chart(settings.chart)
         port = settings.remote_port if remote else settings.port
@@ -689,7 +704,8 @@ class Handler(BaseHTTPRequestHandler):
                     log.path(day))
                 document: Any = contract.observers_document(day, identities, records, results)
             elif path == "/skipped":
-                document = contract.skipped_document(day, log.records(day, role=Role.ACTIVE))
+                document = self.server.skipped.document(
+                    day, today, log.records(day, role=Role.ACTIVE), log.path(day))
             elif path == "/watching":
                 document = contract.watching_document(
                     day, log.records(day, role=Role.ACTIVE), settings.watching_max_rows,

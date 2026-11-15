@@ -195,6 +195,8 @@ status_recent_commands = 10
 idempotency_key_ttl_seconds = 86400
 # Replay settings file (fill model) the API uses to simulate each observer's day result at GET /observers, the same simulation as `python -m aperture.research observers`, relative to the repo root; read by the api server.
 replay_settings_file = "config/replay.toml"
+# Most simulated trades (ENTERs, oldest first) GET /observers lists per observer; more = cut, with `trades_truncated` true; read by the api server (api/observer_results.py).
+observer_trades_max_rows = 100
 # Most rows GET /watching returns (the closest first; the answer's `total` counts them all); read by the api server.
 watching_max_rows = 8
 # Decimal places of GET /watching `closeness` (0..1, rounded down); read by the api server.
@@ -208,6 +210,10 @@ flow_change_pct_decimal_places = 2
 performance_max_range_days = 366
 # Decimal places of GET /performance numbers that come from a division (R values, win rate, averages, profit factor), rounded half-even; read by the api server.
 performance_decimal_places = 4
+# Minutes after a closed trade's exit (day-v1) and after a skipped signal (skipped-v1) at which the API shows the price, the close of the M1 bar covering that moment; strictly increasing, each > 0; the last one also bounds the window of a trade's overshoot; read by the api server (api/after.py).
+price_after_minutes = [1, 5, 15, 60]
+# Decimal places of the R quotients the API computes for display, overshoot_r in day-v1, rounded half-even; read by the api server (api/after.py).
+after_r_decimal_places = 4
 
 [market_data]
 # Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).
