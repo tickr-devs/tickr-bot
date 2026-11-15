@@ -201,3 +201,28 @@ def test_send_outcome_mirrors_the_engine_send_state():
     from aperture.engine.core import SendState
 
     assert [m.value for m in contract.SendOutcome] == [m.value for m in SendState]
+
+
+def test_a_status_written_before_a_key_was_added_still_reads():
+    """An update leaves the old bot's status file on disk; the watchdog and the API read it."""
+    raw = json.loads(EXAMPLE.read_text("utf-8"))
+    assert raw["entry_block"].pop("attention") is False
+    parsed = contract.from_jsonable(StatusV1, raw)
+    assert parsed.entry_block.attention is True  # an old block was always a warning
+    del raw["positions"]  # a key without a default stays required
+    with pytest.raises(contract.ContractError, match="missing keys: positions"):
+        contract.from_jsonable(StatusV1, raw)
+
+
+def test_a_field_default_does_not_make_its_key_optional():
+    """`symbol: null` on a flatten means close everything, so a command file that lacks the
+    key is refused, never read as that."""
+    command = contract.new_command(CommandKind.FLATTEN, T0, "test")
+    raw = contract.to_jsonable(command)
+    assert contract.from_jsonable(contract.CommandV1, raw) == command
+    del raw["symbol"]
+    with pytest.raises(contract.ContractError, match="missing keys: symbol"):
+        contract.from_jsonable(contract.CommandV1, raw)
+    del raw["schema_version"]
+    with pytest.raises(contract.ContractError, match="missing keys: symbol, schema_version"):
+        contract.from_jsonable(contract.CommandV1, raw)

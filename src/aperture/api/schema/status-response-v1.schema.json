@@ -84,11 +84,15 @@
                     },
                     "text": {
                       "type": "string"
+                    },
+                    "attention": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "cause",
-                    "text"
+                    "text",
+                    "attention"
                   ],
                   "additionalProperties": false
                 },

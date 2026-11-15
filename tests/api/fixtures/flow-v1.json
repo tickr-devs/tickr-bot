@@ -119,9 +119,9 @@
     "mismatch": null,
     "fences": [
       {
-        "kind": "foreign_exposure",
+        "kind": "foreign-position:EFGH",
         "since": "2026-11-16T15:00:00.123Z",
-        "text": "A position not opened by the bot exists."
+        "text": "position not opened by this bot"
       }
     ],
     "fences_cause": null

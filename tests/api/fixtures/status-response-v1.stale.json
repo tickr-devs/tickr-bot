@@ -15,14 +15,15 @@
     },
     "entry_stop": false,
     "entry_block": {
-      "cause": "open_position_limit",
-      "text": "One position is already open (limit 1)."
+      "cause": "own_trade_open",
+      "text": "The bot already has a trade open.",
+      "attention": false
     },
     "fences": [
       {
-        "kind": "foreign_exposure",
+        "kind": "foreign-position:EFGH",
         "since": "2026-11-16T15:00:00.123Z",
-        "text": "A position not opened by the bot exists."
+        "text": "position not opened by this bot"
       }
     ],
     "position": {

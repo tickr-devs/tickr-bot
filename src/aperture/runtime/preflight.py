@@ -46,7 +46,7 @@ from aperture.observers.loader import load_active
 from aperture.runtime import stopmarker
 from aperture.runtime.alerts import default_notifier, recipient_missing
 from aperture.runtime.launchd import check_timings
-from aperture.store import DATABASE_FILE, EnvironmentMismatch, Store
+from aperture.store import DATABASE_FILE, MIGRATIONS, EnvironmentMismatch, Store
 
 STRATEGY_FILE = "strategy.toml"
 STRATEGIES_DIR = "strategies"
@@ -267,6 +267,14 @@ def _check_database(cfg: config_module.Config) -> Check:
     try:
         store = Store.open_readonly(database)
         try:
+            version = store.schema_version
+            if version == 0:
+                return Check(CheckName.DATABASE, True, "empty: the bot creates it")
+            if version > len(MIGRATIONS):
+                return Check(CheckName.DATABASE, False,
+                             f"{database} has schema {version}, this code knows "
+                             f"{len(MIGRATIONS)}: update the code",
+                             PreflightCause.DATABASE_UNREADABLE)
             store.require_environment(cfg.environment_name)
         finally:
             store.close()

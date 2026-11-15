@@ -25,7 +25,7 @@ from aperture.api.history import (
     entry_send,
     trade_metrics,
 )
-from aperture.calendar import NEW_YORK, CalendarRefused, SessionCalendar
+from aperture.calendar import NEW_YORK, CalendarCause, CalendarRefused, SessionCalendar
 from aperture.config import Config, trading_gate
 from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
 from aperture.engine.loop import drain
@@ -502,7 +502,58 @@ class Service:
         if self.entries_off is not None:
             return api.EntryBlock("strategy_not_loaded",
                                   f"Active strategy not loaded: {self.entries_off}")
-        return NOT_WIRED if self.evaluator is None else None
+        if self.evaluator is None:
+            return NOT_WIRED
+        return self._ordinary_block()
+
+    def _ordinary_block(self) -> api.EntryBlock | None:
+        """Why admission refuses every entry right now although nothing is wrong: no session,
+        outside the entry window, or a trade of our own is already open. Reported with
+        `attention = False` so the apps can say "not now" without a warning. A calendar that
+        cannot answer is a real block."""
+        now = self.now()
+        session = self.config.session
+        if self.calendar is None:
+            return api.EntryBlock("calendar_unknown", "No trading calendar is loaded.")
+        try:
+            day = self.calendar.day_at(now)
+            times = day.session_times(session.last_entry_minutes_before_close,
+                                      session.flatten_minutes_before_close)
+        except CalendarRefused as exc:
+            if exc.cause in (CalendarCause.WEEKEND, CalendarCause.HOLIDAY):
+                return api.EntryBlock("no_session_today", "No regular session today.",
+                                      attention=False)
+            return api.EntryBlock("calendar_unknown", f"Trading calendar: {exc.cause}.")
+        if day.half_day and not session.half_days_enabled:
+            return api.EntryBlock("no_session_today",
+                                  "Half day: the bot does not trade half days.",
+                                  attention=False)
+        if not day.in_regular_session(now):
+            return api.EntryBlock(
+                "outside_regular_session",
+                f"Outside the regular session ({day.regular_open.astimezone(NEW_YORK):%H:%M}-"
+                f"{day.regular_close.astimezone(NEW_YORK):%H:%M} New York).", attention=False)
+        if now >= times.last_entry:
+            return api.EntryBlock(
+                "after_last_entry",
+                f"Past the last entry time ({times.last_entry.astimezone(NEW_YORK):%H:%M} "
+                "New York).",
+                attention=False)
+        if self._own_exposure():
+            return api.EntryBlock("own_trade_open", "The bot already has a trade open.",
+                                  attention=False)
+        return None
+
+    def _own_exposure(self) -> bool:
+        """What admission counts as our own position or working order: it refuses on either
+        before it looks at the position limit."""
+        for trade in self.engine.trades():
+            orders = self.engine.orders(trade.trade_id)
+            if self.engine.expected_quantity(orders) > 0:
+                return True
+            if any(o.live and o.leg is not Leg.STOP for o in orders):
+                return True
+        return False
 
     def _daily_money_block(self) -> api.EntryBlock | None:
         """Entries the daily ceiling refuses anyway: the room left is below

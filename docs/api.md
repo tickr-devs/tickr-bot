@@ -110,6 +110,17 @@ missing, invalid or dated in the future. `age_seconds` = `served_at - status.wri
 show first, in plain words: the single entry-blocking reason, "Entries allowed.", or why the status
 cannot be trusted. Clients should poll every `poll_seconds`.
 
+`entry_block` is `null` only when admission could take an entry now. Its `cause` is a stable
+code and `attention` says how to show it. `attention: true` is a real block (trading gate,
+operator pause, a fence: the code is the fence name with `_`, a daily ceiling, strategy not
+loaded, `calendar_unknown`). `attention: false` is an ordinary state that passes on its own:
+`no_session_today`, `outside_regular_session`, `after_last_entry`, `own_trade_open`.
+`fences[].kind` is the bot's fence name, with its key after a colon when it has one
+(`foreign-position:ABCD`, `foreign-order:<client order id>`, `broker-read-failed:open-orders`,
+`unprotected:<trade>`): match the part before the colon.
+`attention` was added after version 1 shipped: a reader takes a document without it as
+`attention: true`; the bot always writes it.
+
 Daily loss money (spec 7, check 6), exactly as the bot's admission computes it; `null` means
 unknown (a trade closed today has fills without a known price), never zero:
 `realized_loss_today_usd` is today's net realized loss (wins offset losses, never below 0),

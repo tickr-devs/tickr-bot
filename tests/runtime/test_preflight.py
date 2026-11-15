@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -305,3 +306,18 @@ def test_an_unreadable_database_blocks_the_start(config_path):
     path.write_bytes(b"not a database")
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.DATABASE_UNREADABLE and result.blocks_start
+
+
+def test_an_empty_database_file_passes_and_a_newer_schema_blocks(config_path):
+    environ = _ready(config_path)
+    path = _database(config_path, config_module.load(config_path).environment_name)
+    path.write_bytes(b"")
+    assert _run(config_path, environ).exit_code is ExitCode.READY
+    path.unlink()
+    path = _database(config_path, config_module.load(config_path).environment_name)
+    db = sqlite3.connect(path)
+    db.execute("PRAGMA user_version = 9999")
+    db.commit()
+    db.close()
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.DATABASE_UNREADABLE and "schema 9999" in result.summary()

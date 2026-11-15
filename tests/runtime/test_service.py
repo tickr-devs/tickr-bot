@@ -887,3 +887,41 @@ def test_cli_run_refuses_a_database_of_another_environment(tmp_path, monkeypatch
     store = Store.open(database, busy_timeout_seconds=0)
     assert store.run_count() == 1  # refused before any run was recorded
     store.close()
+
+
+@pytest.mark.parametrize("now, cause", [
+    (MONDAY_11, None),
+    (datetime(2026, 11, 16, 8, 0, tzinfo=NEW_YORK), "outside_regular_session"),
+    (datetime(2026, 11, 16, 15, 59, tzinfo=NEW_YORK), "after_last_entry"),
+    (datetime(2026, 11, 16, 20, 0, tzinfo=NEW_YORK), "outside_regular_session"),
+    (datetime(2026, 11, 14, 11, 0, tzinfo=NEW_YORK), "no_session_today"),   # Saturday
+    (datetime(2026, 11, 26, 11, 0, tzinfo=NEW_YORK), "no_session_today"),   # Thanksgiving
+])
+def test_status_names_the_ordinary_reasons_admission_refuses_entries(tmp_path, now, cause):
+    """The apps read `entry_block`: without these they say "entries allowed" at night."""
+    bot = Bot(tmp_path, now=now)
+    bot.service.market, bot.service.evaluator = StubMarket(), StubEvaluator()  # type: ignore[assignment]
+    bot.engine.recover()
+    bot.service.state = api.BotState.RUNNING
+    block = bot.service._ordinary_block()
+    assert (None if block is None else (block.cause, block.attention)) == (
+        None if cause is None else (cause, False))
+    if config.trading_gate(CFG).open:
+        assert bot.service.status().entry_block == block
+
+
+def test_status_says_calmly_that_the_position_limit_is_used(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    bot.service.market, bot.service.evaluator = StubMarket(), StubEvaluator()  # type: ignore[assignment]
+    bot.engine.recover()
+    bot.service.state = api.BotState.RUNNING
+    bot.engine.open_trade("ABC", D(2), D("10.00"), D("9.80"), D(1))
+    block = bot.service._ordinary_block()
+    assert block is not None and (block.cause, block.attention) == ("own_trade_open", False)
+
+
+def test_a_missing_calendar_is_a_real_block(tmp_path):
+    bot = Bot(tmp_path)
+    bot.service.calendar = None
+    block = bot.service._ordinary_block()
+    assert block is not None and (block.cause, block.attention) == ("calendar_unknown", True)
