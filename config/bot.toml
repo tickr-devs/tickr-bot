@@ -93,6 +93,10 @@ cancel_retry_spacing_seconds = 6
 cancel_not_sent_alert_seconds = 30
 # Seconds a position may lack a verified broker stop before the engine closes it; read by the engine.
 max_unprotected_seconds = 30
+# Seconds an order's Detail reads may keep failing (no answered read in between) before the engine sets the
+# detail-unreadable fence (entries blocked, alert at once): the order's state is then unknown, a stop is no longer
+# counted as verified and an entry or close no longer excuses a quantity mismatch; read by the engine.
+detail_unreadable_seconds = 30
 # Seconds after a closing order's send attempt before, still not filled, it sets the
 # exit-not-filled operator fence and alert (nothing is resent); read by the engine.
 max_exit_seconds = 30

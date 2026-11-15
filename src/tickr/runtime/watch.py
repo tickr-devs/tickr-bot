@@ -3,9 +3,10 @@
 The daily ceiling alerts once per New York day, when today's net realized loss reaches
 `[risk] max_daily_loss_usd` (from then on every entry is refused for the day).
 
-Alerts come from engine fences: a fence that needs the operator alerts at once; a fence that
-clears itself alerts only after it has lasted `fence_alert_after_seconds` (a single failed read
-is not worth a notification). Each fence alerts once while it stays set. Every outcome is
+Alerts come from engine fences: a fence that needs the operator (or `detail-unreadable`, which
+the engine sets only after its own wait) alerts at once; a fence that clears itself alerts only
+after it has lasted `fence_alert_after_seconds` (a single failed read is not worth a
+notification). Each fence alerts once while it stays set. Every outcome is
 journaled as `alert`, whether shown, suppressed or failed.
 """
 
@@ -49,7 +50,11 @@ FENCE_ALERTS: dict[str, AlertKind] = {
     Fence.FOREIGN_POSITION: AlertKind.FOREIGN_EXPOSURE,
     Fence.FOREIGN_ORDER: AlertKind.FOREIGN_EXPOSURE,
     Fence.BROKER_READ: AlertKind.BROKER_READS_FAILING,
+    Fence.DETAIL_UNREADABLE: AlertKind.UNKNOWN_ORDER_STATUS,
 }
+# Fences that alert at once although they clear themselves: the engine sets them only after
+# their own wait (`[orders] detail_unreadable_seconds`), and a stop may be gone meanwhile.
+ALERT_AT_ONCE = OPERATOR_FENCES | {Fence.DETAIL_UNREADABLE}
 STREAM_LOST_CAUSE = "stream-lost"
 
 
@@ -89,7 +94,7 @@ class Watch:
             kind = FENCE_ALERTS.get(kind_name)
             if kind is None or name in self._alerted:
                 continue
-            if kind_name not in OPERATOR_FENCES and ages.get(name, 0.0) < threshold:
+            if kind_name not in ALERT_AT_ONCE and ages.get(name, 0.0) < threshold:
                 continue
             self._alerted.add(name)
             self.alert(kind, f"{name}: {cause}")

@@ -281,7 +281,13 @@ If a read of the trade itself fails (for example Webull answers 429 because the 
 trade together read too fast): Terminal A prints nothing at that moment. The trade stops using
 that route for `rate_limit_cooldown_seconds` (60 s) and tries again. If it cannot see its stop
 working for `[orders] max_unprotected_seconds` (30 s), it closes the position and prints
-`needs the operator: unprotected-timeout:<trade>: ...`; a positions or open-orders read still
+`needs the operator: unprotected-timeout:<trade>: ...`. A stop whose Detail read keeps failing
+(not a 429) is different: the trade never cancels a stop it cannot read, so it sells nothing for
+those shares. After `[orders] detail_unreadable_seconds` (30 s) of failures it prints
+`needs the operator: detail-unreadable:<order>: ...` (entries blocked, phone alert). A stop seen
+working before keeps the trade open and the line clears itself once Detail answers again; a
+stop never seen working ends in `unprotected-timeout:<trade>: ... a stop's Detail cannot be
+read ...`, and the position waits for you: close it in the Webull app. A positions or open-orders read still
 failing at the end shows as `fence broker-read-failed: ...` in its final lines. A `not read`
 line in Terminal B or C is the script's own refusal or 429. On any of these: Ctrl-C the
 watcher, run no more script reads, watch the stop in the app until the trade ends, and keep

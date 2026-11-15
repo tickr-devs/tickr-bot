@@ -13,6 +13,7 @@ protected by guesswork.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -90,6 +91,10 @@ class Fence(StrEnum):
     # order was sent, the stop stays; only the operator clears it, so it never sells at the
     # next open with nobody deciding.
     MARKET_CLOSED = "market-closed"
+    # An order's Detail read has kept failing for `[orders] detail_unreadable_seconds`: its
+    # state is unknown. While set, the order proves nothing: a stop is not verified protection
+    # and an entry or close does not excuse a quantity mismatch. Clears on the next good read.
+    DETAIL_UNREADABLE = "detail-unreadable"
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
@@ -108,6 +113,11 @@ ORDER_OBSERVED = "order-observed"
 # `[orders] stop_held_proof_seconds` when no change was seen: a display-only record of how long
 # the shares were provably held (api/history.py, MAE/MFE); nothing in the engine reads it.
 ORDER_HELD = "order-held"
+# The first failed Detail read of an order after an answered one ({"at": engine clock, "error"}),
+# and the first answered read after such failures: how long Detail has been unreadable
+# (`detail-unreadable` fence) survives a restart.
+DETAIL_FAILED = "detail-read-failed"
+DETAIL_ANSWERED = "detail-read-answered"
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
 _WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
 # Cancel states after which a later Detail read decides whether the cancel took.
@@ -261,6 +271,12 @@ class Engine:
         # First not-sent cancel of each order since the last one that left (process memory:
         # after a restart the wait starts again, which only delays the alert).
         self._not_sent_since: dict[str, float] = {}
+        # First failed Detail read of each order since its last answered one (a cache of the
+        # journaled `detail-read-failed` row, see `_failing_since`).
+        self._detail_failing_since: dict[str, float] = {}
+        # Orders whose latest Detail read in this process was answered. The exit cancels a stop
+        # only when it is in here, so after a restart a stop is read once before its cancel.
+        self._detail_answered_ids: set[str] = set()
 
     # --- fences ----------------------------------------------------------------------------
 
@@ -661,9 +677,16 @@ class Engine:
             self._not_found(row, held)
             return
         except RateLimited:
+            # Not a failed read: our budget refused it, nothing was asked. The order keeps its
+            # place in `_detail_answered_ids` (the budget's cooldown bounds this, and the
+            # detail-budget fence blocks entries meanwhile).
             raise
-        except BrokerError:
-            return  # read failure: keep the last known state, try again next step
+        except BrokerError as exc:
+            # Keep the last known state and try again next step, but never silently: a read
+            # failing for too long fences (`_detail_failed`).
+            self._detail_failed(row, type(exc).__name__)
+            return
+        self._detail_answered(cid)
         with self.store.transaction():
             self._apply_detail(row, detail, resurrected=False)
         for fence in (Fence.UNKNOWN_ORDER, Fence.ORDER_MISSING):
@@ -677,8 +700,65 @@ class Engine:
         if detail.state.terminal:
             self._note_not_sent(cid, False)
 
+    def _detail_failed(self, row: OrderRow, error: str) -> None:
+        """A Detail read of this order failed (not the budget): past
+        `[orders] detail_unreadable_seconds` of failures with no answered read in between,
+        its state is unknown and entries are fenced; runtime.watch alerts at once. The first
+        failure of a streak is journaled with its time, so a restart keeps counting."""
+        cid = row.client_order_id
+        self._detail_answered_ids.discard(cid)
+        since = self._failing_since(cid)
+        if since is None:
+            since = self.clock()
+            self._detail_failing_since[cid] = since
+            with self.store.transaction():
+                self.store.append(DETAIL_FAILED, {"at": since, "error": error}, key=cid,
+                                  run_id=self.run_id)
+        waited = self.clock() - since
+        if waited < float(self.config.orders.detail_unreadable_seconds):
+            return
+        if row.leg is Leg.STOP and row.cancel_state in _CANCEL_AWAITING:
+            cause = (f"stop cancel sent and its Detail unreadable for {int(waited)} s: the stop "
+                     "may be gone and nothing is sold; check the position in the Webull app")
+        else:
+            cause = (f"Detail unreadable for {int(waited)} s: order state unknown; check it in "
+                     "the Webull app")
+        self._set_fence(Fence.DETAIL_UNREADABLE, cid, cause)
+
+    def _detail_answered(self, cid: str) -> None:
+        """Detail answered for this order (with the order or with "not found")."""
+        if cid in self._detail_answered_ids:
+            return  # answered before in this process, and no failure since
+        if self._failing_since(cid) is not None:
+            with self.store.transaction():
+                self.store.append(DETAIL_ANSWERED, {}, key=cid, run_id=self.run_id)
+        self._detail_failing_since.pop(cid, None)
+        self._detail_answered_ids.add(cid)
+        self._clear_fence(Fence.DETAIL_UNREADABLE, cid)
+
+    def _failing_since(self, cid: str) -> float | None:
+        """Engine-clock time of the first failed Detail read of the current streak, or None
+        when the latest read was answered (memory first, then the journal after a restart)."""
+        if cid in self._detail_failing_since:
+            return self._detail_failing_since[cid]
+        if cid in self._detail_answered_ids:
+            return None
+        rows = self.store.query(
+            "SELECT kind, body FROM journal WHERE kind IN (?, ?) AND key = ? "
+            "ORDER BY seq DESC LIMIT 1", (DETAIL_FAILED, DETAIL_ANSWERED, cid))
+        if not rows or rows[0]["kind"] != DETAIL_FAILED:
+            return None
+        since = float(json.loads(rows[0]["body"])["at"])
+        self._detail_failing_since[cid] = since
+        return since
+
+    def _detail_lost(self, row: OrderRow) -> bool:
+        """Detail of this order has been unreadable for too long: it proves nothing now."""
+        return self._has_fence(Fence.DETAIL_UNREADABLE, row.client_order_id)
+
     def _not_found(self, row: OrderRow, held: dict[str, Decimal] | None) -> None:
         cid = row.client_order_id
+        self._detail_answered(cid)
         if row.send_state is SendState.ACKNOWLEDGED:
             # The broker acknowledged it and now says it does not exist: a conflict.
             self._set_fence(Fence.ORDER_MISSING, cid, "acknowledged order not found by Detail")
@@ -856,7 +936,8 @@ class Engine:
             return
 
         # Only entry and exit orders change the quantity on purpose; a resting stop does not.
-        in_flight = entry.live or any(e.live for e in exits)
+        # One whose Detail cannot be read explains nothing: the mismatch is fenced, not excused.
+        in_flight = any(o.live and not self._detail_lost(o) for o in (entry, *exits))
         if held is None:
             pass
         elif held == expected or in_flight:
@@ -1011,12 +1092,20 @@ class Engine:
                           expected: Decimal) -> None:
         """Fence while the held quantity lacks a verified stop; exit if that lasts too long."""
         stops = [o for o in self.orders(trade.trade_id) if o.leg is Leg.STOP]
-        verified = sum((s.open_quantity for s in stops if s.verified), ZERO)
+        verified = sum((s.open_quantity for s in stops
+                        if s.verified and not self._detail_lost(s)), ZERO)
         if expected <= 0 or verified >= expected:
             self._clear_fence(Fence.UNPROTECTED, trade.trade_id)
             return
         self._set_fence(Fence.UNPROTECTED, trade.trade_id,
                         f"verified stop covers {verified} of {expected}")
+        # Stops last seen working, with no cancel of ours, whose Detail is only unreadable now:
+        # they are not proof (the fences above alert), but closing for them would cancel a
+        # likely working stop and end the day's entries over a read outage. No exit for them.
+        unreadable = sum((s.open_quantity for s in stops if s.verified and not s.cancelling
+                          and self._detail_lost(s)), ZERO)
+        if verified + unreadable >= expected:
+            return
         age = self._fence_age(f"{Fence.UNPROTECTED}:{trade.trade_id}") or 0.0
         exiting = trade.state is TradeState.EXITING or any(e.live for e in exits)
         if age >= float(self.config.orders.max_unprotected_seconds) and not exiting:
@@ -1028,9 +1117,19 @@ class Engine:
                 # False when an exit was already requested earlier in this pass (stop-rejected),
                 # and telling the operator to sell by hand then would double the sale.
                 refused = self._has_fence(Fence.EXIT_REFUSED, trade.trade_id)
-                text = (f"no verified stop for {int(age)} s and the closing order was refused "
-                        "before: close the position in the Webull app" if refused else
-                        f"no verified stop for {int(age)} s; exiting")
+                # A stop whose latest Detail read failed is not cancelled by the exit
+                # (`_exit_step`), so the close waits for its Detail: say so, not "exiting".
+                unread = any(s.live and self._failing_since(s.client_order_id) is not None
+                             for s in stops)
+                if refused:
+                    text = (f"no verified stop for {int(age)} s and the closing order was "
+                            "refused before: close the position in the Webull app")
+                elif unread:
+                    text = (f"no verified stop for {int(age)} s and a stop's Detail cannot be "
+                            "read: that stop is kept, nothing is sold; close the position in "
+                            "the Webull app")
+                else:
+                    text = f"no verified stop for {int(age)} s; exiting"
                 self._set_fence(Fence.UNPROTECTED_TIMEOUT, trade.trade_id, text)
 
     def _exit_step(self, trade: TradeRow, entry: OrderRow, stops: list[OrderRow],
@@ -1073,10 +1172,15 @@ class Engine:
             return  # keep our stops; a sale could add to an untracked stop of the replace
         live_stops = [s for s in stops if s.live]
         for stop in live_stops:
+            if stop.client_order_id not in self._detail_answered_ids:
+                # Spec 9: a cancel only Detail can confirm is sent only after this process's
+                # latest Detail read of the stop was answered; while it fails the stop keeps
+                # protecting and still counts as covering, so nothing is sold for its shares.
+                # A read failing too long sets the detail-unreadable fence, which alerts.
+                continue
             self._cancel(stop)
-        # Sell only what no live stop still covers: shares whose stop is gone are not left
-        # waiting for a stop that cannot be confirmed cancelled (for example its Detail is
-        # unreadable). Stops plus this sale never exceed the agreed quantity.
+        # Sell only what no live stop still covers (a stop leaves `live` only when Detail shows
+        # it ended). Stops plus this sale never exceed the agreed quantity.
         covered = sum((s.open_quantity for s in live_stops), ZERO)
         uncovered = expected - covered
         if uncovered <= 0:

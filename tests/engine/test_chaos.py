@@ -223,7 +223,9 @@ class Chaos:
         self.seed = seed
         # `full` adds persistent unreadable Detail of single orders and the check that a stop
         # the engine cancelled is followed by a close or a new stop, or explained by a fence
-        # on this trade (tests/engine/test_bug_detail_unreadable.py: both find known bugs).
+        # on this trade (tests/engine/test_bug_detail_unreadable.py). A stop whose Detail dies
+        # between its last answered read and its cancel can still end bare, fenced
+        # `detail-unreadable` and never guessed: that fence explains it.
         self.full = full
         self.bare_ticks = 0
         self.rng = random.Random(seed)

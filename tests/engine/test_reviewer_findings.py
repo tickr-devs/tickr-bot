@@ -128,8 +128,6 @@ class StopDetailUnreadable(TeardownWatch):
         return order
 
 
-@pytest.mark.xfail(strict=True, reason="bug A: after max_unprotected_seconds the exit cancels "
-                   "the working (unreadable) stop and never sends the close: bare position")
 def test_bug_a_unreadable_stop_is_not_cancelled_into_a_bare_position(store):
     broker = StopDetailUnreadable()
     engine = make(store, broker)
@@ -140,6 +138,9 @@ def test_bug_a_unreadable_stop_is_not_cancelled_into_a_bare_position(store):
     assert f"{Fence.UNPROTECTED}:{trade}" in engine.fences()
     loop(engine, 50)  # 180 s: past max_unprotected_seconds, the exit was requested
     assert engine.trade(trade).exit_requested == "unprotected-too-long"
+    # The text says the stop is kept and the close waits, not "exiting".
+    assert "a stop's Detail cannot be read" in engine.fences()[
+        f"{Fence.UNPROTECTED_TIMEOUT}:{trade}"]
     assert held(broker) == {"ABC": D(2)}
     assert_unreadable_stop_kept(broker, engine, D(2))
 
@@ -188,8 +189,6 @@ class FillDetailUnreadable(FakeBroker):
         return order
 
 
-@pytest.mark.xfail(strict=True, reason="bug C: shares held at the broker that Detail cannot "
-                   "explain, with the entry still live in records: no stop and no fence")
 def test_bug_c_unexplained_shares_with_unreadable_entry_detail_are_fenced(store):
     broker = FillDetailUnreadable()
     engine = make(store, broker)

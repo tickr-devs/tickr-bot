@@ -150,7 +150,7 @@ def run_until_closed(engine: Engine, *, sleep: Callable[[float], None],
         fences = engine.fences()
         for name, cause in sorted(fences.items()):
             shown = name.partition(":")[0] in OPERATOR_FENCES or name.startswith(
-                f"{Fence.STOP_HELD}:")
+                (f"{Fence.STOP_HELD}:", f"{Fence.DETAIL_UNREADABLE}:"))
             if shown and (name, cause) not in notified:
                 notified.add((name, cause))
                 notify(f"needs the operator: {name}: {cause}")

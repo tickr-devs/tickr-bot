@@ -72,6 +72,16 @@ def test_self_clearing_fence_alerts_only_when_it_lasts(tmp_path):
     assert rig.kinds() == [AlertKind.BROKER_READS_FAILING]
 
 
+def test_detail_unreadable_alerts_at_once(tmp_path):
+    """The engine sets it only after its own wait (`[orders] detail_unreadable_seconds`), and a
+    stop may be gone meanwhile: no second wait before the owner is told."""
+    rig = Rig(tmp_path)
+    rig.fence(Fence.DETAIL_UNREADABLE, "c1")
+    rig.watch.check()
+    assert rig.kinds() == [AlertKind.UNKNOWN_ORDER_STATUS]
+    assert not rig.engine.clear_operator_fence("detail-unreadable:c1")  # clears itself
+
+
 def test_a_fence_set_again_after_clearing_alerts_again(tmp_path):
     rig = Rig(tmp_path)
     rig.fence(Fence.EXIT_REFUSED, "t1")

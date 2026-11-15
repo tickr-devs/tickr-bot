@@ -121,6 +121,14 @@ def test_stop_held_proof_interval_must_be_positive(tmp_path, value):
         config.load(_copy(tmp_path, text))
 
 
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_detail_unreadable_wait_must_be_positive(tmp_path, value):
+    text = re.sub(r"(?m)^detail_unreadable_seconds = \S+", f"detail_unreadable_seconds = {value}",
+                  BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="detail_unreadable_seconds"):
+        config.load(_copy(tmp_path, text))
+
+
 def test_account_stale_must_exceed_the_reconcile_interval(tmp_path):
     text = re.sub(r"(?m)^account_stale_seconds = \S+", "account_stale_seconds = 10",
                   BOT.read_text("utf-8"))

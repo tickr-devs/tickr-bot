@@ -51,12 +51,20 @@ def test_every_fixed_fence_text_the_engine_writes_is_recognized():
      {"covered": "120", "held": "100"}),
     ("unprotected-timeout:t1", "no verified stop for 31 s; exiting", "unprotected_exiting",
      {"seconds": "31"}),
+    ("unprotected-timeout:t1", "no verified stop for 31 s and a stop's Detail cannot be read: "
+     "that stop is kept, nothing is sold; close the position in the Webull app",
+     "unprotected_stop_unreadable", {"seconds": "31"}),
     ("unprotected-timeout:t1", "no verified stop for 31 s and the closing order was refused "
      "before: close the position in the Webull app", "unprotected_close_by_hand",
      {"seconds": "31"}),
     ("cancel-unknown:c1", "cancel unknown; waiting for Detail", "cancel_outcome_unknown",
      {"outcome": "unknown"}),
     ("cancel-unknown:c1", "crashed during cancel", "cancel_crashed", {}),
+    ("detail-unreadable:c1", "Detail unreadable for 31 s: order state unknown; check it in "
+     "the Webull app", "detail_unreadable", {"seconds": "31"}),
+    ("detail-unreadable:c1", "stop cancel sent and its Detail unreadable for 30 s: the stop "
+     "may be gone and nothing is sold; check the position in the Webull app",
+     "stop_cancel_unconfirmed", {"seconds": "30"}),
     ("cancel-not-sent:c1", "no cancel could be sent for 62 s (request budget)",
      "cancel_not_sent", {"seconds": "62"}),
     ("foreign-position:EFGH", "position not opened by this bot", "foreign_position", {}),
