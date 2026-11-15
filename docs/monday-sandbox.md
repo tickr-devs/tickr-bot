@@ -56,6 +56,17 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    launchctl bootout gui/$(id -u)/local.tickr.bot
    launchctl print-disabled gui/$(id -u) | grep tickr.bot   # shows it disabled
    ```
+   **The demo day job stays unloaded during the live session** («Во время живой сессии задача
+   демо-дня `local.tickr.demo` выгружена»). It never talks to Webull, but it runs a second,
+   simulated bot on this Mac and serves the apps' "Demo day"; on Monday neither is wanted.
+   Unload it until after the close (16:00), then load it again if you want the demo back:
+   ```sh
+   launchctl bootout gui/$(id -u)/local.tickr.demo           # no output, or "No such process"
+   launchctl print gui/$(id -u)/local.tickr.demo 2>&1 | head -1   # "Could not find service": unloaded
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8766/demo/status   # 503: nothing serves the demo
+   # after the close, to bring it back:
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.demo.plist
+   ```
 
 ## Monday
 

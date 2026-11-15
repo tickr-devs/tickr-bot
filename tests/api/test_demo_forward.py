@@ -191,3 +191,24 @@ def test_demo_not_running_is_unavailable(local_api, upstream):
     resp, payload = request(local_api, "GET", "/demo/status")
     assert resp.status == 503
     assert "local.tickr.demo" in doc(payload)["cause"]
+
+
+@pytest.mark.parametrize("path", [
+    "/demo/../status", "/demo/..", "/demo/./status", "/demo/x/../../commands/flatten",
+    "/demo/%2e%2e/status", "/demo/%2E%2E/status", "/demo/.%2e/status", "/demo/%252e%252e/status",
+    "/demo/x%2f..%2fstatus", "/demo/x%5c..%5cstatus", "/demo/x\\..\\status",
+])
+def test_a_path_that_could_step_out_is_refused_never_forwarded(local_api, upstream, path):
+    resp, payload = request(local_api, "GET", path)
+    assert resp.status == 400 and doc(payload)["error"] == "bad_request"
+    resp, payload = request(local_api, "POST", path, body={})
+    assert resp.status == 400 and doc(payload)["error"] == "bad_request"
+    assert upstream.seen == []
+
+
+@pytest.mark.parametrize("path", ["/demo/days/2026-11-13", "/demo/bars?symbol=MVLD&date=2026-11-13",
+                                  "/demo/a..b", "/demo/status?x=..%2f.."])
+def test_ordinary_paths_with_dots_still_go_to_the_demo(local_api, upstream, path):
+    resp, _ = request(local_api, "GET", path)
+    assert resp.status == 200
+    assert upstream.seen[-1]["path"] == path[len("/demo"):]

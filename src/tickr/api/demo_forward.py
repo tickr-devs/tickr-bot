@@ -18,6 +18,7 @@ from __future__ import annotations
 import http.client
 from dataclasses import dataclass
 from decimal import Decimal
+from urllib.parse import unquote
 
 DEMO_ROOT = "/demo"  # the prefix the apps put in front of every demo request (protocol constant)
 DEMO_PREFIX = DEMO_ROOT + "/"
@@ -46,6 +47,25 @@ class DemoUnavailable(Exception):
 
 def is_demo_path(path: str) -> bool:
     return path == DEMO_ROOT or path.startswith(DEMO_PREFIX)
+
+
+# Path segments that would step out of the path they are in, and characters that would start a
+# new segment, once percent-decoded.
+DOT_SEGMENTS = (".", "..")
+SEPARATORS = ("/", "\\")
+
+
+def stays_in_demo(path: str) -> bool:
+    """True when no segment of `path` (without its query), decoded as often as it decodes
+    (`%2e`, `%252e`, ...), is `.` or `..` or hides a separator (`%2f`, `%5c`): such a request
+    could mean another path than it shows, so it is refused, never forwarded or normalised."""
+    for segment in path.split("/"):
+        decoded = segment
+        while (once := unquote(decoded)) != decoded:
+            decoded = once
+        if decoded in DOT_SEGMENTS or any(s in decoded for s in SEPARATORS):
+            return False
+    return True
 
 
 def target(raw_path: str) -> str:

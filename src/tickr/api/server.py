@@ -66,6 +66,7 @@ from tickr.api.demo_forward import (
     DemoUnavailable,
     forward,
     is_demo_path,
+    stays_in_demo,
 )
 from tickr.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
 from tickr.api.jobs import JobsSettings, jobs_document
@@ -783,6 +784,10 @@ class Handler(BaseHTTPRequestHandler):
         settings = self.server.settings
         if settings.demo_port == 0:
             self._error("not_found", "this API forwards to no demo day ([api] demo_port is 0)")
+            return
+        if not stays_in_demo(self._path()):
+            self._error("bad_request", "a path under /demo/ must not hold . or .. segments or "
+                        "encoded separators")
             return
         try:
             answer = forward(settings.host, settings.demo_port, settings.demo_timeout_seconds,
