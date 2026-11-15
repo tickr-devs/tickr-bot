@@ -147,6 +147,19 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
         assert skipped["signals"] and {(s["symbol"], s["admission"])
                                        for s in skipped["signals"]} == {("CCC", "refused")}
         assert all(s["refusal_cause"] and s["entry_price"] for s in skipped["signals"])
+        # The Overview's live flow and "Watching closely".
+        flow = _get(server, "/flow")
+        assert {c["symbol"] for c in flow["chips"]} == {"AAA", "BBB", "CCC"}
+        assert all(c["change_pct"] is not None and c["excluded_cause"] is None
+                   for c in flow["chips"])
+        stages = {s["stage"]: s["symbols"] for s in flow["stages"]}
+        assert stages["universe"] == stages["screeners"] == ["AAA", "BBB", "CCC"]
+        assert stages["risk"] == stages["order"] == stages["stop"] == ["AAA", "BBB"]
+        assert {s["state"] for s in flow["stops"]} == {"verified"}
+        assert flow["reconcile"]["agreement"] == "match"
+        watching = _get(server, "/watching")
+        assert 0 < len(watching["rows"]) <= cfg.api.watching_max_rows
+        assert all(r["verdict"] in ("WATCH", "IGNORE") for r in watching["rows"])
         observers = _get(server, "/observers")["observers"]
         assert [(o["name"], o["result_cause"]) for o in observers] == [
             ("price-action-v2", None)]

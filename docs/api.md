@@ -83,6 +83,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first. |
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
 | GET | `/skipped?date=<YYYY-MM-DD>` | `200` `skipped-v1`: every ENTER of the active strategy that date (default today) that did not become a position (admission `refused` or `not_evaluated`), oldest first, with checks. |
+| GET | `/flow?date=<YYYY-MM-DD>` | `200` `flow-v1`: the Overview's live flow that date (default today): screener chips and the pipeline stages from screeners to verified broker stops, with reconciliation. |
+| GET | `/watching?date=<YYYY-MM-DD>` | `200` `watching-v1`: the symbols the active strategy is closest to entering on that date (default today), closest first, capped by `[api] watching_max_rows`. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
@@ -336,7 +338,86 @@ records are left out. A date without a decision file answers with an empty list.
 
 A missing, repeated, extra, malformed or non-ticker parameter is `400 bad_request`; a malformed
 line for the symbol (`/decisions`), an observer line (`/observers`) or an active line
-(`/skipped`) of that day is `503 unavailable` with the file, line and cause.
+(`/skipped`, `/watching`, `/flow`) of that day is `503 unavailable` with the file, line and cause.
+
+### GET /flow (read-only)
+
+`/flow?date=` (date optional, default today in New York) is the Overview's live flow. Every
+value is derived from what the bot already records; nothing is written, the broker is never
+read. Archived (`.gz`) files are read the same way; a last line still being written today is
+not read yet.
+
+`chips`: one per symbol a screener listed that day, from the captured `screener.jsonl`, most
+recently listed first (within a discovery pass: gainers, losers, top actives, each by rank).
+- `sources`: every screener that listed it that day: `GAINERS` `LOSERS` `TOP_ACTIVES`.
+- `change_pct`: `(price - pre_close) / pre_close x 100` of its latest captured provider row,
+  rounded half-even to `[api] flow_change_pct_decimal_places`. `null` when the row lacks a
+  number for either key or `pre_close` is not positive; `change_cause` then says which
+  (otherwise `null`). The provider's own `change_ratio` is not used: its unit is unproven.
+- `excluded_cause`: why the universe filter refused it in the latest pass that listed it, as
+  `CAUSE: measured` (`SECURITY_TYPE_NOT_ALLOWED: ETF`,
+  `SECURITY_TYPE_UNKNOWN: missing`, `CONFLICTING_ROWS: ...`); `null` when it passed. The bot
+  journals only each pass's totals, so the API applies the discovery code's own `merge` and
+  `universe_cause` again to every captured pass (the rows of one screener read share a receipt
+  time; a pass reads gainers, losers, top actives in that order), with the allowed lists of
+  `[market_data]` as the API loaded them. Liquidity refusals (spread, dollar volume) and
+  halts are not recorded per symbol and are not shown.
+
+`stages`: always six, in this order, each `{stage, count, symbols}` (distinct symbols, sorted):
+- `screeners`: every chip; `universe`: the chips with `excluded_cause` `null`;
+- `strategy`: symbols with a decision of the active strategy (role `active`) that day;
+- `risk`: symbols with an active `ENTER` whose admission is `taken`;
+- `order`: symbols of trades of this environment opened that day whose entry order filled
+  (the bot database);
+- `stop`: those whose stop is `verified` (below).
+
+`stops`: one per trade in `order`, oldest first (then by trade id), `{trade_id, symbol,
+state}`. `state` is its own enum, not status-v1's stop state:
+- `verified`: a broker Detail read journaled one of the trade's stop orders working after the
+  first entry fill read (the same rows as `stop_confirmed_after_seconds`);
+- `pending`: no such read yet, and the trade is still open and the date is today;
+- `never_verified`: no such read, and the trade is closed (a rejected stop on a flattened
+  trade, a stop that filled before any read saw it working) or the date is past;
+- `unknown`: its journal rows cannot be read.
+The live state of an open position's stop (`missing` included) is in `/status`.
+
+`reconcile`: the bot keeps only its latest reconciliation and status, so only today has them.
+`agreement` (`match` / `mismatch`), `read_at` and `mismatch` come from the account file when
+its `read_at` is that day; `fences` (status-v1 shape) from the status file when it was written
+that day. Otherwise each is `null` and `agreement_cause` / `fences_cause` says why (no file,
+invalid file, written on another day, or a past day).
+
+A capture file with a malformed line is `503 unavailable` (`capture file unreadable: ...`), as
+is an unreadable database.
+
+### GET /watching (read-only)
+
+`/watching?date=` (date optional, default today in New York) is "Watching closely": from the
+decision file, the latest record per symbol of the active strategy (role `active`) that day,
+left out when its verdict is `ENTER`, `HOLD` or `EXIT` (entering, or in a position), so a past
+day shows the state at the close. Each row: `symbol`, `at` (bar start), `strategy`, `verdict`
+(explain-v1 enum), `decisive_check` (explain-v1 check shape: the first failed check in the
+order evaluated, the same as explain-v1 `first_failed_check`; `null` when every recorded check
+passed, as for a `WATCH` made without a quote), `closeness`, `closeness_cause`,
+`quote_age_seconds` and `quote_age_cause`.
+
+`closeness` (0..1, rounded down to `[api] watching_closeness_decimal_places`) says how near the
+decisive check is to passing:
+- operator `>` or `>=` (passes once measured rises to the threshold): `measured / threshold`,
+  defined for `threshold > 0` and `measured >= 0`;
+- operator `<` or `<=` (passes once measured falls to the threshold):
+  `threshold / measured`, defined for `measured > 0` and `threshold >= 0`.
+1 is at the threshold. It is `null` and `closeness_cause` says why for a yes/no check
+(operator `is`, nothing measured), an operator without a direction, values outside the domain
+above, a record whose failed check already meets its threshold, or no failed check
+(`every recorded check passed`).
+
+`quote_age_seconds` is always `null` with `quote_age_cause`
+`not recorded: decision records hold no quote time`: the decision file does not keep the quote
+the strategy saw.
+
+Rows are closest first (`null` closeness last), then by symbol, at most
+`[api] watching_max_rows`; `total` counts every row before the cap.
 
 ### Commands
 

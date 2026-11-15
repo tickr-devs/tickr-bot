@@ -173,6 +173,12 @@ status_recent_commands = 10
 idempotency_key_ttl_seconds = 86400
 # Replay settings file (fill model) the API uses to simulate each observer's day result at GET /observers, the same simulation as `python -m aperture.research observers`, relative to the repo root; read by the api server.
 replay_settings_file = "config/replay.toml"
+# Most rows GET /watching returns (the closest first; the answer's `total` counts them all); read by the api server.
+watching_max_rows = 8
+# Decimal places of GET /watching `closeness` (0..1, rounded down); read by the api server.
+watching_closeness_decimal_places = 4
+# Decimal places of GET /flow screener chips' `change_pct` (percent, rounded half-even); read by the api server.
+flow_change_pct_decimal_places = 2
 # Longest date range GET /performance accepts, in New York calendar days counting both ends; longer = 400 bad_request; read by the api server.
 performance_max_range_days = 366
 # Decimal places of GET /performance numbers that come from a division (R values, win rate, averages, profit factor), rounded half-even; read by the api server.

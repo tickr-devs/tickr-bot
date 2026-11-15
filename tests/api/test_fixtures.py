@@ -19,6 +19,7 @@ from aperture.api.contract import (
     AccountOrder,
     AccountPosition,
     AccountResponseV1,
+    Agreement,
     BarsV1,
     BarV1,
     CheckV1,
@@ -33,6 +34,14 @@ from aperture.api.contract import (
     DecisionV1,
     ErrorV1,
     ExplainV1,
+    Fence,
+    FlowChipV1,
+    FlowReconcileV1,
+    FlowStage,
+    FlowStageV1,
+    FlowStopState,
+    FlowStopV1,
+    FlowV1,
     ObserverDecisionV1,
     ObserversV1,
     ObserverV1,
@@ -44,8 +53,11 @@ from aperture.api.contract import (
     SkippedV1,
     StatusResponseV1,
     StrategyId,
+    WatchingRowV1,
+    WatchingV1,
 )
 from aperture.api.performance import performance
+from aperture.data.base import ScreenerKind
 from aperture.research.records import Admission
 from aperture.strategy.base import Verdict
 
@@ -181,6 +193,47 @@ def documents() -> dict[str, object]:
                                 CheckV1("ask_above_trigger", Decimal("5.31"), ">",
                                         Decimal("5.25"), True, ""),)))),
         "skipped-v1.empty": SkippedV1(DAY - timedelta(days=3), ()),
+        "flow-v1": FlowV1("sandbox", DAY, (
+            FlowChipV1("ABCD", (ScreenerKind.GAINERS, ScreenerKind.TOP_ACTIVES),
+                       Decimal("12.40"), None, None),
+            FlowChipV1("SPY", (ScreenerKind.TOP_ACTIVES,), Decimal("0.31"), None,
+                       "SECURITY_TYPE_NOT_ALLOWED: ETF"),
+            FlowChipV1("WXYZ", (ScreenerKind.GAINERS,), None, "the captured row has no "
+                       "pre_close", None),
+            FlowChipV1("EFGH", (ScreenerKind.LOSERS,), Decimal("-8.05"), None, None)), (
+            FlowStageV1(FlowStage.SCREENERS, 4, ("ABCD", "EFGH", "SPY", "WXYZ")),
+            FlowStageV1(FlowStage.UNIVERSE, 3, ("ABCD", "EFGH", "WXYZ")),
+            FlowStageV1(FlowStage.STRATEGY, 3, ("ABCD", "EFGH", "WXYZ")),
+            FlowStageV1(FlowStage.RISK, 3, ("ABCD", "EFGH", "WXYZ")),
+            FlowStageV1(FlowStage.ORDER, 3, ("ABCD", "EFGH", "WXYZ")),
+            FlowStageV1(FlowStage.STOP, 1, ("WXYZ",))), (
+            FlowStopV1("t-0001", "WXYZ", FlowStopState.VERIFIED),
+            FlowStopV1("t-0002", "EFGH", FlowStopState.NEVER_VERIFIED),
+            FlowStopV1("t-0003", "ABCD", FlowStopState.PENDING)),
+            FlowReconcileV1(Agreement.MATCH, None, T0, None, (
+                Fence("foreign_exposure", T0, "A position not opened by the bot exists."),),
+                None)),
+        "flow-v1.empty": FlowV1("sandbox", DAY - timedelta(days=3), (), tuple(
+            FlowStageV1(stage, 0, ()) for stage in FlowStage), (), FlowReconcileV1(
+            None, "only the latest reconciliation is kept; it is not recorded per day", None,
+            None, None, "only the latest status is kept; it is not recorded per day")),
+        "watching-v1": WatchingV1(DAY, 3, (
+            WatchingRowV1("ABCD", T0.replace(microsecond=0), StrategyId("price-action-v1", "1"),
+                          Verdict.WATCH, CheckV1("ask_above_trigger", Decimal("12.33"), ">",
+                                                 Decimal("12.35"), False, ""),
+                          Decimal("0.9983"), None, None,
+                          "not recorded: decision records hold no quote time"),
+            WatchingRowV1("WXYZ", T0.replace(microsecond=0), StrategyId("price-action-v1", "1"),
+                          Verdict.IGNORE, CheckV1("spread_ratio", Decimal("0.0031"), "<=",
+                                                  Decimal("0.002"), False, ""),
+                          Decimal("0.6451"), None, None,
+                          "not recorded: decision records hold no quote time"),
+            WatchingRowV1("EFGH", T0.replace(microsecond=0), StrategyId("price-action-v1", "1"),
+                          Verdict.IGNORE, CheckV1("quote_valid", None, "is", None, False,
+                                                  "own symbol, 0 < bid <= ask"),
+                          None, "quote_valid: a yes/no check has no measured value", None,
+                          "not recorded: decision records hold no quote time"))),
+        "watching-v1.empty": WatchingV1(DAY - timedelta(days=3), 0, ()),
         "performance-v1": performance("sandbox", DAY - timedelta(days=6), DAY, (
             _closed("t-0001", -3, "100", "50"), _closed("t-0002", -3, "-50", "50"),
             _closed("t-0003", 0, "0", "50"), _closed("t-0004", 0, "-25", "50"),

@@ -1,0 +1,130 @@
+{
+  "environment": "sandbox",
+  "day": "2026-11-16",
+  "chips": [
+    {
+      "symbol": "ABCD",
+      "sources": [
+        "GAINERS",
+        "TOP_ACTIVES"
+      ],
+      "change_pct": "12.40",
+      "change_cause": null,
+      "excluded_cause": null
+    },
+    {
+      "symbol": "SPY",
+      "sources": [
+        "TOP_ACTIVES"
+      ],
+      "change_pct": "0.31",
+      "change_cause": null,
+      "excluded_cause": "SECURITY_TYPE_NOT_ALLOWED: ETF"
+    },
+    {
+      "symbol": "WXYZ",
+      "sources": [
+        "GAINERS"
+      ],
+      "change_pct": null,
+      "change_cause": "the captured row has no pre_close",
+      "excluded_cause": null
+    },
+    {
+      "symbol": "EFGH",
+      "sources": [
+        "LOSERS"
+      ],
+      "change_pct": "-8.05",
+      "change_cause": null,
+      "excluded_cause": null
+    }
+  ],
+  "stages": [
+    {
+      "stage": "screeners",
+      "count": 4,
+      "symbols": [
+        "ABCD",
+        "EFGH",
+        "SPY",
+        "WXYZ"
+      ]
+    },
+    {
+      "stage": "universe",
+      "count": 3,
+      "symbols": [
+        "ABCD",
+        "EFGH",
+        "WXYZ"
+      ]
+    },
+    {
+      "stage": "strategy",
+      "count": 3,
+      "symbols": [
+        "ABCD",
+        "EFGH",
+        "WXYZ"
+      ]
+    },
+    {
+      "stage": "risk",
+      "count": 3,
+      "symbols": [
+        "ABCD",
+        "EFGH",
+        "WXYZ"
+      ]
+    },
+    {
+      "stage": "order",
+      "count": 3,
+      "symbols": [
+        "ABCD",
+        "EFGH",
+        "WXYZ"
+      ]
+    },
+    {
+      "stage": "stop",
+      "count": 1,
+      "symbols": [
+        "WXYZ"
+      ]
+    }
+  ],
+  "stops": [
+    {
+      "trade_id": "t-0001",
+      "symbol": "WXYZ",
+      "state": "verified"
+    },
+    {
+      "trade_id": "t-0002",
+      "symbol": "EFGH",
+      "state": "never_verified"
+    },
+    {
+      "trade_id": "t-0003",
+      "symbol": "ABCD",
+      "state": "pending"
+    }
+  ],
+  "reconcile": {
+    "agreement": "match",
+    "agreement_cause": null,
+    "read_at": "2026-11-16T15:00:00.123Z",
+    "mismatch": null,
+    "fences": [
+      {
+        "kind": "foreign_exposure",
+        "since": "2026-11-16T15:00:00.123Z",
+        "text": "A position not opened by the bot exists."
+      }
+    ],
+    "fences_cause": null
+  },
+  "api_version": 1
+}

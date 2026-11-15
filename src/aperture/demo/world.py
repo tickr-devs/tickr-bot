@@ -238,8 +238,11 @@ class Feed(FakeMarketData):
         # Ranked like a gainers list: by today's change, best first (losers: worst first).
         symbols = sorted(self.world.screeners[kind], key=self.world.change,
                          reverse=kind is not ScreenerKind.LOSERS)
+        # Provider row keys as Webull names them; the world's previous close is today's open.
         return [ScreenerRow(kind, rank, f"id-{symbol}", symbol, SCREENER_EXCHANGE,
-                            SCREENER_CURRENCY, SCREENER_TYPE, {"symbol": symbol})
+                            SCREENER_CURRENCY, SCREENER_TYPE, {
+                                "symbol": symbol, "price": str(self.world.price(symbol)),
+                                "pre_close": str(self.world.today[symbol][0].open)})
                 for rank, symbol in enumerate(symbols, start=1)]
 
     def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
