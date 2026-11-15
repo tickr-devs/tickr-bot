@@ -18,9 +18,10 @@
 # It refuses, before changing anything: off macOS; without .venv; on a New York weekday between
 # 04:00 and 20:00 (extended hours); while the old bot job runs or the old lock records a live pid;
 # with a trade not closed in the old database; when both old and new databases, or both old and
-# new config folders, exist. After unloading the old jobs it refuses while any process still
-# holds the old lock or has the old database open (then nothing is scheduled: stop that process
-# and run the script again). Every step is skipped when already done, so a rerun is safe.
+# new config folders, exist. Before unloading anything it closes the broker token folders
+# (chmod 700) and the env file (chmod 600) to other accounts. After unloading the old jobs it
+# refuses while any process still holds the old lock or has the old database open (then nothing
+# is scheduled: stop that process and run the script again). Every step is skipped when already done, so a rerun is safe.
 #
 # The repository folder may keep its old name; if you rename it, recreate .venv first (its
 # scripts hold absolute paths). The iOS app has a new bundle id and link scheme (tickr://): pair
@@ -105,6 +106,21 @@ fi
 if "$PY" -c 'import importlib.metadata as m; m.version("aperture")' >/dev/null 2>&1; then
   uninstall
 fi
+
+# 2b. Secret files closed to other accounts, before anything is unloaded: preflight refuses a
+#     broker token folder with any group or other permission (token-dir-open), and render-launchd
+#     (step 7) refuses such an env file. Permissions only, never contents; safe to repeat.
+TOKEN_DIRS=$("$PY" -c '
+import tomllib
+envs = tomllib.load(open("config/bot.toml", "rb"))["environments"]
+print("\n".join(e["token_dir"] for e in envs.values()))
+') || refuse "cannot read [environments.*] token_dir from config/bot.toml"
+for dir in $TOKEN_DIRS; do
+  if [ -d "$DATA/$dir" ]; then run chmod 700 "$DATA/$dir"; fi
+done
+for f in "$OLD_ENV_DIR/env" "$NEW_ENV_DIR/env"; do
+  if [ -f "$f" ]; then run chmod 600 "$f"; fi
+done
 
 # 3. Unload the old launchd jobs and keep their plists aside.
 for job in $JOBS; do
