@@ -25,6 +25,10 @@
       "stream": "fresh"
     },
     "recent_commands": [],
+    "realized_loss_today_usd": null,
+    "open_reservations_usd": "0",
+    "daily_room_usd": null,
+    "positions": [],
     "schema_version": 1
   },
   "age_seconds": "0.250",

@@ -110,6 +110,13 @@ def test_min_daily_room_must_sit_below_the_ceiling(tmp_path, value):
         config.load(_copy(tmp_path, text))
 
 
+def test_account_stale_must_exceed_the_reconcile_interval(tmp_path):
+    text = re.sub(r"(?m)^account_stale_seconds = \S+", "account_stale_seconds = 10",
+                  BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="account_stale_seconds"):
+        config.load(_copy(tmp_path, text))
+
+
 def test_unknown_environment_refused(tmp_path):
     text = re.sub(r'(?m)^environment = ".*"', 'environment = "staging"', BOT.read_text("utf-8"))
     with pytest.raises(config.ConfigError, match="not one of"):

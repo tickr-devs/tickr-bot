@@ -2,7 +2,7 @@
 
 The bot is a headless service. Clients (the status page now, the macOS app later) talk only to this
 local API. The API process is separate from the bot and never talks to the broker: it serves the
-status file the bot writes and drops operator commands into an inbox the bot reads.
+status and account files the bot writes and drops operator commands into an inbox the bot reads.
 
 Run it: `python -m aperture.api --config config/bot.toml`. Settings are in `config/bot.toml` `[api]`.
 
@@ -76,6 +76,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first. |
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
+| GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
@@ -96,6 +97,41 @@ missing, invalid or dated in the future. `age_seconds` = `served_at - status.wri
 `stale` is true when the age exceeds `[api] status_stale_seconds`. `summary` is the one line to
 show first, in plain words: the single entry-blocking reason, "Entries allowed.", or why the status
 cannot be trusted. Clients should poll every `poll_seconds`.
+
+Daily loss money (spec 7, check 6), exactly as the bot's admission computes it; `null` means
+unknown (a trade closed today has fills without a known price), never zero:
+`realized_loss_today_usd` is today's net realized loss (wins offset losses, never below 0),
+`open_reservations_usd` the planned loss of every open trade, and `daily_room_usd` =
+`[risk] max_daily_loss_usd` - realized - reserved (may be negative). Entries are refused while the
+room is below `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot
+tracks; `position` is its first element or `null`, kept for older clients.
+
+### GET /account
+
+`account` is the bot's `account-v1` document, written (temp file + fsync + rename, like status)
+after every successful reconciliation: a broker read of open orders and positions, at startup
+and every `[orders] reconcile_interval_seconds`. A failed read writes nothing, so the age grows; a failed write
+is journaled once (`account-write-failed`) and the bot carries on. `read_at` is the time the file
+was written, just after the reads. `age_seconds` = `served_at - account.read_at`; `stale` is true when the age exceeds
+`[api] account_stale_seconds`. A missing, invalid or future-dated file is `503 unavailable` with
+the cause.
+
+- `positions`: every non-zero position the broker listed (`avg_price` null when the broker row
+  does not show it).
+- `orders`: every open order the broker listed. `side`, `type` and `status` are the bot's names
+  (`BUY`/`SELL`; `MARKET`/`LIMIT`/`STOP_LOSS`; `ACCEPTED`, `PARTIALLY_FILLED`, ...). `ours` is
+  true when the client order id is one of the bot's own. `limit_price` is not read yet and is
+  always null.
+- `matches_records` is true only when the broker's positions equal what the bot's open trades
+  expect and its open orders are exactly the bot's live orders (the same test as the day-end
+  record), AND no fence says otherwise: foreign position or order, quantity mismatch,
+  resurrected, unknown send outcome, order missing, unknown order status, over-protected.
+  `mismatch` lists those fences' causes (`name: cause; ...`), or one plain sentence when only
+  the comparison fails. `resurrected` is an operator fence that stays until it is cleared, so
+  `mismatch` may describe something the broker has already resolved.
+- `equity_usd` and `buying_power_usd` are always null in this version: the adapter does not read
+  the account balance (the balance response shape is unproven, docs/webull-facts.md).
+- No account id or broker order id is ever in the document.
 
 ### History (read-only)
 
@@ -142,6 +178,8 @@ parsed); a missing, repeated, extra or non-ticker parameter is
 
 - Status: after each loop step that changes what `/status` shows, the bot calls
   `contract.write_status(path, StatusV1(...))` (temp file + fsync + rename).
+- Account: after each successful reconciliation the bot calls
+  `contract.write_account(path, AccountV1(...))` (`runtime/account.py`), the same way.
 - Commands: the bot calls `contract.read_commands(inbox, now, command_max_age_seconds)`. Each item
   is a command or a refusal (unreadable file, expired, dated in the future). For each item the bot
   journals it in one transaction, acts if it is a command, then calls `contract.retire_command`

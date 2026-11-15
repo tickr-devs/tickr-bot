@@ -6,6 +6,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from aperture.api.contract import (
+    AccountOrder,
+    AccountPosition,
+    AccountV1,
     BotState,
     CommandKind,
     CommandOutcome,
@@ -24,6 +27,8 @@ from aperture.api.contract import (
 )
 
 T0 = datetime(2026, 11, 16, 15, 0, 0, 123000, tzinfo=UTC)
+POSITION = Position("ABCD", Decimal("10"), Decimal("12.34"), T0,
+                    Stop(StopState.VERIFIED, Decimal("11.90"), "ap-0001-s"))
 
 
 def status(written_at: datetime = T0, **overrides) -> StatusV1:
@@ -38,8 +43,7 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
         entry_block=EntryBlock("open_position_limit",
                                "One position is already open (limit 1)."),
         fences=(Fence("foreign_exposure", T0, "A position not opened by the bot exists."),),
-        position=Position("ABCD", Decimal("10"), Decimal("12.34"), T0,
-                          Stop(StopState.VERIFIED, Decimal("11.90"), "ap-0001-s")),
+        position=POSITION,
         trades_today=(Trade("WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0, T0,
                             "stop", Decimal("-1.60")),),
         result_today_gross_usd=Decimal("-1.60"),
@@ -47,6 +51,25 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
         recent_commands=(CommandRecord("0b6f7c1e-2f0a-4c55-9d1e-6a1d2f3e4b5c",
                                        CommandKind.ENTRY_STOP_ON, T0, T0,
                                        CommandOutcome.DONE, None),),
+        realized_loss_today_usd=Decimal("1.60"),
+        open_reservations_usd=Decimal("50"),
+        daily_room_usd=Decimal("248.40"),
+        positions=(POSITION,),
     )
     values.update(overrides)
     return StatusV1(**values)
+
+
+def account(read_at: datetime = T0, **overrides) -> AccountV1:
+    values = dict(
+        read_at=read_at,
+        equity_usd=None,
+        buying_power_usd=None,
+        positions=(AccountPosition("ABCD", Decimal("10"), Decimal("12.34")),),
+        orders=(AccountOrder("ap-0001-s", "ABCD", "SELL", "STOP_LOSS", "ACCEPTED",
+                             Decimal("10"), None, Decimal("11.90"), True),),
+        matches_records=True,
+        mismatch=None,
+    )
+    values.update(overrides)
+    return AccountV1(**values)

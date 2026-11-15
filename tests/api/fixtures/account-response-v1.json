@@ -1,0 +1,34 @@
+{
+  "served_at": "2026-11-16T15:00:04.123Z",
+  "account": {
+    "read_at": "2026-11-16T15:00:00.123Z",
+    "equity_usd": null,
+    "buying_power_usd": null,
+    "positions": [
+      {
+        "symbol": "ABCD",
+        "quantity": "10",
+        "avg_price": "12.34"
+      }
+    ],
+    "orders": [
+      {
+        "client_order_id": "ap-0001-s",
+        "symbol": "ABCD",
+        "side": "SELL",
+        "type": "STOP_LOSS",
+        "status": "ACCEPTED",
+        "quantity": "10",
+        "limit_price": null,
+        "stop_price": "11.90",
+        "ours": true
+      }
+    ],
+    "matches_records": true,
+    "mismatch": null,
+    "schema_version": 1
+  },
+  "age_seconds": "4.000",
+  "stale": false,
+  "api_version": 1
+}

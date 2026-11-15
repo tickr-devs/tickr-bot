@@ -9,7 +9,8 @@
     "position_notional_cap_usd": "2500",
     "max_daily_loss_usd": "300",
     "max_open_positions": 1,
-    "max_quote_age_seconds": "5"
+    "max_quote_age_seconds": "5",
+    "min_daily_room_usd": "10"
   },
   "session": {
     "timezone": "America/New_York",

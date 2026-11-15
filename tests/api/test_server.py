@@ -304,6 +304,7 @@ def test_settings_endpoint_shows_the_loaded_config(api, settings):
     cfg = config.load(ROOT / "config" / "bot.toml")
     assert body["risk"]["max_daily_loss_usd"] == str(cfg.risk.max_daily_loss_usd)
     assert body["risk"]["max_open_positions"] == cfg.risk.max_open_positions
+    assert body["risk"]["min_daily_room_usd"] == str(cfg.risk.min_daily_room_usd)
     assert body["session"]["flatten_minutes_before_close"] == (
         cfg.session.flatten_minutes_before_close)
     assert body["active_strategy"] == cfg.strategy.active

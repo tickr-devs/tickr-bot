@@ -1,0 +1,44 @@
+{
+  "read_at": "2026-11-16T15:00:00.123Z",
+  "equity_usd": null,
+  "buying_power_usd": null,
+  "positions": [
+    {
+      "symbol": "ABCD",
+      "quantity": "10",
+      "avg_price": "12.34"
+    },
+    {
+      "symbol": "EFGH",
+      "quantity": "5",
+      "avg_price": null
+    }
+  ],
+  "orders": [
+    {
+      "client_order_id": "ap-0001-s",
+      "symbol": "ABCD",
+      "side": "SELL",
+      "type": "STOP_LOSS",
+      "status": "ACCEPTED",
+      "quantity": "10",
+      "limit_price": null,
+      "stop_price": "11.90",
+      "ours": true
+    },
+    {
+      "client_order_id": "manual-1",
+      "symbol": "EFGH",
+      "side": "BUY",
+      "type": "LIMIT",
+      "status": "ACCEPTED",
+      "quantity": "5",
+      "limit_price": null,
+      "stop_price": null,
+      "ours": false
+    }
+  ],
+  "matches_records": false,
+  "mismatch": "foreign-position:EFGH: position not opened by this bot; foreign-order:manual-1: open order not in our records",
+  "schema_version": 1
+}

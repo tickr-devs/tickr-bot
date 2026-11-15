@@ -64,6 +64,22 @@
         "cause": null
       }
     ],
+    "realized_loss_today_usd": "1.60",
+    "open_reservations_usd": "50",
+    "daily_room_usd": "248.40",
+    "positions": [
+      {
+        "symbol": "ABCD",
+        "quantity": "10",
+        "entry_price": "12.34",
+        "opened_at": "2026-11-16T15:00:00.123Z",
+        "stop": {
+          "state": "verified",
+          "price": "11.90",
+          "client_order_id": "ap-0001-s"
+        }
+      }
+    ],
     "schema_version": 1
   },
   "age_seconds": "42.500",

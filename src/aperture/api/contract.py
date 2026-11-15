@@ -2,6 +2,8 @@
 
 Two files on disk decouple the bot from the API process:
 - the bot writes `StatusV1` to `<data_dir>/<status_file>` with `write_status` (temp file + rename);
+- the bot writes `AccountV1` to `<data_dir>/<account_file>` with `write_account` after each
+  successful broker read of positions and open orders (reconciliation), the same way;
 - the API writes one `CommandV1` per operator command into `<data_dir>/<commands_dir>/inbox/`
   with `write_command`; the bot reads them with `read_commands`, journals each one, then moves it
   out of the inbox with `retire_command`.
@@ -33,6 +35,7 @@ from aperture.strategy.base import Verdict
 API_VERSION = 1
 STATUS_SCHEMA_VERSION = 1
 COMMAND_SCHEMA_VERSION = 1
+ACCOUNT_SCHEMA_VERSION = 1
 
 INBOX = "inbox"
 PROCESSED = "processed"
@@ -184,12 +187,58 @@ class StatusV1:
     entry_stop: bool
     entry_block: EntryBlock | None  # None = entries allowed
     fences: tuple[Fence, ...]
-    position: Position | None
+    position: Position | None  # the first of `positions`, kept for older clients
     trades_today: tuple[Trade, ...]
     result_today_gross_usd: Decimal
     freshness: Freshness
     recent_commands: tuple[CommandRecord, ...]
+    # Daily loss rule (spec 7, check 6) as the bot computes it; null = unknown, never zero.
+    realized_loss_today_usd: Decimal | None  # net realized loss today, >= 0
+    open_reservations_usd: Decimal | None  # planned loss of every open trade
+    daily_room_usd: Decimal | None  # ceiling - realized - reserved; may be negative
+    positions: tuple[Position, ...]  # every open position the bot tracks
     schema_version: int = _const(STATUS_SCHEMA_VERSION)
+
+
+# ---------------------------------------------------------------- account written by the bot
+
+
+@dataclass(frozen=True)
+class AccountPosition:
+    symbol: str
+    quantity: Decimal
+    avg_price: Decimal | None  # null when the broker row does not show it
+
+
+@dataclass(frozen=True)
+class AccountOrder:
+    """One open order as the broker listed it. `ours`: its client id is one of the bot's."""
+
+    client_order_id: str | None
+    symbol: str
+    side: str
+    type: str
+    status: str
+    quantity: Decimal
+    limit_price: Decimal | None
+    stop_price: Decimal | None
+    ours: bool
+
+
+@dataclass(frozen=True)
+class AccountV1:
+    """What the bot's latest successful broker read of positions and open orders showed, and
+    whether it agreed with the bot's records. Written by the bot, never by the API; no
+    account ids."""
+
+    read_at: datetime
+    equity_usd: Decimal | None
+    buying_power_usd: Decimal | None
+    positions: tuple[AccountPosition, ...]
+    orders: tuple[AccountOrder, ...]
+    matches_records: bool
+    mismatch: str | None  # what disagrees, in plain words; null when matches_records
+    schema_version: int = _const(ACCOUNT_SCHEMA_VERSION)
 
 
 # ---------------------------------------------------------------- commands
@@ -218,6 +267,18 @@ class StatusResponseV1:
     unavailable_cause: str | None
     summary: str  # the single entry-blocking reason in plain words, or "Entries allowed."
     poll_seconds: Decimal
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class AccountResponseV1:
+    """GET /account: the bot's account-v1 document with its age. A missing or invalid file is
+    503 unavailable instead."""
+
+    served_at: datetime
+    account: AccountV1
+    age_seconds: Decimal
+    stale: bool
     api_version: int = _const(API_VERSION)
 
 
@@ -332,6 +393,7 @@ class RiskSettings:
     max_daily_loss_usd: Decimal
     max_open_positions: int
     max_quote_age_seconds: Decimal
+    min_daily_room_usd: Decimal
 
 
 @dataclass(frozen=True)
@@ -418,6 +480,8 @@ SCHEMA_TYPES: dict[str, type] = {
     "bars-v1": BarsV1,
     "settings-v1": SettingsV1,
     "explain-v1": ExplainV1,
+    "account-v1": AccountV1,
+    "account-response-v1": AccountResponseV1,
 }
 
 
@@ -683,6 +747,16 @@ def write_status(path: Path | str, status: StatusV1) -> None:
 def read_status(path: Path | str) -> StatusV1:
     """Raises FileNotFoundError when the bot has not written a status yet, else ContractError."""
     return loads(StatusV1, Path(path).read_bytes())
+
+
+def write_account(path: Path | str, account: AccountV1) -> None:
+    """Called by the bot after each successful broker read of positions and open orders."""
+    write_atomic(Path(path), dumps(account))
+
+
+def read_account(path: Path | str) -> AccountV1:
+    """Raises FileNotFoundError when the bot has not written one yet, else ContractError."""
+    return loads(AccountV1, Path(path).read_bytes())
 
 
 def new_command(kind: CommandKind, now: datetime, source: str) -> CommandV1:

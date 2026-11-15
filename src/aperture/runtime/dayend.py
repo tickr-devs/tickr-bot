@@ -43,7 +43,9 @@ def own_left(engine: Engine, view: BrokerView) -> tuple[list[str], list[str]]:
     return positions, orders
 
 
-def _agree(engine: Engine, view: BrokerView) -> bool:
+def records_agree(engine: Engine, view: BrokerView) -> bool:
+    """The broker's positions equal what our open trades expect, symbol by symbol, and its
+    open orders are exactly our live orders. Also used by the account file (account.py)."""
     expected: dict[str, Decimal] = {}
     for trade in engine.trades():
         quantity = engine.expected_quantity(engine.orders(trade.trade_id))
@@ -69,7 +71,7 @@ def day_end_record(engine: Engine, view: BrokerView | None, now: datetime) -> di
         return record
     positions, orders = own_left(engine, view)
     broker_flat = not any(p.quantity != 0 for p in view.positions) and not view.open_orders
-    agree = _agree(engine, view)
+    agree = records_agree(engine, view)
     record.update(
         broker_flat=broker_flat,
         own_positions=len(positions), own_open_orders=len(orders),

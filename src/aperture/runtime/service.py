@@ -24,6 +24,7 @@ from aperture.config import Config, trading_gate
 from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
 from aperture.engine.loop import drain
 from aperture.engine.manual import flatten_deadline
+from aperture.runtime.account import account_document
 from aperture.runtime.alerts import AlertKind
 from aperture.runtime.dayend import DayEnd
 from aperture.runtime.protection import LatencyLog, busy
@@ -47,6 +48,7 @@ EVALUATION_SKIPPED = "evaluation-skipped"  # one row per protect-first episode
 EVALUATION_SLOW = "evaluation-slow"
 LATENCY_FAILED = "protection-latency-failed"
 STRATEGY_NOT_LOADED = "strategy-not-loaded"
+ACCOUNT_WRITE_FAILED = "account-write-failed"  # one row per stretch of failed writes
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
@@ -57,13 +59,14 @@ class ServicePaths:
     status: Path
     inbox: Path
     processed: Path
+    account: Path | None = None  # None: no account file is written (tools, some tests)
 
     @classmethod
     def from_config(cls, config: Config) -> ServicePaths:
         data = config.root / config.run.data_dir
         commands = data / config.api.commands_dir
         return cls(data / config.api.status_file, commands / api.INBOX,
-                   commands / api.PROCESSED)
+                   commands / api.PROCESSED, data / config.api.account_file)
 
 
 def strategy_id(config: Config) -> api.StrategyId:
@@ -119,6 +122,7 @@ class Service:
         self.day_end = DayEnd(engine, calendar, watch)
         self.latency: LatencyLog | None = LatencyLog(engine)
         self._skipping: str | None = None  # cause of the current protect-first episode
+        self._account_failing = False  # the last account file write failed (journaled once)
 
     # --- commands --------------------------------------------------------------------------
 
@@ -396,7 +400,8 @@ class Service:
                                       "WHERE trade_id = ?", (trade_id,))[0]
         return _iso(row["opened_at"])
 
-    def _position(self) -> api.Position | None:
+    def _positions(self) -> tuple[api.Position, ...]:
+        found = []
         for trade in self.engine.trades():
             orders = self.engine.orders(trade.trade_id)
             quantity = self.engine.expected_quantity(orders)
@@ -404,9 +409,19 @@ class Service:
             if quantity <= 0 or entry_price is None:
                 continue
             stops = [o for o in orders if o.leg is Leg.STOP]
-            return api.Position(trade.symbol, quantity, entry_price,
-                                self._opened_at(trade.trade_id), self._stop(trade, stops))
-        return None
+            found.append(api.Position(trade.symbol, quantity, entry_price,
+                                      self._opened_at(trade.trade_id), self._stop(trade, stops)))
+        return tuple(found)
+
+    def _daily_money(self) -> tuple[Decimal | None, Decimal, Decimal | None]:
+        """(net realized loss today, open reservations, room) as admission computes them;
+        loss and room are None when today's money is unknown."""
+        from aperture.runtime import entries  # entries imports this module
+
+        now = self.now()
+        reserved = sum((t.planned_loss_usd for t in self.engine.trades()), ZERO)
+        return (entries.realized_loss_today(self.engine, now), reserved,
+                entries.daily_loss_room(self.engine, self.config, now))
 
     def _trades_today(self) -> tuple[api.Trade, ...]:
         return trades_today(self.engine, self.now())
@@ -422,6 +437,8 @@ class Service:
         gate = trading_gate(self.config)
         fences = self.engine.fence_rows()
         trades = self._trades_today()
+        positions = self._positions()
+        loss, reserved, room = self._daily_money()
         return api.StatusV1(
             written_at=self.now(), bot_state=self.state, run_id=self.engine.run_id,
             environment=self.config.environment_name,
@@ -429,15 +446,37 @@ class Service:
             entry_stop=any(name == Fence.ENTRY_STOP for name, _, _ in fences),
             entry_block=self._entry_block(gate.open, gate.cause, fences),
             fences=tuple(api.Fence(name, _iso(set_at), cause) for name, cause, set_at in fences),
-            position=self._position(), trades_today=trades,
+            position=positions[0] if positions else None, trades_today=trades,
             result_today_gross_usd=sum((t.result_gross_usd for t in trades), ZERO),
             freshness=(self.market.freshness(self.last_broker_read_at)
                        if self.market is not None
                        else api.Freshness(self.last_broker_read_at, None, api.StreamHealth.OFF)),
-            recent_commands=self._recent_commands())
+            recent_commands=self._recent_commands(),
+            realized_loss_today_usd=loss, open_reservations_usd=reserved,
+            daily_room_usd=room, positions=positions)
 
     def write_status(self) -> None:
         api.write_status(self.paths.status, self.status())
+
+    def write_account(self) -> None:
+        """After a successful reconciliation: what it read from the broker (docs/api.md)."""
+        if self.paths.account is None:
+            return
+        document = account_document(self.engine, self.now())
+        if document is None:
+            return
+        try:
+            api.write_account(self.paths.account, document)
+        except OSError as exc:
+            # A display file: its failure never ends the loop. Journaled once per stretch.
+            if not self._account_failing:
+                with self.engine.store.transaction():
+                    self.engine.store.append(ACCOUNT_WRITE_FAILED,
+                                             {"error": type(exc).__name__, "detail": str(exc)},
+                                             run_id=self.engine.run_id)
+            self._account_failing = True
+            return
+        self._account_failing = False
 
     # --- loop ------------------------------------------------------------------------------
 
@@ -445,6 +484,8 @@ class Service:
         ok = self.engine.reconcile() if reconcile else True
         if not reconcile:
             self.engine.step()
+        elif ok:
+            self.write_account()
         if ok and not any(n == Fence.BROKER_READ for n in self.engine.fences()):
             self.last_broker_read_at = self.now()
 
@@ -459,6 +500,7 @@ class Service:
         self.engine.recover()
         if not any(n == Fence.BROKER_READ for n in self.engine.fences()):
             self.last_broker_read_at = self.now()
+            self.write_account()
         self.state = api.BotState.RUNNING
         last_reconcile = monotonic()
         while not should_stop():

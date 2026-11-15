@@ -35,6 +35,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from aperture.api import contract
 from aperture.api.contract import (
+    AccountResponseV1,
     CommandAcceptedV1,
     CommandKind,
     ContractError,
@@ -87,6 +88,8 @@ class ApiSettings:
     history: HistoryPaths
     decisions: Path  # <decisions_dir>/<environment>, read by GET /explain
     shown: SettingsV1  # served at GET /settings
+    account_path: Path  # the bot's account-v1 file, served at GET /account
+    account_stale_seconds: Decimal
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -128,6 +131,8 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         history=HistoryPaths.from_config(cfg),
         decisions=DecisionLog.from_config(cfg).directory,
         shown=shown_settings(cfg),
+        account_path=data / api.account_file,
+        account_stale_seconds=api.account_stale_seconds,
     )
 
 
@@ -143,7 +148,8 @@ def shown_settings(cfg: Config) -> SettingsV1:
             position_notional_cap_usd=Decimal(risk.position_notional_cap_usd),
             max_daily_loss_usd=Decimal(risk.max_daily_loss_usd),
             max_open_positions=risk.max_open_positions,
-            max_quote_age_seconds=Decimal(risk.max_quote_age_seconds)),
+            max_quote_age_seconds=Decimal(risk.max_quote_age_seconds),
+            min_daily_room_usd=Decimal(risk.min_daily_room_usd)),
         session=SessionSettings(
             timezone=session.timezone,
             last_entry_minutes_before_close=session.last_entry_minutes_before_close,
@@ -207,6 +213,22 @@ class ApiServer(ThreadingHTTPServer):
             poll_seconds=self.settings.poll_seconds,
         )
 
+    def account_response(self) -> AccountResponseV1 | ErrorV1:
+        """The bot's account-v1 document with its age; an `unavailable` error when the file
+        is missing, invalid or dated in the future."""
+        now = self.clock()
+        try:
+            account = contract.read_account(self.settings.account_path)
+        except FileNotFoundError:
+            return ErrorV1("unavailable", "the bot has not written an account file")
+        except (ContractError, OSError) as exc:
+            return ErrorV1("unavailable", f"account file is invalid ({exc})")
+        age = contract.seconds_between(account.read_at, now)
+        if age < 0:
+            return ErrorV1("unavailable", "account file is dated in the future")
+        return AccountResponseV1(served_at=now, account=account, age_seconds=age,
+                                 stale=age > self.settings.account_stale_seconds)
+
     def enqueue(self, kind: CommandKind) -> CommandAcceptedV1 | ErrorV1:
         with self.inbox_lock:
             if contract.count_inbox(self.settings.inbox) >= self.settings.max_pending_commands:
@@ -230,7 +252,7 @@ _ERROR_CODES = {
     "internal": 500, "unavailable": 503, "unauthorized": 401,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
-              "/explain")
+              "/explain", "/account")
 DAY_PREFIX = "/days/"
 
 
@@ -372,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.settings.shown)
             elif path == "/explain":
                 self._explain()
+            elif path == "/account":
+                self._account()
             elif path in COMMAND_ROUTES:
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
             elif path == "/days" or path.startswith(DAY_PREFIX) or path == "/bars":
@@ -437,6 +461,19 @@ class Handler(BaseHTTPRequestHandler):
             self._error("unavailable", str(exc))
             return
         self._json(200, document)
+
+    def _account(self) -> None:
+        """GET /account: the bot's latest broker read of positions and open orders."""
+        try:
+            _query(urlsplit(self.path).query, frozenset())
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        result = self.server.account_response()
+        if isinstance(result, ErrorV1):
+            self._error(result.error, result.cause)
+        else:
+            self._json(200, result)
 
     def _explain(self) -> None:
         """GET /explain?symbol=: the latest active-strategy decision recorded today."""

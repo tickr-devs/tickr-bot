@@ -141,6 +141,10 @@ remote_token_bytes = 32
 remote_pairing_file = "remote-pairing-link"
 # Status file the bot writes and the API serves, relative to data_dir; read by the bot's status writer and the api server.
 status_file = "status.json"
+# Account file the bot writes after each successful broker read of positions and open orders (reconciliation) and the API serves at GET /account, relative to data_dir; read by the bot's account writer and the api server.
+account_file = "account.json"
+# Account document older than this many seconds is shown as stale; keep it above [orders] reconcile_interval_seconds; read by the api server.
+account_stale_seconds = 30
 # Command folder, relative to data_dir; the API writes into <commands_dir>/inbox, the bot consumes from there; read by the api server and the bot.
 commands_dir = "commands"
 # Status older than this many seconds is shown as stale (bot may be down); read by the api server.
