@@ -462,6 +462,32 @@ def test_day_trade_carries_its_entry_send(paths):
     assert trade.entry_cause is None
 
 
+def test_day_trade_names_the_strategy_that_opened_it(paths):
+    _journaled_trade(paths)
+    store, _ = _timed_store(paths)
+    with store.transaction():
+        store.append("trade-opened", {"symbol": "ABCD", "strategy": "price-action-v1",
+                                      "strategy_version": "2"}, key="t1")
+    store.close()
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert trade.strategy == contract.StrategyId("price-action-v1", "2")
+
+
+@pytest.mark.parametrize("body", [
+    {"symbol": "ABCD"},  # a manual trade, or one opened before strategies were journaled
+    {"symbol": "ABCD", "strategy": "price-action-v1"},  # malformed: shown null, never guessed
+])
+def test_day_trade_without_a_readable_strategy_shows_null(paths, body):
+    _journaled_trade(paths)
+    store, _ = _timed_store(paths)
+    with store.transaction():
+        store.append("trade-opened", body, key="t1")
+    store.close()
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert trade.strategy is None
+    assert trade.stop_confirmed_after_seconds == Decimal("2.250")  # other parts unaffected
+
+
 def test_an_unreadable_entry_row_shows_null_entry_and_keeps_the_metrics(paths):
     _journaled_trade(paths)
     store, clock = _timed_store(paths)

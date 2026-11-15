@@ -217,6 +217,21 @@ def test_flatten_command_closes_through_the_exit_path(tmp_path):
     (done,) = bot.service.status().trades_today
     assert (done.quantity, done.exit_reason, done.result_gross_usd) == (
         D(2), "operator-flatten", D(0))
+    assert done.strategy is None  # opened by hand here: no strategy journaled
+
+
+def test_a_closed_trade_in_status_names_the_strategy_that_opened_it(tmp_path):
+    bot = Bot(tmp_path)
+    t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1),
+                              strategy=("price-action-v1", "3"))
+    bot.broker.fill(bot.engine.orders(t)[0].client_order_id, D(2), D(10))
+    for _ in range(3):
+        bot.engine.step()
+    bot.service.state = api.BotState.RUNNING
+    bot.command(api.CommandKind.FLATTEN)
+    assert bot.run(10)
+    (done,) = bot.service.status().trades_today
+    assert done.strategy == api.StrategyId("price-action-v1", "3")
 
 
 def test_flatten_refused_while_a_close_waits_for_the_operator(tmp_path):

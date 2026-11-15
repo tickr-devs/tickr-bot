@@ -63,7 +63,7 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
                             EntrySend("ap-0002-e", T0, T0 + timedelta(milliseconds=2),
                                       SendOutcome.UNKNOWN, SendOutcome.ACKNOWLEDGED, 1,
                                       T0 + timedelta(seconds=4)),
-                            None),),
+                            None, StrategyId("price-action-v1", "1")),),
         result_today_gross_usd=Decimal("-1.60"),
         freshness=Freshness(T0, None, StreamHealth.FRESH),
         recent_commands=(CommandRecord("0b6f7c1e-2f0a-4c55-9d1e-6a1d2f3e4b5c",

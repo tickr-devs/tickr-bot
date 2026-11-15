@@ -73,6 +73,10 @@
         "filled_at": "2026-11-16T15:00:04.123Z"
       },
       "entry_cause": null,
+      "strategy": {
+        "name": "price-action-v1",
+        "version": "1"
+      },
       "entry_cause_codes": []
     }
   ],

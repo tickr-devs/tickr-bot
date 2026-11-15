@@ -224,6 +224,10 @@ tracks; `position` is its first element or `null`, kept for older clients.
 Each `trades_today` entry also has `planned_loss_usd` (1 R as recorded when the trade was opened)
 and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE are only in
 `day-v1`: the bot does not read capture files to write its status.
+`strategy` (in `trades_today` and in `day-v1` `trades`) is `{name, version}` of the strategy whose
+decision opened the trade, as journaled in its `trade-opened` row; `null` for a manual trade, a
+trade opened before the bot journaled it, or a row it cannot read (display only, never guessed).
+In status it was added after version 1 shipped: a reader takes an entry without it as `null`.
 
 Every `positions` element (so also `position`) and every `trades_today` entry has `entry` and
 `entry_cause`, the first link of the protection chain (see "Entry send" below).

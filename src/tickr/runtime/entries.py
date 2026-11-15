@@ -222,7 +222,8 @@ class EntryDesk:
                     self.engine.open_trade(decision.symbol, decision.quantity,
                                            inputs.limit_price, inputs.stop_price,
                                            result.planned_loss_usd,
-                                           entry_low_price=decision.entry_low)
+                                           entry_low_price=decision.entry_low,
+                                           strategy=(decision.strategy, decision.version))
                     admission = RecordAdmission.TAKEN
                 except EntryRefused as exc:
                     admission, cause = RecordAdmission.REFUSED, f"{ENGINE_REFUSED}: {exc.cause}"

@@ -25,6 +25,7 @@ from tickr.api.history import (
     closed_trades,
     entry_send,
     trade_metrics,
+    trade_strategy,
 )
 from tickr.calendar import (
     NEW_YORK,
@@ -112,7 +113,7 @@ def _iso(text: str) -> datetime:
 def _status_trade(t: api.DayTrade) -> api.Trade:
     return api.Trade(t.symbol, t.quantity, t.entry_price, t.exit_price, t.opened_at,
                      t.closed_at, t.exit_reason, t.result_gross_usd, t.planned_loss_usd,
-                     t.stop_confirmed_after_seconds, t.entry, t.entry_cause)
+                     t.stop_confirmed_after_seconds, t.entry, t.entry_cause, t.strategy)
 
 
 def trades_today(engine: Engine, now: datetime) -> tuple[api.Trade, ...]:
@@ -155,6 +156,7 @@ class Service:
         self._disagreed = False
         # Stop confirmation time of each closed trade shown in status (final once closed).
         self._stop_timing: dict[str, Decimal | None] = {}
+        self._strategy: dict[str, api.StrategyId | None] = {}  # per closed trade, display
         # Entry send of each trade shown, once final (trade closed, or its journal unreadable).
         self._entry: dict[str, tuple[api.EntrySend, str | None]] = {}
 
@@ -674,8 +676,13 @@ class Service:
                             key=trade.trade_id, run_id=self.engine.run_id)
             self._stop_timing[trade.trade_id] = timing
         entry, cause = self._entry_send(trade.trade_id, final=True)
+        if trade.trade_id not in self._strategy:
+            try:
+                self._strategy[trade.trade_id] = trade_strategy(self.engine.store, trade.trade_id)
+            except Exception:  # noqa: BLE001 - display only, as above; null, never a stop
+                self._strategy[trade.trade_id] = None
         return replace(trade, stop_confirmed_after_seconds=self._stop_timing[trade.trade_id],
-                       entry=entry, entry_cause=cause)
+                       entry=entry, entry_cause=cause, strategy=self._strategy[trade.trade_id])
 
     def _entry_send(self, trade_id: str, *, final: bool) -> tuple[api.EntrySend, str | None]:
         """As `_shown`: display only, never ends the loop; an unreadable journal shows null

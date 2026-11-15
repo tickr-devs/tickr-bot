@@ -254,6 +254,9 @@ class Trade:
     stop_confirmed_after_seconds: Decimal | None
     entry: EntrySend
     entry_cause: str | None  # why a field of `entry` is null; null when none is
+    # The strategy whose decision opened the trade; null for a manual trade or one opened
+    # before the bot journaled it. Added after version 1 shipped.
+    strategy: StrategyId | None = _added_later(None)
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
 
@@ -483,6 +486,9 @@ class DayTrade:
     overshoot_usd: Decimal | None
     overshoot_r: Decimal | None
     overshoot_cause: str | None
+    # As in `Trade`: the strategy whose decision opened it, null when not journaled. Always
+    # written; the default only spares paths that never show it (the daily-loss check).
+    strategy: StrategyId | None = None
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
     prices_after_cause_codes: tuple[ReasonV1, ...] = _reasons_of("prices_after_cause")

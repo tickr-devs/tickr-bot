@@ -61,6 +61,9 @@ class TradeState(StrEnum):
     CLOSED = "closed"
 
 
+TRADE_OPENED = "trade-opened"  # journal row written with a trade; api/history reads it
+
+
 class Fence(StrEnum):
     """Reasons that block NEW entries. Never block exits, cancels or protection."""
 
@@ -402,14 +405,16 @@ class Engine:
     def open_trade(self, symbol: str, quantity: Decimal, limit_price: Decimal,
                    stop_price: Decimal, planned_loss_usd: Decimal,
                    stop_percent_below_fill: Decimal | None = None,
-                   entry_low_price: Decimal | None = None) -> str:
+                   entry_low_price: Decimal | None = None,
+                   strategy: tuple[str, str] | None = None) -> str:
         """Record and send a LIMIT BUY entry. Refuses (EntryRefused) instead of guessing.
 
         With `stop_percent_below_fill`, the stop is re-derived from the first observed average
         fill price (rounded down to the cent) before the first stop is placed; `stop_price`
         is the bound computed from the limit and is never loosened. `entry_low_price` is the
         bottom of the strategy's price window, kept so a resting entry can be cancelled once
-        the quote leaves the window (`cancel_entry`)."""
+        the quote leaves the window (`cancel_entry`). `strategy` (name, version) of the decision
+        that opened it is journaled for display; None for a manual trade."""
         gate = self.gate()
         if not gate.open:
             raise EntryRefused(f"trading gate closed: {gate.cause}")
@@ -436,10 +441,12 @@ class Engine:
                  None if stop_percent_below_fill is None else str(stop_percent_below_fill),
                  str(planned_loss_usd), self.store.stamp(),
                  None if entry_low_price is None else str(entry_low_price)))
-            self.store.append("trade-opened", {
+            self.store.append(TRADE_OPENED, {
                 "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
                 "stop_price": stop_price, "planned_loss_usd": planned_loss_usd,
-                "entry_low_price": entry_low_price},
+                "entry_low_price": entry_low_price,
+                **({} if strategy is None else {"strategy": strategy[0],
+                                                "strategy_version": strategy[1]})},
                 key=trade_id, run_id=self.run_id)
             cid = self._write_intent(trade_id, Leg.ENTRY, symbol, Side.BUY, OrderType.LIMIT,
                                      quantity, limit_price=limit_price)

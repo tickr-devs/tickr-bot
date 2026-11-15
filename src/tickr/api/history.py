@@ -29,6 +29,7 @@ from tickr.data.capture import BARS_FILE, CaptureError, read_captured_bars
 from tickr.engine.core import (
     ORDER_HELD,
     ORDER_OBSERVED,
+    TRADE_OPENED,
     Leg,
     OrderRow,
     SendState,
@@ -213,6 +214,26 @@ def _send_outcome(states: list[SendState]) -> SendState | None:
     return states[-1] if states else None
 
 
+def trade_strategy(store: Store, trade_id: str) -> api.StrategyId | None:
+    """The strategy (name, version) whose decision opened the trade, from its `trade-opened`
+    row; None for a manual trade or one opened before the bot journaled it. Raises
+    MalformedJournal for a row it cannot read. Display only."""
+    rows = store.query("SELECT seq, at_utc, kind, key, body FROM journal WHERE kind = ? AND "
+                       "key = ? ORDER BY seq", (TRADE_OPENED, trade_id))
+    if len(rows) != 1:
+        if rows:
+            raise MalformedJournal(f"trade {trade_id} has {len(rows)} {TRADE_OPENED} rows")
+        return None
+    _, body = _parsed(rows[0])
+    name, version = body.get("strategy"), body.get("strategy_version")
+    if name is None and version is None:
+        return None
+    if not isinstance(name, str) or not isinstance(version, str):
+        raise MalformedJournal(f"trade {trade_id}: {TRADE_OPENED} strategy {name!r} "
+                               f"version {version!r}")
+    return api.StrategyId(name, version)
+
+
 def entry_send(store: Store, trade_id: str) -> tuple[api.EntrySend, str | None]:
     """The trade's entry send as journaled, and why any field is null (None when none is).
     Raises MalformedJournal for a row it cannot read. Display only: never on the daily-loss
@@ -295,7 +316,7 @@ def closed_trades(store: Store, environment: str | None = None,
             # daily-loss check and stays as it was.
             stop_confirmed_after_seconds=None, mae_usd=None, mfe_usd=None,
             entry=NO_ENTRY, entry_cause=NOT_READ, prices_after=(), prices_after_cause=NOT_READ,
-            overshoot_usd=None, overshoot_r=None, overshoot_cause=NOT_READ))
+            overshoot_usd=None, overshoot_r=None, overshoot_cause=NOT_READ, strategy=None))
     return result
 
 
@@ -418,7 +439,11 @@ class History:
             entry, cause = entry_send(store, trade.trade_id)
         except MalformedJournal as exc:
             entry, cause = NO_ENTRY, f"journal unreadable: {exc}"
-        trade = replace(trade, entry=entry, entry_cause=cause)
+        try:
+            strategy = trade_strategy(store, trade.trade_id)
+        except MalformedJournal:
+            strategy = None
+        trade = replace(trade, entry=entry, entry_cause=cause, strategy=strategy)
         bars = self._bars_by_symbol(day, today).get(trade.symbol, [])
         if self.after is not None and self.closes is not None:
             trade = trade_after(trade, bars, self.closes.close(day), self.after)

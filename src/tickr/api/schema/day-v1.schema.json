@@ -331,6 +331,29 @@
               }
             ]
           },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "version"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "entry_cause_codes": {
             "type": "array",
             "items": {
@@ -420,6 +443,7 @@
           "overshoot_usd",
           "overshoot_r",
           "overshoot_cause",
+          "strategy",
           "entry_cause_codes",
           "prices_after_cause_codes",
           "overshoot_cause_codes"
