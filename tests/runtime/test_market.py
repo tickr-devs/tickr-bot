@@ -537,3 +537,45 @@ def test_observer_symbols_are_unsubscribed_without_a_reconnect(tmp_path):
     rig.market.tick(discover=False)
     assert rig.market.subscribed == {"AAA"} and session.symbols == {"AAA"}
     assert session.up and reconnects == []
+
+
+def test_a_dropped_candidate_leaves_by_its_own_path_before_the_observer_tier_takes_it(tmp_path):
+    from aperture.runtime.market import DiscoveryState
+
+    rig = tiered(tmp_path, candidate_subscriptions=1, observer_subscriptions=2)
+    rig.market.bind()
+    rig.source.transport(True, rig.now, "up")
+    rig.market.observer_watch = {"AAA"}
+    rig.advance(RESYNC)
+    rig.market.tick()
+    assert rig.source.subscribed == {"AAA"} and rig.market._optional == set()  # candidate
+    rig.market.discovery = DiscoveryState(rig.now, "x", ())  # type: ignore[arg-type]
+    rig.advance(RESYNC)
+    rig.market.tick()  # unsubscribed as a candidate, not kept by the observer tier
+    assert rig.source.subscribed == set()
+    rig.advance(RESYNC)
+    rig.market.tick()  # then taken by the observer tier, through the optional path
+    assert rig.source.subscribed == {"AAA"} and rig.market._optional == {"AAA"}
+
+
+def test_no_observer_symbol_is_added_while_trading_even_after_a_failed_pass(tmp_path):
+    rig = tiered(tmp_path, candidate_subscriptions=1, observer_subscriptions=2)
+    rig.market.bind()
+    rig.source.transport(True, rig.now, "up")
+    rig.market.observer_watch = {"OB1"}
+    calls = {"n": 0}
+    original = rig.source.subscribe
+
+    def failing_once(symbols, listener):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("candidate request failed")
+        original(symbols, listener)
+
+    rig.source.subscribe = failing_once  # type: ignore[method-assign]
+    rig.advance(RESYNC)
+    rig.market.tick(discover=False)  # resync chose OB1, but the pass stopped at candidates
+    assert "OB1" not in rig.source.subscribed
+    rig.position()
+    rig.market.tick(discover=False)
+    assert "OB1" not in rig.source.subscribed

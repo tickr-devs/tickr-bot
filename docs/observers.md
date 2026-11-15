@@ -107,8 +107,8 @@ Notes for both candidates (from the trading-core review of `strategy/simple.py`)
   while `[market_data] bars_per_symbol` covers the whole session.
 - The previous close is the last bar of the latest fetched prior session, not the official
   close.
-- Observers' WATCH and ENTER symbols get L1 quotes as the lowest stream tier
-  (`ObserverSet.watching`, `runtime/market._sync_subscriptions`): after the position, the
+- Observers' WATCH and ENTER symbols (for `[observers] watching_seconds` after the bar they
+  were decided on) get L1 quotes as the lowest stream tier (`ObserverSet.watching`, `runtime/market._sync_subscriptions`): after the position, the
   active strategy's WATCH symbols and the discovery candidates, up to
   `[market_data] observer_subscriptions` and never more than the slots the higher tiers leave
   free above `stream_reserved_symbols` (it shrinks at once when they need room). It changes at

@@ -28,6 +28,7 @@ from aperture.types import Bar
 ROOT = Path(__file__).resolve().parent.parent.parent
 NY = ZoneInfo("America/New_York")
 M1 = timedelta(minutes=1)
+WINDOW = timedelta(minutes=3)
 START = datetime.combine(date(2026, 11, 10), time(10, 0), NY).astimezone(UTC)
 
 
@@ -371,13 +372,13 @@ def test_observer_set_hands_observers_neither_budget_nor_stale_quote(tmp_path):
 def test_watching_follows_each_observers_latest_decision(tmp_path):
     watcher, ignorer = Fake(name="w"), Fake(name="i", verdict=Verdict.IGNORE)
     observers, _ = observer_set(tmp_path, watcher, ignorer)
-    assert observers.watching(START + 3 * M1) == frozenset()
+    assert observers.watching(START + 3 * M1, WINDOW) == frozenset()
     observers.on_evaluation(context(), START + 3 * M1)
     assert settle(observers) == ()
-    assert observers.watching(START + 3 * M1) == {"ABC"}
+    assert observers.watching(START + 3 * M1, WINDOW) == {"ABC"}
     watcher.verdict = Verdict.IGNORE
     observers.on_evaluation(context(4), START + 4 * M1)
-    assert settle(observers) == () and observers.watching(START + 4 * M1) == frozenset()
+    assert settle(observers) == () and observers.watching(START + 4 * M1, WINDOW) == frozenset()
     assert observers.close(5)
 
 
@@ -389,7 +390,7 @@ def test_watching_drops_a_symbol_no_longer_evaluated(tmp_path):
     observers.on_evaluation(other, START + 5 * M1)  # two bars later, ABC not evaluated
     assert settle(observers) == ()
     # ABC's bar started at START + 2, more than three minutes before START + 6
-    assert observers.watching(START + 6 * M1) == {"XYZ"}
+    assert observers.watching(START + 6 * M1, WINDOW) == {"XYZ"}
     assert observers.close(5)
 
 
@@ -399,7 +400,7 @@ def test_watching_ignores_a_switched_off_observer(tmp_path):
     observers, _ = observer_set(tmp_path, good, bad)
     observers.on_evaluation(context(), START + 3 * M1)
     settle(observers)
-    assert observers.watching(START + 3 * M1) == frozenset()
+    assert observers.watching(START + 3 * M1, WINDOW) == frozenset()
     assert observers.close(5)
 
 
@@ -407,6 +408,7 @@ def test_watching_empties_once_evaluation_stops(tmp_path):
     observers, _ = observer_set(tmp_path, Fake())
     observers.on_evaluation(context(), START + 3 * M1)
     assert settle(observers) == ()
-    assert observers.watching(START + 3 * M1) == {"ABC"}
-    assert observers.watching(START + 10 * M1) == frozenset()  # after the close, no new bars
+    assert observers.watching(START + 3 * M1, WINDOW) == {"ABC"}
+    # after the close no new bars arrive
+    assert observers.watching(START + 10 * M1, WINDOW) == frozenset()
     assert observers.close(5)

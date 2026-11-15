@@ -12,7 +12,7 @@ import time
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -443,7 +443,9 @@ class Service:
         self._feed_observers()
         observers = self.observers
         self.market.observer_watch = (set() if observers is None
-                                      else set(observers.watching(self.now())))
+                                      else set(observers.watching(
+                                          self.now(), timedelta(seconds=float(
+                                              self.config.observers.watching_seconds)))))
 
     def _feed_observers(self) -> None:
         """The contexts the active strategy just saw go to the observers, after all broker

@@ -188,20 +188,23 @@ class MarketRuntime:
         which must not happen to a position's quotes for an observer. Same live-transport
         rule as candidates."""
         now = self.monotonic()
-        if not self.health.transport.up or now < self._observers_retry_at:
+        if not self.health.transport.up:
             self._observers_applied = set()
             return set()
         md = self.config.market_data
         free = md.stream_max_symbols - md.stream_reserved_symbols - len(taken)
         cap = max(min(md.observer_subscriptions, free), 0)
-        if now >= self._observers_next_sync and not trading:
+        live = self._observers_applied & self.subscribed  # what this tier really holds
+        if now >= self._observers_next_sync and not trading and now >= self._observers_retry_at:
             self._observers_next_sync = now + float(md.observer_resync_seconds)
-            wanted = self.observer_watch - taken
-            ordered = sorted(wanted, key=lambda s: (s not in self.subscribed, s))
-            self._observers_applied = set(ordered[:cap])
+            # A symbol a higher tier subscribed and is dropping leaves by that tier's path;
+            # the observer tier may take it again on a later resync, optionally.
+            wanted = self.observer_watch - taken - (self.subscribed - self._optional)
+            self._observers_applied = self._trim(wanted, cap)
         else:
-            kept = sorted(self._observers_applied - taken)
-            self._observers_applied = set(kept[:cap])
+            # No new symbol while trading, in a retry pause or between resyncs: only what is
+            # live stays, trimmed to the room left.
+            self._observers_applied = self._trim(live - taken, cap)
         return set(self._observers_applied)
 
     def _sync_subscriptions(self) -> None:
@@ -250,8 +253,8 @@ class MarketRuntime:
             return
         if not self._subscribe(observed - self.subscribed, "subscribe-observers",
                                optional=True):
+            # The live part of the tier stays; only the refused additions wait.
             self._observers_retry_at = self.monotonic() + retry
-            self._observers_applied = set()
 
     def _subscribe(self, added: set[str], where: str, optional: bool = False) -> bool:
         if not added:

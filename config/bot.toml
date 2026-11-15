@@ -298,6 +298,9 @@ max_evaluation_seconds = 0.5
 # Evaluations waiting for the observer worker thread; when full, a new one is dropped and recorded (never blocks trading);
 # read by observers.runner.
 queue_size = 256
+# Seconds an observer's WATCH or ENTER keeps its symbol on the L1 stream, counted from the start of the bar it was decided
+# on (180 = that bar, the next one while the worker is mid-bar, and one minute of pass timing); read by runtime.service.
+watching_seconds = 180
 # Decision records folder relative to [run] data_dir; files go to <decisions_dir>/<environment>/<NY date>/decisions.jsonl;
 # written by observers.log for observer and active-strategy decisions (runtime.entries).
 decisions_dir = "decisions"
