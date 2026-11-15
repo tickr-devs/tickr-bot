@@ -1,4 +1,6 @@
-"""Command line: `python -m aperture.advisor --days 2026-11-17 ... `. See docs/advisor.md."""
+"""Command line: `python -m aperture.advisor --days 2026-11-17 ...` (recorded live days) or
+`python -m aperture.advisor --backtest <results> --backtest-data <data>` (fitting period of a
+SIMULATED backtest). See docs/advisor.md."""
 
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from pathlib import Path
 from aperture import config as config_module
 from aperture.advisor.client import AnthropicClient
 from aperture.advisor.errors import AdvisorError
-from aperture.advisor.run import Status, run_advisor
+from aperture.advisor.run import Status, run_advisor, run_backtest_advisor
 from aperture.calendar import CalendarRefused
 from aperture.observers.errors import ObserverError
 from aperture.replay.errors import ReplayError
@@ -26,7 +28,12 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m aperture.advisor",
         description="Ask Claude for a proposed next strategy version. Never applied.",
     )
-    parser.add_argument("--days", nargs="+", required=True, help="recorded NY dates, YYYY-MM-DD")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--days", nargs="+", help="recorded NY dates, YYYY-MM-DD")
+    source.add_argument("--backtest", type=Path,
+                        help="results folder of `python -m aperture.backtest run`")
+    parser.add_argument("--backtest-data", type=Path,
+                        help="its data folder (fetched minutes), required with --backtest")
     parser.add_argument("--config", type=Path, default=Path("config/bot.toml"))
     parser.add_argument("--research-settings", type=Path, default=Path("config/research.toml"))
     parser.add_argument("--replay-settings", type=Path, default=Path("config/replay.toml"))
@@ -36,20 +43,31 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None, client_factory=AnthropicClient) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.backtest is not None and args.backtest_data is None:
+        parser.error("--backtest needs --backtest-data")
+    if args.backtest is None and args.backtest_data is not None:
+        parser.error("--backtest-data goes with --backtest")
     try:
-        days = [date.fromisoformat(d) for d in args.days]
         cfg = config_module.load(args.config)
-        result = run_advisor(
-            cfg,
-            days,
-            client_factory(cfg.advisor),
-            load_research_settings(args.research_settings),
-            load_settings(args.replay_settings),
-            datetime.now(UTC),
-            folder=args.strategy_folder,
-            out_dir=args.out,
-        )
+        if args.backtest is not None:
+            replay = load_settings(args.replay_settings)
+            result = run_backtest_advisor(cfg, args.backtest, args.backtest_data,
+                                          client_factory(cfg.advisor), replay, datetime.now(UTC),
+                                          folder=args.strategy_folder, out_dir=args.out)
+        else:
+            days = [date.fromisoformat(d) for d in args.days]
+            result = run_advisor(
+                cfg,
+                days,
+                client_factory(cfg.advisor),
+                load_research_settings(args.research_settings),
+                load_settings(args.replay_settings),
+                datetime.now(UTC),
+                folder=args.strategy_folder,
+                out_dir=args.out,
+            )
     except (AdvisorError, ResearchError, ReplayError, ObserverError, CalendarRefused,
             config_module.ConfigError, OSError, ValueError, tomllib.TOMLDecodeError) as exc:
         print(f"advisor refused: {exc}", file=sys.stderr)

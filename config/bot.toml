@@ -278,6 +278,18 @@ max_changes = 3
 max_evidence_bytes = 400000
 # Proposals folder relative to [run] data_dir; one sub-folder per run; read by advisor.run.
 proposals_dir = "proposals"
+# Backtest mode (--backtest): fewest simulated trades in the fitting period (before the report's hold-out) the advisor
+# accepts as evidence; fewer = refused; count; read by advisor.backtest_evidence.
+backtest_min_fitting_trades = 30
+# Backtest mode: entry-price bucket edges of the evidence breakdown, USD, increasing (below the first, between edges,
+# at or above the last); read by advisor.backtest_evidence.
+backtest_price_edges_usd = [5, 20, 50]
+# Backtest mode: bucket edges of the stop distance (entry - stop) / entry, percent, increasing; read by
+# advisor.backtest_evidence.
+backtest_stop_distance_edges_percent = [1, 2, 4, 8]
+# Backtest mode: bucket edges, in R, of the best price reached while a trade was open and of the best price after a
+# stop exit until the session end, both measured from the entry, increasing; read by advisor.backtest_evidence.
+backtest_excursion_edges_r = [0, 0.5, 1, 2, 3]
 
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails; read by runtime.preflight.

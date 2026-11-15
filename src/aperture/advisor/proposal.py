@@ -21,6 +21,12 @@ from typing import Any
 
 from aperture.advisor.errors import AdvisorError
 
+IDEA_KEYS = ("name", "hypothesis", "entry_rule", "exit_rule", "filters", "evidence",
+             "test_plan")
+"""A new strategy idea (all empty = none). Never code: a developer writes the module."""
+IDEA_REQUIRED = ("name", "hypothesis", "entry_rule", "evidence")
+_IDEA_NAME = re.compile(r"^[a-z][a-z0-9-]*-v[0-9]+$")
+
 SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -43,8 +49,15 @@ SCHEMA: dict[str, Any] = {
         "expected_effect": {"type": "string"},
         "risks": {"type": "array", "items": {"type": "string"}},
         "no_change_reason": {"type": "string"},
+        "new_strategy_idea": {
+            "type": "object",
+            "properties": {key: {"type": "string"} for key in IDEA_KEYS},
+            "required": list(IDEA_KEYS),
+            "additionalProperties": False,
+        },
     },
-    "required": ["summary", "changes", "expected_effect", "risks", "no_change_reason"],
+    "required": ["summary", "changes", "expected_effect", "risks", "no_change_reason",
+                 "new_strategy_idea"],
     "additionalProperties": False,
 }
 
@@ -63,12 +76,24 @@ class Change:
 
 
 @dataclass(frozen=True)
+class Idea:
+    name: str
+    hypothesis: str
+    entry_rule: str
+    exit_rule: str
+    filters: str
+    evidence: str
+    test_plan: str
+
+
+@dataclass(frozen=True)
 class Proposal:
     summary: str
     changes: tuple[Change, ...]
     expected_effect: str
     risks: tuple[str, ...]
     no_change_reason: str
+    idea: Idea | None = None
 
 
 def _kind(value: Any) -> str:
@@ -139,8 +164,9 @@ def parse_reply(text: str, base: Mapping[str, Any], max_changes: int) -> Proposa
             continue
         changes.append(Change(section, key, old, new, str(item["new_value"]).strip(),
                               str(item["reason"]), str(item["evidence"])))
-    if not changes and not causes and not str(data["no_change_reason"]).strip():
-        causes.append("no changes and no no_change_reason")
+    idea = _idea(data["new_strategy_idea"], causes)
+    if not changes and idea is None and not causes and not str(data["no_change_reason"]).strip():
+        causes.append("no changes, no idea and no no_change_reason")
     if causes:
         raise AdvisorError("; ".join(causes))
     return Proposal(
@@ -149,7 +175,26 @@ def parse_reply(text: str, base: Mapping[str, Any], max_changes: int) -> Proposa
         expected_effect=str(data["expected_effect"]),
         risks=tuple(str(r) for r in data["risks"]),
         no_change_reason=str(data["no_change_reason"]),
+        idea=idea,
     )
+
+
+def _idea(raw: Any, causes: list[str]) -> Idea | None:
+    """The idea, None when every field is empty; a partial or misnamed idea is a cause."""
+    if not isinstance(raw, dict) or set(raw) != set(IDEA_KEYS):
+        causes.append("new_strategy_idea does not match the schema")
+        return None
+    values = {k: str(raw[k]).strip() for k in IDEA_KEYS}
+    if not any(values.values()):
+        return None
+    empty = [k for k in IDEA_REQUIRED if not values[k]]
+    if empty:
+        causes.append(f"new_strategy_idea lacks {', '.join(empty)}")
+        return None
+    if not _IDEA_NAME.match(values["name"]):
+        causes.append(f"new_strategy_idea name {values['name']!r} is not like 'name-v1'")
+        return None
+    return Idea(**values)
 
 
 def next_version(strategies_dir: Path, name: str) -> str:

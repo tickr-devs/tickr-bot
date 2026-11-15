@@ -167,6 +167,10 @@ class AdvisorConfig:
     max_changes: int
     max_evidence_bytes: int
     proposals_dir: str
+    backtest_min_fitting_trades: int
+    backtest_price_edges_usd: tuple[Decimal, ...]
+    backtest_stop_distance_edges_percent: tuple[Decimal, ...]
+    backtest_excursion_edges_r: tuple[Decimal, ...]
 
 
 @dataclass(frozen=True)
@@ -295,6 +299,14 @@ def _coerce(where: str, value: Any, target: Any) -> Any:
                 isinstance(v, int) and not isinstance(v, bool) for v in value):
             raise ConfigError(f"{where}: expected a list of integers, got {value!r}")
         return tuple(value)
+    if target == tuple[Decimal, ...]:
+        if not isinstance(value, list) or not value or not all(
+                isinstance(v, int | float) and not isinstance(v, bool) for v in value):
+            raise ConfigError(f"{where}: expected a non-empty list of numbers, got {value!r}")
+        numbers = tuple(Decimal(str(v)) for v in value)
+        if any(b <= a for a, b in zip(numbers, numbers[1:], strict=False)):
+            raise ConfigError(f"{where}: expected strictly increasing numbers, got {value!r}")
+        return numbers
     if target == tuple[str, ...]:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             raise ConfigError(f"{where}: expected a list of strings, got {value!r}")

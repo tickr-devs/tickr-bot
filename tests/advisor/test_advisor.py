@@ -17,7 +17,7 @@ from aperture import config as config_module
 from aperture.advisor.__main__ import main
 from aperture.advisor.client import AdvisorReply, AnthropicClient
 from aperture.advisor.errors import AdvisorError
-from aperture.advisor.proposal import SCHEMA, next_version, parse_reply
+from aperture.advisor.proposal import IDEA_KEYS, SCHEMA, next_version, parse_reply
 from aperture.advisor.run import Status, captured_bars, day_files, run_advisor
 from aperture.data.capture import BAR_KEYS, CAPTURE_KEYS, CaptureWriter
 from aperture.observers.log import DecisionLog
@@ -36,7 +36,10 @@ PROVIDER = "fake"
 BASE = tomllib.loads((ROOT / "strategies/price-action-v1/strategy.toml").read_text())
 
 
-def answer(changes=(), no_change="", summary="s"):
+NO_IDEA = dict.fromkeys(IDEA_KEYS, "")
+
+
+def answer(changes=(), no_change="", summary="s", idea=None):
     return json.dumps({
         "summary": summary,
         "changes": [
@@ -46,6 +49,7 @@ def answer(changes=(), no_change="", summary="s"):
         "expected_effect": "fewer early entries",
         "risks": ["fewer trades"],
         "no_change_reason": no_change,
+        "new_strategy_idea": idea or NO_IDEA,
     })
 
 

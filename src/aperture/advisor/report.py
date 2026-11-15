@@ -1,16 +1,20 @@
-"""The markdown report of one advisor run. Always written, whatever the outcome."""
+"""The markdown report of one advisor run, and the idea note. Always written, whatever the
+outcome."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from aperture.advisor.proposal import Proposal
+from aperture.advisor.proposal import Idea, Proposal
+
+if TYPE_CHECKING:
+    from aperture.advisor.run import Tuning
 
 TITLES = {
     "proposed": "Proposed new version",
+    "idea": "New strategy idea",
     "no_change": "No change proposed",
     "refused": "Proposal refused",
 }
@@ -18,6 +22,39 @@ TITLES = {
 
 def _cell(text: Any) -> str:
     return " ".join(str(text).split()).replace("|", "\\|")
+
+
+def _idea_lines(idea: Idea) -> list[str]:
+    lines = []
+    for title, text in (("Hypothesis", idea.hypothesis), ("Entry", idea.entry_rule),
+                        ("Exit", idea.exit_rule), ("Filters", idea.filters),
+                        ("Evidence", idea.evidence), ("How to test", idea.test_plan)):
+        lines += [f"**{title}.** {text or 'not given'}", ""]
+    return lines
+
+
+def render_idea(idea: Idea, tuning: Tuning) -> str:
+    """idea.md: what a developer needs to write the module, and how it is judged."""
+    module = idea.name.replace("-", "_")
+    return "\n".join([
+        f"# Strategy idea: {idea.name}",
+        "",
+        "Written by the AI advisor. Not code and not applied.",
+        "",
+        *_idea_lines(idea),
+        "## Next steps",
+        "",
+        f"1. A developer writes `src/aperture/strategy/{module}.py` (`create(values)`, a "
+        "Decision with its checks; it never sends orders) and "
+        f"`strategies/{idea.name}/strategy.toml` with every number commented, in a pull "
+        "request with its own review.",
+        "2. Backtest it on the same data: `python -m aperture.backtest run ... --strategy "
+        f"aperture.strategy.{module} --values strategies/{idea.name}/strategy.toml`.",
+        f"3. The idea came from {tuning.tuned_on}; results there prove nothing. Whoever writes "
+        "the module has usually seen this window's hold-out numbers, so judge it on sessions "
+        "after the window (a fresh fetch) or on observer days, not on this hold-out.",
+        "",
+    ])
 
 
 def render_report(
@@ -31,15 +68,14 @@ def render_report(
     model: str,
     base: str,
     folder: str,
-    days: Sequence[date],
+    tuning: Tuning,
     now: datetime,
-    evidence: dict[str, Any],
 ) -> str:
     lines = [
         f"# Strategy advisor: {TITLES[status]}",
         "",
         f"- Base: {base} (folder `{folder}`)",
-        f"- Days: {len(days)} ({days[0].isoformat()} .. {days[-1].isoformat()})",
+        f"- Evidence: {tuning.label}",
         f"- Model: {model}",
         f"- Run: {now:%Y-%m-%d %H:%M} UTC",
         "- **Not applied.** Results in the evidence are observed price moves or simulated "
@@ -61,36 +97,36 @@ def render_report(
             lines += ["", "## Expected effect", "", proposal.expected_effect, "", "## Risks", ""]
             lines += [f"- {r}" for r in proposal.risks] or ["- none named"]
             lines.append("")
-        else:
+        elif proposal.idea is None:
             lines += ["## Why no change", "", proposal.no_change_reason, ""]
+        if proposal.idea is not None:
+            lines += [f"## New strategy idea: {proposal.idea.name}", "",
+                      *_idea_lines(proposal.idea),
+                      "Next steps are in `idea.md`.", ""]
     if status == "proposed" and target is not None:
         relative = target.relative_to(out)
+        try_it = (
+            [f"1. Backtest it on the same data: `python -m aperture.backtest run ... --values "
+             f"{relative}/strategy.toml`.",
+             f"2. `python -m aperture.advisor.judge --run {out} --results <its results>` "
+             "compares it with the base on the withheld hold-out.",
+             f"3. If it holds there, copy `{relative}` to `strategies/{target.name}/` and run "
+             "it as an observer."]
+            if tuning.backtest else
+            [f"1. Copy `{relative}` to `strategies/{target.name}/` in the repository.",
+             f'2. Add `"{target.name}"` to `[strategy] observers` in `config/bot.toml`.',
+             "3. After some days, compare it with `python -m aperture.research observers`."]
+        )
         lines += [
             "## How to try it",
             "",
             f"The new version is **{new_identity}** in `{relative}/strategy.toml`.",
-            f"1. Copy `{relative}` to `strategies/{target.name}/` in the repository.",
-            f'2. Add `"{target.name}"` to `[strategy] observers` in `config/bot.toml`.',
-            "3. After some days, compare it with `python -m aperture.research observers`.",
+            *try_it,
             "",
-            "Hold-out rule: this version was tuned on "
-            + ", ".join(d.isoformat() for d in days) + ". Judge it only on "
-            f"days after {days[-1].isoformat()} (observers) or on replay days outside that list; "
-            "results on the tuning days prove nothing.",
+            f"Hold-out rule: this version was tuned on {tuning.tuned_on}. Judge it only on "
+            f"{tuning.judge_on}; results on the tuning days prove nothing.",
             "",
         ]
-    lines += [
-        "## Evidence headline",
-        "",
-        f"- Decisions: {evidence['decisions']} over {evidence['symbols']} symbols; "
-        f"verdicts {evidence['verdicts']}",
-        "- First failed check (IGNORE/WATCH): "
-        f"{evidence['first_failed_check_on_ignore_and_watch']}",
-        f"- ENTER refusals: {evidence['enter_refusal_causes']}",
-        f"- Not-taken ENTERs simulated: {evidence['not_taken_enters_simulated']['trades']} trades, "
-        f"total R {evidence['not_taken_enters_simulated']['total_r']}",
-        "",
-        "Full numbers: `evidence.json`. Exact request: `request.txt`.",
-        "",
-    ]
+    lines += ["## Evidence headline", "", *[f"- {line}" for line in tuning.headline], "",
+              "Full numbers: `evidence.json`. Exact request: `request.txt`.", ""]
     return "\n".join(lines)
