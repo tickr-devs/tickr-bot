@@ -13,7 +13,10 @@
       "exit_reason": "stop",
       "stop_price": "5.02",
       "planned_loss_usd": "50",
-      "result_gross_usd": "-1.60"
+      "result_gross_usd": "-1.60",
+      "stop_confirmed_after_seconds": "1.250",
+      "mae_usd": "-2.20",
+      "mfe_usd": "0.80"
     },
     {
       "trade_id": "t-0002",
@@ -26,7 +29,10 @@
       "exit_reason": "strategy_exit",
       "stop_price": null,
       "planned_loss_usd": "50",
-      "result_gross_usd": "4.10"
+      "result_gross_usd": "4.10",
+      "stop_confirmed_after_seconds": null,
+      "mae_usd": null,
+      "mfe_usd": null
     }
   ],
   "result_gross_usd": "2.50",

@@ -112,6 +112,10 @@ unknown (a trade closed today has fills without a known price), never zero:
 room is below `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot
 tracks; `position` is its first element or `null`, kept for older clients.
 
+Each `trades_today` entry also has `planned_loss_usd` (1 R as recorded when the trade was opened)
+and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE are only in
+`day-v1`: the bot does not read capture files to write its status.
+
 ### GET /account
 
 `account` is the bot's `account-v1` document, written (temp file + fsync + rename, like status)
@@ -151,6 +155,57 @@ fill-weighted averages, `stop_price` is the first protective stop sent (null if 
 received when the provider revised one. On today's file a last line still being written is not
 read yet. Only M1 is served; clients aggregate M5/M15 and compute indicators themselves.
 Query strings take exactly the documented parameters, each once; anything else is `bad_request`.
+
+#### Per-trade metrics
+
+Computed by the reader from what the bot already records; `null` means unknown, never zero.
+
+- `planned_loss_usd` (status `Trade` and `day-v1`): 1 R, the planned loss recorded when the
+  trade was opened (`trades.planned_loss_usd`). R multiples are left to the client
+  (`result_gross_usd / planned_loss_usd`, `mae_usd / planned_loss_usd`, ...).
+- `stop_confirmed_after_seconds` (status `Trade` and `day-v1`): seconds, millisecond precision,
+  from the first entry fill to the broker confirming the protective stop. Both ends are journal
+  times (`journal.at_utc`) of `order-observed` rows (one per Detail read that changed an
+  order): the start is the first read of the entry showing filled quantity > 0 (Webull Detail
+  has no fill time, so this is when the fill was seen, not when it happened); the end is the
+  first later read of one of the trade's stop orders showing it working at the broker (state
+  `ACCEPTED` or `PARTIALLY_FILLED`; the engine's "verified" stop). The same two rows are
+  `fill_observed_at` and `stop_verified_at` of the trade's `protection-latency` journal row.
+  `null` when the stop was never confirmed (rejected, or filled or gone before a read showed it
+  working) or no fill read is journaled.
+- `mae_usd` / `mfe_usd` (`day-v1` only): maximum adverse and favourable excursion while shares
+  were held, as a **lower bound** (never overstated): `(lowest price - entry_price) x held` and
+  `(highest price - entry_price) x held`. Journal times lag the events they record
+  (`order-observed` is written only when a read shows a change), so only what the journal
+  proves counts:
+  - Window start: the minute of the first entry read showing a fill. Its bar is left out (it
+    may hold prices from before the fill).
+  - Window end ("held until"): for each stop or exit order that sold shares, the latest moment
+    the journal proves it had not sold yet. For a close (MARKET exit) that is its send intent
+    (`order-intent` row, written before the send); for a stop, its last `order-observed` read
+    still showing nothing filled (in practice its working read). The earliest of these over
+    all orders that sold is the end. Its minute's bar is left out too.
+  - Prices: the entry fill price (fill-weighted average), the fill price of each order that
+    sold shares, and the low and high of the captured M1 bars that start after the start
+    minute and before the end minute. If an order that sold has no proving row, no bar
+    counts, only the fill prices.
+  - `held`: the filled quantity the first entry fill read showed (later fills are not
+    counted), never more than the quantity sold. Nothing is sold inside the window, so that
+    many shares were held throughout.
+  - Capture: the bars of the first entry fill read's minute and of the last read showing
+    shares sold must be in the capture file, as proof it covered the trade; their prices are
+    not used.
+
+  So a stop-out at -1 R shows about -1 R (its fill), never the fall after it. A stop-out
+  usually shows its fill prices alone: a resting stop's only journaled unfilled read is its
+  working read, seconds after the fill. A restart between the last proving read and the read
+  of the fill changes nothing (the proven window is used). As the entry price is always
+  included, MAE is at most 0 and MFE at least 0; no value is defaulted. `null` when either
+  edge minute's bar is not captured, no entry fill read or no read of the sale is journaled.
+- A journal row these metrics cannot read gives `null` for the trade's stop timing and
+  excursions, never an error. In the bot it is journaled once per trade
+  (`stop-timing-failed`) and the step goes on. The daily-loss check never reads them: the
+  bot computes them only for the status file.
 
 ### GET /explain (read-only)
 

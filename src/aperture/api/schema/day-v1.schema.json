@@ -63,6 +63,39 @@
           "result_gross_usd": {
             "type": "string",
             "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          },
+          "stop_confirmed_after_seconds": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mae_usd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mfe_usd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -76,7 +109,10 @@
           "exit_reason",
           "stop_price",
           "planned_loss_usd",
-          "result_gross_usd"
+          "result_gross_usd",
+          "stop_confirmed_after_seconds",
+          "mae_usd",
+          "mfe_usd"
         ],
         "additionalProperties": false
       }

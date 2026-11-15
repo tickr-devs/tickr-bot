@@ -11,14 +11,14 @@ from __future__ import annotations
 import time
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aperture.api import contract as api
-from aperture.api.history import average_fill_price, closed_trades
+from aperture.api.history import average_fill_price, closed_trades, trade_metrics
 from aperture.calendar import NEW_YORK, CalendarRefused, SessionCalendar
 from aperture.config import Config, trading_gate
 from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
@@ -53,6 +53,7 @@ EVALUATION_SLOW = "evaluation-slow"
 LATENCY_FAILED = "protection-latency-failed"
 STRATEGY_NOT_LOADED = "strategy-not-loaded"
 ACCOUNT_WRITE_FAILED = "account-write-failed"  # one row per stretch of failed writes
+STOP_TIMING_FAILED = "stop-timing-failed"  # one row per trade whose stop timing is unreadable
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
@@ -92,12 +93,17 @@ def _iso(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
+def _status_trade(t: api.DayTrade) -> api.Trade:
+    return api.Trade(t.symbol, t.quantity, t.entry_price, t.exit_price, t.opened_at,
+                     t.closed_at, t.exit_reason, t.result_gross_usd, t.planned_loss_usd,
+                     t.stop_confirmed_after_seconds)
+
+
 def trades_today(engine: Engine, now: datetime) -> tuple[api.Trade, ...]:
-    """Trades closed today (New York date) that had fills, with gross result."""
+    """Trades closed today (New York date) that had fills, with gross result. The daily-loss
+    check reads this: it never reads the journal, so the display metric is null here."""
     today = now.astimezone(NEW_YORK).date()
-    return tuple(api.Trade(t.symbol, t.quantity, t.entry_price, t.exit_price, t.opened_at,
-                           t.closed_at, t.exit_reason, t.result_gross_usd)
-                 for t in closed_trades(engine.store, closed_on=today))
+    return tuple(_status_trade(t) for t in closed_trades(engine.store, closed_on=today))
 
 
 class Service:
@@ -128,6 +134,8 @@ class Service:
         self._skipping: str | None = None  # cause of the current protect-first episode
         self.stopped_by: str | None = None  # command_id of an obeyed stop-bot command
         self._account_failing = False  # the last account file write failed (journaled once)
+        # Stop confirmation time of each closed trade shown in status (final once closed).
+        self._stop_timing: dict[str, Decimal | None] = {}
 
     # --- commands --------------------------------------------------------------------------
 
@@ -547,7 +555,26 @@ class Service:
                 entries.daily_loss_room(self.engine, self.config, now))
 
     def _trades_today(self) -> tuple[api.Trade, ...]:
-        return trades_today(self.engine, self.now())
+        """For status only: today's trades with their stop confirmation time."""
+        today = self.now().astimezone(NEW_YORK).date()
+        return tuple(_status_trade(self._shown(t))
+                     for t in closed_trades(self.engine.store, closed_on=today))
+
+    def _shown(self, trade: api.DayTrade) -> api.DayTrade:
+        """A display metric never ends the loop: an unreadable journal shows null, journaled
+        once per trade."""
+        if trade.trade_id not in self._stop_timing:
+            try:
+                timing = trade_metrics(self.engine.store, trade, None).stop_confirmed_after_seconds
+            except Exception as exc:  # noqa: BLE001 - see docstring
+                timing = None
+                if not self.engine.store.journal(STOP_TIMING_FAILED, trade.trade_id):
+                    with self.engine.store.transaction():
+                        self.engine.store.append(STOP_TIMING_FAILED, {
+                            "error": type(exc).__name__, "detail": str(exc)},
+                            key=trade.trade_id, run_id=self.engine.run_id)
+            self._stop_timing[trade.trade_id] = timing
+        return replace(trade, stop_confirmed_after_seconds=self._stop_timing[trade.trade_id])
 
     def _recent_commands(self) -> tuple[api.CommandRecord, ...]:
         rows = self.engine.store.journal(COMMAND)[-self.config.api.status_recent_commands:]

@@ -45,7 +45,9 @@
         "opened_at": "2026-11-16T15:00:00.123Z",
         "closed_at": "2026-11-16T15:00:00.123Z",
         "exit_reason": "stop",
-        "result_gross_usd": "-1.60"
+        "result_gross_usd": "-1.60",
+        "planned_loss_usd": "50",
+        "stop_confirmed_after_seconds": "1.250"
       }
     ],
     "result_today_gross_usd": "-1.60",

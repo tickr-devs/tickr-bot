@@ -45,7 +45,7 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
         fences=(Fence("foreign_exposure", T0, "A position not opened by the bot exists."),),
         position=POSITION,
         trades_today=(Trade("WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0, T0,
-                            "stop", Decimal("-1.60")),),
+                            "stop", Decimal("-1.60"), Decimal("50"), Decimal("1.250")),),
         result_today_gross_usd=Decimal("-1.60"),
         freshness=Freshness(T0, None, StreamHealth.FRESH),
         recent_commands=(CommandRecord("0b6f7c1e-2f0a-4c55-9d1e-6a1d2f3e4b5c",

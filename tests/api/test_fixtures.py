@@ -103,10 +103,10 @@ def documents() -> dict[str, object]:
         "day-v1": DayV1("sandbox", DAY, (
             DayTrade("t-0001", "WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0,
                      T0 + timedelta(minutes=7), "stop", Decimal("5.02"), Decimal("50"),
-                     Decimal("-1.60")),
+                     Decimal("-1.60"), Decimal("1.250"), Decimal("-2.20"), Decimal("0.80")),
             DayTrade("t-0002", "ABCD", Decimal("10"), Decimal("12.34"), Decimal("12.75"),
                      T0 + timedelta(minutes=20), T0 + timedelta(minutes=48), "strategy_exit",
-                     None, Decimal("50"), Decimal("4.10"))),
+                     None, Decimal("50"), Decimal("4.10"), None, None, None)),
             Decimal("2.50"), ("ABCD", "WXYZ")),
         "settings-v1": SettingsV1(
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),

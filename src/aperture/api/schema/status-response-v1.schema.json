@@ -231,6 +231,21 @@
                   "result_gross_usd": {
                     "type": "string",
                     "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  "planned_loss_usd": {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  "stop_confirmed_after_seconds": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -241,7 +256,9 @@
                   "opened_at",
                   "closed_at",
                   "exit_reason",
-                  "result_gross_usd"
+                  "result_gross_usd",
+                  "planned_loss_usd",
+                  "stop_confirmed_after_seconds"
                 ],
                 "additionalProperties": false
               }

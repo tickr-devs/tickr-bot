@@ -19,7 +19,9 @@ What it does:
 - Runs the real bot (`aperture run`) on a simulated exchange (`src/aperture/demo/world.py`):
   only the broker, market data, clock, `sleep` and alerts are replaced. Webull is never
   contacted, alerts go to the terminal. So the database, status, account, capture and decision
-  files have exactly the format of a real day.
+  files have exactly the format of a real day. The per-trade metrics of `docs/api.md`
+  (planned loss, stop confirmation time, MAE/MFE) come from those records too, so every demo
+  trade has them.
 - Plays the past sessions in `config/demo.toml` fast, then the demo day (today if it is a session,
   otherwise the latest session before it) fast up to `[demo] clock`, then in real time with the
   local API listening, until Ctrl-C. About two to three minutes before the API is up.

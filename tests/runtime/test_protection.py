@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
@@ -12,8 +13,8 @@ from aperture.api import contract as api
 from aperture.broker.fake import FakeBroker
 from aperture.calendar import NEW_YORK, SessionCalendar
 from aperture.config import GateResult
-from aperture.engine.core import Engine
-from aperture.runtime import service
+from aperture.engine.core import Engine, Leg
+from aperture.runtime import entries, service
 from aperture.runtime.protection import PROTECTION_LATENCY, LatencyLog, busy
 from aperture.store import Store
 from aperture.types import Quote
@@ -216,6 +217,9 @@ def test_a_trade_closed_before_its_stop_was_seen_working_is_recorded_as_such(tmp
     body = rig.latency()
     assert body["closed_before_verified"] is True and body["stop_verified_at"] is None
     assert body["stop_sent_at"] is not None and body["observed_to_verified_seconds"] is None
+    (trade,) = rig.service.status().trades_today
+    assert trade.stop_confirmed_after_seconds is None  # never confirmed: unknown, not zero
+    assert trade.planned_loss_usd == D(1)
 
 
 def test_a_trade_never_filled_has_no_latency_row(tmp_path):
@@ -256,3 +260,63 @@ def test_a_failing_measurement_never_ends_the_loop(tmp_path):
     (failed,) = rig.store.journal(service.LATENCY_FAILED)
     assert failed.body["error"] == "KeyError"
     assert rig.evaluator.calls == [1, 3, 4, 5]  # protection and the strategy went on
+
+
+def _stopped_out_trade(rig: Rig) -> LatencyLog:
+    """A fake-broker trade: 2 shares filled, stop seen working one poll later, stopped out."""
+    engine, log = rig.engine, LatencyLog(rig.engine)
+    engine.recover()
+    engine.open_trade("ABC", D(2), D(10), D("9.80"), D("0.40"))
+    rig.broker.fill(rig.entry(), D(2), D(10))
+    rig.advance(1)
+    engine.step()  # fill observed, stop sent
+    rig.advance(POLL)
+    engine.step()  # stop seen working
+    log.record()
+    (stop,) = [o for o in rig.broker.open_orders() if o.order_type == "STOP_LOSS"]
+    rig.broker.fill(stop.client_order_id, D(2), D("9.80"))
+    for _ in range(3):
+        rig.advance(POLL)
+        engine.step()
+    return log
+
+
+def test_status_trade_carries_planned_loss_and_stop_confirmation_time(tmp_path):
+    """status-v1 trades_today: 1 R as recorded at entry, and the same fill-observed -> stop
+    working time the protection-latency row records, from the journal of a fake-broker trade."""
+    rig = Rig(tmp_path)
+    _stopped_out_trade(rig)
+    (trade,) = rig.service.status().trades_today
+    assert trade.exit_reason and trade.planned_loss_usd == D("0.40")
+    assert trade.stop_confirmed_after_seconds == D(str(POLL)).quantize(D("0.001"))
+    assert float(trade.stop_confirmed_after_seconds) == (
+        rig.latency()["observed_to_verified_seconds"])
+    # The daily-loss path never reads the journal for it.
+    (plain,) = service.trades_today(rig.engine, rig.now)
+    assert plain.stop_confirmed_after_seconds is None
+    assert replace(plain, stop_confirmed_after_seconds=trade.stop_confirmed_after_seconds) == trade
+
+
+def test_a_malformed_fill_read_row_never_stops_the_loop_or_moves_the_daily_loss(tmp_path):
+    rig = Rig(tmp_path)
+    _stopped_out_trade(rig)
+    loss = entries.realized_loss_today(rig.engine, rig.now)
+    assert loss == D("0.40")
+    (closed,) = rig.engine.trades(open_only=False)
+    stop = next(o for o in rig.engine.orders(closed.trade_id) if o.leg is Leg.STOP)
+    with rig.store.transaction():  # not something the engine writes: no filled_quantity
+        rig.store.append("order-observed", {"state": "ACCEPTED"}, key=stop.client_order_id)
+    rig.run(3)
+    assert rig.passes == 3  # the loop went on
+    status = api.loads(api.StatusV1, (tmp_path / "status.json").read_bytes())
+    (trade,) = status.trades_today
+    assert trade.stop_confirmed_after_seconds is None and trade.planned_loss_usd == D("0.40")
+    assert status.realized_loss_today_usd == loss
+    assert entries.realized_loss_today(rig.engine, rig.now) == loss
+    (failed,) = rig.store.journal(service.STOP_TIMING_FAILED)  # once, not once per pass
+    assert failed.key == closed.trade_id and failed.body["error"] == "MalformedJournal"
+    rig.store.close()
+    rig.open()  # a restart journals it no second time
+    rig.run(2)
+    assert len(rig.store.journal(service.STOP_TIMING_FAILED)) == 1
+
