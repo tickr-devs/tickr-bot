@@ -3,8 +3,10 @@ bearer token always required there, whatever the Host header says."""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import stat
 import threading
 from dataclasses import replace
@@ -357,3 +359,38 @@ def test_idle_connection_on_the_remote_port_is_closed_before_any_token(remote_se
         server.shutdown()
         server.server_close()
         local.server_close()
+
+
+
+def _hold_pairing_lock(settings):
+    lock = settings.pairing_code_path.with_name(settings.pairing_code_path.name + ".lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def test_redeem_waits_for_the_pairing_lock(remote_api, remote_settings):
+    """`pair` runs in another process: POST /pair waits while it holds the shared file lock, so
+    the two never interleave."""
+    code = link_code(pair(remote_settings, now=NOW))
+    fd = _hold_pairing_lock(remote_settings)
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(answer=redeem(remote_api, code)))
+    worker.start()
+    worker.join(0.3)
+    assert worker.is_alive() and not result
+    os.close(fd)
+    worker.join(5)
+    assert result["answer"][0].status == 200
+
+
+def test_pair_waits_for_the_pairing_lock(remote_settings):
+    remote_settings.pairing_code_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = _hold_pairing_lock(remote_settings)
+    worker = threading.Thread(target=pair, args=(remote_settings,), kwargs={"now": NOW})
+    worker.start()
+    worker.join(0.3)
+    assert worker.is_alive() and not remote_settings.pairing_code_path.exists()
+    os.close(fd)
+    worker.join(5)
+    assert remote_settings.pairing_code_path.exists()
