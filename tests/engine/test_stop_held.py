@@ -10,12 +10,12 @@ from datetime import UTC, datetime
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.broker.fake import FakeBroker
-from aperture.config import Config, GateResult
-from aperture.engine.core import ORDER_HELD, ORDER_OBSERVED, Engine, Fence, Leg, TradeState
-from aperture.store import Store
-from aperture.types import OrderState
+from tickr import config
+from tickr.broker.fake import FakeBroker
+from tickr.config import Config, GateResult
+from tickr.engine.core import ORDER_HELD, ORDER_OBSERVED, Engine, Fence, Leg, TradeState
+from tickr.store import Store
+from tickr.types import OrderState
 
 RUN_ID = re.compile(r"[0-9a-f]{8}(?=-t)|^[0-9a-f-]{32,36}$")
 ROOT = Path(__file__).resolve().parents[2]

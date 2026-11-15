@@ -1,6 +1,6 @@
 # Operations on the Mac
 
-How the owner runs Aperture under launchd. Nothing here is installed from the cloud: the owner
+How the owner runs Tickr under launchd. Nothing here is installed from the cloud: the owner
 renders the job files, reads them, and loads them. Manual trades and the Sandbox probe day
 (stop the bot job first) are in docs/manual-trade.md.
 
@@ -8,13 +8,13 @@ renders the job files, reads them, and loads them. Manual trades and the Sandbox
 
 | Job | Label | When | Relaunch |
 |---|---|---|---|
-| preflight | `local.aperture.preflight` | `[runtime] preflight_start_local` on `launch_weekdays` | never |
-| bot | `local.aperture.bot` | `[runtime] bot_start_local` on `launch_weekdays` | never (a crash raises an alert) |
-| watchdog | `local.aperture.watchdog` | `[runtime] watchdog_start_local` on `launch_weekdays`; runs until its last check | never |
+| preflight | `local.tickr.preflight` | `[runtime] preflight_start_local` on `launch_weekdays` | never |
+| bot | `local.tickr.bot` | `[runtime] bot_start_local` on `launch_weekdays` | never (a crash raises an alert) |
+| watchdog | `local.tickr.watchdog` | `[runtime] watchdog_start_local` on `launch_weekdays`; runs until its last check | never |
 
 The bot job has one starter besides its schedule: near the flatten time the watchdog may start it once a day (see "Watchdog", `watchdog-restarted-bot`).
-| test-alert | `local.aperture.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
-| api | `local.aperture.api` | at login, always on, loopback only | launchd keeps it alive |
+| test-alert | `local.tickr.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
+| api | `local.tickr.api` | at login, always on, loopback only | launchd keeps it alive |
 
 Times in `[runtime]` are the **Mac's local time**. The calendar decides whether there is a
 session: on weekends, market closures and half days (unless `half_days_enabled`) preflight reports
@@ -22,7 +22,7 @@ session: on weekends, market closures and half days (unless `half_days_enabled`)
 time, check the start times around daylight-saving changes (US and other countries switch on
 different dates); the bot must start before 09:30 ET.
 
-The bot job runs `python -m aperture.runtime run-bot`, which runs preflight again, then starts the
+The bot job runs `python -m tickr.runtime run-bot`, which runs preflight again, then starts the
 bot as a child process. launchd stops the job with SIGTERM; the supervisor forwards one SIGTERM to
 the bot, whose handler only sets the stop-entries flag; the main loop then cancels working entries,
 leaves resting stops at the broker and exits. If the bot is still running
@@ -31,8 +31,8 @@ waiting; launchd sends SIGKILL at `bot_exit_timeout_seconds`.
 
 ## Stopping the bot safely
 
-1. `launchctl kill TERM gui/$(id -u)/local.aperture.bot`
-2. Before logging out, shutting down or `launchctl bootout`, wait for the `"record": "bot-exit"` line in `~/Library/Logs/Aperture/bot.log`
+1. `launchctl kill TERM gui/$(id -u)/local.tickr.bot`
+2. Before logging out, shutting down or `launchctl bootout`, wait for the `"record": "bot-exit"` line in `~/Library/Logs/Tickr/bot.log`
    (`"clean": true`). A `bot-did-not-stop` alert means the bot is stuck: check orders and the
    position in the Webull app before doing anything else.
 3. Do not log out, restart or shut down the Mac while the bot has a working order or an open
@@ -40,7 +40,7 @@ waiting; launchd sends SIGKILL at `bot_exit_timeout_seconds`.
    `ExitTimeOut` then. A resting stop stays at the broker either way; a working entry order may not be
    cancelled.
 
-`aperture.cli run` (the bot job's command) recovers and reconciles, keeps the positions it owns
+`tickr.cli run` (the bot job's command) recovers and reconciles, keeps the positions it owns
 protected, acts on API commands (entry-stop on/off, cancel-own-orders, flatten), asks every open
 trade to exit at the session's flatten time (at once when there is no session or no calendar;
 see `flatten-after-close` for a start after the close),
@@ -58,12 +58,12 @@ it is refused and the bot keeps running (send emergency or flatten first, wait f
 to close, then stop-bot). A
 SIGTERM does not have this check: it leaves an open position under its DAY stop, and nothing
 flattens it while the bot is down. When obeyed, the bot writes `data/<[runtime] stop_marker_file>` and every later start is refused (preflight
-cause `stopped-by-operator`, with an alert) until you run `aperture clear-stop`. See
+cause `stopped-by-operator`, with an alert) until you run `tickr clear-stop`. See
 docs/api.md, "Commands".
 
 ## Exit codes
 
-`python -m aperture.runtime preflight` and `run-bot`:
+`python -m tickr.runtime preflight` and `run-bot`:
 
 | Code | Meaning |
 |---|---|
@@ -90,10 +90,10 @@ Every run prints JSON lines (`"record": "preflight" | "alert" | "bot-exit"`) to 
    that reaches you away from the Mac). Presence only, never the value.
 7. Broker token folder `<data_dir>/<token_dir>` exists.
 7b. No operator stop marker (cause `stopped-by-operator`): a stop-bot command from the apps
-   left `<data_dir>/<[runtime] stop_marker_file>`; `aperture clear-stop` removes it.
+   left `<data_dir>/<[runtime] stop_marker_file>`; `tickr clear-stop` removes it.
 7c. The database, when it exists, holds runs of this environment only (cause
    `database-other-environment`; `database-unreadable` when it cannot be opened). After
-   changing `[run] environment`, move `data/aperture.sqlite3` aside and keep it: the apps then
+   changing `[run] environment`, move `data/tickr.sqlite3` aside and keep it: the apps then
    no longer show the other environment's days.
 8. The active strategy builds and `[market_data] history_sessions` covers its history need. A
    failure is reported, but the bot still starts with entries off so it can protect positions.
@@ -102,7 +102,7 @@ Every run prints JSON lines (`"record": "preflight" | "alert" | "bot-exit"`) to 
    and waits up to `[environments.*] token_check_duration_seconds` for you to approve it in the
    Webull app. INVALID, EXPIRED, not approved in time, or any other token error fails the check
    with cause `token-unusable`. Where Webull has token checking off, this is one config read.
-   `aperture run` alerts the same way (journaled as an `alert` record) if its token waits.
+   `tickr run` alerts the same way (journaled as an `alert` record) if its token waits.
 
 All checks are reported; the first failure is the recorded cause.
 
@@ -110,29 +110,29 @@ All checks are reported; the first failure is the recorded cause.
 
 1. Clone the repo and create the venv:
    ```sh
-   cd ~/Development/Aperture
+   cd ~/Development/Tickr
    python3.12 -m venv .venv && .venv/bin/pip install -e ".[webull]"
    ```
 2. Credentials file outside the repo, readable only by you. One `NAME=value` per line, using the
    variable names from `config/bot.toml` (for the active environment):
    ```sh
-   mkdir -p ~/.config/aperture && touch ~/.config/aperture/env && chmod 600 ~/.config/aperture/env
-   open -e ~/.config/aperture/env
+   mkdir -p ~/.config/tickr && touch ~/.config/tickr/env && chmod 600 ~/.config/tickr/env
+   open -e ~/.config/tickr/env
    ```
-   The jobs load it with `sh` (`set -a; . file`), so Aperture code never reads the values. Quote a
+   The jobs load it with `sh` (`set -a; . file`), so Tickr code never reads the values. Quote a
    value with single quotes if it contains spaces or `$`.
    Add your iMessage address here too, under the name in `[alerts] imessage_recipient_variable`:
-   `APERTURE_IMESSAGE_TO='+15551234567'` (or your Apple ID email). It is personal data: never
+   `TICKR_IMESSAGE_TO='+15551234567'` (or your Apple ID email). It is personal data: never
    put it in the repo or in a plist. To test by hand in Terminal:
-   `set -a; . ~/.config/aperture/env; set +a` first.
-   **Deadline:** `APERTURE_IMESSAGE_TO` must be in this file before the first preflight run
+   `set -a; . ~/.config/tickr/env; set +a` first.
+   **Deadline:** `TICKR_IMESSAGE_TO` must be in this file before the first preflight run
    (08:30 Mac time on Monday with the default `[runtime] preflight_start_local`). Without it
    preflight fails with `alert-recipient-missing` and the bot job does not start the bot.
 3. Data and token folders: `mkdir -p data/webull-token-sandbox` (`[environments.sandbox]
    token_dir`; `data/webull-token-production` before Production).
 4. Alerts: sign in to iMessage in the Messages app on this Mac (Messages > Settings > iMessage)
    with an Apple ID, then, after loading the env file as above, run
-   `.venv/bin/python -m aperture.runtime alert preflight-failed "test"` once. You should get a
+   `.venv/bin/python -m tickr.runtime alert preflight-failed "test"` once. You should get a
    notification on the Mac and an iMessage on the phone. The Mac notification comes from the
    Tickr app, with its icon, when the app is at `[alerts] mac_app` (default
    `/Applications/Tickr.app`: in Xcode, Product > Archive, then Distribute App > Copy App, and
@@ -144,27 +144,27 @@ All checks are reported; the first failure is the recorded cause.
    below). The first JSON line is the Mac notification (`"delivery": "shown"`,
    `"pending": ["imessage"]`); a second line with `"channel": "imessage"` follows with the
    iMessage result. A failed send is never retried; the next alert tries again.
-5. Run preflight by hand: `.venv/bin/python -m aperture.runtime preflight; echo $?`.
+5. Run preflight by hand: `.venv/bin/python -m tickr.runtime preflight; echo $?`.
 
 ## Install the jobs
 
 ```sh
-cd ~/Development/Aperture
-mkdir -p ~/Library/Logs/Aperture
-.venv/bin/python -m aperture.runtime render-launchd \
+cd ~/Development/Tickr
+mkdir -p ~/Library/Logs/Tickr
+.venv/bin/python -m tickr.runtime render-launchd \
     --python "$PWD/.venv/bin/python" \
-    --env-file ~/.config/aperture/env \
-    --log-dir ~/Library/Logs/Aperture \
+    --env-file ~/.config/tickr/env \
+    --log-dir ~/Library/Logs/Tickr \
     --out data/launchd
 # Read the five files in data/launchd, then:
 for job in preflight bot watchdog api test-alert; do
-  cp data/launchd/local.aperture.$job.plist ~/Library/LaunchAgents/
-  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.aperture.$job.plist
+  cp data/launchd/local.tickr.$job.plist ~/Library/LaunchAgents/
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.$job.plist
 done
 ```
 
 After changing `[runtime]` values, render again, then
-`launchctl bootout gui/$(id -u)/local.aperture.<job>` and `bootstrap` the changed jobs.
+`launchctl bootout gui/$(id -u)/local.tickr.<job>` and `bootstrap` the changed jobs.
 
 ### Alerts from launchd (do this once, at the Mac)
 
@@ -172,41 +172,50 @@ macOS grants the Automation permission ("allow ... to control Messages") per cal
 Allowing it for Terminal does not cover the launchd jobs, and a job cannot click "OK": without
 the permission every iMessage from the bot and the watchdog fails (recorded as
 `imessage: osascript exited with code 1`) while the Mac notification still works. So, while you
-are at the Mac, after loading `local.aperture.test-alert.plist`:
+are at the Mac, after loading `local.tickr.test-alert.plist`:
 
 ```sh
-launchctl kickstart gui/$(id -u)/local.aperture.test-alert
+launchctl kickstart gui/$(id -u)/local.tickr.test-alert
 ```
 
 A dialog asks to allow control of Messages: click OK. You should get a notification and an
-iMessage "test alert from launchd". Check `~/Library/Logs/Aperture/test-alert.log`: the
+iMessage "test alert from launchd". Check `~/Library/Logs/Tickr/test-alert.log`: the
 `"channel": "imessage"` line must say `"delivery": "shown"`. The test-alert job runs the same
 program chain as the bot and watchdog jobs (`/bin/sh`, then the venv python) and has no
 schedule, so it can stay installed; kickstart it again after recreating the venv or upgrading
 macOS. If no dialog appears and the send fails, open System Settings > Privacy & Security >
 Automation and allow Messages for the listed program.
 
+## Moving a Mac from the old name
+
+The product had another name until 2026-11-15. A Mac installed under it moves with one script
+(dry run first, then `--apply`); its header says what it moves and why. **Pull the rename and
+run the script in one sitting, flat, outside market hours:** after a pull without it the old
+launchd jobs fail at import and nothing alerts. The bot refuses to start
+next to the old database file (`legacy-database-name`) until it has run.
+The script: `ops/migrate-from-aperture.sh`.  <!-- rename-keep -->
+
 ## Everyday commands
 
 ```sh
-launchctl print gui/$(id -u)/local.aperture.preflight      # state and last exit code
-launchctl kickstart gui/$(id -u)/local.aperture.preflight  # run preflight now
-launchctl kill TERM gui/$(id -u)/local.aperture.bot        # stop the bot cleanly
-launchctl bootout gui/$(id -u)/local.aperture.bot          # remove a job
-tail -f ~/Library/Logs/Aperture/bot.log
+launchctl print gui/$(id -u)/local.tickr.preflight      # state and last exit code
+launchctl kickstart gui/$(id -u)/local.tickr.preflight  # run preflight now
+launchctl kill TERM gui/$(id -u)/local.tickr.bot        # stop the bot cleanly
+launchctl bootout gui/$(id -u)/local.tickr.bot          # remove a job
+tail -f ~/Library/Logs/Tickr/bot.log
 ```
 
-To look at the apps with a full made-up day (never Webull, its own folder): `aperture demo`,
+To look at the apps with a full made-up day (never Webull, its own folder): `tickr demo`,
 see [demo.md](demo.md).
 
-## Disk upkeep: `aperture maintain`
+## Disk upkeep: `tickr maintain`
 
 What grows under `data/`, per environment and New York date: `capture/<env>/<date>/`
 (`quotes.jsonl` is by far the largest: every stream quote; then `bars.jsonl`, `screener.jsonl`,
-`notices.jsonl`) and `decisions/<env>/<date>/decisions.jsonl`. The database (`aperture.sqlite3`)
+`notices.jsonl`) and `decisions/<env>/<date>/decisions.jsonl`. The database (`tickr.sqlite3`)
 grows slowly and is never pruned: the journal is the audit trail. `history/` is a cache of
 prior-session bars, the backup folder keeps one file, `watchdog.jsonl` gets a few lines a day;
-launchd's logs in `~/Library/Logs/Aperture` are not ours to rotate.
+launchd's logs in `~/Library/Logs/Tickr` are not ours to rotate.
 
 Never run it during the trading session, not even as a dry run: it takes the bot's
 single-instance lock and writes its own pid into the lock file, so a bot job starting meanwhile
@@ -214,8 +223,8 @@ is refused and the watchdog and `status` see a pid that is not the bot. Run it w
 stopped, after the close or on a non-trading day:
 
 ```sh
-.venv/bin/python -m aperture.cli maintain          # dry run: prints what it would archive and why it keeps the rest
-.venv/bin/python -m aperture.cli maintain --apply  # does it
+.venv/bin/python -m tickr.cli maintain          # dry run: prints what it would archive and why it keeps the rest
+.venv/bin/python -m tickr.cli maintain --apply  # does it
 ```
 
 - Each `*.jsonl` of a finished day folder is gzipped in place to `*.jsonl.gz` (written, read back
@@ -252,7 +261,7 @@ straight to the supervisor. Limits:
 
 ## Alerts
 
-`python -m aperture.runtime alert <kind> <text>` shows one alert. Kinds (spec section 11):
+`python -m tickr.runtime alert <kind> <text>` shows one alert. Kinds (spec section 11):
 `unprotected-position`, `stop-rejected`, `unknown-order-status`, `foreign-exposure`,
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
@@ -284,7 +293,7 @@ for it and the rest of the position may have no stop: close it in the Webull app
 ### `refused: the database holds runs of environment ...`
 
 One database belongs to one environment (spec section 10). After changing `[run] environment`,
-move `data/aperture.sqlite3` aside (keep it) or point `[run] data_dir` at another folder; the
+move `data/tickr.sqlite3` aside (keep it) or point `[run] data_dir` at another folder; the
 bot and the manual commands refuse to start on another environment's records.
 
 ## Fill to stop
@@ -345,7 +354,7 @@ broker stop while it works (the stop was cancelled before the close was sent).
 2. If the order is still working, let it work or cancel it in the app. If it ends (filled,
    cancelled, expired), the bot sees it: filled closes the trade; otherwise the bot puts a stop
    back on what is still held and sends no other close.
-3. When you have looked, `aperture clear-fence exit-not-filled:<trade>`. If the trade is still
+3. When you have looked, `tickr clear-fence exit-not-filled:<trade>`. If the trade is still
    open, the bot then sends one new closing order.
 
 ### `flatten-after-close`
@@ -360,7 +369,7 @@ the next open with nobody deciding. So the bot sends no closing order: the trade
 the operator fence `market-closed:<trade>` carries the one cause. The usual way here is a bot
 that started late, after the close (a manual start, or a restart by a supervisor), with a trade
 still open. An operator `flatten` or `emergency` in that time is refused the same way (the
-command record says "no closing order is sent now"); `aperture exit` and `aperture resume`
+command record says "no closing order is sent now"); `tickr exit` and `tickr resume`
 stop with exit 4 and print the fence.
 
 1. Open the Webull app: the position and its stop. The stop is a DAY order and expires at the
@@ -368,7 +377,7 @@ stop with exit 4 and print the fence.
 2. Close it in the Webull app (extended hours, or at the next open), or place your own stop
    for the next session.
 3. The fence does not clear itself, so nothing is sold at the next open on its own. If you
-   want the bot to close the trade instead, `aperture clear-fence market-closed:<trade>`
+   want the bot to close the trade instead, `tickr clear-fence market-closed:<trade>`
    during the regular session: the bot then sends one closing order. Cleared outside the
    session, the fence is set again at once with the same alert.
 
@@ -376,7 +385,7 @@ stop with exit 4 and print the fence.
 
 The bot's own day-end check dies with the bot. The protective stop is a DAY order and launchd
 never relaunches a crashed bot, so after a crash nothing would flatten at 15:55 ET and the
-position would go overnight without a broker-side stop. The watchdog job (`python -m aperture.runtime watchdog`)
+position would go overnight without a broker-side stop. The watchdog job (`python -m tickr.runtime watchdog`)
 is a separate process that covers this:
 
 - It starts at `[runtime] watchdog_start_local` on `launch_weekdays` and exits after its last
@@ -393,7 +402,7 @@ is a separate process that covers this:
   the flatten time (15:50 ET on a normal day), if the bot is down while its database shows an
   open trade, the watchdog starts the bot job once. It still sends nothing itself.
 - Every check and alert is one JSON line in `data/watchdog.jsonl` (`[runtime]
-  watchdog_journal_file`) and in `~/Library/Logs/Aperture/watchdog.log`.
+  watchdog_journal_file`) and in `~/Library/Logs/Tickr/watchdog.log`.
 - Exit 0: all checks clear; 1: something alerted; 2: config invalid (alert sent); 3: no session.
 - On a machine with no alert channel (not macOS) it writes a `watchdog-alert-channel-refused`
   line (`alert-channel-missing`), still runs and journals, and never exits 0, so the scheduler
@@ -444,7 +453,7 @@ recovers (no live pid, or a status file not yet rewritten); if the next check is
 From `[runtime] watchdog_restart_before_flatten_seconds` before the flatten time (300 s:
 15:50 ET on a normal day, 12:50 ET on a half day) until its last check, a watchdog bot check
 that finds the bot down while its database shows an open trade starts the bot job once:
-`[runtime] watchdog_restart_command`, by default `launchctl kickstart gui/<uid>/local.aperture.bot`
+`[runtime] watchdog_restart_command`, by default `launchctl kickstart gui/<uid>/local.tickr.bot`
 (without `-k`, so a job launchd still sees running is left alone). That is the same job the
 schedule starts: preflight again (a failure alerts `bot-did-not-start`), the supervisor, the
 single-instance lock, then the normal startup: recovery, reconciliation, the stop verified.
@@ -469,6 +478,6 @@ normal exit path. The watchdog itself never places, cancels or replaces anything
 - To keep the bot down on purpose with a position open (a manual trade), unload the bot job, or
   keep a stop marker left from an earlier stop made while flat. A new `stop-bot` is refused while
   any trade is open, so it cannot create the marker then. See docs/manual-trade.md.
-- Owner check, once on the Mac: the exit code of `launchctl kickstart gui/$(id -u)/local.aperture.bot`
+- Owner check, once on the Mac: the exit code of `launchctl kickstart gui/$(id -u)/local.tickr.bot`
   (no `-k`) for a job launchd still sees running, and for a booted-out job. Record both here.
 

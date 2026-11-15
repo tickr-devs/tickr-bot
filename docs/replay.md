@@ -1,6 +1,6 @@
 # Historical replay (simulated)
 
-`aperture.replay` runs any strategy bar by bar over recorded M1 bars and reports what would
+`tickr.replay` runs any strategy bar by bar over recorded M1 bars and reports what would
 have happened under conservative fill assumptions. Every output row and the summary carry the
 label `simulated`. A replay is an evaluation tool, never an acceptance gate (decisions.md,
 2026-11-14), and it proves nothing about real fill quality.
@@ -10,9 +10,9 @@ Fetching history from Webull is out of scope here; the tool reads files.
 ## Run
 
 ```
-python -m aperture.replay \
+python -m tickr.replay \
   --bars data/history/ABC-2026-11.jsonl data/history/XYZ-2026-11.jsonl \
-  --strategy aperture.strategy.price_action_v1 \
+  --strategy tickr.strategy.price_action_v1 \
   --values strategies/price-action-v1/strategy.toml \
   --settings config/replay.toml --config config/bot.toml \
   --out out/replay-2026-11

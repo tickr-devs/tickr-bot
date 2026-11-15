@@ -1,5 +1,5 @@
 [project]
-name = "aperture"
+name = "tickr"
 version = "0.1.0"
 description = "Single-owner intraday trading bot for US common stocks on Webull OpenAPI"
 requires-python = ">=3.12"
@@ -7,13 +7,13 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
-# Webull OpenAPI SDK, imported only by src/aperture/broker/webull.py.
+# Webull OpenAPI SDK, imported only by src/tickr/broker/webull.py.
 webull = ["webull-openapi-python-sdk==3.0.3"]
-# Anthropic SDK, imported only by src/aperture/advisor/client.py (the offline advisor, never the bot).
+# Anthropic SDK, imported only by src/tickr/advisor/client.py (the offline advisor, never the bot).
 advisor = ["anthropic==2.8.0"]
 
 [project.scripts]
-aperture = "aperture.cli:main"
+tickr = "tickr.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]

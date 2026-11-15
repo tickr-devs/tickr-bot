@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 from strategy_bars import SYMBOL, TODAY, bar, d, prior_sessions, quote
 
-from aperture import config
-from aperture.observers.loader import check_history, load_strategy, parse_modules
-from aperture.strategy import volume_shock_v1 as vs
-from aperture.strategy.base import PositionView, SymbolContext, Verdict
+from tickr import config
+from tickr.observers.loader import check_history, load_strategy, parse_modules
+from tickr.strategy import volume_shock_v1 as vs
+from tickr.strategy.base import PositionView, SymbolContext, Verdict
 
 ROOT = Path(__file__).resolve().parents[2]
 VALUES = tomllib.loads((ROOT / "strategies" / "volume-shock-v1" / "strategy.toml").read_text())

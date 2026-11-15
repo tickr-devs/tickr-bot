@@ -6,10 +6,10 @@ from decimal import Decimal
 
 from research_helpers import NY, close_at_16, flat, record, research_settings, series
 
-from aperture.calendar import CalendarCause, CalendarRefused
-from aperture.research.outcomes import outcomes, summarize
-from aperture.research.records import Admission
-from aperture.strategy.base import Verdict
+from tickr.calendar import CalendarCause, CalendarRefused
+from tickr.research.outcomes import outcomes, summarize
+from tickr.research.records import Admission
+from tickr.strategy.base import Verdict
 
 # 10:00 .. 10:06; 10:03 has no trades. ATR(2) at 10:01 = (0.3 + 0.3) / 2 = 0.3.
 ROWS = [

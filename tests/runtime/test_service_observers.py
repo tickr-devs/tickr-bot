@@ -5,15 +5,15 @@ from datetime import timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.observers.loader import LoadedStrategy
-from aperture.observers.log import DecisionLog
-from aperture.observers.runner import ObserverSet
-from aperture.runtime import service
-from aperture.runtime.alerts import Alerter, AlertKind
-from aperture.runtime.watch import ALERT, Watch
-from aperture.strategy.base import Decision, SymbolContext, Verdict
-from aperture.types import Bar
+from tickr import config
+from tickr.observers.loader import LoadedStrategy
+from tickr.observers.log import DecisionLog
+from tickr.observers.runner import ObserverSet
+from tickr.runtime import service
+from tickr.runtime.alerts import Alerter, AlertKind
+from tickr.runtime.watch import ALERT, Watch
+from tickr.strategy.base import Decision, SymbolContext, Verdict
+from tickr.types import Bar
 
 from .test_service import Bot
 
@@ -66,7 +66,7 @@ class Market:
         pass
 
     def freshness(self, last_broker_read_at):
-        from aperture.api import contract as api
+        from tickr.api import contract as api
         return api.Freshness(last_broker_read_at, None, api.StreamHealth.OFF)
 
 

@@ -33,7 +33,7 @@ from typing import Any
 
 import pytest
 
-from aperture.broker.base import (
+from tickr.broker.base import (
     BrokerError,
     OrderNotFound,
     OutcomeUnknown,
@@ -41,8 +41,8 @@ from aperture.broker.base import (
     Refused,
     ReplaceAck,
 )
-from aperture.broker.status import map_status
-from aperture.broker.webull import (
+from tickr.broker.status import map_status
+from tickr.broker.webull import (
     DETAIL_NOT_VISIBLE,
     BrokerReadFailed,
     ForeignOrdersUnreadable,
@@ -64,8 +64,8 @@ from aperture.broker.webull import (
     read_screener,
     read_snapshot,
 )
-from aperture.data.base import BarSpan, DelayedData, MarketDataError, ScreenerKind
-from aperture.types import OrderDetail, OrderState, OrderType, Side
+from tickr.data.base import BarSpan, DelayedData, MarketDataError, ScreenerKind
+from tickr.types import OrderDetail, OrderState, OrderType, Side
 
 from .test_webull_broker import OWN, broker, limit_buy
 

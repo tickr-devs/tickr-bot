@@ -2,8 +2,8 @@
 
 import pytest
 
-import aperture.cli as cli
-import aperture.runtime.__main__ as runtime_main
+import tickr.cli as cli
+import tickr.runtime.__main__ as runtime_main
 
 
 @pytest.fixture(autouse=True)

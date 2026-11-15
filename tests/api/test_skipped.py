@@ -10,19 +10,19 @@ from decimal import Decimal
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.observer_results import ObserverResults, SimulationPaths
-from aperture.api.server import settings_from_config
-from aperture.archive import compress
-from aperture.calendar import SessionCalendar
-from aperture.data.capture import BARS_FILE, read_captured_bars
-from aperture.observers.log import DecisionLog
-from aperture.replay.clock import calendar_clock
-from aperture.replay.settings import load_settings
-from aperture.research import observer_report
-from aperture.research.records import Admission, DecisionRecord
-from aperture.strategy.base import Check, Decision, Role, Verdict
+from tickr import config
+from tickr.api import contract
+from tickr.api.observer_results import ObserverResults, SimulationPaths
+from tickr.api.server import settings_from_config
+from tickr.archive import compress
+from tickr.calendar import SessionCalendar
+from tickr.data.capture import BARS_FILE, read_captured_bars
+from tickr.observers.log import DecisionLog
+from tickr.replay.clock import calendar_clock
+from tickr.replay.settings import load_settings
+from tickr.research import observer_report
+from tickr.research.records import Admission, DecisionRecord
+from tickr.strategy.base import Check, Decision, Role, Verdict
 
 from .schema_check import errors
 from .test_decisions import (

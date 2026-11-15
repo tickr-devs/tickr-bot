@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from research_helpers import HERE
 
-from aperture.config import uncommented_keys
-from aperture.research.errors import ResearchSettingsError
-from aperture.research.settings import KEYS, load_research_settings, settings_from_mapping
+from tickr.config import uncommented_keys
+from tickr.research.errors import ResearchSettingsError
+from tickr.research.settings import KEYS, load_research_settings, settings_from_mapping
 
 ROOT = HERE.parent.parent
 CONFIG = ROOT / "config" / "research.toml"

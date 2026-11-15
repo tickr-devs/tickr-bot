@@ -1,7 +1,7 @@
 """BUG reproduction (fails until fixed): a bars body with the same minute twice for one symbol
 is returned as two bars, even when they disagree (hard rule 7: refuse, never guess).
 
-`read_bars` (src/aperture/broker/webull.py:871, also read_history_bars :900 and read_daily_bars
+`read_bars` (src/tickr/broker/webull.py:871, also read_history_bars :900 and read_daily_bars
 :1215) appends every row and sorts; nothing checks (symbol, start) is unique, within a series or
 across two series of one symbol. `data/history.py` guards this itself (HistoryCause.CONFLICT),
 but discovery (`session_dollar_volume`, data/discovery.py) and runtime/evaluation.py use
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from aperture.broker.webull import MalformedResponse, read_bars
+from tickr.broker.webull import MalformedResponse, read_bars
 
 
 def bar(close: str) -> dict:

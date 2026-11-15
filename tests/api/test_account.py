@@ -9,9 +9,9 @@ from decimal import Decimal
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.server import make_server, settings_from_config
+from tickr import config
+from tickr.api import contract
+from tickr.api.server import make_server, settings_from_config
 
 from .samples import T0, account
 from .schema_check import errors

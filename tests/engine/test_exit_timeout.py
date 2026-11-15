@@ -8,14 +8,14 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.broker.fake import FakeBroker
-from aperture.config import GateResult
-from aperture.engine.core import OPERATOR_FENCES, Engine, Fence, Leg, TradeState
-from aperture.runtime.alerts import Alerter, AlertKind
-from aperture.runtime.watch import ALERT, Watch
-from aperture.store import Store
-from aperture.types import OrderType
+from tickr import config
+from tickr.broker.fake import FakeBroker
+from tickr.config import GateResult
+from tickr.engine.core import OPERATOR_FENCES, Engine, Fence, Leg, TradeState
+from tickr.runtime.alerts import Alerter, AlertKind
+from tickr.runtime.watch import ALERT, Watch
+from tickr.store import Store
+from tickr.types import OrderType
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -52,7 +52,7 @@ class Rig:
                              clock=lambda: self.epoch)
         self.notifier = Recorder()
         self.watch = Watch(self.engine, self.engine.config,
-                           Alerter(CFG.alerts, "Aperture test", self.notifier, self.now),
+                           Alerter(CFG.alerts, "Tickr test", self.notifier, self.now),
                            self.now)
 
     def run(self, steps: int = 1) -> None:

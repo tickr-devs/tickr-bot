@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.broker.base import Refused
-from aperture.broker.webull import (
+from tickr import config
+from tickr.broker.base import Refused
+from tickr.broker.webull import (
     GATE_CLOSED,
     Route,
     broker_from_config,

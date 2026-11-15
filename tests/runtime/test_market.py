@@ -4,16 +4,16 @@ from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.api import contract as api
-from aperture.broker.fake import FakeBroker
-from aperture.broker.webull import MalformedResponse
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.data.base import FakeMarketData
-from aperture.data.health import StreamHealth
-from aperture.engine.core import Engine
-from aperture.runtime.market import (
+from tickr import config
+from tickr.api import contract as api
+from tickr.broker.fake import FakeBroker
+from tickr.broker.webull import MalformedResponse
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.data.base import FakeMarketData
+from tickr.data.health import StreamHealth
+from tickr.engine.core import Engine
+from tickr.runtime.market import (
     DISCOVERY,
     DISCOVERY_FAILED,
     STREAM_ERROR,
@@ -22,8 +22,8 @@ from aperture.runtime.market import (
     MarketRuntime,
     StreamInbox,
 )
-from aperture.store import Store
-from aperture.types import Quote
+from tickr.store import Store
+from tickr.types import Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -178,7 +178,7 @@ def test_discovery_failure_is_journaled_and_retried_next_interval(tmp_path):
 
 
 def test_bot_adapters_share_one_transport_and_budget(monkeypatch):
-    from aperture.broker import webull
+    from tickr.broker import webull
 
     class Dummy:
         def __init__(self, *args):
@@ -227,7 +227,7 @@ class Budget:
 
 
 def real_session(budget):
-    from aperture.broker.webull import StreamSession
+    from tickr.broker.webull import StreamSession
     session = StreamSession(budget, lambda: MONDAY_11, lambda where, exc: None, max_symbols=100)
     session.bind(lambda symbols: None, lambda symbols: None, lambda: None)
     return session
@@ -256,7 +256,7 @@ def test_bind_before_start_sees_the_first_connect(tmp_path):
 
 
 def test_a_failing_subscribe_is_journaled_never_raised(tmp_path):
-    from aperture.broker.webull import WebullMarketData
+    from tickr.broker.webull import WebullMarketData
 
     session = real_session(Budget(fail=RuntimeError("bare SDK exception")))
     adapter = WebullMarketData.__new__(WebullMarketData)
@@ -278,7 +278,7 @@ def test_best_candidates_are_subscribed_up_to_the_configured_count(tmp_path):
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from aperture.runtime.market import DiscoveryState
+    from tickr.runtime.market import DiscoveryState
 
     rig = Rig(tmp_path, now=SATURDAY)
     limit = 2
@@ -303,8 +303,8 @@ def test_refused_candidates_never_take_the_position_off_the_stream(tmp_path):
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from aperture.broker.webull import StreamSession
-    from aperture.runtime.market import DiscoveryState
+    from tickr.broker.webull import StreamSession
+    from tickr.runtime.market import DiscoveryState
 
     limit = 2
     sent: set[str] = set()
@@ -343,8 +343,8 @@ def test_candidates_are_dropped_while_the_transport_is_down(tmp_path):
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from aperture.broker.webull import StreamSession
-    from aperture.runtime.market import DiscoveryState
+    from tickr.broker.webull import StreamSession
+    from tickr.runtime.market import DiscoveryState
 
     limit, sent = 2, set()
     reconnects = []
@@ -401,7 +401,7 @@ def candidates(*symbols):
 def tiered(tmp_path, source=None, **market_data):
     from dataclasses import replace
 
-    from aperture.runtime.market import DiscoveryState
+    from tickr.runtime.market import DiscoveryState
 
     rig = Rig(tmp_path, source=source) if source is not None else Rig(tmp_path, now=SATURDAY)
     rig.market.config = replace(CFG, market_data=replace(CFG.market_data, **market_data))
@@ -466,7 +466,7 @@ def test_the_observer_tier_is_frozen_while_a_position_is_open(tmp_path):
 
 
 def stream_rig(tmp_path, send_subscribe, budget=None, **market_data):
-    from aperture.broker.webull import StreamSession
+    from tickr.broker.webull import StreamSession
 
     sent: set[str] = set()
     reconnects: list[int] = []
@@ -541,7 +541,7 @@ def test_observer_symbols_are_unsubscribed_without_a_reconnect(tmp_path):
 
 
 def test_a_dropped_candidate_an_observer_watches_stays_on_the_optional_path(tmp_path):
-    from aperture.runtime.market import DiscoveryState
+    from tickr.runtime.market import DiscoveryState
 
     rig = tiered(tmp_path, candidate_subscriptions=1, observer_subscriptions=2)
     rig.market.bind()
@@ -595,7 +595,7 @@ def test_no_observer_symbol_is_added_while_trading_even_after_a_failed_pass(tmp_
 
 
 def test_no_unsubscribe_failure_reconnects_with_a_position_open(tmp_path):
-    from aperture.runtime.market import DiscoveryState
+    from tickr.runtime.market import DiscoveryState
 
     rig, session, sent, reconnects = stream_rig(
         tmp_path, lambda symbols: None, candidate_subscriptions=1, observer_subscriptions=0)

@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config as config_module
-from aperture.advisor.__main__ import main
-from aperture.advisor.errors import AdvisorError
-from aperture.advisor.judge import judge
-from aperture.advisor.judge import main as judge_main
-from aperture.advisor.proposal import IDEA_KEYS, parse_reply
-from aperture.advisor.run import TUNING_FILE, Status, run_backtest_advisor
-from aperture.replay.settings import load_settings
+from tickr import config as config_module
+from tickr.advisor.__main__ import main
+from tickr.advisor.errors import AdvisorError
+from tickr.advisor.judge import judge
+from tickr.advisor.judge import main as judge_main
+from tickr.advisor.proposal import IDEA_KEYS, parse_reply
+from tickr.advisor.run import TUNING_FILE, Status, run_backtest_advisor
+from tickr.replay.settings import load_settings
 
 from .test_advisor import BASE, FakeClient, answer
 
@@ -142,7 +142,7 @@ def test_idea_without_changes_writes_idea_md(tmp_path):
     assert result.status is Status.IDEA and result.proposal_folder is None
     idea = (result.folder / "idea.md").read_text()
     assert "# Strategy idea: pullback-v1" in idea
-    assert "src/aperture/strategy/pullback_v1.py" in idea
+    assert "src/tickr/strategy/pullback_v1.py" in idea
     assert "New strategy idea: pullback-v1" in (result.folder / "report.md").read_text()
     assert json.loads((result.folder / TUNING_FILE).read_text())["idea"] == "pullback-v1"
 
@@ -212,12 +212,12 @@ def test_bucket_edges_must_increase(tmp_path):
 
 
 def test_reads_what_the_real_backtest_writes(tmp_path):
-    """Contract with aperture.backtest: its own writers produce the files the advisor reads."""
-    from aperture.backtest.report import write_report
-    from aperture.backtest.settings import load_settings as load_backtest
-    from aperture.backtest.universe import PoolEntry
-    from aperture.replay.engine import ExitReason, ReplayResult, SimulatedTrade
-    from aperture.replay.report import write_all
+    """Contract with tickr.backtest: its own writers produce the files the advisor reads."""
+    from tickr.backtest.report import write_report
+    from tickr.backtest.settings import load_settings as load_backtest
+    from tickr.backtest.universe import PoolEntry
+    from tickr.replay.engine import ExitReason, ReplayResult, SimulatedTrade
+    from tickr.replay.report import write_all
 
     days = [*FIT_DAYS, date(2026, 9, 4), HOLD_DAY, date(2026, 10, 2)]
     trades = []

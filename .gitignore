@@ -15,7 +15,7 @@ dist/
 authorization/
 # Xcode per-user state (window layout, breakpoints, schemes order).
 xcuserdata/
-# The `aperture demo` folder (rebuilt by the command, never real data).
+# The `tickr demo` folder (rebuilt by the command, never real data).
 /demo/
 # SwiftPM pins Xcode writes for the root workspace; each project and package commits its own.
-/Aperture.xcworkspace/xcshareddata/swiftpm/
+/Tickr.xcworkspace/xcshareddata/swiftpm/

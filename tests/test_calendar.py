@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from aperture.calendar import (
+from tickr.calendar import (
     NEW_YORK,
     CalendarCause,
     CalendarRefused,

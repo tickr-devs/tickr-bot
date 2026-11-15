@@ -4,11 +4,11 @@ from datetime import date, datetime
 
 import pytest
 
-from aperture.calendar import NEW_YORK, CalendarCause, CalendarRefused
-from aperture.risk.causes import AdmissionCause as C
-from aperture.risk.daily import check_daily
-from aperture.risk.sizing import check_size, max_quantity
-from aperture.risk.timers import deadlines, deadlines_for
+from tickr.calendar import NEW_YORK, CalendarCause, CalendarRefused
+from tickr.risk.causes import AdmissionCause as C
+from tickr.risk.daily import check_daily
+from tickr.risk.sizing import check_size, max_quantity
+from tickr.risk.timers import deadlines, deadlines_for
 
 from .conftest import CALENDAR, CONFIG, D
 

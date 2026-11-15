@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from md_helpers import NOW, quote
 
-from aperture import config
-from aperture.data.base import FakeMarketData
-from aperture.data.health import FanOut, StreamHealth, StreamState, UntrackedSymbol
+from tickr import config
+from tickr.data.base import FakeMarketData
+from tickr.data.health import FanOut, StreamHealth, StreamState, UntrackedSymbol
 
 QUIET = timedelta(seconds=5)
 ROOT = Path(__file__).resolve().parents[2]

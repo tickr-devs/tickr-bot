@@ -8,11 +8,11 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from aperture.replay.__main__ import session_clock
-from aperture.replay.engine import ExitReason, SignalOutcome, replay
-from aperture.replay.settings import load_settings
-from aperture.strategy import price_action_v1 as pa
-from aperture.types import Bar
+from tickr.replay.__main__ import session_clock
+from tickr.replay.engine import ExitReason, SignalOutcome, replay
+from tickr.replay.settings import load_settings
+from tickr.strategy import price_action_v1 as pa
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]
 NY = ZoneInfo("America/New_York")

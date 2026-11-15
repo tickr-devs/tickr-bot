@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from conftest import HERE
 
-from aperture.replay.bars import load_bars
-from aperture.replay.errors import BarFileError, SettingsError
-from aperture.replay.settings import KEYS, load_settings, settings_from_mapping
+from tickr.replay.bars import load_bars
+from tickr.replay.errors import BarFileError, SettingsError
+from tickr.replay.settings import KEYS, load_settings, settings_from_mapping
 
 GOOD = {
     "symbol": "ABC",

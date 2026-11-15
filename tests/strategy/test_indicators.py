@@ -10,7 +10,7 @@ from fractions import Fraction
 import pytest
 from strategy_bars import bar, d, flat_session, rising_session
 
-from aperture.strategy import indicators as ind
+from tickr.strategy import indicators as ind
 
 
 def test_ema_hand_computed():

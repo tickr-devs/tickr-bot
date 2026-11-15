@@ -3,7 +3,7 @@ instead of returning a typed refusal for a finite but absurd quantity.
 
 CLAUDE.md rule 7 ("Refuse, never guess": a typed refusal with one recorded cause) and the
 admission docstring ("A refusal never guesses: missing or unknown values refuse"). Check 5
-accepts any finite Decimal quantity; `check_size` (src/aperture/risk/sizing.py) then computes
+accepts any finite Decimal quantity; `check_size` (src/tickr/risk/sizing.py) then computes
 `quantity * entry_high`, which overflows the default decimal context and raises. No current
 strategy can produce such a quantity (price-action-v1 caps it by the notional cap), so this
 matters only for a buggy or new strategy module (rule 8: strategies are swappable).
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from aperture.risk.admission import admit
+from tickr.risk.admission import admit
 
 from .conftest import D, decision, inputs
 

@@ -1,5 +1,5 @@
-# Settings of the offline backtest tool (python -m aperture.backtest). Every result is SIMULATED.
-# Read only by src/aperture/backtest/; the trading bot never reads this file. See docs/backtest.md.
+# Settings of the offline backtest tool (python -m tickr.backtest). Every result is SIMULATED.
+# Read only by src/tickr/backtest/; the trading bot never reads this file. See docs/backtest.md.
 # Universe lists, the dollar-volume floor and request sizes come from config/bot.toml, fills and
 # history depth from config/replay.toml.
 

@@ -1,7 +1,7 @@
 """BUG reproduction (fails until fixed): an out-of-range provider time escapes as a bare
 exception instead of MalformedResponse (hard rule 7, webull.py module docstring).
 
-`epoch_ms_to_utc` (src/aperture/broker/webull.py:740) checks only that the value is a positive
+`epoch_ms_to_utc` (src/tickr/broker/webull.py:740) checks only that the value is a positive
 whole number, then calls `datetime.fromtimestamp`, which raises OverflowError, ValueError or
 OSError past year 9999. `_bar_time` (webull.py:753) converts with `astimezone(UTC)`, which raises
 OverflowError at the edges of the datetime range. Snapshot `quote_time` and the stream
@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aperture.broker.webull import (
+from tickr.broker.webull import (
     MalformedResponse,
     parse_json,
     quote_from_stream,

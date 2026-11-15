@@ -9,10 +9,10 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from aperture import config
-from aperture.broker.webull import DailyBar, InstrumentPage, InstrumentRow, SymbolsRefused
-from aperture.calendar import SessionCalendar
-from aperture.types import Bar
+from tickr import config
+from tickr.broker.webull import DailyBar, InstrumentPage, InstrumentRow, SymbolsRefused
+from tickr.calendar import SessionCalendar
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]
 NY = ZoneInfo("America/New_York")

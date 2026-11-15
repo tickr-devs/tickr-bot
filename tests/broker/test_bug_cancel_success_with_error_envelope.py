@@ -1,7 +1,7 @@
 """BUG reproduction (fails until fixed): a cancel answered with a success status but an error
 envelope is reported as a sent cancel instead of OutcomeUnknown.
 
-`WebullBroker.cancel` (src/aperture/broker/webull.py:689) returns on any 2xx without looking at
+`WebullBroker.cancel` (src/tickr/broker/webull.py:689) returns on any 2xx without looking at
 the body. `place` and `replace_stop_price` treat the same answer as "not an acknowledgement" and
 raise OutcomeUnknown (read_acknowledgement / read_replace_ack). SdkTransport produces exactly
 this shape for a 2xx whose body is not JSON (`{"error_code": "UNPARSEABLE_BODY"}`).
@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from aperture.broker.base import OutcomeUnknown
-from aperture.broker.webull import WireResponse
+from tickr.broker.base import OutcomeUnknown
+from tickr.broker.webull import WireResponse
 
 from .test_webull_broker import broker
 

@@ -29,21 +29,21 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from aperture import cli, config
-from aperture.broker.base import BrokerError, Refused
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.data.base import FakeMarketData, ScreenerKind, ScreenerRow
-from aperture.engine.core import Engine, EntryRefused, Fence, Leg, SendState, TradeState
-from aperture.observers.log import DecisionLog
-from aperture.runtime.entries import EntryDesk
-from aperture.store import Store
-from aperture.strategy.base import Check, Decision, Verdict
-from aperture.types import OrderRequest, OrderType, Quote, Side, TimeInForce, TradingSession
+from tickr import cli, config
+from tickr.broker.base import BrokerError, Refused
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow
+from tickr.engine.core import Engine, EntryRefused, Fence, Leg, SendState, TradeState
+from tickr.observers.log import DecisionLog
+from tickr.runtime.entries import EntryDesk
+from tickr.store import Store
+from tickr.strategy.base import Check, Decision, Verdict
+from tickr.types import OrderRequest, OrderType, Quote, Side, TimeInForce, TradingSession
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "aperture"
+SRC = ROOT / "src" / "tickr"
 CFG = config.load(ROOT / "config" / "bot.toml")
 MONDAY_11 = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)  # a regular session, in the probe window
 
@@ -262,7 +262,7 @@ def test_only_the_webull_adapter_and_the_advisor_import_network_libraries():
 def test_the_bot_never_imports_the_advisor():
     offenders = [path.relative_to(SRC).as_posix() for path in SRC.rglob("*.py")
                  if path.relative_to(SRC).parts[0] != "advisor"
-                 and any(n == "aperture.advisor" or n.startswith("aperture.advisor.")
+                 and any(n == "tickr.advisor" or n.startswith("tickr.advisor.")
                          for n in imports(path))]
     assert offenders == []
 
@@ -278,9 +278,9 @@ def test_no_host_name_is_written_in_source():
 
 @pytest.mark.parametrize("environment", sorted(CFG.environments))
 def test_every_adapter_request_goes_to_an_allowlisted_host(tmp_path, monkeypatch, environment):
-    """The whole adapter stack, built from config as `aperture run` builds it, in every
+    """The whole adapter stack, built from config as `tickr run` builds it, in every
     environment: token setup, account reads, market data and (where the gate allows) orders."""
-    from aperture.broker.webull import bot_adapters, stream_settings_from_config
+    from tickr.broker.webull import bot_adapters, stream_settings_from_config
 
     cfg = config.load(repo_copy(tmp_path, environment))
     canaries = plant_canaries(monkeypatch, cfg)
@@ -318,9 +318,9 @@ def test_no_credential_value_reaches_output_logs_files_or_the_database(
     refused entry, a protected trade with a failed read, an exit, a supervised `run` with an
     alert, status file, capture, decision log and the daily backup. No canary may appear in
     stdout, stderr, log records or ANY file written under the repo copy."""
-    from aperture.broker.webull import broker_from_config
-    from aperture.runtime import __main__ as runtime_main
-    from aperture.runtime import service
+    from tickr.broker.webull import broker_from_config
+    from tickr.runtime import __main__ as runtime_main
+    from tickr.runtime import service
 
     caplog.set_level(logging.DEBUG)
     bot_toml = repo_copy(tmp_path, replacements=(
@@ -443,7 +443,7 @@ def test_without_a_valid_authorization_no_path_sends_a_trading_request(
         tmp_path, monkeypatch, case):
     """Engine, entry desk, the manual trade command and the bot service, all over the real
     adapter: zero place or cancel requests reach the wire, while reads still work."""
-    from aperture.broker.webull import broker_from_config
+    from tickr.broker.webull import broker_from_config
 
     bot_toml = gated_repo(tmp_path, INVALID_AUTHORIZATIONS[case])
     cfg = config.load(bot_toml)

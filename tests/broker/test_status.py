@@ -4,8 +4,8 @@ from decimal import Decimal as D
 
 import pytest
 
-from aperture.broker.status import map_status
-from aperture.types import OrderState as S
+from tickr.broker.status import map_status
+from tickr.types import OrderState as S
 
 
 @pytest.mark.parametrize("raw,qty,filled,expected", [

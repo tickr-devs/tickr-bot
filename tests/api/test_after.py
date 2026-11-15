@@ -10,21 +10,21 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.after import AfterSettings, Closes, SkippedAfter, overshoot, prices_after
-from aperture.api.history import History, HistoryPaths, closed_trades
-from aperture.api.observer_results import SimulationPaths
-from aperture.api.server import settings_from_config
-from aperture.calendar import SessionCalendar
-from aperture.config import ConfigError
-from aperture.data.capture import read_captured_bars
-from aperture.observers.log import DecisionLog
-from aperture.replay.clock import calendar_clock
-from aperture.replay.settings import load_settings
-from aperture.research.records import Admission
-from aperture.research.whatif import simulate_one
-from aperture.strategy.base import Role
+from tickr import config
+from tickr.api import contract
+from tickr.api.after import AfterSettings, Closes, SkippedAfter, overshoot, prices_after
+from tickr.api.history import History, HistoryPaths, closed_trades
+from tickr.api.observer_results import SimulationPaths
+from tickr.api.server import settings_from_config
+from tickr.calendar import SessionCalendar
+from tickr.config import ConfigError
+from tickr.data.capture import read_captured_bars
+from tickr.observers.log import DecisionLog
+from tickr.replay.clock import calendar_clock
+from tickr.replay.settings import load_settings
+from tickr.research.records import Admission
+from tickr.research.whatif import simulate_one
+from tickr.strategy.base import Role
 
 from .schema_check import errors
 from .test_decisions import ACTIVE, ROOT, _write
@@ -133,7 +133,7 @@ def test_closes_come_from_the_calendar_and_name_a_refused_day():
 
 @pytest.fixture
 def paths(tmp_path) -> HistoryPaths:
-    return HistoryPaths("sandbox", tmp_path / "aperture.sqlite3", tmp_path / "capture" / "sandbox",
+    return HistoryPaths("sandbox", tmp_path / "tickr.sqlite3", tmp_path / "capture" / "sandbox",
                         CALENDAR, Decimal(900))
 
 

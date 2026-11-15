@@ -1,4 +1,4 @@
-"""`python -m aperture.probes`: the chart probes C1 and C2 against fakes. No Webull, no SDK."""
+"""`python -m tickr.probes`: the chart probes C1 and C2 against fakes. No Webull, no SDK."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config, probes
-from aperture.api import contract as api
-from aperture.broker.base import RateLimited
-from aperture.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
-from aperture.broker.webull import BrokerReadFailed, Route
-from aperture.cli import data_paths
-from aperture.data.base import FakeMarketData
+from tickr import config, probes
+from tickr.api import contract as api
+from tickr.broker.base import RateLimited
+from tickr.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
+from tickr.broker.webull import BrokerReadFailed, Route
+from tickr.cli import data_paths
+from tickr.data.base import FakeMarketData
 
 ROOT = Path(__file__).resolve().parents[1]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -185,7 +185,7 @@ def test_chart_limit_starts_its_processes_and_writes_the_answer(tmp_path):
     def launch(commands: list[list[str]]) -> list[int]:
         assert len(commands) == cfg.probe.chart_limit_processes
         for index, command in enumerate(commands):
-            assert command[1:6] == ["-m", "aperture.probes", "--config", str(path),
+            assert command[1:6] == ["-m", "tickr.probes", "--config", str(path),
                                     "chart-limit-worker"]
             out, start = Path(command[command.index("--out") + 1]), command[-1]
             assert datetime.fromisoformat(start) == T0 + timedelta(

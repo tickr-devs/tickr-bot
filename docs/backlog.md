@@ -21,10 +21,10 @@ Out of scope for v1. Nothing here is built unless a task names it. The full orig
 - Spike-entry setup block (owner wants it back as its own block; values open).
 - Account page completeness (balances, buying power, all broker fields), fee evidence, gRPC trade events.
 - Production readiness: authorization record form, readiness checklist, enabling day.
-- Store maintenance beyond `aperture maintain` (docs/operations.md): pruning the prior-session `history/` cache, deleting very old archives.
+- Store maintenance beyond `tickr maintain` (docs/operations.md): pruning the prior-session `history/` cache, deleting very old archives.
 
 ## From the old bot's tracker (reviewed 2026-11-14)
-Ideas from the frozen `Trading` tracker (open and closed tasks) that Aperture does not have yet; old numbers in brackets. Old-tracker answers are not owner decisions until recorded in `docs/decisions.md`.
+Ideas from the frozen `Trading` tracker (open and closed tasks) that Tickr does not have yet; old numbers in brackets. Old-tracker answers are not owner decisions until recorded in `docs/decisions.md`.
 
 Strategy and research:
 - **No-progress exit** as a strategy version: close when price has not moved X R in favour within N minutes; X and N were never chosen (old Q43); judge it by replay and observers first (old #083). Built as candidate `price-action-v2` with provisional X and N (docs/observers.md); not active.

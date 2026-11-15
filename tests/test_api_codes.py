@@ -11,16 +11,16 @@ import json
 import re
 from pathlib import Path
 
-from aperture.api import reasons
-from aperture.api.contract import OWN_TRADE_OPEN, BotState
-from aperture.engine.core import Fence
-from aperture.risk.causes import AdmissionCause
+from tickr.api import reasons
+from tickr.api.contract import OWN_TRADE_OPEN, BotState
+from tickr.engine.core import Fence
+from tickr.risk.causes import AdmissionCause
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "apps" / "scripts" / "kit_api_strings.py"
 REASONS_SCRIPT = ROOT / "apps" / "scripts" / "kit_reason_strings.py"
-KIT_CATALOG = ROOT / "apps/shared/Sources/ApertureKit/Resources/Localizable.xcstrings"
-SERVICE = ROOT / "src" / "aperture" / "runtime" / "service.py"
+KIT_CATALOG = ROOT / "apps/shared/Sources/TickrKit/Resources/Localizable.xcstrings"
+SERVICE = ROOT / "src" / "tickr" / "runtime" / "service.py"
 
 
 def load():

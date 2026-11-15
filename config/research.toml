@@ -1,6 +1,6 @@
-# Settings of the signal research tools (python -m aperture.research outcomes). Results are
+# Settings of the signal research tools (python -m tickr.research outcomes). Results are
 # observed price moves after recorded decisions, never profit. Read only by
-# src/aperture/research/; the trading bot never reads this file. See docs/research.md.
+# src/tickr/research/; the trading bot never reads this file. See docs/research.md.
 # The what-if simulation uses config/replay.toml instead, so it fills exactly like the replay.
 
 [research]

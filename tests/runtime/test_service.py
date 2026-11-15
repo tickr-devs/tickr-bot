@@ -8,16 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from aperture import cli, config
-from aperture.api import contract as api
-from aperture.broker.base import RateLimited
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.data.base import FakeMarketData
-from aperture.engine.core import Engine, Fence, TradeState
-from aperture.runtime import service, stopmarker
-from aperture.store import Store
+from tickr import cli, config
+from tickr.api import contract as api
+from tickr.broker.base import RateLimited
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.data.base import FakeMarketData
+from tickr.engine.core import Engine, Fence, TradeState
+from tickr.runtime import service, stopmarker
+from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -110,7 +110,7 @@ class StubEvaluator:
 
 class StubMarket:
     def __init__(self) -> None:
-        from aperture.runtime.market import StreamInbox
+        from tickr.runtime.market import StreamInbox
 
         self.inbox = StreamInbox()
         self.watch: set[str] = set()
@@ -127,7 +127,7 @@ class StubMarket:
 
 
 def test_with_an_evaluator_the_loop_runs_the_strategy_and_entries_are_open(tmp_path):
-    from aperture.runtime.market import DiscoveryState
+    from tickr.runtime.market import DiscoveryState
 
     bot = Bot(tmp_path)
     market, evaluator = StubMarket(), StubEvaluator()
@@ -624,7 +624,7 @@ def test_cli_run_obeys_stop_bot_then_refuses_until_cleared(tmp_path, monkeypatch
     store.close()
     assert api.read_status(paths.status).bot_state is api.BotState.STOPPED
     assert cli.main(["--config", str(bot_toml), "run"]) == 3
-    assert "aperture clear-stop" in capsys.readouterr().err
+    assert "tickr clear-stop" in capsys.readouterr().err
     store = Store.open(database, busy_timeout_seconds=0)
     assert store.run_count() == runs  # refused before any run was recorded
     store.close()

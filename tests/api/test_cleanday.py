@@ -9,14 +9,14 @@ from typing import Any
 
 import pytest
 
-from aperture.api import cleanday
-from aperture.api import contract as api
-from aperture.api.cleanday import clean_days
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.engine.core import Fence
-from aperture.runtime import account, dayend, market, service, watch
-from aperture.runtime.alerts import AlertKind
-from aperture.store import Store
+from tickr.api import cleanday
+from tickr.api import contract as api
+from tickr.api.cleanday import clean_days
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.engine.core import Fence
+from tickr.runtime import account, dayend, market, service, watch
+from tickr.runtime.alerts import AlertKind
+from tickr.store import Store
 
 DAY = date(2026, 11, 16)
 NEXT = date(2026, 11, 17)
@@ -215,7 +215,7 @@ def test_no_database_is_unknown(tmp_path):
 
 
 def test_days_carry_the_verdict(tmp_path):
-    from aperture.api.history import History, HistoryPaths
+    from tickr.api.history import History, HistoryPaths
 
     journal = _clean_day(tmp_path)
     journal.store.close()

@@ -10,17 +10,17 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config as config_module
-from aperture.api import contract
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK
-from aperture.cli import data_paths
-from aperture.lock import SingleInstanceLock
-from aperture.runtime import __main__ as runtime_main
-from aperture.runtime import stopmarker, watchdog
-from aperture.runtime.alerts import Alerter
-from aperture.store import Store
-from aperture.types import OrderDetail, OrderState, OrderType, Position, Side
+from tickr import config as config_module
+from tickr.api import contract
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK
+from tickr.cli import data_paths
+from tickr.lock import SingleInstanceLock
+from tickr.runtime import __main__ as runtime_main
+from tickr.runtime import stopmarker, watchdog
+from tickr.runtime.alerts import Alerter
+from tickr.store import Store
+from tickr.types import OrderDetail, OrderState, OrderType, Position, Side
 
 MONDAY_OPEN = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)  # 09:30 ET
 STATUS_EXAMPLE = Path(__file__).resolve().parents[1] / "api" / "fixtures" / "status-v1.example.json"
@@ -94,7 +94,7 @@ def make(cfg, clock: Clock, connect, tmp_path: Path, runner: Runs | None = None)
     recorder = Recorder()
     day = watchdog.market_day(cfg, clock())
     guard = watchdog.Watchdog(
-        cfg, day, connect=connect, alerter=Alerter(cfg.alerts, "Aperture", recorder, clock),
+        cfg, day, connect=connect, alerter=Alerter(cfg.alerts, "Tickr", recorder, clock),
         journal=watchdog.Journal(tmp_path / "watchdog.jsonl"), clock=clock, sleep=clock.sleep,
         lock_path=lock_path, database=database, status_path=status_path(cfg),
         runner=runner if runner is not None else Runs())
@@ -399,7 +399,7 @@ def test_restart_decision_table(cfg, tmp_path, case, expected, started):
     if started:
         ((command, timeout),) = runs.calls
         assert command == ["/bin/launchctl", "kickstart",
-                           f"gui/{os.getuid()}/local.aperture.bot"]
+                           f"gui/{os.getuid()}/local.tickr.bot"]
         assert timeout == cfg.runtime.watchdog_restart_timeout_seconds
         assert watchdog.restarted_on(record) == date(2026, 11, 16)
 
@@ -425,7 +425,7 @@ def test_restart_happens_once_a_day_and_is_recorded_before_the_command(cfg, tmp_
     assert seen == [date(2026, 11, 16)] and kinds(recorder) == ["bot-down-with-open-trade"]
     lines = [r for r in records(tmp_path / "watchdog.jsonl") if r["record"] == watchdog.RESTART]
     assert [(r["started"], r["command"][-1]) for r in lines] == [
-        (True, "gui/{uid}/local.aperture.bot")]
+        (True, "gui/{uid}/local.tickr.bot")]
 
 
 @pytest.mark.parametrize("result,cause", [(1, "restart command exited 1"),
@@ -496,7 +496,7 @@ def test_after_a_restart_a_flat_broker_and_running_bot_are_quiet(cfg, tmp_path):
 
 def test_restart_command_names_the_bot_job_label(config_path):
     cfg = config_module.load(config_path)
-    template = (cfg.root / "ops" / "launchd" / "local.aperture.bot.plist.template").read_text()
+    template = (cfg.root / "ops" / "launchd" / "local.tickr.bot.plist.template").read_text()
     label = cfg.runtime.watchdog_restart_command[-1].rsplit("/", 1)[1]
     assert f"<key>Label</key>\n  <string>{label}</string>" in template
     assert "-k" not in cfg.runtime.watchdog_restart_command  # never kills a running job

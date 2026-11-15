@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from aperture.api.contract import (
+from tickr.api.contract import (
     AccountOrder,
     AccountPosition,
     AccountV1,

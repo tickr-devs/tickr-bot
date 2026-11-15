@@ -35,7 +35,7 @@ jobs:
           # Its own command, so a failing diff stops the job instead of reading as "no changes".
           files=$(git diff --name-only --no-renames "$BASE...$HEAD")
           others=$(printf '%s\n' "$files" | grep -Ev \
-            '^(docs/|apps/(ios|macos|shared)/|Aperture\.xcworkspace/|README\.md$|CLAUDE\.md$|\.github/workflows/(ios|macos)-app\.yml$)' \
+            '^(docs/|apps/(ios|macos|shared)/|Tickr\.xcworkspace/|README\.md$|CLAUDE\.md$|\.github/workflows/(ios|macos)-app\.yml$)' \
             || true)
           if [ -n "$others" ]; then echo "python=true"; else echo "python=false"; fi >> "$GITHUB_OUTPUT"
   test:
@@ -73,8 +73,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t aperture:ci .
+      - run: docker build -t tickr:ci .
       - run: docker compose -f ops/docker/compose.yaml --profile jobs config -q
         env:
-          APERTURE_CONFIG_HOST: /srv/aperture/etc/bot.toml
-          APERTURE_ENV_FILE_HOST: /srv/aperture/etc/env
+          TICKR_CONFIG_HOST: /srv/tickr/etc/bot.toml
+          TICKR_ENV_FILE_HOST: /srv/tickr/etc/env

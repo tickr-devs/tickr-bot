@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.broker.base import OutcomeUnknown, RateLimited
-from aperture.broker.fake import FakeBroker
-from aperture.config import GateResult
-from aperture.engine.core import Engine, EntryRefused, Fence, Leg, SendState, TradeState
-from aperture.store import Store
-from aperture.types import OrderRequest, OrderState, OrderType, Position, Side, TimeInForce
-from aperture.types import TradingSession as Session
+from tickr import config
+from tickr.broker.base import OutcomeUnknown, RateLimited
+from tickr.broker.fake import FakeBroker
+from tickr.config import GateResult
+from tickr.engine.core import Engine, EntryRefused, Fence, Leg, SendState, TradeState
+from tickr.store import Store
+from tickr.types import OrderRequest, OrderState, OrderType, Position, Side, TimeInForce
+from tickr.types import TradingSession as Session
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -342,7 +342,7 @@ def test_f3_absent_requires_open_orders_and_late_fill_is_resurrected(store):
 def test_f3_absent_not_decided_while_order_is_in_open_orders(store):
     class DetailBlind(FakeBroker):
         def order_detail(self, client_order_id):
-            from aperture.broker.base import OrderNotFound
+            from tickr.broker.base import OrderNotFound
             raise OrderNotFound(client_order_id)
 
     b = DetailBlind()
@@ -501,7 +501,7 @@ def test_exit_refused_restores_protection_and_blocks_repeat_requests(store):
 
 
 def test_r1_a_stop_with_unreadable_detail_cannot_starve_the_entry(store):
-    from aperture.broker.base import BrokerError
+    from tickr.broker.base import BrokerError
 
     class StuckStopDetail(FakeBroker):
         stuck: set = set()
@@ -531,7 +531,7 @@ class StuckStop(FakeBroker):
     stuck: set = set()
 
     def order_detail(self, cid):
-        from aperture.broker.base import BrokerError
+        from tickr.broker.base import BrokerError
 
         if cid in self.stuck:
             raise BrokerError("DETAIL_NOT_VISIBLE")

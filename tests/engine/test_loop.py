@@ -3,12 +3,12 @@ from __future__ import annotations
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.broker.fake import FakeBroker
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Leg
-from aperture.engine.loop import run
-from aperture.store import Store
+from tickr import config
+from tickr.broker.fake import FakeBroker
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Leg
+from tickr.engine.loop import run
+from tickr.store import Store
 
 CFG = config.load(Path(__file__).resolve().parents[2] / "config" / "bot.toml")
 
@@ -40,7 +40,7 @@ def _engine(tmp_path, broker):
 
 
 def test_drain_cancels_entry_protects_partial_fill_and_leaves_stop(tmp_path):
-    from aperture.engine.loop import drain
+    from tickr.engine.loop import drain
     broker = FakeBroker()
     engine = _engine(tmp_path, broker)
     trade = engine.open_trade("ABC", D(3), D(10), D(9), D(1))
@@ -62,7 +62,7 @@ def test_drain_cancels_entry_protects_partial_fill_and_leaves_stop(tmp_path):
 
 
 def test_drain_deadline_returns_false(tmp_path):
-    from aperture.engine.loop import drain
+    from tickr.engine.loop import drain
 
     class NeverCancels(FakeBroker):
         def cancel(self, client_order_id):
@@ -82,7 +82,7 @@ def test_drain_deadline_returns_false(tmp_path):
 
 
 def test_drain_mid_teardown_puts_protection_back_instead_of_closing(tmp_path):
-    from aperture.engine.loop import drain
+    from tickr.engine.loop import drain
     broker = FakeBroker()
     engine = _engine(tmp_path, broker)
     trade = engine.open_trade("ABC", D(2), D(10), D(9), D(1))

@@ -11,19 +11,19 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from aperture import config
-from aperture.observers.errors import ObserverError
-from aperture.observers.loader import (
+from tickr import config
+from tickr.observers.errors import ObserverError
+from tickr.observers.loader import (
     LoadedStrategy,
     load_active,
     load_observers,
     parse_modules,
 )
-from aperture.observers.log import DecisionLog
-from aperture.observers.runner import ObserverSet
-from aperture.research.records import Admission, load_records
-from aperture.strategy.base import Decision, PositionView, Role, SymbolContext, Verdict
-from aperture.types import Bar
+from tickr.observers.log import DecisionLog
+from tickr.observers.runner import ObserverSet
+from tickr.research.records import Admission, load_records
+from tickr.strategy.base import Decision, PositionView, Role, SymbolContext, Verdict
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 NY = ZoneInfo("America/New_York")
@@ -289,7 +289,7 @@ def test_real_strategy_variant_runs_as_observer(tmp_path):
 
 
 def test_log_is_safe_for_two_writers(tmp_path):
-    from aperture.research.records import DecisionRecord
+    from tickr.research.records import DecisionRecord
 
     log = DecisionLog(tmp_path / "d")
     decision = Decision("s", "1", "ABC", Verdict.WATCH, ())
@@ -311,8 +311,8 @@ def test_log_is_safe_for_two_writers(tmp_path):
 def test_freeze_drops_the_loss_budget_and_a_stale_quote():
     from datetime import timedelta
 
-    from aperture.observers.runner import freeze
-    from aperture.types import Quote
+    from tickr.observers.runner import freeze
+    from tickr.types import Quote
 
     base = context()
     at = base.bars[-1].start + 2 * M1
@@ -326,7 +326,7 @@ def test_freeze_drops_the_loss_budget_and_a_stale_quote():
 
 
 def _quote_at(provider, receipt):
-    from aperture.types import Quote
+    from tickr.types import Quote
 
     return Quote("ABC", Decimal(1), Decimal(2), Decimal(1), Decimal(1), provider, receipt)
 
@@ -338,7 +338,7 @@ def _quote_at(provider, receipt):
     (0, 1, False),      # received after the evaluation time
 ])
 def test_freeze_keeps_only_quotes_admission_would_accept(provider_offset, receipt_offset, kept):
-    from aperture.observers.runner import freeze
+    from tickr.observers.runner import freeze
 
     base = context()
     at = base.bars[-1].start + 2 * M1
@@ -348,7 +348,7 @@ def test_freeze_keeps_only_quotes_admission_would_accept(provider_offset, receip
 
 
 def test_freeze_drops_a_naive_quote():
-    from aperture.observers.runner import freeze
+    from tickr.observers.runner import freeze
 
     base = context()
     at = base.bars[-1].start + 2 * M1

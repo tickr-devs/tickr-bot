@@ -5,11 +5,11 @@ from decimal import Decimal
 import pytest
 from research_helpers import CLOCK, flat, record, replay_settings, series
 
-from aperture.replay.engine import ExitReason
-from aperture.research.errors import ResearchError
-from aperture.research.records import Admission
-from aperture.research.whatif import WhatIfOutcome, summarize, what_if
-from aperture.strategy.base import Role, Verdict
+from tickr.replay.engine import ExitReason
+from tickr.research.errors import ResearchError
+from tickr.research.records import Admission
+from tickr.research.whatif import WhatIfOutcome, summarize, what_if
+from tickr.strategy.base import Role, Verdict
 
 # Replay test settings: slippage = max(0.1 % of price, 0.01), entry_wait_bars = 2.
 DECISION = ("10.00", "10.05", "9.95", "10.05")

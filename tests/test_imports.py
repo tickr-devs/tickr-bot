@@ -1,6 +1,6 @@
-from aperture.broker.base import Broker, OutcomeUnknown, Refused
-from aperture.strategy.base import Check, Decision, Verdict
-from aperture.types import TERMINAL_STATES, OrderState
+from tickr.broker.base import Broker, OutcomeUnknown, Refused
+from tickr.strategy.base import Check, Decision, Verdict
+from tickr.types import TERMINAL_STATES, OrderState
 
 
 def test_interfaces_import():

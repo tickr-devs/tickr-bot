@@ -7,10 +7,10 @@ from decimal import Decimal
 import pytest
 from conftest import CLOCK, FLATTEN, LAST_ENTRY, NY, REGULAR_OPEN, at, enter, series
 
-from aperture.replay.clock import fixed_clock
-from aperture.replay.engine import ExitReason, SignalOutcome, replay
-from aperture.replay.errors import ReplayError, StrategyContractError
-from aperture.strategy.base import Decision, Verdict
+from tickr.replay.clock import fixed_clock
+from tickr.replay.engine import ExitReason, SignalOutcome, replay
+from tickr.replay.errors import ReplayError, StrategyContractError
+from tickr.strategy.base import Decision, Verdict
 
 D = Decimal
 FLAT = ("10.00", "10.05", "9.95", "10.00")

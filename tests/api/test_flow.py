@@ -8,18 +8,18 @@ from decimal import Decimal
 
 import pytest
 
-from aperture.api import contract
-from aperture.api.contract import closeness
-from aperture.api.history import History, HistoryPaths
-from aperture.broker.fake import FakeBroker
-from aperture.config import GateResult
-from aperture.data.base import ScreenerKind, ScreenerRow
-from aperture.data.capture import CaptureWriter
-from aperture.engine.core import Engine
-from aperture.observers.log import DecisionLog
-from aperture.research.records import Admission
-from aperture.store import Store
-from aperture.strategy.base import Check, Verdict
+from tickr.api import contract
+from tickr.api.contract import closeness
+from tickr.api.history import History, HistoryPaths
+from tickr.broker.fake import FakeBroker
+from tickr.config import GateResult
+from tickr.data.base import ScreenerKind, ScreenerRow
+from tickr.data.capture import CaptureWriter
+from tickr.engine.core import Engine
+from tickr.observers.log import DecisionLog
+from tickr.research.records import Admission
+from tickr.store import Store
+from tickr.strategy.base import Check, Verdict
 
 from .samples import account, status
 from .test_decisions import (

@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation
-from aperture.strategy.base import Decision, Verdict
-from aperture.types import Quote
+from tickr import config
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation
+from tickr.strategy.base import Decision, Verdict
+from tickr.types import Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = config.load(ROOT / "config" / "bot.toml")

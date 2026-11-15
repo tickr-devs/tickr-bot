@@ -1,6 +1,6 @@
 # Backtest over past gainers (simulated)
 
-`aperture.backtest` answers "does the strategy have an edge?" before the first trade: it rebuilds
+`tickr.backtest` answers "does the strategy have an edge?" before the first trade: it rebuilds
 which symbols were gainers on each past session, replays the strategy on them minute by minute
 with the replay engine (`docs/replay.md`), and reports the result twice: every signal on its
 own, and what the bot could have taken under its risk limits. Everything is `simulated`; it is
@@ -10,10 +10,10 @@ an evaluation tool, never an acceptance gate (decisions.md, 2026-11-14). The bot
 
 ```
 # On the owner's Mac (read-only market data of the configured environment, its credentials):
-python -m aperture.backtest fetch-all --out data/backtest --first 2026-08-17 --last 2026-11-13
+python -m tickr.backtest fetch-all --out data/backtest --first 2026-08-17 --last 2026-11-13
 # Anywhere (offline):
-python -m aperture.backtest run --out data/backtest --results out/backtest \
-  --strategy aperture.strategy.price_action_v1 --values strategies/price-action-v1/strategy.toml
+python -m tickr.backtest run --out data/backtest --results out/backtest \
+  --strategy tickr.strategy.price_action_v1 --values strategies/price-action-v1/strategy.toml
 ```
 
 `fetch-all` = `fetch-universe`, `fetch-daily`, `select`, `fetch-minutes` (each also runs alone).

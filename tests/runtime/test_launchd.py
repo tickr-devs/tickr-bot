@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config as config_module
-from aperture.runtime import launchd
+from tickr import config as config_module
+from tickr.runtime import launchd
 
-PATHS = launchd.Paths(repo=Path("/Users/o/Aperture"),
-                      python=Path("/Users/o/Aperture/.venv/bin/python"),
-                      config=Path("/Users/o/Aperture/config/bot.toml"),
-                      env_file=Path("/Users/o/.config/aperture/env & more"),
-                      log_dir=Path("/Users/o/Library/Logs/Aperture"))
+PATHS = launchd.Paths(repo=Path("/Users/o/Tickr"),
+                      python=Path("/Users/o/Tickr/.venv/bin/python"),
+                      config=Path("/Users/o/Tickr/config/bot.toml"),
+                      env_file=Path("/Users/o/.config/tickr/env & more"),
+                      log_dir=Path("/Users/o/Library/Logs/Tickr"))
 
 
 def _render(config_path: Path, repo: Path, out: Path) -> dict[str, dict]:
@@ -25,16 +25,16 @@ def _render(config_path: Path, repo: Path, out: Path) -> dict[str, dict]:
 
 def test_templates_render_to_valid_plists(config_path, repo, tmp_path):
     jobs = _render(config_path, repo, tmp_path / "out")
-    assert set(jobs) == {"local.aperture.preflight.plist", "local.aperture.bot.plist",
-                         "local.aperture.api.plist", "local.aperture.watchdog.plist",
-                         "local.aperture.test-alert.plist"}
+    assert set(jobs) == {"local.tickr.preflight.plist", "local.tickr.bot.plist",
+                         "local.tickr.api.plist", "local.tickr.watchdog.plist",
+                         "local.tickr.test-alert.plist"}
     for job in jobs.values():
         assert job["WorkingDirectory"] == str(PATHS.repo)
 
 
 def test_bot_is_never_relaunched_and_gets_exit_time(config_path, repo, tmp_path):
     cfg = config_module.load(config_path)
-    bot = _render(config_path, repo, tmp_path / "out")["local.aperture.bot.plist"]
+    bot = _render(config_path, repo, tmp_path / "out")["local.tickr.bot.plist"]
     assert bot["KeepAlive"] is False and bot["RunAtLoad"] is False
     assert bot["ExitTimeOut"] == cfg.runtime.bot_exit_timeout_seconds
     hour, minute = map(int, cfg.runtime.bot_start_local.split(":"))
@@ -46,10 +46,10 @@ def test_bot_is_never_relaunched_and_gets_exit_time(config_path, repo, tmp_path)
 
 def test_api_always_on_and_preflight_scheduled(config_path, repo, tmp_path):
     jobs = _render(config_path, repo, tmp_path / "out")
-    api = jobs["local.aperture.api.plist"]
+    api = jobs["local.tickr.api.plist"]
     assert api["KeepAlive"] is True and api["RunAtLoad"] is True
     assert "ENV_FILE" not in str(api) and str(PATHS.env_file) not in str(api)
-    preflight = jobs["local.aperture.preflight.plist"]
+    preflight = jobs["local.tickr.preflight.plist"]
     assert preflight["KeepAlive"] is False
     assert len(preflight["StartCalendarInterval"]) == len(
         config_module.load(config_path).runtime.launch_weekdays)
@@ -139,20 +139,20 @@ def test_watchdog_job_scheduled_and_both_long_jobs_keep_the_mac_awake(config_pat
                                                                       tmp_path):
     cfg = config_module.load(config_path)
     jobs = _render(config_path, repo, tmp_path / "out")
-    dog = jobs["local.aperture.watchdog.plist"]
+    dog = jobs["local.tickr.watchdog.plist"]
     assert dog["KeepAlive"] is False and dog["RunAtLoad"] is False
     hour, minute = map(int, cfg.runtime.watchdog_start_local.split(":"))
     assert dog["StartCalendarInterval"] == [
         {"Weekday": d, "Hour": hour, "Minute": minute} for d in cfg.runtime.launch_weekdays]
     assert dog["ProgramArguments"][2].endswith('--config "$2" watchdog')
-    assert '--config "$2" run-bot' in jobs["local.aperture.bot.plist"]["ProgramArguments"][2]
-    for name in ("local.aperture.bot.plist", "local.aperture.watchdog.plist"):
+    assert '--config "$2" run-bot' in jobs["local.tickr.bot.plist"]["ProgramArguments"][2]
+    for name in ("local.tickr.bot.plist", "local.tickr.watchdog.plist"):
         script = jobs[name]["ProgramArguments"][2]
         # A side process waiting on the job's own pid; the job's process is still exec'd, so
         # launchd's SIGTERM reaches the supervisor directly.
         assert '/usr/bin/caffeinate -i -s -w $$ >/dev/null 2>&1 & exec "$1"' in script
-    assert "caffeinate" not in str(jobs["local.aperture.preflight.plist"])
-    test = jobs["local.aperture.test-alert.plist"]  # runs only on a manual kickstart
+    assert "caffeinate" not in str(jobs["local.tickr.preflight.plist"])
+    test = jobs["local.tickr.test-alert.plist"]  # runs only on a manual kickstart
     assert test["RunAtLoad"] is False and test["KeepAlive"] is False
     assert "StartCalendarInterval" not in test
     assert test["ProgramArguments"][:2] == dog["ProgramArguments"][:2]  # same program chain

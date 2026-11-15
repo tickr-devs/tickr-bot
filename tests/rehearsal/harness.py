@@ -1,4 +1,4 @@
-"""Run the real `aperture run` (cli.main) against a `World` on a fake clock.
+"""Run the real `tickr run` (cli.main) against a `World` on a fake clock.
 
 Everything below the adapters is production code: config, store, engine, market runtime,
 discovery, history, the active strategy, admission, alerts, status and backups. Only the broker,
@@ -18,11 +18,11 @@ from typing import Any
 
 import pytest
 
-from aperture import cli, config
-from aperture.api import contract as api
-from aperture.runtime import service
-from aperture.store import JournalRow, Store
 from rehearsal.world import World, flat_session, ny
+from tickr import cli, config
+from tickr.api import contract as api
+from tickr.runtime import service
+from tickr.store import JournalRow, Store
 
 ROOT = Path(__file__).resolve().parents[2]
 DAY = date(2026, 11, 16)  # a Monday; the five sessions before it are Nov 9-13
@@ -71,7 +71,7 @@ class Rehearsal:
     # --- driving -------------------------------------------------------------------------
 
     def run_until(self, clock: str) -> int:
-        """`aperture run` from the world's current time until SIGTERM at `clock` (New York)."""
+        """`tickr run` from the world's current time until SIGTERM at `clock` (New York)."""
         self.world.at(ny(DAY, clock), lambda: os.kill(os.getpid(), signal.SIGTERM))
         return cli.main(["--config", str(self.bot_toml), "run"])
 

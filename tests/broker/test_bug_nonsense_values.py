@@ -1,7 +1,7 @@
 """BUG reproduction (fails until fixed): the Webull readers pass values that cannot be true
 (hard rule 7: refuse, never guess).
 
-- `read_order` (src/aperture/broker/webull.py) returns a FILLED order whose `filled_price` is 0
+- `read_order` (src/tickr/broker/webull.py) returns a FILLED order whose `filled_price` is 0
   or negative: the fill price feeds realised P&L and the stop distance.
 - `_require` treats only None and "" as missing, so a blank `symbol` (" ") is returned as the
   symbol " " by `read_order`, `read_positions` and `read_snapshot`.
@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from aperture.broker.webull import (
+from tickr.broker.webull import (
     MalformedResponse,
     read_order_detail,
     read_positions,

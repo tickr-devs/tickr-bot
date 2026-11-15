@@ -15,10 +15,10 @@ from typing import Any
 
 import pytest
 
-from aperture import config
-from aperture.broker.base import RateLimited
-from aperture.broker.budget import RequestBudget, RouteLimit
-from aperture.broker.webull import (
+from tickr import config
+from tickr.broker.base import RateLimited
+from tickr.broker.budget import RequestBudget, RouteLimit
+from tickr.broker.webull import (
     ACCOUNT_FREE_ROUTES,
     BrokerReadFailed,
     MalformedResponse,
@@ -31,8 +31,8 @@ from aperture.broker.webull import (
     read_screener,
     read_snapshot,
 )
-from aperture.data.base import DelayedData, MarketData, MarketDataError, ScreenerKind
-from aperture.data.discovery import DiscoverySettings, merge, universe_cause
+from tickr.data.base import DelayedData, MarketData, MarketDataError, ScreenerKind
+from tickr.data.discovery import DiscoverySettings, merge, universe_cause
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "webull" / "market_data"
 ROOT = Path(__file__).resolve().parents[2]

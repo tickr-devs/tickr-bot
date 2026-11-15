@@ -13,10 +13,10 @@ from research_helpers import (
     series,
 )
 
-from aperture.research.compare import DiffKind, decide, diff, select
-from aperture.research.errors import ResearchError
-from aperture.research.records import Admission
-from aperture.strategy.base import Role, Verdict
+from tickr.research.compare import DiffKind, decide, diff, select
+from tickr.research.errors import ResearchError
+from tickr.research.records import Admission
+from tickr.strategy.base import Role, Verdict
 
 BARS = series("10:00", [
     flat("10.00"),

@@ -6,9 +6,9 @@ from pathlib import Path
 
 from md_helpers import NOW, OPEN, bars, quote, row, settings
 
-from aperture import config
-from aperture.data.base import FakeMarketData, ScreenerKind
-from aperture.data.discovery import (
+from tickr import config
+from tickr.data.base import FakeMarketData, ScreenerKind
+from tickr.data.discovery import (
     Cause,
     DiscoverySettings,
     Stage,

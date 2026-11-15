@@ -8,16 +8,16 @@ from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
-from aperture.backtest import fetch
-from aperture.backtest.gate import RULE_GAINER, RULE_POOL, GainerGate
-from aperture.backtest.report import bootstrap_interval, bot_view, price_bucket, stats
-from aperture.backtest.run import run_backtest
-from aperture.backtest.settings import load_settings
-from aperture.backtest.universe import CapRecord, PoolEntry, write_caps, write_pool
-from aperture.data.capture import bar_record
-from aperture.replay.settings import load_settings as load_replay
-from aperture.strategy.base import Decision, SymbolContext, Verdict
-from aperture.types import Bar
+from tickr.backtest import fetch
+from tickr.backtest.gate import RULE_GAINER, RULE_POOL, GainerGate
+from tickr.backtest.report import bootstrap_interval, bot_view, price_bucket, stats
+from tickr.backtest.run import run_backtest
+from tickr.backtest.settings import load_settings
+from tickr.backtest.universe import CapRecord, PoolEntry, write_caps, write_pool
+from tickr.data.capture import bar_record
+from tickr.replay.settings import load_settings as load_replay
+from tickr.strategy.base import Decision, SymbolContext, Verdict
+from tickr.types import Bar
 
 from .helpers import ROOT, cfg, flat_bars, minute
 
@@ -82,7 +82,7 @@ def test_stats_interval_and_buckets():
 
 
 def test_holdout_start_is_the_last_share_of_sessions():
-    from aperture.backtest.report import holdout_start
+    from tickr.backtest.report import holdout_start
 
     days = [date(2026, 11, d) for d in (2, 3, 4, 5, 6, 9)]
     assert holdout_start(days, Decimal(50)) == date(2026, 11, 5)
@@ -113,7 +113,7 @@ def test_run_end_to_end(tmp_path):
     write_pool(pool, out / "pool.csv")
     write_caps([CapRecord(TODAY, 4, 4)], out / "pool_cap.csv")
     run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
-                 "aperture.strategy.price_action_v1",
+                 "tickr.strategy.price_action_v1",
                  ROOT / "strategies" / "price-action-v1" / "strategy.toml")
     with open(results / "trades.csv") as handle:
         trades = list(csv.DictReader(handle))
@@ -129,7 +129,7 @@ def test_run_end_to_end(tmp_path):
 
 
 def test_bot_view_applies_live_sizing_positions_and_the_daily_ceiling():
-    from aperture.replay.engine import ExitReason, SimulatedTrade
+    from tickr.replay.engine import ExitReason, SimulatedTrade
 
     def trade(symbol, start, end, entry, exit_, quantity="40"):
         return SimulatedTrade("s", "1", symbol, TODAY, "x", minute(TODAY, start),
@@ -152,9 +152,9 @@ def test_bot_view_applies_live_sizing_positions_and_the_daily_ceiling():
 
 
 def test_last_sessions_cuts_the_pool_to_the_latest_calendar_sessions():
-    from aperture.backtest.errors import BacktestError
-    from aperture.backtest.run import last_sessions
-    from aperture.calendar import SessionCalendar
+    from tickr.backtest.errors import BacktestError
+    from tickr.backtest.run import last_sessions
+    from tickr.calendar import SessionCalendar
 
     calendar = SessionCalendar.load(ROOT / "config" / "calendar")
 
@@ -190,7 +190,7 @@ def test_run_last_sessions_reports_its_window(tmp_path):
                           Decimal(10**8))], out / "pool.csv")
     write_caps([CapRecord(old, 1, 1), CapRecord(TODAY, 1, 1)], out / "pool_cap.csv")
     run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
-                 "aperture.strategy.price_action_v1",
+                 "tickr.strategy.price_action_v1",
                  ROOT / "strategies" / "price-action-v1" / "strategy.toml", 3)
     report = json.loads((results / "report.json").read_text())
     assert report["last_sessions"] == {"requested": 3, "first": "2026-11-11",
@@ -202,7 +202,7 @@ def test_run_last_sessions_reports_its_window(tmp_path):
     assert "Last 3 sessions only: 2026-11-11 to 2026-11-13, 2 of them without" in text
     assert "wide by construction" in text
     # The Lab's summary (GET /lab/replay) reads this report.
-    from aperture.api.lab_replay import summarize
+    from tickr.api.lab_replay import summarize
 
     summary = summarize(report)
     assert (summary.first_day, summary.last_day, summary.sessions) == (

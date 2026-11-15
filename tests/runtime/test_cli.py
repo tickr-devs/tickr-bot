@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import sys
 
-from aperture import config as config_module
-from aperture.runtime import __main__ as runtime_main
-from aperture.runtime.__main__ import main
-from aperture.runtime.preflight import Check, CheckName, PreflightCause, PreflightResult
+from tickr import config as config_module
+from tickr.runtime import __main__ as runtime_main
+from tickr.runtime.__main__ import main
+from tickr.runtime.preflight import Check, CheckName, PreflightCause, PreflightResult
 
 
 def _records(out: str) -> list[dict]:
@@ -100,7 +100,7 @@ def test_render_launchd(config_path, repo, tmp_path, capsys):
 
 
 def test_token_probe_alerts_when_the_token_waits_for_the_owner(config_path, monkeypatch, capsys):
-    from aperture.broker import webull
+    from tickr.broker import webull
 
     cfg = config_module.load(config_path)
     monkeypatch.setattr(webull, "check_token", lambda cfg, on_token_pending: on_token_pending())
@@ -111,7 +111,7 @@ def test_token_probe_alerts_when_the_token_waits_for_the_owner(config_path, monk
 
 
 def test_token_probe_returns_the_refusal_cause(config_path, monkeypatch, capsys):
-    from aperture.broker import webull
+    from tickr.broker import webull
 
     def refuse(cfg, on_token_pending):
         raise webull.AdapterConfigError("token initialisation failed: token create failed")

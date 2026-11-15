@@ -1,4 +1,4 @@
-"""Dress rehearsal: a whole trading day through the real `aperture run` on a simulated exchange.
+"""Dress rehearsal: a whole trading day through the real `tickr run` on a simulated exchange.
 
 Monday 2026-11-16. Two symbols appear on the gainers screener:
 - AAA breaks out at the open, is bought, and later collapses through its stop (stopped out);
@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from decimal import Decimal as D
 
-from aperture.api import contract as api
 from rehearsal.harness import DAY, Rehearsal, history
 from rehearsal.world import build_day
+from tickr.api import contract as api
 
 HOT = D(30000)  # shares per minute while a symbol moves: ten times its prior sessions
 
@@ -82,4 +82,4 @@ def test_full_day(tmp_path, monkeypatch):
     assert [d["symbol"] for d in taken] == ["AAA", "BBB"]
     assert r.notifier.shown == []  # a normal day raises no alert
     assert (r.config.root / r.config.run.data_dir / r.config.run.backups_dir
-            / f"aperture-{DAY.isoformat()}.sqlite3").exists()
+            / f"tickr-{DAY.isoformat()}.sqlite3").exists()

@@ -7,15 +7,15 @@ from decimal import Decimal
 import pytest
 from research_helpers import M1, record, write_jsonl
 
-from aperture.research.errors import RecordFileError
-from aperture.research.records import (
+from tickr.research.errors import RecordFileError
+from tickr.research.records import (
     Admission,
     load_records,
     record_from_mapping,
     record_to_json,
     write_records,
 )
-from aperture.strategy.base import Check, Role, Verdict
+from tickr.strategy.base import Check, Role, Verdict
 
 
 def _full():

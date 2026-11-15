@@ -7,13 +7,13 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
 
-from aperture.api import contract as api
-from aperture.broker.base import BrokerError
-from aperture.broker.fake import FakeBroker
-from aperture.engine.core import BrokerView, Fence, TradeState
-from aperture.runtime import entries, service
-from aperture.runtime.account import NOT_AGREED, RECONCILE_CHECKED, record_reconcile
-from aperture.types import OrderDetail, OrderState, OrderType, Position, Side
+from tickr.api import contract as api
+from tickr.broker.base import BrokerError
+from tickr.broker.fake import FakeBroker
+from tickr.engine.core import BrokerView, Fence, TradeState
+from tickr.runtime import entries, service
+from tickr.runtime.account import NOT_AGREED, RECONCILE_CHECKED, record_reconcile
+from tickr.types import OrderDetail, OrderState, OrderType, Position, Side
 
 from .test_service import CFG, ROOT, Bot, opened
 
@@ -179,8 +179,8 @@ def test_a_disagreement_without_a_fence_is_recorded_once_two_passes_in_a_row_sho
 def test_a_fill_seen_inside_a_reconcile_pass_never_records_a_mismatch(tmp_path):
     """Reconcile reads open orders, then its step sees the entry fill and places the stop: the
     stop is live in the records but not in that read, for one pass only."""
-    from aperture.api import cleanday
-    from aperture.calendar import SessionCalendar
+    from tickr.api import cleanday
+    from tickr.calendar import SessionCalendar
 
     bot = Bot(tmp_path, broker=FakeBroker())
     bot.engine.recover()

@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
-from aperture.strategy.base import Check, Decision, SymbolContext, Verdict
+from tickr.strategy.base import Check, Decision, SymbolContext, Verdict
 
 KEYS = {"strategy": {"name", "version"}, "rules": {"lookback", "window_usd", "exit_drop_usd"}}
 

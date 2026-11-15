@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from aperture.broker.base import RateLimited
-from aperture.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
+from tickr.broker.base import RateLimited
+from tickr.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
 
 
 class Clock:

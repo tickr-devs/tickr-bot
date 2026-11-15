@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from aperture.types import Bar, Quote
+from tickr.types import Bar, Quote
 
 NY = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")

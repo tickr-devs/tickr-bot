@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from aperture.broker.base import OrderNotFound, RateLimited, Refused
-from aperture.broker.webull import (
+from tickr.broker.base import OrderNotFound, RateLimited, Refused
+from tickr.broker.webull import (
     DETAIL_NOT_VISIBLE,
     BrokerReadFailed,
     ForeignOrdersUnreadable,
@@ -21,7 +21,7 @@ from aperture.broker.webull import (
     read_order_detail,
     read_order_rows,
 )
-from aperture.types import OrderState, OrderType, Side
+from tickr.types import OrderState, OrderType, Side
 
 from .test_webull_broker import OWN, broker, limit_buy
 

@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api.__main__ import CHART_STARTING, attach_chart_source
-from aperture.api.chart import (
+from tickr import config
+from tickr.api.__main__ import CHART_STARTING, attach_chart_source
+from tickr.api.chart import (
     Chart,
     ChartRefused,
     ChartSettings,
@@ -24,15 +24,15 @@ from aperture.api.chart import (
     parse_query,
     place,
 )
-from aperture.api.contract import ChartInterval, ChartRange
-from aperture.api.server import make_server, settings_from_config
-from aperture.broker.base import BrokerError
-from aperture.broker.budget import RequestBudget, RouteLimit
-from aperture.broker.webull import Route, WebullMarketData, WireResponse
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.data.base import BarSpan, FakeMarketData, SessionBar
-from aperture.demo.world import World, day_bars, flat_bars
-from aperture.types import Bar
+from tickr.api.contract import ChartInterval, ChartRange
+from tickr.api.server import make_server, settings_from_config
+from tickr.broker.base import BrokerError
+from tickr.broker.budget import RequestBudget, RouteLimit
+from tickr.broker.webull import Route, WebullMarketData, WireResponse
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.data.base import BarSpan, FakeMarketData, SessionBar
+from tickr.demo.world import World, day_bars, flat_bars
+from tickr.types import Bar
 
 from .schema_check import errors
 from .test_server import doc, request, schema
@@ -541,7 +541,7 @@ def test_no_chart_client_is_built_until_probe_c1_is_recorded_as_passed(served, t
     resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=5m&range=1d")
     assert resp.status == 503 and doc(payload)["error"] == "unavailable"
     assert "chart probe C1 is not recorded for sandbox" in doc(payload)["cause"]
-    assert "aperture.probes chart-client" in doc(payload)["cause"]
+    assert "tickr.probes chart-client" in doc(payload)["cause"]
     assert "GET /chart is off" in capsys.readouterr().err
     resp, _ = request(served, "POST", "/commands/stop-bot", {})
     assert resp.status == 202

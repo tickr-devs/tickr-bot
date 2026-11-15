@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from aperture.api import contract, reasons
-from aperture.engine.core import Fence
-from aperture.risk.daily import check_daily
-from aperture.risk.sizing import check_size
+from tickr.api import contract, reasons
+from tickr.engine.core import Fence
+from tickr.risk.daily import check_daily
+from tickr.risk.sizing import check_size
 
 CORE = Path(reasons.__file__).resolve().parent.parent / "engine" / "core.py"
 
@@ -210,7 +210,7 @@ def test_the_daily_loss_records_never_parse_a_cause(monkeypatch):
 
 
 def test_planned_loss_texts_of_after_and_performance_read():
-    from aperture.api.performance import NOT_POSITIVE_PLANNED_LOSS
+    from tickr.api.performance import NOT_POSITIVE_PLANNED_LOSS
     assert reasons.prose_reasons(NOT_POSITIVE_PLANNED_LOSS)[0].code == (
         "planned_loss_not_positive_r")
     assert reasons.prose_reasons("planned loss 0 is not positive: no R")[0].params == {

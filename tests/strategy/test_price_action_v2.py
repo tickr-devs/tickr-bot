@@ -22,16 +22,16 @@ from strategy_bars import (
     rising_session,
 )
 
-from aperture import config
-from aperture.observers.loader import load_strategy, parse_modules
-from aperture.replay.__main__ import session_clock
-from aperture.replay.engine import ExitReason, replay
-from aperture.replay.settings import load_settings
-from aperture.research.compare import DiffKind, decide, diff
-from aperture.strategy import price_action_v1 as v1
-from aperture.strategy import price_action_v2 as v2
-from aperture.strategy.base import PositionView, SymbolContext, Verdict
-from aperture.types import Bar
+from tickr import config
+from tickr.observers.loader import load_strategy, parse_modules
+from tickr.replay.__main__ import session_clock
+from tickr.replay.engine import ExitReason, replay
+from tickr.replay.settings import load_settings
+from tickr.research.compare import DiffKind, decide, diff
+from tickr.strategy import price_action_v1 as v1
+from tickr.strategy import price_action_v2 as v2
+from tickr.strategy.base import PositionView, SymbolContext, Verdict
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]
 

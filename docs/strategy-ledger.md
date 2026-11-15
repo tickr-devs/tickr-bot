@@ -6,7 +6,7 @@ comes first, then the results.
 
 ## Method (2026-11-15 run)
 
-- **Data:** the `aperture.backtest` fetch (`docs/backtest.md`) of regular-session M1 bars,
+- **Data:** the `tickr.backtest` fetch (`docs/backtest.md`) of regular-session M1 bars,
   2026-08-17 to 2026-11-13. Symbols A to S only (2400 of the pool's symbols), because the fetch
   was still running.
   - Gainer days: 9521 symbol-days from `pool.csv`, meaning the day high was at least 5% above
@@ -58,7 +58,7 @@ bars while M1 bars are raw. On 27% of liquid rows the two scales differ by more 
 research scripts before `edge-research-2/` used the raw `previous_close`; `nfam.py` rescales it with
 the day's adjusted close (`pc * minute close / daily close`). With the fix, the liquid universe's
 mean overnight gap is -0.02%, not the +0.22% the raw value suggests. The bot's backtest already
-skips split days (`SPLIT_BETWEEN_SESSIONS` in `aperture.backtest.run`); its small dividend bias on
+skips split days (`SPLIT_BETWEEN_SESSIONS` in `tickr.backtest.run`); its small dividend bias on
 the gate is unchanged.
 
 Break-even cost per side, meaning the gross mean divided by two: about 0 or negative for every
@@ -78,9 +78,9 @@ session without its 09:30 bar is refused all day.
 ## Reproducing
 
 The research scripts are offline and are not part of the bot. They live in the project's shared
-folder `aperture/edge-research/`: `prep.py` (gainer cache), `prep2.py` (loser days and market
+folder `tickr/edge-research/`: `prep.py` (gainer cache), `prep2.py` (loser days and market
 proxy), `prep3.py` (actives proxy), `lib.py`, `sim.py` (fixed: explicit entry price), `prep_tz.py` and `tz_check.py` (symbol hold-out), `prep_liq.py` and `lit_liq.py` (liquid universe), and one script per family. The
-pre-registrations are in `preregistered.txt`. The N1-N20 round is in `aperture/edge-research-2/`
+pre-registrations are in `preregistered.txt`. The N1-N20 round is in `tickr/edge-research-2/`
 (`nfam.py`, `nfam2.py`, `n16b.py`, `n17.py`, `n19.py`, `eda.py`, and `preregistered-n.txt` with every
 result appended in order).
 

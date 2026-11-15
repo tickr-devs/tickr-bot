@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from aperture.replay.clock import fixed_clock
-from aperture.replay.settings import ReplaySettings, load_settings
-from aperture.research.records import Admission, DecisionRecord
-from aperture.research.settings import ResearchSettings, load_research_settings
-from aperture.strategy.base import Check, Decision, Role, SymbolContext, Verdict
-from aperture.types import Bar
+from tickr.replay.clock import fixed_clock
+from tickr.replay.settings import ReplaySettings, load_settings
+from tickr.research.records import Admission, DecisionRecord
+from tickr.research.settings import ResearchSettings, load_research_settings
+from tickr.strategy.base import Check, Decision, Role, SymbolContext, Verdict
+from tickr.types import Bar
 
 HERE = Path(__file__).parent
 NY = ZoneInfo("America/New_York")

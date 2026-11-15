@@ -12,8 +12,8 @@ ceiling a trade is sized down to the room left, never refused only because the f
 loss no longer fits") and against risk/sizing.py ("a strategy may size on a larger risk ...
 and so be stricter, never looser").
 
-Where: src/aperture/strategy/price_action_v1.py (`sizing_risk`, `stop`, `entry_high` in
-`_with_quote`) versus src/aperture/runtime/entries.py `EntryDesk._inputs` (`round_to_tick`
+Where: src/tickr/strategy/price_action_v1.py (`sizing_risk`, `stop`, `entry_high` in
+`_with_quote`) versus src/tickr/runtime/entries.py `EntryDesk._inputs` (`round_to_tick`
 of entry_high and stop). Safe direction (no money at risk), but trades are lost.
 """
 
@@ -25,10 +25,10 @@ from decimal import Decimal as D
 
 import pytest
 
-from aperture.risk.admission import admit
-from aperture.risk.ticks import round_to_tick
-from aperture.strategy.base import SymbolContext, Verdict
-from aperture.types import Quote
+from tickr.risk.admission import admit
+from tickr.risk.ticks import round_to_tick
+from tickr.strategy.base import SymbolContext, Verdict
+from tickr.types import Quote
 
 from .test_daily_room_properties import (
     CEILING,

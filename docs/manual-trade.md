@@ -7,7 +7,7 @@ For the Monday 2026-11-16 probe day, follow "Probe day" below from top to bottom
 ## One-time setup (fresh clone)
 
 ```
-gh repo clone valentyn-dymaretskyi/Aperture ~/Development/Aperture && cd ~/Development/Aperture
+gh repo clone valentyn-dymaretskyi/Tickr ~/Development/Tickr && cd ~/Development/Tickr
 python3.12 -m venv .venv && source .venv/bin/activate     # Python 3.12 or newer
 pip install -e ".[webull,dev]"
 mkdir -p data/webull-token-sandbox                         # [run] data_dir / [environments.sandbox] token_dir
@@ -15,16 +15,16 @@ mkdir -p data/webull-token-sandbox                         # [run] data_dir / [e
 
 The Sandbox variables (`WEBULL_SANDBOX_APP_KEY`, `WEBULL_SANDBOX_APP_SECRET`,
 `WEBULL_SANDBOX_ACCOUNT_ID`, names from `[environments.sandbox]`) live in
-`~/.config/aperture/env`, the same file the launchd jobs load (docs/operations.md, one-time
+`~/.config/tickr/env`, the same file the launchd jobs load (docs/operations.md, one-time
 setup step 2). Never type the values on the command line or put them in the repo.
 
 Every command below runs from the repository root: `--config` defaults to the relative path
 `config/bot.toml`. In each new terminal:
 
 ```
-cd ~/Development/Aperture && source .venv/bin/activate
-set -a; . ~/.config/aperture/env; set +a
-aperture check-config        # must show "trading gate: open (trading enabled by configuration)"
+cd ~/Development/Tickr && source .venv/bin/activate
+set -a; . ~/.config/tickr/env; set +a
+tickr check-config        # must show "trading gate: open (trading enabled by configuration)"
 ```
 
 The first command that talks to Webull may wait up to `token_check_duration_seconds` (300 s) for
@@ -40,19 +40,19 @@ visible.
 ## Commands
 
 ```
-aperture check-config
-aperture status                                 # environment, gate, bot pid, last run
-aperture check-quote SYMBOL                     # read-only: is the snapshot quote fresh?
-aperture trade SYMBOL --limit 12.34            # quantity and stop default from [probe]
-aperture trade SYMBOL --limit 12.34 --stop 12.10
-aperture probe-replace-stop --to 12.20          # probe F5, see below
-aperture resume                                 # recover, keep protecting; ends when no trade is open
-aperture exit                                   # recover, then close every open trade
-aperture clear-fence NAME                       # after looking at an operator fence
+tickr check-config
+tickr status                                 # environment, gate, bot pid, last run
+tickr check-quote SYMBOL                     # read-only: is the snapshot quote fresh?
+tickr trade SYMBOL --limit 12.34            # quantity and stop default from [probe]
+tickr trade SYMBOL --limit 12.34 --stop 12.10
+tickr probe-replace-stop --to 12.20          # probe F5, see below
+tickr resume                                 # recover, keep protecting; ends when no trade is open
+tickr exit                                   # recover, then close every open trade
+tickr clear-fence NAME                       # after looking at an operator fence
 ```
 
 Exit codes: 0 done; 2 config error; 3 refused (`refused: <cause>` on stderr; also "another
-aperture process holds the lock"); 4 a trade waits for you (closing order refused or not
+tickr process holds the lock"); 4 a trade waits for you (closing order refused or not
 filled; for `probe-replace-stop`: see the F5 results).
 
 Stop price: without `--stop`, the planned-loss check uses the worst case (2 % below the
@@ -73,16 +73,16 @@ Watch in the Webull app during the run:
 1. Right after the fill: one working SELL stop for the filled quantity at the printed stop price.
 2. After the close: no position in the symbol and no working orders left.
 3. If you see a position without a working stop for more than a few seconds, close it in the
-   app and run `aperture status`; the bot fences entries and will not touch it again.
+   app and run `tickr status`; the bot fences entries and will not touch it again.
 
 Crash test: do the `kill -9` only while the stop is visible as working in the app, then run
-`aperture resume`. It must find the same trade, keep the stop and close at the hold time or at
+`tickr resume`. It must find the same trade, keep the stop and close at the hold time or at
 the flatten time.
 
 If a closing order is refused (`exit-refused:<trade>`), or is still not filled
 `[orders] max_exit_seconds` (30 s) after it was sent and then ends (`exit-not-filled:<trade>`),
 the bot puts the stop back, sends no second close, stops, and prints what to do: look in the
-Webull app, then `aperture clear-fence <that fence>` and `aperture exit`. While a not-filled
+Webull app, then `tickr clear-fence <that fence>` and `tickr exit`. While a not-filled
 close is still working at Webull, the bot leaves it alone (docs/operations.md, `exit-not-filled`).
 
 `resume` and `exit` use today's flatten time from the calendar; after the close, on a
@@ -90,12 +90,12 @@ non-trading day, or if the calendar cannot be read, they close open trades right
 
 Ctrl-C once: close through the normal exit path. Ctrl-C twice, closing the terminal, or a
 SIGTERM: the command stops and the stop stays resting at the broker, with the position still
-open. Run `aperture resume` (keeps protecting and closes at the flatten time) or `aperture exit`
+open. Run `tickr resume` (keeps protecting and closes at the flatten time) or `tickr exit`
 (closes now; after the close neither sends a closing order) afterwards; the position never closes by itself while no command runs, except by
 its stop.
 
 Entries stay blocked while any fence is set (printed at the end of every command). Operator
-fences need a look and are cleared with `aperture clear-fence NAME`: `stop-rejected:*`,
+fences need a look and are cleared with `tickr clear-fence NAME`: `stop-rejected:*`,
 `exit-refused:*`, `exit-not-filled:*`, `replace-unresolved:*`, `cancel-failed:*`,
 `resurrected:*`, `unprotected-timeout:*`, `market-closed:*` (a close due after the close:
 nothing sent, the stop stays; docs/operations.md, `flatten-after-close`). All others clear
@@ -111,27 +111,27 @@ chat at the end; an agent then writes webull-facts.md and the fixtures from them
 
 ### Before the open
 
-1. The manual commands and the bot service share one lock and one database: `aperture trade`
-   refuses while `aperture run` holds the lock. If the launchd jobs are installed, keep the
+1. The manual commands and the bot service share one lock and one database: `tickr trade`
+   refuses while `tickr run` holds the lock. If the launchd jobs are installed, keep the
    bot job from starting today, before its `[runtime] bot_start_local` (09:00 Mac local time):
 
    ```
-   launchctl disable gui/$(id -u)/local.aperture.bot
-   launchctl bootout gui/$(id -u)/local.aperture.bot
-   launchctl print-disabled gui/$(id -u) | grep aperture.bot   # shows it disabled
+   launchctl disable gui/$(id -u)/local.tickr.bot
+   launchctl bootout gui/$(id -u)/local.tickr.bot
+   launchctl print-disabled gui/$(id -u) | grep tickr.bot   # shows it disabled
    ```
 
    `disable` keeps it from being loaded again; `bootout` unloads the copy already loaded, so
    its calendar start does not fire. If the bot already started, `bootout` stops it with
-   SIGTERM: wait for the `"record": "bot-exit"` line in `~/Library/Logs/Aperture/bot.log`.
+   SIGTERM: wait for the `"record": "bot-exit"` line in `~/Library/Logs/Tickr/bot.log`.
    It is re-enabled in step 4. Keep the watchdog job running (read-only, it checks you are
    flat after the flatten time). While a manual trade is open it alerts
    `bot-down-with-open-trade` ("no live pid in its lock file" or a stale status file):
    expected on a probe day, because the manual command is not the bot. If a manual trade is
    still open at 15:50 ET it also tries its one restart of the bot job; with the job booted out
    that fails and alerts `watchdog-restart-failed`: close the manual trade before then.
-2. Terminal A, as in one-time setup: `cd`, `source`, load the env file, `aperture check-config`.
-   Then `aperture status`: it must show `bot: not running`. (`status` does not list fences;
+2. Terminal A, as in one-time setup: `cd`, `source`, load the env file, `tickr check-config`.
+   Then `tickr status`: it must show `bot: not running`. (`status` does not list fences;
    `trade`, `exit` and `resume` print every fence still set when they end.)
 3. Save the read script (once). It only reads and sends no orders. It prints raw bodies with
    the account id replaced by `<account>`, and takes its own request budget from the active
@@ -147,16 +147,16 @@ cat > data/probe_reads.py <<'EOF'
 import json, sys, time
 from collections import namedtuple
 from datetime import UTC, datetime
-from aperture import config
-from aperture.broker.base import BrokerError
-from aperture.broker.webull import (Route, SdkTransport, budget_from_config, send_once,
+from tickr import config
+from tickr.broker.base import BrokerError
+from tickr.broker.webull import (Route, SdkTransport, budget_from_config, send_once,
                                     settings_from_config)
 
 cfg = config.load("config/bot.toml")
 transport = SdkTransport(settings_from_config(cfg))
 budget = budget_from_config(cfg)  # this process's own [environments.*] route limits
 category = cfg.market_data.screener_category
-# Not an Aperture route, so the transport adds account_id to its query (output is scrubbed).
+# Not an Tickr route, so the transport adds account_id to its query (output is scrubbed).
 TRADE_INSTRUMENT = namedtuple("R", "name method path mutating")(
     "TRADE_INSTRUMENT", "GET", "/trade/instrument", False)
 
@@ -216,7 +216,7 @@ Below, `SYM` is that symbol.
 ### Step 0, right after 09:30: are Sandbox quotes real time?
 
 ```
-aperture check-quote SYM 2>&1 | tee -i data/probe-2026-11-16/0-check-quote.txt
+tickr check-quote SYM 2>&1 | tee -i data/probe-2026-11-16/0-check-quote.txt
 ```
 
 It reads one snapshot quote through the same path as `probe-replace-stop` and sends no orders.
@@ -248,7 +248,7 @@ Look up a currently halted US stock on the Nasdaq trade-halts page
   OPENW rows.
 - `trade instrument <symbol> <id>`: `GET /trade/instrument` per instrument id:
   `trade_policy` (ALL / CLOSE_ONLY / DENIED per the SDK) and `forbid_reason`, or the error
-  Sandbox gives for this route. Never read by Aperture before. This route is not one of the
+  Sandbox gives for this route. Never read by Tickr before. This route is not one of the
   adapter's account-free routes, so the transport adds `account_id` to its query; the
   printed output is scrubbed like the rest.
 - `positions`, `open orders`: should be empty now before any trade.
@@ -264,7 +264,7 @@ read (item 3), nothing else, so its reads and the trade's stay inside the route 
 
 1. Terminal B (set up as in one-time setup), start the open-orders watcher first:
    `.venv/bin/python data/probe_reads.py watch SYM 2>&1 | tee -i data/probe-2026-11-16/2-watch.txt`
-2. Terminal A: `aperture trade SYM --limit LIMIT 2>&1 | tee -i data/probe-2026-11-16/2-trade.txt`
+2. Terminal A: `tickr trade SYM --limit LIMIT 2>&1 | tee -i data/probe-2026-11-16/2-trade.txt`
 3. Once the watcher lists the stop (a `STOP_LOSS` line with an id starting `ap-`, also seen
    working in the app), Terminal C, Detail of that one order only:
    `.venv/bin/python data/probe_reads.py held <stop id> 2>&1 | tee -i data/probe-2026-11-16/2-held.txt`
@@ -272,7 +272,7 @@ read (item 3), nothing else, so its reads and the trade's stay inside the route 
    `stop_price` named so?).
 4. After the trade prints `trade <id> SYM: closed (...)`, the journal (UTC times; the last
    column is the leg of each `order-intent`):
-   `sqlite3 data/aperture.sqlite3 "SELECT at_utc, kind, key, json_extract(body, '$.leg') FROM journal WHERE at_utc >= '2026-11-16' ORDER BY seq" | tee data/probe-2026-11-16/2-journal.txt`
+   `sqlite3 data/tickr.sqlite3 "SELECT at_utc, kind, key, json_extract(body, '$.leg') FROM journal WHERE at_utc >= '2026-11-16' ORDER BY seq" | tee data/probe-2026-11-16/2-journal.txt`
 5. Detail of the three orders (ids are the `order-intent` keys: entry, stop, exit):
    `.venv/bin/python data/probe_reads.py held <entry id> <stop id> <exit id> 2>&1 | tee -i data/probe-2026-11-16/2-after.txt`.
    Fill shape, average price, fees field (if any), the cancelled stop, the filled MARKET SELL.
@@ -306,8 +306,8 @@ the end), so the marker is the watcher: the first line listing the `ap-` STOP_LO
 
 1. Terminal C: start the watcher (10 minutes):
    `.venv/bin/python data/probe_reads.py watch SYM 2>&1 | tee -i data/probe-2026-11-16/3-watch.txt`
-2. Terminal A: `aperture trade SYM --limit LIMIT 2>&1 | tee -i data/probe-2026-11-16/3-trade.txt`
-3. Terminal B, right away: `aperture status`. It prints `bot: pid <pid> recorded ...` (the
+2. Terminal A: `tickr trade SYM --limit LIMIT 2>&1 | tee -i data/probe-2026-11-16/3-trade.txt`
+3. Terminal B, right away: `tickr status`. It prints `bot: pid <pid> recorded ...` (the
    trade command's pid). Type `kill -TERM <pid>` with that number and do not press Enter yet.
 4. When the watcher prints the first line with the `ap-` STOP_LOSS (the app shows it working),
    press Enter in Terminal B within 30 s. The trade command stops; the position and its stop
@@ -315,14 +315,14 @@ the end), so the marker is the watcher: the first line listing the `ap-` STOP_LO
    have passed, or the watcher no longer lists the stop, do not kill: let the trade close,
    then start step 3 again.
 5. Right after the kill, check the Webull app: one share of SYM and one working SELL stop.
-   - No working stop but the share is held: in Terminal A run `aperture exit` at once (no
+   - No working stop but the share is held: in Terminal A run `tickr exit` at once (no
      arguments; it recovers and closes every open trade). Then go to step 4 of the day.
    - No position: the trade had already closed; start step 3 again.
 6. Terminal B (no trade command runs now): positions and open orders while held (F9):
    `.venv/bin/python data/probe_reads.py raw SYM 2>&1 | tee -i data/probe-2026-11-16/3-held.txt`
 7. Look up the bid in the app. Pick a new stop above the current stop, below the bid, at most
    `[probe] replace_max_move_usd` (0.50) above the current stop, whole cents.
-8. Terminal A: `aperture probe-replace-stop --to NEW_STOP 2>&1 | tee -i data/probe-2026-11-16/3-replace.txt`.
+8. Terminal A: `tickr probe-replace-stop --to NEW_STOP 2>&1 | tee -i data/probe-2026-11-16/3-replace.txt`.
    It refuses (exit 3, nothing sent) unless: gate open, inside the probe window, exactly one
    open trade with no exit requested, no fence, the broker position equals our records, one
    verified working unfilled stop, a quote no older than `max_quote_age_seconds`, and the
@@ -334,7 +334,7 @@ the end), so the marker is the watcher: the first line listing the `ap-` STOP_LO
    - every `open order:` line;
    - `F5 result: ...`. Screenshot the app's order list too (same order edited, or a new
      order; price; still working throughout?).
-9. Close: `aperture exit 2>&1 | tee -i data/probe-2026-11-16/3-exit.txt` (read the F5
+9. Close: `tickr exit 2>&1 | tee -i data/probe-2026-11-16/3-exit.txt` (read the F5
    results below first if the result is not `confirmed`). Check in the app: no position, no
    working orders.
 10. Journal again, as in step 2 item 4, into `3-journal.txt`.
@@ -348,19 +348,19 @@ F5 results:
 - `F5 result: confirmed` (exit 0): same client_order_id, working at the new price. Fence
   cleared; our record carries the new price.
 - `F5 result: adopted` (exit 4): Webull made a NEW order at the new price and the old one ended.
-  The bot now tracks the new order as the trade's stop, so `aperture exit` cancels it. Check the
-  app shows exactly one working stop, then `aperture clear-fence replace-unresolved:<stop id>`.
+  The bot now tracks the new order as the trade's stop, so `tickr exit` cancels it. Check the
+  app shows exactly one working stop, then `tickr clear-fence replace-unresolved:<stop id>`.
 - `F5 result: not-sent` (exit 3): refused before or by the broker; nothing changed.
 - `F5 result: unresolved` (exit 4), including an unknown outcome: the command never resends.
   Do NOT run another replace. Look in the app: count the working SELL stops in the symbol.
-  - Exactly one, ours, any price: `aperture exit` closes normally (it cancels our stop id).
-  - None: the position is unprotected; run `aperture exit` at once.
+  - Exactly one, ours, any price: `tickr exit` closes normally (it cancels our stop id).
+  - None: the position is unprotected; run `tickr exit` at once.
   - A stop with an id that is not ours (the bot then reports `foreign-order:<id>`), or more
     than one: cancel the extra stops in the app and close the position there, then
-    `aperture status`; send the screenshots before running anything else.
+    `tickr status`; send the screenshots before running anything else.
   Clear `replace-unresolved:<stop id>` only after the app shows a clean state.
 
-  What the bot does meanwhile (`aperture exit` or `resume` running): while
+  What the bot does meanwhile (`tickr exit` or `resume` running): while
   `replace-unresolved:<stop id>` is set and the bot would place a stop or send a close, it
   reads open orders itself, at most once per `reconcile_interval_seconds`. It places no stop
   and sends no close until two such reads in a row show no working SELL in the symbol that is
@@ -369,7 +369,7 @@ F5 results:
   ("stop and close held: untracked SELL <id> rests in ABC after an unresolved replace; resolve
   it in the Webull app"); otherwise it may only say "exiting". Once you cancel that order in
   the app, two clean reads (about 10-20 s) release the hold and, because the exit is already
-  requested (by `aperture exit`, or by the unprotected-too-long rule), the bot sells the
+  requested (by `tickr exit`, or by the unprotected-too-long rule), the bot sells the
   position at MARKET. It does not place a new stop first. In the exit path a release is good
   for one pass only: after it the bot cancels our stop and then holds again for two reads
   (about 10 to 20 s) with no stop of ours before the MARKET close. This is expected and does
@@ -398,13 +398,13 @@ Each open fact in docs/webull-facts.md, the output that answers it, and its file
 
 Then:
 
-1. The last `aperture exit` printed no `fence ...` line, `aperture status` shows
+1. The last `tickr exit` printed no `fence ...` line, `tickr status` shows
    `bot: not running`, and the app shows no position and no working order.
 2. Re-enable the bot job, so it starts on the next weekday:
    ```
-   launchctl enable gui/$(id -u)/local.aperture.bot
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.aperture.bot.plist
-   launchctl print gui/$(id -u)/local.aperture.bot | head -5   # loaded again
+   launchctl enable gui/$(id -u)/local.tickr.bot
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.bot.plist
+   launchctl print gui/$(id -u)/local.tickr.bot | head -5   # loaded again
    ```
 3. Paste every file in `data/probe-2026-11-16/` and the screenshots into the project chat.
    Before pasting, check that nothing in them identifies the account (the script replaces

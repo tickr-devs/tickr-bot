@@ -8,12 +8,12 @@ from decimal import Decimal as D
 import pytest
 from research_helpers import HERE
 
-from aperture.archive import compress
-from aperture.data.base import StreamNotice
-from aperture.data.capture import CaptureWriter
-from aperture.research.__main__ import main
-from aperture.research.latency import stats
-from aperture.types import Quote
+from tickr.archive import compress
+from tickr.data.base import StreamNotice
+from tickr.data.capture import CaptureWriter
+from tickr.research.__main__ import main
+from tickr.research.latency import stats
+from tickr.types import Quote
 
 T0 = datetime(2026, 11, 13, 15, 0, tzinfo=UTC)  # 10:00 New York
 DAY = "2026-11-13"

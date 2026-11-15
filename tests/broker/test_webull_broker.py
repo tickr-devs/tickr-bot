@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from aperture.broker.base import (
+from tickr.broker.base import (
     Broker,
     BrokerError,
     OrderNotFound,
@@ -17,8 +17,8 @@ from aperture.broker.base import (
     Refused,
     ReplaceAck,
 )
-from aperture.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
-from aperture.broker.webull import (
+from tickr.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
+from tickr.broker.webull import (
     GATE_CLOSED,
     BrokerReadFailed,
     MalformedResponse,
@@ -29,8 +29,8 @@ from aperture.broker.webull import (
     build_order_body,
     to_decimal,
 )
-from aperture.config import GateResult
-from aperture.types import OrderRequest, OrderType, Side, TimeInForce, TradingSession
+from tickr.config import GateResult
+from tickr.types import OrderRequest, OrderType, Side, TimeInForce, TradingSession
 
 MAX_CID = 32
 OWN = "ACCOUNT-UNDER-TEST"

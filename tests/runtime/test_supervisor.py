@@ -6,8 +6,8 @@ import subprocess
 import sys
 from decimal import Decimal
 
-from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
-from aperture.runtime.supervisor import ChildExit, supervise
+from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
+from tickr.runtime.supervisor import ChildExit, supervise
 
 POLL = Decimal("0.05")
 NO_ALERT = {"stop_alert_after_seconds": Decimal(60), "on_stop_overdue": lambda: None}

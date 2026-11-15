@@ -6,10 +6,10 @@ from decimal import Decimal
 
 from conftest import BOT_TOML, CLOCK, HERE, enter, series
 
-from aperture.replay.__main__ import main
-from aperture.replay.engine import replay
-from aperture.replay.report import SIGNAL_COLUMNS, TRADE_COLUMNS, summarize, write_all
-from aperture.strategy.base import Verdict
+from tickr.replay.__main__ import main
+from tickr.replay.engine import replay
+from tickr.replay.report import SIGNAL_COLUMNS, TRADE_COLUMNS, summarize, write_all
+from tickr.strategy.base import Verdict
 
 FLAT = ("10.00", "10.05", "9.95", "10.00")
 UP = ("10.05", "10.12", "10.02", "10.08")

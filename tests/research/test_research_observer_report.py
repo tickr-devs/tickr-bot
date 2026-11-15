@@ -14,11 +14,11 @@ from research_helpers import (
     write_jsonl,
 )
 
-from aperture.research.__main__ import main
-from aperture.research.errors import ResearchError
-from aperture.research.observer_report import report
-from aperture.research.records import Admission, write_records
-from aperture.strategy.base import Role, Verdict
+from tickr.research.__main__ import main
+from tickr.research.errors import ResearchError
+from tickr.research.observer_report import report
+from tickr.research.records import Admission, write_records
+from tickr.strategy.base import Role, Verdict
 
 ROOT = HERE.parent.parent
 DECISION = ("10.00", "10.05", "9.95", "10.05")

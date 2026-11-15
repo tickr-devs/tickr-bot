@@ -12,7 +12,7 @@ looks sensible, runs it as an observer (see `docs/observers.md`).
 ```
 pip install -e '.[advisor]'          # the Anthropic SDK is an optional extra
 export ANTHROPIC_API_KEY=...         # set in your shell; never in the repo
-python -m aperture.advisor --days 2026-11-16 2026-11-17 2026-11-18 2026-11-19 2026-11-20
+python -m tickr.advisor --days 2026-11-16 2026-11-17 2026-11-18 2026-11-19 2026-11-20
 ```
 
 Options: `--notes <file>` (text the model also reads, sent as written, for example ideas
@@ -24,9 +24,9 @@ hold-out number reaches it), `--strategy-folder` (default: the active strategy f
 ## Backtest mode
 
 ```
-python -m aperture.backtest run --out data/backtest --results out/backtest-v1 \
-  --strategy aperture.strategy.price_action_v1 --values strategies/price-action-v1/strategy.toml
-python -m aperture.advisor --backtest out/backtest-v1 --backtest-data data/backtest
+python -m tickr.backtest run --out data/backtest --results out/backtest-v1 \
+  --strategy tickr.strategy.price_action_v1 --values strategies/price-action-v1/strategy.toml
+python -m tickr.advisor --backtest out/backtest-v1 --backtest-data data/backtest
 ```
 
 The strategy folder (`--strategy-folder`, default active) must be the version the backtest
@@ -43,8 +43,8 @@ The run folder also gets `tuning.json` (window, hold-out start, the base's hold-
 never sent). Then judge the proposal on the hold-out it never saw:
 
 ```
-python -m aperture.backtest run ... --results out/backtest-v2 --values <run>/strategies/price-action-v1-v2/strategy.toml
-python -m aperture.advisor.judge --run <run folder> --results out/backtest-v2
+python -m tickr.backtest run ... --results out/backtest-v2 --values <run>/strategies/price-action-v1-v2/strategy.toml
+python -m tickr.advisor.judge --run <run folder> --results out/backtest-v2
 ```
 
 `judge` refuses a candidate on other data (the report's pool counts differ), another window
@@ -74,7 +74,7 @@ For each day it reads `<data_dir>/<decisions_dir>/<env>/<day>/decisions.jsonl` a
 chosen strategy name and version, and builds an evidence bundle:
 
 - verdict counts, the first failed check on IGNORE/WATCH, ENTER refusal causes;
-- the outcomes summary and the what-if summary (same code as `python -m aperture.research`);
+- the outcomes summary and the what-if summary (same code as `python -m tickr.research`);
 - which observer versions were recorded.
 
 The prompt carries the current `strategy.toml`, the strategy module's source and this bundle. Nothing else is sent:

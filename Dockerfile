@@ -1,4 +1,4 @@
-# Aperture on a Linux server: one image for the bot, preflight, watchdog and local API.
+# Tickr on a Linux server: one image for the bot, preflight, watchdog and local API.
 # See docs/deploy-server.md. No secrets, tokens, env file or data are copied in (.dockerignore
 # is an allowlist); the env file and config/bot.toml are mounted read-only at run time and the
 # data folder is a volume.
@@ -10,12 +10,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The container user's uid must be able to read the env file (chmod 600 on the host): build
-# with --build-arg APERTURE_UID=$(id -u) --build-arg APERTURE_GID=$(id -g) on the server.
-ARG APERTURE_UID=1000
-ARG APERTURE_GID=1000
-RUN groupadd --gid "$APERTURE_GID" aperture \
-    && useradd --uid "$APERTURE_UID" --gid "$APERTURE_GID" --no-create-home \
-       --home-dir /app/data --shell /usr/sbin/nologin aperture
+# with --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g) on the server.
+ARG TICKR_UID=1000
+ARG TICKR_GID=1000
+RUN groupadd --gid "$TICKR_GID" tickr \
+    && useradd --uid "$TICKR_UID" --gid "$TICKR_GID" --no-create-home \
+       --home-dir /app/data --shell /usr/sbin/nologin tickr
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -30,15 +30,15 @@ COPY src ./src
 RUN pip install -e ".[webull]"
 COPY config ./config
 COPY strategies ./strategies
-COPY --chmod=0755 ops/docker/entrypoint.sh /usr/local/bin/aperture-entrypoint
+COPY --chmod=0755 ops/docker/entrypoint.sh /usr/local/bin/tickr-entrypoint
 
 # Only the data folder is writable by the bot user; code and config stay root-owned.
 # The working directory is the data folder, so a file a library writes to its current
 # directory lands in the volume, never in the image (on the Mac it would land in the repo).
-RUN mkdir -p /app/data && chown aperture:aperture /app/data
+RUN mkdir -p /app/data && chown tickr:tickr /app/data
 VOLUME ["/app/data"]
 WORKDIR /app/data
-USER aperture
+USER tickr
 
-ENTRYPOINT ["/usr/local/bin/aperture-entrypoint"]
-CMD ["python", "-m", "aperture.api", "--config", "/app/config/bot.toml"]
+ENTRYPOINT ["/usr/local/bin/tickr-entrypoint"]
+CMD ["python", "-m", "tickr.api", "--config", "/app/config/bot.toml"]

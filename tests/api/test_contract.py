@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from aperture.api import contract
-from aperture.api.contract import CommandKind, ContractError, StatusV1
+from tickr.api import contract
+from tickr.api.contract import CommandKind, ContractError, StatusV1
 
 from .samples import T0, status
 from .schema_check import errors
@@ -26,7 +26,7 @@ def test_committed_schemas_match_the_code(tmp_path):
         committed = contract.SCHEMA_DIR / f"{name}.schema.json"
         generated = tmp_path / f"{name}.schema.json"
         assert committed.read_text("utf-8") == generated.read_text("utf-8"), (
-            f"{name}: contract changed; run `python -m aperture.api.contract` and review the "
+            f"{name}: contract changed; run `python -m tickr.api.contract` and review the "
             "diff (removing or renaming a key needs a new version)")
 
 
@@ -198,7 +198,7 @@ def test_write_command_refuses_bad_id(tmp_path):
 
 
 def test_send_outcome_mirrors_the_engine_send_state():
-    from aperture.engine.core import SendState
+    from tickr.engine.core import SendState
 
     assert [m.value for m in contract.SendOutcome] == [m.value for m in SendState]
 

@@ -1,4 +1,4 @@
-# Aperture platform settings. Every key has a comment: what it is, its unit, who reads it.
+# Tickr platform settings. Every key has a comment: what it is, its unit, who reads it.
 # Strategy values live in strategies/<name>/strategy.toml. Secrets never live here: only the
 # NAMES of the environment variables that hold them.
 
@@ -11,7 +11,7 @@ data_dir = "data"
 database_busy_timeout_seconds = 5
 # Daily verified database backup folder, relative to data_dir; one file per NY date, only the latest kept (spec 10); read by runtime.watch.
 backups_dir = "backups"
-# Closed sessions whose capture and decision folders `aperture maintain` leaves uncompressed (today is never touched);
+# Closed sessions whose capture and decision folders `tickr maintain` leaves uncompressed (today is never touched);
 # older finished days are gzipped in place; read by maintain.
 maintain_keep_sessions = 20
 
@@ -67,6 +67,7 @@ half_days_enabled = false
 
 [orders]
 # Prefix of bot client order ids; read by orders and reconciliation to recognise own orders.
+# Kept "ap-" after the rename to Tickr on purpose: changing it would orphan orders placed under the old prefix.
 client_order_id_prefix = "ap-"
 # Prefix of probe client order ids; leftovers with it block the bot start; read by runtime.
 probe_client_order_id_prefix = "probe-"
@@ -140,7 +141,7 @@ hold_seconds = 60
 replace_max_move_usd = 0.50
 # Seconds Detail of the stop is polled after a probe-replace-stop request, one read per detail_poll_seconds; read by the probe-replace-stop command.
 replace_observe_seconds = 15
-# Folder for the evidence of `python -m aperture.probes` (one sub-folder per New York date and run), relative to [run] data_dir; read by the probes.
+# Folder for the evidence of `python -m tickr.probes` (one sub-folder per New York date and run), relative to [run] data_dir; read by the probes.
 evidence_dir = "probes"
 # Processes `probes chart-limit` starts at once, count; each has its own Webull client and its own request budget; read by the probes.
 chart_limit_processes = 2
@@ -164,9 +165,9 @@ allowed_hosts = ["127.0.0.1", "localhost"]
 remote_hosts = []
 # Second loopback port, for remote access only: every request on it must carry the paired bearer token whatever its Host, and `tailscale serve` points here, never at `port`; read by the api server.
 remote_port = 8767
-# File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m aperture.api pair`, never the token itself; read by the api server.
+# File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m tickr.api pair`, never the token itself; read by the api server.
 remote_token_hash_file = "remote-token.sha256"
-# Random bytes in a newly paired bearer token (URL-safe text is about 4/3 as long); read by `python -m aperture.api pair`.
+# Random bytes in a newly paired bearer token (URL-safe text is about 4/3 as long); read by `python -m tickr.api pair`.
 remote_token_bytes = 32
 # File where `pair` leaves the pairing link (it holds the token) for the owner to move to the phone, relative to data_dir; written 0600, never printed, deleted by the api server on the first request that presents the new token; read by `pair` and the api server.
 remote_pairing_file = "remote-pairing-link"
@@ -197,7 +198,7 @@ status_recent_commands = 10
 # Seconds the API remembers an Idempotency-Key and the 202 answer it gave (a repeat returns that answer and queues
 # nothing); must be above command_max_age_seconds; keys are kept under <commands_dir>/idempotency; read by the api server.
 idempotency_key_ttl_seconds = 86400
-# Replay settings file (fill model) the API uses to simulate each observer's day result at GET /observers, the same simulation as `python -m aperture.research observers`, relative to the repo root; read by the api server.
+# Replay settings file (fill model) the API uses to simulate each observer's day result at GET /observers, the same simulation as `python -m tickr.research observers`, relative to the repo root; read by the api server.
 replay_settings_file = "config/replay.toml"
 # Most simulated trades (ENTERs, oldest first) GET /observers lists per observer; more = cut, with `trades_truncated` true; read by the api server (api/observer_results.py).
 observer_trades_max_rows = 100
@@ -325,7 +326,7 @@ capture_dir = "capture"
 [observers]
 # Strategy module per strategy NAME, as "name=importable.module" (the module exposes create(values)); an observer folder
 # strategies/<folder>/strategy.toml names its strategy in [strategy] name; read by observers.loader.
-strategy_modules = ["price-action-v1=aperture.strategy.price_action_v1", "price-action-v2=aperture.strategy.price_action_v2", "volume-shock-v1=aperture.strategy.volume_shock_v1", "noise-band-v1=aperture.strategy.noise_band_v1"]
+strategy_modules = ["price-action-v1=tickr.strategy.price_action_v1", "price-action-v2=tickr.strategy.price_action_v2", "volume-shock-v1=tickr.strategy.volume_shock_v1", "noise-band-v1=tickr.strategy.noise_band_v1"]
 # Most observer strategies [strategy] observers may list (each one costs loop time per bar); read by observers.loader.
 max_observers = 4
 # Seconds one observer evaluation may take; slower = that observer is switched off for the run with a cause; read by observers.runner.
@@ -410,7 +411,7 @@ watchdog_journal_file = "watchdog.jsonl"
 watchdog_restart_before_flatten_seconds = 300
 # Command the watchdog runs to start the bot job (the same job the schedule starts: preflight, then the supervised bot);
 # "{uid}" is replaced by the user id; kickstart without -k never touches a running job; read by runtime.watchdog.
-watchdog_restart_command = ["/bin/launchctl", "kickstart", "gui/{uid}/local.aperture.bot"]
+watchdog_restart_command = ["/bin/launchctl", "kickstart", "gui/{uid}/local.tickr.bot"]
 # Seconds the watchdog waits for the restart command to return before calling the attempt failed; read by runtime.watchdog.
 watchdog_restart_timeout_seconds = 10
 # Record of the watchdog's one restart a day (New York date), relative to data_dir; written before the command runs and
@@ -421,7 +422,7 @@ watchdog_restart_file = "watchdog-restart.json"
 # [orders] detail_poll_seconds); read by runtime.service.
 evaluation_budget_seconds = 3
 # Stop marker the bot writes when it obeys a stop-bot command, relative to data_dir; while it exists preflight fails and
-# `aperture run` refuses, until `aperture clear-stop`; read by runtime.stopmarker (bot, preflight, cli).
+# `tickr run` refuses, until `tickr clear-stop`; read by runtime.stopmarker (bot, preflight, cli).
 stop_marker_file = "stopped-by-operator.json"
 
 [alerts]
@@ -434,7 +435,7 @@ notification_timeout_seconds = 5
 fence_alert_after_seconds = 30
 # NAME of the environment variable holding the owner's iMessage address (phone number or Apple ID email); the value is
 # personal data, set only in the owner's env file, never here; presence checked by preflight; read by runtime.alerts.
-imessage_recipient_variable = "APERTURE_IMESSAGE_TO"
+imessage_recipient_variable = "TICKR_IMESSAGE_TO"
 # The Tickr Mac app that shows the Mac notification with its own icon (path to the .app; empty = none). When it is
 # missing, not allowed to notify or fails, the notification goes through osascript instead; read by runtime.alerts.
 mac_app = "/Applications/Tickr.app"
@@ -446,7 +447,7 @@ mac_app_timeout_seconds = 2
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API
 # process build its own Webull client in the background (it then needs the app key and secret, never the account id,
 # and uses the environment's token folder next to the bot; until it is built GET /chart answers 503), and only once the
-# newest `python -m aperture.probes chart-client` run recorded for the environment has passed (C1). Gate, per
+# newest `python -m tickr.probes chart-client` run recorded for the environment has passed (C1). Gate, per
 # docs/webull-facts.md section C: C1 and C2 must pass first, and C1 in the environment being enabled (a Sandbox pass
 # does not prove Production); C3 must pass before daily ranges (1m/3m/1y) are trusted, C4 before the newest minute and
 # half days are; C5 is optional. false = GET /chart answers 503 unavailable (the demo serves its simulated world
@@ -472,7 +473,7 @@ closed_day_settle_seconds = 300
 # Chart cache folder relative to [run] data_dir; settled days' M1 bars go to <cache_dir>/<environment>/<symbol>/<NY
 # date>.json (minute bars are unadjusted, so a settled day never changes); read by the api server and maintain.
 cache_dir = "chart"
-# Days, counted back from today's New York date, a settled day's file stays in the chart cache; `aperture maintain`
+# Days, counted back from today's New York date, a settled day's file stays in the chart cache; `tickr maintain`
 # deletes older ones (a later chart of that day reads it from Webull again). At least session_lookback_days; read by
 # maintain.
 cache_max_age_days = 30

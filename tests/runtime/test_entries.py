@@ -7,22 +7,22 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Fence, Leg
-from aperture.observers.log import DecisionLog
-from aperture.research.records import load_records
-from aperture.runtime.entries import (
+from tickr import config
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Fence, Leg
+from tickr.observers.log import DecisionLog
+from tickr.research.records import load_records
+from tickr.runtime.entries import (
     EntryDesk,
     guard_entries,
     realized_loss_today,
     round_to_tick,
 )
-from aperture.store import Store
-from aperture.strategy.base import Check, Decision, Verdict
-from aperture.types import Quote
+from tickr.store import Store
+from tickr.strategy.base import Check, Decision, Verdict
+from tickr.types import Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -143,7 +143,7 @@ def test_no_calendar_refuses(tmp_path):
 
 def test_daily_ceiling_counts_todays_realized_loss(tmp_path, monkeypatch):
     desk = Desk(tmp_path)
-    monkeypatch.setattr("aperture.runtime.entries.realized_loss_today",
+    monkeypatch.setattr("tickr.runtime.entries.realized_loss_today",
                         lambda engine, now: CFG.risk.max_daily_loss_usd)
     assert desk.decide(decision()).refusal_cause.startswith("DAILY_CEILING")
 
@@ -164,18 +164,18 @@ def test_unresolved_fence_blocks_entries(tmp_path):
 
 
 def test_realized_loss_is_the_net_loss_of_the_day(tmp_path, monkeypatch):
-    from aperture.api import contract as api
-    from aperture.api.history import NO_ENTRY, NOT_READ
+    from tickr.api import contract as api
+    from tickr.api.history import NO_ENTRY, NOT_READ
 
     def trade(result):
         return api.Trade("ABC", D(1), D(10), D(10) + result, NOW, NOW, "x", result, D(5),
                          None, NO_ENTRY, NOT_READ)
 
-    monkeypatch.setattr("aperture.runtime.entries.trades_today",
+    monkeypatch.setattr("tickr.runtime.entries.trades_today",
                         lambda engine, now: (trade(D(-20)), trade(D(5)), trade(D(-5))))
     desk = Desk(tmp_path)
     assert realized_loss_today(desk.engine, NOW) == D(20)  # wins offset losses (owner 2026-11-14)
-    monkeypatch.setattr("aperture.runtime.entries.trades_today",
+    monkeypatch.setattr("tickr.runtime.entries.trades_today",
                         lambda engine, now: (trade(D(-20)), trade(D(50))))
     assert realized_loss_today(desk.engine, NOW) == D(0)
 
@@ -270,7 +270,7 @@ def test_an_entry_already_exiting_is_left_to_the_teardown(tmp_path):
 
 
 def test_the_window_bottom_must_sit_between_the_stop_and_the_limit(tmp_path):
-    from aperture.engine.core import EntryRefused
+    from tickr.engine.core import EntryRefused
 
     desk = Desk(tmp_path)
     with pytest.raises(EntryRefused):

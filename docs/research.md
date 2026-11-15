@@ -1,6 +1,6 @@
 # Signal research: outcomes, what-if, version diff, refusals
 
-`aperture.research` answers these questions offline, from captured M1 bars (the bar JSONL format
+`tickr.research` answers these questions offline, from captured M1 bars (the bar JSONL format
 of `docs/replay.md`) and recorded decisions. It never trades. The bot imports only its record
 format (`records.py`), through the observers (`docs/observers.md`).
 
@@ -18,7 +18,7 @@ conservative fill model and prove nothing about real fills.
 
 ## Decision records (input)
 
-One JSON object per line, written by `aperture.research.records.write_records` (the bot is
+One JSON object per line, written by `tickr.research.records.write_records` (the bot is
 expected to use the same writer when it records decisions; until then `decide` produces them).
 
 ```
@@ -49,7 +49,7 @@ expected to use the same writer when it records decisions; until then `decide` p
 ## outcomes
 
 ```
-python -m aperture.research outcomes --bars data/capture/.../bars.jsonl \
+python -m tickr.research outcomes --bars data/capture/.../bars.jsonl \
   --decisions decisions.jsonl --settings config/research.toml [--config config/bot.toml] \
   --out out/outcomes
 ```
@@ -78,7 +78,7 @@ measured, up, down, mean and median move in percent and ATR).
 ## whatif
 
 ```
-python -m aperture.research whatif --bars ... --decisions decisions.jsonl \
+python -m tickr.research whatif --bars ... --decisions decisions.jsonl \
   [--replay-settings config/replay.toml] [--config config/bot.toml] \
   [--quantity 20] --out out/whatif
 ```
@@ -101,10 +101,10 @@ USD, exits by reason).
 ## decide and diff: another strategy version
 
 ```
-python -m aperture.research decide --bars <history days + the day> \
-  --strategy aperture.strategy.price_action_v1 --values strategies/<v2>/strategy.toml \
+python -m tickr.research decide --bars <history days + the day> \
+  --strategy tickr.strategy.price_action_v1 --values strategies/<v2>/strategy.toml \
   [--replay-settings config/replay.toml] [--config config/bot.toml] --out out/v2
-python -m aperture.research diff --baseline decisions.jsonl --candidate out/v2/decisions.jsonl \
+python -m tickr.research diff --baseline decisions.jsonl --candidate out/v2/decisions.jsonl \
   [--baseline-strategy price-action-v1:1] --settings config/research.toml --out out/diff
 ```
 
@@ -130,12 +130,12 @@ or `whatif` over those days says nothing about the change; run it on other days.
 ## latency: quote latency from capture files
 
 ```
-python -m aperture.research latency --quotes data/capture/<env>/<NY date>/quotes.jsonl \
+python -m tickr.research latency --quotes data/capture/<env>/<NY date>/quotes.jsonl \
   [--notices data/capture/<env>/<NY date>/notices.jsonl] [--source stream|snapshot] \
   --settings config/research.toml --out out/latency
 ```
 
-Reads the capture files as `aperture.data.capture` writes them (several days may be passed).
+Reads the capture files as `tickr.data.capture` writes them (several days may be passed).
 Latency = `receipt_time` minus `provider_time` in milliseconds, for quotes of `--source`
 (default `stream`; snapshot quotes measure a REST round trip plus quote age, a different thing).
 
@@ -162,7 +162,7 @@ the bot is still appending to) is left unread and counted in `partial_last_lines
 ## refusals: per-day, per-setup refusal table
 
 ```
-python -m aperture.research refusals --decisions decisions.jsonl \
+python -m tickr.research refusals --decisions decisions.jsonl \
   [--strategy price-action-v1:1] --settings config/research.toml --out out/refusals
 ```
 

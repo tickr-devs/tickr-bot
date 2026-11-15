@@ -1,4 +1,4 @@
-"""The rehearsal tests' view of `aperture.demo.world`: a regular New York session from the
+"""The rehearsal tests' view of `tickr.demo.world`: a regular New York session from the
 repo calendar, a one-cent half spread and 500-share quotes, as the scenarios were written."""
 
 from __future__ import annotations
@@ -8,10 +8,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from aperture.calendar import SessionCalendar, ny_date_of
-from aperture.demo import world as demo_world
-from aperture.demo.world import CENT, Exchange, Feed, ny  # noqa: F401 - re-exported
-from aperture.types import Bar
+from tickr.calendar import SessionCalendar, ny_date_of
+from tickr.demo import world as demo_world
+from tickr.demo.world import CENT, Exchange, Feed, ny  # noqa: F401 - re-exported
+from tickr.types import Bar
 
 CALENDAR = SessionCalendar.load(Path(__file__).resolve().parents[2] / "config" / "calendar")
 QUOTE_SIZE = Decimal(500)

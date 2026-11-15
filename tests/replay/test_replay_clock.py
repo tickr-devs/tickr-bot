@@ -5,9 +5,9 @@ from datetime import date, datetime
 import pytest
 from conftest import BOT_TOML, FLAT, NY, enter, series
 
-from aperture.replay.__main__ import session_clock
-from aperture.replay.engine import SignalOutcome, replay
-from aperture.replay.errors import ReplayError
+from tickr.replay.__main__ import session_clock
+from tickr.replay.engine import SignalOutcome, replay
+from tickr.replay.errors import ReplayError
 
 
 def test_normal_day_clock_comes_from_bot_toml_and_calendar():

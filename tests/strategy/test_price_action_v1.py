@@ -21,9 +21,9 @@ from strategy_bars import (
     strategy_values,
 )
 
-from aperture.strategy import indicators as ind
-from aperture.strategy import price_action_v1 as pa
-from aperture.strategy.base import PositionView, SymbolContext, Verdict
+from tickr.strategy import indicators as ind
+from tickr.strategy import price_action_v1 as pa
+from tickr.strategy.base import PositionView, SymbolContext, Verdict
 
 
 def make(**overrides):

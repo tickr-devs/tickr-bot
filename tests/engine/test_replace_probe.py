@@ -8,17 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from aperture import cli, config
-from aperture.broker.base import BrokerError
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK
-from aperture.config import GateResult
-from aperture.data.base import FakeMarketData
-from aperture.engine.core import Engine, Fence, Leg, TradeState
-from aperture.engine.manual import ManualRefused
-from aperture.engine.replace_probe import Verdict, observe, plan_replace, precheck, send
-from aperture.store import Store
-from aperture.types import OrderState, Quote
+from tickr import cli, config
+from tickr.broker.base import BrokerError
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK
+from tickr.config import GateResult
+from tickr.data.base import FakeMarketData
+from tickr.engine.core import Engine, Fence, Leg, TradeState
+from tickr.engine.manual import ManualRefused
+from tickr.engine.replace_probe import Verdict, observe, plan_replace, precheck, send
+from tickr.store import Store
+from tickr.types import OrderState, Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -164,7 +164,7 @@ def test_unresolved_replace_never_adds_a_second_stop_or_sells(setup):
     reads = broker.open_orders
 
     def fail_once():
-        from aperture.broker.base import OutcomeUnknown
+        from tickr.broker.base import OutcomeUnknown
         broker.open_orders = reads
         raise OutcomeUnknown("read lost")
 
@@ -402,7 +402,7 @@ def held(setup):
     reads = broker.open_orders
 
     def fail_once():
-        from aperture.broker.base import OutcomeUnknown
+        from tickr.broker.base import OutcomeUnknown
         broker.open_orders = reads
         raise OutcomeUnknown("read lost")
 
@@ -523,7 +523,7 @@ def test_new_order_listed_one_read_late(setup):
 
 
 def test_exit_loop_shows_the_hold_once_then_sells_when_resolved(setup):
-    from aperture.engine.manual import run_until_closed
+    from tickr.engine.manual import run_until_closed
     engine, broker, trade, foreign = held(setup)
     lines = []
 
@@ -559,7 +559,7 @@ class NoOrders(Market):
 
 class FailingQuotes(FakeMarketData):
     def snapshot(self, symbols):
-        from aperture.data.base import MarketDataError
+        from tickr.data.base import MarketDataError
         raise MarketDataError("read failed")
 
 

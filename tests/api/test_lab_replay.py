@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.lab_replay import LabReplay, LabReplayRefused
-from aperture.api.server import make_remote_server, make_server, settings_from_config
-from aperture.backtest.universe import PoolEntry, write_pool
-from aperture.config import ConfigError
+from tickr import config
+from tickr.api import contract
+from tickr.api.lab_replay import LabReplay, LabReplayRefused
+from tickr.api.server import make_remote_server, make_server, settings_from_config
+from tickr.backtest.universe import PoolEntry, write_pool
+from tickr.config import ConfigError
 
 from .samples import T0
 from .schema_check import errors
@@ -131,7 +131,7 @@ def test_start_runs_the_niced_backtest_then_reports_done(cfg, spawner):
     command, kwargs = spawn.calls[0]
     assert command[:3] == ["nice", "-n", "19"]
     assert command[command.index("--last-sessions") + 1] == "20"
-    assert command[command.index("--strategy") + 1] == "aperture.strategy.price_action_v1"
+    assert command[command.index("--strategy") + 1] == "tickr.strategy.price_action_v1"
     values = Path(command[command.index("--values") + 1])
     assert values == cfg.root / "strategies" / "price-action-v1" / "strategy.toml"
     assert values.exists() and kwargs["cwd"] == cfg.root

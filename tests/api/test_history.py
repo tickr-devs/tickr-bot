@@ -11,16 +11,16 @@ from pathlib import Path
 
 import pytest
 
-from aperture.api import contract
-from aperture.api.history import (
+from tickr.api import contract
+from tickr.api.history import (
     History,
     HistoryPaths,
     HistoryUnavailable,
     closed_trades,
     trade_metrics,
 )
-from aperture.data.capture import BARS_FILE
-from aperture.store import Store
+from tickr.data.capture import BARS_FILE
+from tickr.store import Store
 
 from .schema_check import errors
 from .test_server import api, doc, request, schema, settings  # noqa: F401 - pytest fixtures
@@ -87,7 +87,7 @@ def _bar(symbol: str, minute: int, close: str = "12.40", end: str = "\n") -> str
 
 @pytest.fixture
 def paths(tmp_path) -> HistoryPaths:
-    return HistoryPaths("sandbox", tmp_path / "aperture.sqlite3",
+    return HistoryPaths("sandbox", tmp_path / "tickr.sqlite3",
                         tmp_path / "capture" / "sandbox", CALENDAR_DIR, Decimal(900))
 
 

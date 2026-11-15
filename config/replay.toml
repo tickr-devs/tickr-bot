@@ -1,5 +1,5 @@
-# Settings of the historical replay tool (python -m aperture.replay). Every result is SIMULATED.
-# Read only by src/aperture/replay/; the trading bot never reads this file. See docs/replay.md.
+# Settings of the historical replay tool (python -m tickr.replay). Every result is SIMULATED.
+# Read only by src/tickr/replay/; the trading bot never reads this file. See docs/replay.md.
 
 [replay]
 # Adverse slippage per simulated fill, percent of the fill price; read by replay/engine.py.

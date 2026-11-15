@@ -10,11 +10,11 @@ from typing import Any
 
 import pytest
 
-from aperture import config
-from aperture.api.chart import place
-from aperture.broker.base import RateLimited
-from aperture.broker.budget import BudgetExhausted
-from aperture.broker.webull import (
+from tickr import config
+from tickr.api.chart import place
+from tickr.broker.base import RateLimited
+from tickr.broker.budget import BudgetExhausted
+from tickr.broker.webull import (
     AdapterConfigError,
     MalformedResponse,
     Route,
@@ -25,8 +25,8 @@ from aperture.broker.webull import (
     market_data_from_config,
     read_history_bars,
 )
-from aperture.calendar import SessionCalendar, ny_date_of
-from aperture.data.base import BarSpan, DelayedData
+from tickr.calendar import SessionCalendar, ny_date_of
+from tickr.data.base import BarSpan, DelayedData
 
 from .test_webull_market_data import Scripted, bar_row, ok, recorded, recorded_meta
 
@@ -161,8 +161,8 @@ def test_naive_end_is_refused():
 
 def test_only_the_api_chart_reads_chart_bars():
     """The trading loop, discovery and history never call history_bars: chart reads cannot
-    take the bot's budget or its source. The owner's chart probes (`aperture.probes`) are the
+    take the bot's budget or its source. The owner's chart probes (`tickr.probes`) are the
     one other caller: a process of their own, with their own client and budget."""
     callers = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "src").rglob("*.py")
                      if ".history_bars(" in p.read_text("utf-8"))
-    assert callers == ["src/aperture/api/chart.py", "src/aperture/probes.py"]
+    assert callers == ["src/tickr/api/chart.py", "src/tickr/probes.py"]

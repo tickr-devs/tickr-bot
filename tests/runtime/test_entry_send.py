@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal as D
 
-from aperture.api import contract as api
-from aperture.api.history import entry_send
-from aperture.engine.core import SendState
-from aperture.runtime import entries, service
+from tickr.api import contract as api
+from tickr.api.history import entry_send
+from tickr.engine.core import SendState
+from tickr.runtime import entries, service
 
 from .test_protection import Rig
 

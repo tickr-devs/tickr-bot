@@ -9,10 +9,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from aperture.replay.clock import fixed_clock
-from aperture.replay.settings import ReplaySettings, load_settings
-from aperture.strategy.base import Decision, SymbolContext, Verdict
-from aperture.types import Bar
+from tickr.replay.clock import fixed_clock
+from tickr.replay.settings import ReplaySettings, load_settings
+from tickr.strategy.base import Decision, SymbolContext, Verdict
+from tickr.types import Bar
 
 HERE = Path(__file__).parent
 NY = ZoneInfo("America/New_York")

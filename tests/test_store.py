@@ -5,12 +5,19 @@ from decimal import Decimal
 
 import pytest
 
-from aperture.store import MIGRATIONS, EnvironmentMismatch, Store
+from tickr.store import (
+    DATABASE_FILE,
+    LEGACY_DATABASE_FILE,
+    MIGRATIONS,
+    EnvironmentMismatch,
+    LegacyDatabaseError,
+    Store,
+)
 
 
 @pytest.fixture
 def store(tmp_path):
-    s = Store.open(tmp_path / "data" / "aperture.sqlite3", busy_timeout_seconds=0)
+    s = Store.open(tmp_path / "data" / "tickr.sqlite3", busy_timeout_seconds=0)
     yield s
     s.close()
 
@@ -87,7 +94,7 @@ def test_backup_is_verified(store, tmp_path):
 
 
 def test_busy_begin_does_not_wedge_the_store(store, tmp_path):
-    other = sqlite3.connect(tmp_path / "data" / "aperture.sqlite3", isolation_level=None)
+    other = sqlite3.connect(tmp_path / "data" / "tickr.sqlite3", isolation_level=None)
     other.execute("BEGIN IMMEDIATE")
     with pytest.raises(sqlite3.OperationalError, match="locked"), store.transaction():
         pass
@@ -115,7 +122,7 @@ def test_failed_commit_rolls_back(store):
 
 
 def test_migration_backs_up_existing_database(tmp_path, monkeypatch):
-    import aperture.store as store_module
+    import tickr.store as store_module
     path = tmp_path / "a.sqlite3"
     s = Store.open(path, busy_timeout_seconds=0)
     with s.transaction():
@@ -166,3 +173,26 @@ def test_a_database_with_runs_of_another_environment_is_refused(tmp_path):
     with pytest.raises(EnvironmentMismatch, match="'one'"):
         store.require_environment("two")
     store.close()
+
+
+def test_open_refuses_a_new_database_next_to_the_pre_rename_one(tmp_path):
+    Store.open(tmp_path / LEGACY_DATABASE_FILE, busy_timeout_seconds=0).close()
+    with pytest.raises(LegacyDatabaseError, match="legacy-database-name"):
+        Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0)
+    assert not (tmp_path / DATABASE_FILE).exists()
+    Store.open(tmp_path / "other.sqlite3", busy_timeout_seconds=0).close()
+    (tmp_path / "other.sqlite3").rename(tmp_path / DATABASE_FILE)
+    with pytest.raises(LegacyDatabaseError):  # both names present: still refused
+        Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0)
+
+
+def test_open_refuses_beside_a_leftover_pre_rename_wal_file(tmp_path):
+    (tmp_path / (LEGACY_DATABASE_FILE + "-wal")).write_bytes(b"")
+    with pytest.raises(LegacyDatabaseError):
+        Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0)
+
+
+def test_open_uses_the_renamed_database_once_it_exists(tmp_path):
+    Store.open(tmp_path / LEGACY_DATABASE_FILE, busy_timeout_seconds=0).close()
+    (tmp_path / LEGACY_DATABASE_FILE).rename(tmp_path / DATABASE_FILE)
+    Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0).close()

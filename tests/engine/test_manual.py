@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from aperture import cli, config
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Fence, Leg, TradeState
-from aperture.engine.manual import ManualRefused, check_window, plan_probe, run_until_closed
-from aperture.store import Store
+from tickr import cli, config
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Fence, Leg, TradeState
+from tickr.engine.manual import ManualRefused, check_window, plan_probe, run_until_closed
+from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -193,7 +193,7 @@ def test_resume_late_closes_only_before_the_close(tmp_path, monkeypatch, capsys,
 
 
 def test_flatten_deadline_from_calendar():
-    from aperture.engine.manual import flatten_deadline
+    from tickr.engine.manual import flatten_deadline
     assert flatten_deadline(CFG, CAL, MONDAY_11) > MONDAY_11
     late = MONDAY_11.replace(hour=15, minute=59)
     assert flatten_deadline(CFG, CAL, late) == late
@@ -212,7 +212,7 @@ def test_refused_close_never_loops(tmp_path):
     def place(request):
         sends.append(request.order_type)
         if request.order_type == "MARKET":
-            from aperture.broker.base import Refused
+            from tickr.broker.base import Refused
             raise Refused("CLOSED", "refused at the session edge")
         return real_place(request)
 
@@ -285,7 +285,7 @@ def test_default_stop_is_derived_from_the_fill(tmp_path):
 
 
 def test_operator_fences_are_reported_once(tmp_path):
-    from aperture.broker.base import Refused
+    from tickr.broker.base import Refused
 
     market = Market()
     clock = [0.0]

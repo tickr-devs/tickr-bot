@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.broker.fake import FakeBroker
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Leg, TradeState
-from aperture.store import Store
-from aperture.types import OrderState
+from tickr import config
+from tickr.broker.fake import FakeBroker
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Leg, TradeState
+from tickr.store import Store
+from tickr.types import OrderState
 
 CFG = config.load(Path(__file__).resolve().parents[2] / "config" / "bot.toml")
 OPEN = GateResult(True, "test")

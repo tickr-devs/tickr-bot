@@ -31,7 +31,7 @@ def test_flags_words_in_ui_code(tmp_path):
     source = (
         'Text("Overview")\n'
         'Button("Quit") {}\n'
-        'Text(verbatim: "Aperture")\n'
+        'Text(verbatim: "Tickr")\n'
         'var title: String { return "Flatten All" }\n'
         'let s = String(localized: "Pause entries?")\n'
     )
@@ -208,14 +208,14 @@ def test_current_apple_apis_pass(tmp_path):
 
 
 def test_ui_tests_may_use_xctest(tmp_path):
-    folder = tmp_path / "ApertureUITests"
+    folder = tmp_path / "TickrUITests"
     folder.mkdir()
     assert load().legacy_violations(write(folder, "import XCTest\n", "LaunchTests.swift")) == []
 
 
 def test_ui_test_targets_get_only_the_legacy_rule(tmp_path, monkeypatch):
     module = load()
-    folder = tmp_path / "ApertureUITests"
+    folder = tmp_path / "TickrUITests"
     folder.mkdir()
     write(folder, 'import XCTest\nlet cancel = button("Cancel")\n', "FlowTests.swift")
     monkeypatch.setattr(module, "REPO", tmp_path)
@@ -243,7 +243,7 @@ def test_every_form_of_an_outdated_import_fails(tmp_path):
         "import class Combine.AnyCancellable\n"
         "@preconcurrency internal import Combine\n"
         "import Testing\n"
-        "@testable import ApertureKit\n"
+        "@testable import TickrKit\n"
     )
     found = load().legacy_violations(write(tmp_path, source))
     assert [line for line, _ in found] == [1, 2, 3, 4, 5]

@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.server import make_server, settings_from_config
-from aperture.archive import compress
-from aperture.observers.log import DecisionLog
-from aperture.research.records import Admission, DecisionRecord
-from aperture.strategy.base import Check, Decision, Role, Verdict
+from tickr import config
+from tickr.api import contract
+from tickr.api.server import make_server, settings_from_config
+from tickr.archive import compress
+from tickr.observers.log import DecisionLog
+from tickr.research.records import Admission, DecisionRecord
+from tickr.strategy.base import Check, Decision, Role, Verdict
 
 from .samples import T0
 from .schema_check import errors

@@ -7,12 +7,12 @@ from decimal import Decimal
 
 import pytest
 
-from aperture.api.contract import RefusalCode, refusal_of
-from aperture.calendar import NEW_YORK, CalendarCause, CalendarRefused
-from aperture.config import GateResult
-from aperture.risk.admission import CHECKS, admit
-from aperture.risk.causes import AdmissionCause as C
-from aperture.strategy.base import Verdict
+from tickr.api.contract import RefusalCode, refusal_of
+from tickr.calendar import NEW_YORK, CalendarCause, CalendarRefused
+from tickr.config import GateResult
+from tickr.risk.admission import CHECKS, admit
+from tickr.risk.causes import AdmissionCause as C
+from tickr.strategy.base import Verdict
 
 from .conftest import CALENDAR, NOW, D, decision, inputs, quote
 

@@ -15,9 +15,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from aperture.broker.base import RateLimited
-from aperture.broker.budget import RequestBudget, RouteLimit
-from aperture.broker.webull import (
+from tickr.broker.base import RateLimited
+from tickr.broker.budget import RequestBudget, RouteLimit
+from tickr.broker.webull import (
     STREAM_SUBSCRIBE_PATH,
     STREAM_TOO_MANY_SYMBOLS,
     AdapterConfigError,
@@ -29,8 +29,8 @@ from aperture.broker.webull import (
     quote_from_stream,
     subscribe_error,
 )
-from aperture.data.base import MarketDataError, StreamNotice, SubscriptionLimit
-from aperture.data.health import StreamHealth, StreamState
+from tickr.data.base import MarketDataError, StreamNotice, SubscriptionLimit
+from tickr.data.health import StreamHealth, StreamState
 
 NOW = datetime(2026, 11, 13, 15, 0, tzinfo=UTC)
 MS = int(NOW.timestamp() * 1000)
@@ -267,7 +267,7 @@ def _settings(tmp_path, mqtt="data-api.sandbox.webull.com"):
 
 
 def test_sdk_stream_refuses_host_outside_allowlist(tmp_path):
-    from aperture.broker.webull import SdkQuoteStream
+    from tickr.broker.webull import SdkQuoteStream
     s, _, _, _ = session()
     with pytest.raises(AdapterConfigError, match="allowlist"):
         SdkQuoteStream(_settings(tmp_path, mqtt="evil.example.com"), s)
@@ -275,7 +275,7 @@ def test_sdk_stream_refuses_host_outside_allowlist(tmp_path):
 
 def test_sdk_stream_wires_callbacks(tmp_path, monkeypatch, capsys):
     pytest.importorskip("webull")
-    from aperture.broker.webull import SdkQuoteStream
+    from tickr.broker.webull import SdkQuoteStream
     monkeypatch.setenv("T_APP_KEY", "CANARY-KEY")
     monkeypatch.setenv("T_APP_SECRET", "CANARY-SECRET")
     monkeypatch.chdir(tmp_path)
@@ -301,7 +301,7 @@ def test_sdk_stream_wires_callbacks(tmp_path, monkeypatch, capsys):
 
 def test_sdk_stream_reconnects_after_the_loop_ends(tmp_path, monkeypatch):
     pytest.importorskip("webull")
-    from aperture.broker.webull import SdkQuoteStream
+    from tickr.broker.webull import SdkQuoteStream
     monkeypatch.setenv("T_APP_KEY", "k")
     monkeypatch.setenv("T_APP_SECRET", "s")
     monkeypatch.chdir(tmp_path)
@@ -406,7 +406,7 @@ def test_subscribe_error_maps_only_the_limit_code():
 
 def test_sdk_stream_maps_417_to_subscription_limit(tmp_path, monkeypatch):
     pytest.importorskip("webull")
-    from aperture.broker.webull import SdkQuoteStream
+    from tickr.broker.webull import SdkQuoteStream
     monkeypatch.setenv("T_APP_KEY", "k")
     monkeypatch.setenv("T_APP_SECRET", "s")
     monkeypatch.chdir(tmp_path)

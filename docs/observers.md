@@ -3,7 +3,7 @@
 An observer is another strategy version that sees exactly what the active strategy sees and
 whose decisions are only recorded. It cannot place, cancel or size an order and never reaches
 the safety layer. Use it to compare a candidate version against the active one on live days;
-the daily report then shows both side by side (`python -m aperture.research observers`).
+the daily report then shows both side by side (`python -m tickr.research observers`).
 
 ## Configure
 
@@ -15,7 +15,7 @@ active = "price-action-v1"
 observers = ["price-action-v1-lookback8"]      # folders under strategies/
 
 [observers]
-strategy_modules = ["price-action-v1=aperture.strategy.price_action_v1", "price-action-v2=aperture.strategy.price_action_v2"]
+strategy_modules = ["price-action-v1=tickr.strategy.price_action_v1", "price-action-v2=tickr.strategy.price_action_v2"]
 max_observers = 4
 max_evaluation_seconds = 0.5
 decisions_dir = "decisions"
@@ -31,7 +31,7 @@ refused by the strategy, duplicate identity, more than `max_observers`.
 ## Candidate: price-action-v2
 
 `strategies/price-action-v2/` is price-action-v1 (same values) plus two backlog rules, in
-`src/aperture/strategy/price_action_v2.py`. New rules need new code, so it is a new strategy
+`src/tickr/strategy/price_action_v2.py`. New rules need new code, so it is a new strategy
 name with its own module (already mapped in `strategy_modules`), not a value variant of v1.
 It is not active and not an observer by default.
 
@@ -52,11 +52,11 @@ Enable as an observer: `observers = ["price-action-v2"]` in `config/bot.toml [st
 Compare offline without enabling anything:
 
 ```
-python -m aperture.replay --bars <days> --strategy aperture.strategy.price_action_v2 \
+python -m tickr.replay --bars <days> --strategy tickr.strategy.price_action_v2 \
   --values strategies/price-action-v2/strategy.toml --out out/replay-v2
-python -m aperture.research decide --bars <days> --strategy aperture.strategy.price_action_v2 \
+python -m tickr.research decide --bars <days> --strategy tickr.strategy.price_action_v2 \
   --values strategies/price-action-v2/strategy.toml --out out/v2
-python -m aperture.research diff --baseline <v1 decisions.jsonl> \
+python -m tickr.research diff --baseline <v1 decisions.jsonl> \
   --candidate out/v2/decisions.jsonl --settings config/research.toml --out out/diff
 ```
 
@@ -65,7 +65,7 @@ owner decision (`[strategy] active`), not something this candidate does.
 
 ## Candidate: volume-shock-v1
 
-`strategies/volume-shock-v1/` with `src/aperture/strategy/volume_shock_v1.py` (shared entry and
+`strategies/volume-shock-v1/` with `src/tickr/strategy/volume_shock_v1.py` (shared entry and
 sizing in `strategy/simple.py`). It is family L4 of `docs/strategy-ledger.md`: a volume shock in
 a stock trading a little above its previous close; the module docstring and the strategy.toml
 hold the rules and values. The first signal of the session stays valid for `signal_valid_minutes` unless a later bar
@@ -80,7 +80,7 @@ Enable: `observers = ["volume-shock-v1"]`.
 
 ## Candidate: noise-band-v1
 
-`strategies/noise-band-v1/` with `src/aperture/strategy/noise_band_v1.py` (entry and sizing in
+`strategies/noise-band-v1/` with `src/tickr/strategy/noise_band_v1.py` (entry and sizing in
 `strategy/simple.py`). It is family L2 of `docs/strategy-ledger.md`: the first close between
 10:00 and 15:00 that is further above the session open than the stock's usual move at that
 minute over the prior sessions; the docstring and the strategy.toml hold the rules and values.
@@ -127,9 +127,9 @@ Notes for both candidates (from the trading-core review of `strategy/simple.py`)
 ## Engine wiring (to do in the engine, not here)
 
 ```python
-from aperture.observers.loader import load_observers
-from aperture.observers.log import DecisionLog
-from aperture.observers.runner import ObserverSet
+from tickr.observers.loader import load_observers
+from tickr.observers.log import DecisionLog
+from tickr.observers.runner import ObserverSet
 
 settings = config.observers
 observers = ObserverSet(load_observers(config), DecisionLog.from_config(config),
@@ -167,7 +167,7 @@ per line (format in `docs/research.md`).
 ## Daily report
 
 ```
-python -m aperture.research observers \
+python -m tickr.research observers \
   --decisions data/decisions/sandbox/2026-11-17/decisions.jsonl \
   --bars data/capture/sandbox/2026-11-17/bars.jsonl --out out/observers-2026-11-17
 ```

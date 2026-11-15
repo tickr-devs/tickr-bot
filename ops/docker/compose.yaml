@@ -1,14 +1,14 @@
-# Aperture on a Linux server (example). See docs/deploy-server.md before using it.
+# Tickr on a Linux server (example). See docs/deploy-server.md before using it.
 #
 # BLOCKER: today the only alert channels are the macOS notification and iMessage (osascript).
 # On Linux preflight refuses with `alert-channel-missing`, so the bot job never starts the bot.
 # A Linux alert channel is an open owner decision.
 #
 # Run from the repo root on the server, with these host variables set (paths only, no values):
-#   APERTURE_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the build uid)
-#   APERTURE_CONFIG_HOST    absolute path of the bot.toml to run with
+#   TICKR_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the build uid)
+#   TICKR_CONFIG_HOST    absolute path of the bot.toml to run with
 #   docker compose -f ops/docker/compose.yaml build \
-#     --build-arg APERTURE_UID=$(id -u) --build-arg APERTURE_GID=$(id -g)
+#     --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g)
 #
 # Jobs, matching the launchd jobs on the Mac (docs/operations.md, "Jobs"):
 #   api        always on, restarted by Docker (launchd KeepAlive)      -> `up -d api`
@@ -17,13 +17,13 @@
 #   watchdog   scheduled by the host, separate from the bot, never restarted -> `up -d watchdog`
 # The host scheduler (systemd timers, see the doc) starts them at the [runtime] times.
 
-name: aperture
+name: tickr
 
-x-aperture: &aperture
+x-tickr: &tickr
   build:
     context: ../..
     dockerfile: Dockerfile
-  image: aperture:local
+  image: tickr:local
   # Host networking: the API's loopback bind (127.0.0.1, enforced by the API itself) is the
   # server's loopback, never a public interface; Docker publishes no ports.
   network_mode: host
@@ -31,10 +31,10 @@ x-aperture: &aperture
   init: true
   volumes:
     - type: bind
-      source: ${APERTURE_CONFIG_HOST:?absolute path of bot.toml}
+      source: ${TICKR_CONFIG_HOST:?absolute path of bot.toml}
       target: /app/config/bot.toml
       read_only: true
-    - aperture-data:/app/data
+    - tickr-data:/app/data
   logging:
     driver: json-file
     options:
@@ -45,17 +45,17 @@ x-aperture: &aperture
 # with `set -a; . file`, so its values never appear in `docker inspect` or in the image.
 x-with-env: &with-env
   environment:
-    APERTURE_ENV_FILE: /run/aperture/env
+    TICKR_ENV_FILE: /run/tickr/env
   volumes:
     - type: bind
-      source: ${APERTURE_CONFIG_HOST:?absolute path of bot.toml}
+      source: ${TICKR_CONFIG_HOST:?absolute path of bot.toml}
       target: /app/config/bot.toml
       read_only: true
     - type: bind
-      source: ${APERTURE_ENV_FILE_HOST:?absolute path of the env file}
-      target: /run/aperture/env
+      source: ${TICKR_ENV_FILE_HOST:?absolute path of the env file}
+      target: /run/tickr/env
       read_only: true
-    - aperture-data:/app/data
+    - tickr-data:/app/data
     # Production only: the owner authorization file read by trading_gate(), for example
     # ([environments.production] authorization_file = "authorization/production.toml"):
     # - type: bind
@@ -65,22 +65,22 @@ x-with-env: &with-env
 
 services:
   api:
-    <<: *aperture
-    command: ["python", "-m", "aperture.api", "--config", "/app/config/bot.toml"]
+    <<: *tickr
+    command: ["python", "-m", "tickr.api", "--config", "/app/config/bot.toml"]
     restart: unless-stopped
 
   preflight:
-    <<: [*with-env, *aperture]
+    <<: [*with-env, *tickr]
     profiles: ["jobs"]
-    command: ["python", "-m", "aperture.runtime", "--config", "/app/config/bot.toml",
+    command: ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
               "preflight"]
     restart: "no"
 
   bot:
-    <<: [*with-env, *aperture]
+    <<: [*with-env, *tickr]
     profiles: ["jobs"]
-    command: ["python", "-m", "aperture.runtime", "--config", "/app/config/bot.toml",
-              "run-bot", "--", "python", "-m", "aperture.cli", "--config",
+    command: ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
+              "run-bot", "--", "python", "-m", "tickr.cli", "--config",
               "/app/config/bot.toml", "run"]
     # Never relaunched automatically (launchd KeepAlive false): a crash alerts instead.
     restart: "no"
@@ -92,9 +92,9 @@ services:
     pid: host
 
   watchdog:
-    <<: [*with-env, *aperture]
+    <<: [*with-env, *tickr]
     profiles: ["jobs"]
-    command: ["python", "-m", "aperture.runtime", "--config", "/app/config/bot.toml",
+    command: ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
               "watchdog"]
     restart: "no"
     pid: host
@@ -102,4 +102,4 @@ services:
 volumes:
   # The data folder ([run] data_dir): SQLite database, lock, status file, token folder,
   # journals, captures, backups.
-  aperture-data:
+  tickr-data:

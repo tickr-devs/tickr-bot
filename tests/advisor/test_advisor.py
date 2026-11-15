@@ -13,19 +13,19 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from aperture import config as config_module
-from aperture.advisor.__main__ import main
-from aperture.advisor.client import AdvisorReply, AnthropicClient
-from aperture.advisor.errors import AdvisorError
-from aperture.advisor.proposal import IDEA_KEYS, SCHEMA, next_version, parse_reply
-from aperture.advisor.run import Status, captured_bars, day_files, run_advisor
-from aperture.data.capture import BAR_KEYS, CAPTURE_KEYS, CaptureWriter
-from aperture.observers.log import DecisionLog
-from aperture.replay.settings import load_settings
-from aperture.research.records import Admission, DecisionRecord
-from aperture.research.settings import load_research_settings
-from aperture.strategy.base import Check, Decision, Role, Verdict
-from aperture.types import Bar
+from tickr import config as config_module
+from tickr.advisor.__main__ import main
+from tickr.advisor.client import AdvisorReply, AnthropicClient
+from tickr.advisor.errors import AdvisorError
+from tickr.advisor.proposal import IDEA_KEYS, SCHEMA, next_version, parse_reply
+from tickr.advisor.run import Status, captured_bars, day_files, run_advisor
+from tickr.data.capture import BAR_KEYS, CAPTURE_KEYS, CaptureWriter
+from tickr.observers.log import DecisionLog
+from tickr.replay.settings import load_settings
+from tickr.research.records import Admission, DecisionRecord
+from tickr.research.settings import load_research_settings
+from tickr.strategy.base import Check, Decision, Role, Verdict
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 NY = ZoneInfo("America/New_York")
@@ -189,7 +189,7 @@ def test_missing_day_files_and_oversized_evidence_are_refused(tmp_path):
 
 
 def test_archived_day_files_are_read(tmp_path):
-    from aperture.archive import compress
+    from tickr.archive import compress
     cfg = make_root(tmp_path)
     for day in DAYS:
         for path in day_files(cfg, day):

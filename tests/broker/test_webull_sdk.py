@@ -16,7 +16,7 @@ pytest.importorskip("webull")
 
 import requests  # noqa: E402  (installed with the SDK)
 
-from aperture.broker.webull import (  # noqa: E402
+from tickr.broker.webull import (  # noqa: E402
     AdapterConfigError,
     Route,
     SdkTransport,

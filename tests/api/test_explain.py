@@ -1,4 +1,4 @@
-"""`aperture explain SYMBOL` and GET /explain: the latest active decision recorded today."""
+"""`tickr explain SYMBOL` and GET /explain: the latest active decision recorded today."""
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from aperture import cli, config
-from aperture.api import contract
-from aperture.api.server import make_server, settings_from_config
-from aperture.observers.log import DecisionLog
-from aperture.research.errors import RecordFileError
-from aperture.research.records import Admission, DecisionRecord
-from aperture.strategy.base import Check, Decision, Role, Verdict
+from tickr import cli, config
+from tickr.api import contract
+from tickr.api.server import make_server, settings_from_config
+from tickr.observers.log import DecisionLog
+from tickr.research.errors import RecordFileError
+from tickr.research.records import Admission, DecisionRecord
+from tickr.strategy.base import Check, Decision, Role, Verdict
 
 from .samples import T0
 from .schema_check import errors
@@ -142,7 +142,7 @@ def test_explain_unreadable_file_and_post(api, cfg):
     assert resp.status == 405
 
 
-# ---------------------------------------------------------------- aperture explain
+# ---------------------------------------------------------------- tickr explain
 
 
 def test_cli_explain(cfg, monkeypatch, capsys):

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tickr status</title>
+<style>
+  :root { color-scheme: light dark; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e; --dim: #6e7781; }
+  body { font: 15px/1.45 -apple-system, system-ui, sans-serif; margin: 0 auto; max-width: 860px; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); margin: 20px 0 6px; }
+  #summary { font-size: 20px; font-weight: 600; padding: 12px 14px; border-radius: 8px; border: 2px solid currentColor; }
+  #summary.ok { color: var(--ok); } #summary.warn { color: var(--warn); } #summary.bad { color: var(--bad); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 0; }
+  dt { color: var(--dim); } dd { margin: 0; overflow-wrap: anywhere; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid #8884; }
+  .scroll { overflow-x: auto; }
+  .muted { color: var(--dim); }
+  footer { margin-top: 20px; font-size: 12px; color: var(--dim); }
+</style>
+</head>
+<body>
+<h1>Tickr</h1>
+<div id="summary" class="warn">Loading…</div>
+
+<h2>Bot</h2>
+<dl id="bot"></dl>
+
+<h2>Position</h2>
+<div id="position" class="muted">None</div>
+
+<h2>Fences</h2>
+<div id="fences" class="muted">None</div>
+
+<h2>Today</h2>
+<div id="result"></div>
+<div class="scroll"><table id="trades"></table></div>
+
+<h2>Recent commands</h2>
+<div class="scroll"><table id="commands"></table></div>
+
+<footer id="footer"></footer>
+
+<script>
+"use strict";
+// Read-only page over GET /status. Every value is inserted with textContent, never as HTML.
+const DEFAULT_POLL_SECONDS = 3;
+let pollSeconds = DEFAULT_POLL_SECONDS;
+
+function el(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  if (cls) node.className = cls;
+  return node;
+}
+
+function fill(node, children) { node.replaceChildren(...children); }
+
+function pairs(node, rows) {
+  fill(node, rows.flatMap(([k, v]) => [el("dt", k), el("dd", v === null ? "—" : v)]));
+}
+
+function table(node, head, rows) {
+  if (!rows.length) { fill(node, [el("caption", "None", "muted")]); return; }
+  const tr = el("tr"); head.forEach(h => tr.append(el("th", h)));
+  fill(node, [tr, ...rows.map(r => { const row = el("tr"); r.forEach(c => row.append(el("td", c))); return row; })]);
+}
+
+function time(iso) { return iso ? new Date(iso).toLocaleTimeString() : "—"; }
+
+function render(resp) {
+  pollSeconds = Number(resp.poll_seconds) || DEFAULT_POLL_SECONDS;
+  const s = resp.status;
+  const summary = document.getElementById("summary");
+  summary.textContent = resp.summary;
+  summary.className = (!s || resp.stale) ? "bad" : (s.entry_block ? "warn" : "ok");
+
+  if (!s) {
+    pairs(document.getElementById("bot"), [["Status", resp.unavailable_cause]]);
+    ["position", "fences", "result"].forEach(id => document.getElementById(id).textContent = "");
+    table(document.getElementById("trades"), [], []);
+    table(document.getElementById("commands"), [], []);
+  } else {
+    pairs(document.getElementById("bot"), [
+      ["State", s.bot_state],
+      ["Environment", s.environment],
+      ["Trading gate", (s.trading_gate.open ? "open" : "closed") + " (" + s.trading_gate.cause + ")"],
+      ["Strategy", s.strategy.name + " v" + s.strategy.version],
+      ["Entry stop", s.entry_stop ? "ON (entries blocked by operator)" : "off"],
+      ["Entry block", s.entry_block ? s.entry_block.text + " [" + s.entry_block.cause + "]" : "none"],
+      ["Last broker read", time(s.freshness.last_broker_read_at)],
+      ["Last quote", time(s.freshness.last_quote_at)],
+      ["Quote stream", s.freshness.stream],
+      ["Run", s.run_id],
+    ]);
+
+    const pos = document.getElementById("position");
+    if (s.position) {
+      const p = s.position, dl = el("dl");
+      pairs(dl, [
+        ["Symbol", p.symbol], ["Quantity", p.quantity], ["Entry price", p.entry_price],
+        ["Opened", time(p.opened_at)],
+        ["Stop", p.stop.state + (p.stop.price ? " at " + p.stop.price : "")],
+      ]);
+      pos.className = p.stop.state === "verified" ? "" : "bad";
+      fill(pos, [dl]);
+    } else { pos.className = "muted"; pos.textContent = "None"; }
+
+    const fences = document.getElementById("fences");
+    if (s.fences.length) {
+      fences.className = "";
+      fill(fences, s.fences.map(f => el("div", f.text + " (" + f.kind + ", since " + time(f.since) + ")")));
+    } else { fences.className = "muted"; fences.textContent = "None"; }
+
+    document.getElementById("result").textContent =
+      "Result today (gross, USD): " + s.result_today_gross_usd + " over " + s.trades_today.length + " trade(s)";
+    table(document.getElementById("trades"),
+      ["Symbol", "Qty", "Entry", "Exit", "Opened", "Closed", "Reason", "Result USD"],
+      s.trades_today.map(t => [t.symbol, t.quantity, t.entry_price, t.exit_price,
+        time(t.opened_at), time(t.closed_at), t.exit_reason, t.result_gross_usd]));
+    table(document.getElementById("commands"),
+      ["Command", "Requested", "Processed", "Outcome"],
+      s.recent_commands.map(c => [c.kind, time(c.requested_at), time(c.processed_at),
+        c.outcome + (c.cause ? ": " + c.cause : "")]));
+  }
+  document.getElementById("footer").textContent =
+    "Status age: " + (resp.age_seconds === null ? "—" : resp.age_seconds + " s") +
+    " · page updated " + time(resp.served_at) + " · refreshes every " + pollSeconds + " s";
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/status", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json());
+  } catch (e) {
+    const summary = document.getElementById("summary");
+    summary.className = "bad";
+    summary.textContent = "Local API not reachable (" + e.message + "). Entries status unknown.";
+  }
+  setTimeout(poll, pollSeconds * 1000);
+}
+poll();
+</script>
+</body>
+</html>

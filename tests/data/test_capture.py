@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 from md_helpers import NOW, OPEN, bars, quote, row, settings
 
-from aperture import config
-from aperture.data.base import FakeMarketData, ScreenerKind, StreamNotice
-from aperture.data.capture import CaptureError, CaptureWriter, export_replay_bars
-from aperture.data.discovery import discover
-from aperture.data.health import FanOut, StreamHealth
-from aperture.replay.bars import load_bars
-from aperture.runtime.market import StreamInbox
-from aperture.types import Bar
+from tickr import config
+from tickr.data.base import FakeMarketData, ScreenerKind, StreamNotice
+from tickr.data.capture import CaptureError, CaptureWriter, export_replay_bars
+from tickr.data.discovery import discover
+from tickr.data.health import FanOut, StreamHealth
+from tickr.replay.bars import load_bars
+from tickr.runtime.market import StreamInbox
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]
 DAY = "2026-11-13"

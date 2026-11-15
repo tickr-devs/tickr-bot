@@ -1,4 +1,4 @@
-"""`aperture maintain`: archive finished days in place, keep what is still needed, read both."""
+"""`tickr maintain`: archive finished days in place, keep what is still needed, read both."""
 
 from __future__ import annotations
 
@@ -10,18 +10,18 @@ from pathlib import Path
 
 import pytest
 
-from aperture import cli, config
-from aperture.api.history import History, HistoryPaths
-from aperture.archive import compress, existing, open_text
-from aperture.cli import data_paths, main
-from aperture.data.capture import BARS_FILE, CaptureWriter, read_captured_bars
-from aperture.lock import SingleInstanceLock
-from aperture.observers.log import FILE_NAME, DecisionLog
-from aperture.research.records import Admission, DecisionRecord, load_records
-from aperture.runtime.dayend import DAY_END
-from aperture.store import Store
-from aperture.strategy.base import Decision, Role, Verdict
-from aperture.types import Bar
+from tickr import cli, config
+from tickr.api.history import History, HistoryPaths
+from tickr.archive import compress, existing, open_text
+from tickr.cli import data_paths, main
+from tickr.data.capture import BARS_FILE, CaptureWriter, read_captured_bars
+from tickr.lock import SingleInstanceLock
+from tickr.observers.log import FILE_NAME, DecisionLog
+from tickr.research.records import Admission, DecisionRecord, load_records
+from tickr.runtime.dayend import DAY_END
+from tickr.store import Store
+from tickr.strategy.base import Decision, Role, Verdict
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = date(2026, 11, 13)  # Friday; with 2 kept sessions Nov 11 and 12 stay plain
@@ -258,7 +258,7 @@ def test_chart_pruning_never_follows_symlinks_out_of_the_cache(setup, tmp_path, 
 
 
 def test_a_chart_file_that_vanishes_is_skipped(setup, monkeypatch):
-    from aperture import maintain
+    from tickr import maintain
     _, cfg, _, _ = setup
     root = cfg.root / cfg.run.data_dir / cfg.chart.cache_dir / cfg.environment_name
     (root / "AAPL").mkdir(parents=True)

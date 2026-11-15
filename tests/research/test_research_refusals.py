@@ -7,10 +7,10 @@ from decimal import Decimal
 
 from research_helpers import DAY, HERE, NY, record
 
-from aperture.research.__main__ import main
-from aperture.research.records import Admission, write_records
-from aperture.research.refusals import table
-from aperture.strategy.base import Check, Role, Verdict
+from tickr.research.__main__ import main
+from tickr.research.records import Admission, write_records
+from tickr.research.refusals import table
+from tickr.strategy.base import Check, Role, Verdict
 
 
 def _fail(rule: str) -> tuple[Check, ...]:

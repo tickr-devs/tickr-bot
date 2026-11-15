@@ -8,14 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config as config_module
-from aperture.runtime.preflight import (
+from tickr import config as config_module
+from tickr.runtime.preflight import (
     BYTES_PER_MB,
     ExitCode,
     PreflightCause,
     run_preflight,
 )
-from aperture.store import DATABASE_FILE, Store
+from tickr.store import DATABASE_FILE, LEGACY_DATABASE_FILE, Store
 
 MONDAY = datetime(2026, 11, 16, 13, 30, tzinfo=UTC)  # 08:30 ET, a normal trading day
 SATURDAY = datetime(2026, 11, 14, 13, 30, tzinfo=UTC)
@@ -84,7 +84,7 @@ def test_missing_credentials_name_the_variables(config_path):
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.CREDENTIALS_MISSING
     assert name in result.summary()
-    assert "~/.config/aperture/env" in result.summary()  # says where to add it
+    assert "~/.config/tickr/env" in result.summary()  # says where to add it
 
 
 def test_missing_imessage_recipient_refuses_with_its_own_cause(config_path):
@@ -94,7 +94,7 @@ def test_missing_imessage_recipient_refuses_with_its_own_cause(config_path):
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.ALERT_RECIPIENT_MISSING
     assert result.blocks_start and name in result.summary()
-    assert "Apple ID" in result.summary() and "~/.config/aperture/env" in result.summary()
+    assert "Apple ID" in result.summary() and "~/.config/tickr/env" in result.summary()
     assert CANARY not in json.dumps(result.journal_body()) + result.summary()
 
 
@@ -260,7 +260,7 @@ def test_token_is_probed_when_only_the_strategy_is_refused(config_path, break_st
 
 
 def test_operator_stop_marker_blocks_the_start_until_cleared(config_path):
-    from aperture.runtime import stopmarker
+    from tickr.runtime import stopmarker
 
     environ = _ready(config_path)
     cfg = config_module.load(config_path)
@@ -298,6 +298,17 @@ def test_a_database_of_another_environment_blocks_the_start_with_its_own_cause(c
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.DATABASE_OTHER_ENVIRONMENT and result.blocks_start
     assert "move the database aside" in result.summary()
+
+
+@pytest.mark.parametrize("suffix", ["", "-wal"])
+def test_a_database_under_the_old_name_blocks_the_start(config_path, suffix):
+    environ = _ready(config_path)
+    cfg = config_module.load(config_path)
+    data = cfg.root / cfg.run.data_dir
+    data.mkdir(parents=True, exist_ok=True)
+    (data / (LEGACY_DATABASE_FILE + suffix)).write_bytes(b"")
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.LEGACY_DATABASE_NAME and result.blocks_start
 
 
 def test_an_unreadable_database_blocks_the_start(config_path):

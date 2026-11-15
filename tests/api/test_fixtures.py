@@ -1,7 +1,7 @@
 """Contract fixtures for client tests (the macOS app's Swift tests decode every one of them).
 
 Files are named `<schema name>[.<variant>].json`. They are generated from the contract code;
-regenerate with `APERTURE_WRITE_FIXTURES=1 pytest tests/api/test_fixtures.py` and review the diff.
+regenerate with `TICKR_WRITE_FIXTURES=1 pytest tests/api/test_fixtures.py` and review the diff.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from aperture.api import contract
-from aperture.api.contract import (
+from tickr.api import contract
+from tickr.api.contract import (
     AccountOrder,
     AccountPosition,
     AccountResponseV1,
@@ -81,12 +81,12 @@ from aperture.api.contract import (
     WatchingV1,
     WhatIfV1,
 )
-from aperture.api.history import NO_ENTRY, NOT_READ
-from aperture.api.performance import performance
-from aperture.data.base import ScreenerKind
-from aperture.replay.engine import ExitReason
-from aperture.research.records import Admission
-from aperture.strategy.base import Verdict
+from tickr.api.history import NO_ENTRY, NOT_READ
+from tickr.api.performance import performance
+from tickr.data.base import ScreenerKind
+from tickr.replay.engine import ExitReason
+from tickr.research.records import Admission
+from tickr.strategy.base import Verdict
 
 from .samples import T0, account, entry, status
 from .schema_check import errors
@@ -442,14 +442,14 @@ def _text(document: object) -> str:
 
 def test_fixtures_are_current():
     docs = documents()
-    if os.environ.get("APERTURE_WRITE_FIXTURES") == "1":
+    if os.environ.get("TICKR_WRITE_FIXTURES") == "1":
         for name, document in docs.items():
             (FIXTURES / f"{name}.json").write_text(_text(document), "utf-8")
     on_disk = {p.stem for p in FIXTURES.glob("*.json")}
     assert on_disk == set(docs), "fixtures on disk differ from documents()"
     for name, document in docs.items():
         assert (FIXTURES / f"{name}.json").read_text("utf-8") == _text(document), (
-            f"{name}: regenerate with APERTURE_WRITE_FIXTURES=1 and review the diff")
+            f"{name}: regenerate with TICKR_WRITE_FIXTURES=1 and review the diff")
 
 
 @pytest.mark.parametrize("path", sorted(FIXTURES.glob("*.json")), ids=lambda p: p.name)

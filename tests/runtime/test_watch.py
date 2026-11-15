@@ -5,15 +5,15 @@ from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Fence
-from aperture.runtime import service
-from aperture.runtime.alerts import Alerter, AlertKind
-from aperture.runtime.watch import ALERT, BACKUP, BACKUP_FAILED, Watch
-from aperture.store import Store
+from tickr import config
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Fence
+from tickr.runtime import service
+from tickr.runtime.alerts import Alerter, AlertKind
+from tickr.runtime.watch import ALERT, BACKUP, BACKUP_FAILED, Watch
+from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -40,7 +40,7 @@ class Rig:
         self.now = MONDAY_11
         self.notifier = Recorder()
         self.watch = Watch(self.engine, self.cfg,
-                           Alerter(self.cfg.alerts, "Aperture test", self.notifier,
+                           Alerter(self.cfg.alerts, "Tickr test", self.notifier,
                                    lambda: self.now),
                            lambda: self.now)
 
@@ -58,7 +58,7 @@ def test_operator_fence_alerts_at_once_and_only_once(tmp_path):
     rig.watch.check()
     rig.watch.check()
     assert rig.kinds() == [AlertKind.STOP_REJECTED]
-    assert rig.notifier.shown == [("Aperture test: stop-rejected", "stop-rejected:t1: test")]
+    assert rig.notifier.shown == [("Tickr test: stop-rejected", "stop-rejected:t1: test")]
 
 
 def test_self_clearing_fence_alerts_only_when_it_lasts(tmp_path):
@@ -97,21 +97,21 @@ def test_daily_backup_is_verified_and_only_the_latest_is_kept(tmp_path):
     rig = Rig(tmp_path)
     folder = tmp_path / CFG.run.data_dir / CFG.run.backups_dir
     folder.mkdir(parents=True)
-    (folder / "aperture-2026-11-13.sqlite3").write_bytes(b"old")
+    (folder / "tickr-2026-11-13.sqlite3").write_bytes(b"old")
     rig.watch.backup_daily()
-    assert sorted(p.name for p in folder.iterdir()) == ["aperture-2026-11-16.sqlite3"]
+    assert sorted(p.name for p in folder.iterdir()) == ["tickr-2026-11-16.sqlite3"]
     rig.watch.backup_daily()  # same day: nothing more
     assert len(rig.store.journal(BACKUP)) == 1
     rig.now += timedelta(days=1)
     rig.watch.backup_daily()
-    assert sorted(p.name for p in folder.iterdir()) == ["aperture-2026-11-17.sqlite3"]
+    assert sorted(p.name for p in folder.iterdir()) == ["tickr-2026-11-17.sqlite3"]
 
 
 def test_backup_failure_is_journaled_and_keeps_the_old_one(tmp_path):
     rig = Rig(tmp_path)
     folder = tmp_path / CFG.run.data_dir / CFG.run.backups_dir
     folder.mkdir(parents=True)
-    old = folder / "aperture-2026-11-13.sqlite3"
+    old = folder / "tickr-2026-11-13.sqlite3"
     old.write_bytes(b"old")
 
     def broken(target):
@@ -150,7 +150,7 @@ def test_failed_verification_never_leaves_a_final_name_or_deletes_the_old(tmp_pa
     rig = Rig(tmp_path)
     folder = tmp_path / CFG.run.data_dir / CFG.run.backups_dir
     folder.mkdir(parents=True)
-    old = folder / "aperture-2026-11-13.sqlite3"
+    old = folder / "tickr-2026-11-13.sqlite3"
     old.write_bytes(b"old")
     real = rig.store.backup
 
@@ -173,14 +173,14 @@ def test_failed_verification_never_leaves_a_final_name_or_deletes_the_old(tmp_pa
     rig.watch._backup_day = None
     rig.store.backup = real
     rig.watch.backup_daily()
-    assert sorted(p.name for p in folder.iterdir()) == ["aperture-2026-11-16.sqlite3"]
+    assert sorted(p.name for p in folder.iterdir()) == ["tickr-2026-11-16.sqlite3"]
 
 
 def test_cleanup_failure_is_journaled_not_raised(tmp_path, monkeypatch):
     rig = Rig(tmp_path)
     folder = tmp_path / CFG.run.data_dir / CFG.run.backups_dir
     folder.mkdir(parents=True)
-    (folder / "aperture-2026-11-13.sqlite3").write_bytes(b"old")
+    (folder / "tickr-2026-11-13.sqlite3").write_bytes(b"old")
 
     def refuse(self, missing_ok=False):
         raise PermissionError("read-only")
@@ -204,7 +204,7 @@ def test_daily_ceiling_alerts_once_per_day_when_the_net_loss_reaches_it(tmp_path
     rig = Rig(tmp_path)
     ceiling = CFG.risk.max_daily_loss_usd
     loss: list[D | None] = [ceiling - 1]
-    monkeypatch.setattr("aperture.runtime.watch.realized_loss_today",
+    monkeypatch.setattr("tickr.runtime.watch.realized_loss_today",
                         lambda engine, now: loss[0])
     rig.watch.check()
     loss[0] = None  # fill price unknown: no claim either way
@@ -243,7 +243,7 @@ def test_loop_pass_never_waits_on_imessage_and_journals_its_outcome_when_known(t
     still blocked; a later pass journals the iMessage outcome; exit flushes nothing twice."""
     import threading
 
-    from aperture.runtime.alerts import IMESSAGE, Channels, NotifyError
+    from tickr.runtime.alerts import IMESSAGE, Channels, NotifyError
 
     entered, release = threading.Event(), threading.Event()
 
@@ -254,7 +254,7 @@ def test_loop_pass_never_waits_on_imessage_and_journals_its_outcome_when_known(t
             raise NotifyError("osascript exited with code 1")
 
     rig = Rig(tmp_path)
-    rig.watch.alerter = Alerter(rig.cfg.alerts, "Aperture test",
+    rig.watch.alerter = Alerter(rig.cfg.alerts, "Tickr test",
                                 Channels((("macos", rig.notifier),), ((IMESSAGE, SlowPhone()),)),
                                 lambda: rig.now)
     rig.fence(Fence.STOP_REJECTED, "t1")

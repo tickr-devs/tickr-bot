@@ -1,8 +1,8 @@
 """SUSPECTED BUG reproduction (fails until fixed): two position rows for one symbol are returned
 as they are, and the engine then keeps only the last one (hard rules 1 and 7).
 
-`read_positions` (src/aperture/broker/webull.py:413) accepts any number of rows per symbol.
-`Engine.step` (src/aperture/engine/core.py:753) builds `{p.symbol: p.quantity ...}`, so with
+`read_positions` (src/tickr/broker/webull.py:413) accepts any number of rows per symbol.
+`Engine.step` (src/tickr/engine/core.py:753) builds `{p.symbol: p.quantity ...}`, so with
 rows AAPL 100 and AAPL 40 the bot believes it holds 40: the broker's quantity is silently
 replaced, not reconciled. The non-empty positions shape is unproven (webull-facts F9), so this
 may never happen; the fix may equally be a refusal here or a sum/refusal in the engine. The test
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from aperture.broker.webull import MalformedResponse, read_positions
+from tickr.broker.webull import MalformedResponse, read_positions
 
 from .test_webull_broker import OWN
 

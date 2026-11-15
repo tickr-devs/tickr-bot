@@ -1,4 +1,4 @@
-# Demo day (`aperture demo`)
+# Demo day (`tickr demo`)
 
 A made-up trading day, so every screen of the macOS and iOS apps can be looked at with full data
 (open position with its stop, wins and losses, daily room near the ceiling, decisions and their
@@ -8,7 +8,7 @@ with their simulated day results, account, past days for the day picker, perform
 the demo sessions, minute bars).
 
 ```
-.venv/bin/aperture demo          # or: python -m aperture.cli demo
+.venv/bin/tickr demo          # or: python -m tickr.cli demo
 ```
 
 What it does:
@@ -17,7 +17,7 @@ What it does:
   `bot.toml` runs as environment `demo`, serves the API on `[demo] api_port` (8776) and runs the
   observers listed in `config/demo.toml`. The demo's `data/` is inside that folder; the real
   `data/` is never read or written. A `demo/` folder it did not make is refused, never deleted.
-- Runs the real bot (`aperture run`) on a simulated exchange (`src/aperture/demo/world.py`):
+- Runs the real bot (`tickr run`) on a simulated exchange (`src/tickr/demo/world.py`):
   only the broker, market data, clock, `sleep` and alerts are replaced. Webull is never
   contacted, alerts go to the terminal. So the database, status, account, capture and decision
   files have exactly the format of a real day. The per-trade metrics of `docs/api.md`
@@ -39,7 +39,7 @@ What it does:
   local API listening, until Ctrl-C. About two to three minutes before the API is up.
 
 Point the apps at it: macOS Settings, API address `http://127.0.0.1:8776` (or
-`defaults write local.aperture.operator apiBaseURL http://127.0.0.1:8776`). The API's clock is the demo
+`defaults write local.tickr.operator apiBaseURL http://127.0.0.1:8776`). The API's clock is the demo
 day's clock, so "today" in the apps is the demo day.
 
 The bot holds one position at a time in v1 (admission refuses a second), so the demo has one open

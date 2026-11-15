@@ -8,13 +8,13 @@ from decimal import Decimal
 
 import pytest
 
-from aperture.backtest import fetch
-from aperture.backtest.errors import BacktestError
-from aperture.backtest.settings import load_settings
-from aperture.backtest.universe import read_pool, select_liquid, select_pool, write_pool
-from aperture.broker.base import RateLimited
-from aperture.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
-from aperture.broker.webull import InstrumentPage
+from tickr.backtest import fetch
+from tickr.backtest.errors import BacktestError
+from tickr.backtest.settings import load_settings
+from tickr.backtest.universe import read_pool, select_liquid, select_pool, write_pool
+from tickr.broker.base import RateLimited
+from tickr.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
+from tickr.broker.webull import InstrumentPage
 
 from .helpers import ROOT, UTC, FakeHistory, calendar, cfg, daily_bar, flat_bars, row
 
@@ -220,7 +220,7 @@ def test_patiently_after_a_provider_429_waits_for_the_budget_pause():
 
 
 def test_previous_close_on_minute_scale_undoes_split_and_dividend_adjustment():
-    from aperture.backtest.universe import PoolEntry
+    from tickr.backtest.universe import PoolEntry
     day = date(2026, 8, 17)
     # 2:1 split overnight: adjusted daily previous close 80 (raw 160), day close 82 adjusted = raw
     split = PoolEntry(day, 1, "APH", Decimal(80), Decimal(82), Decimal(3), Decimal(10**8))

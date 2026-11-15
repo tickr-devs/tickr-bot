@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from aperture.data.base import ScreenerKind, ScreenerRow
-from aperture.data.discovery import DiscoverySettings
-from aperture.types import Bar, Quote
+from tickr.data.base import ScreenerKind, ScreenerRow
+from tickr.data.discovery import DiscoverySettings
+from tickr.types import Bar, Quote
 
 OPEN = datetime(2026, 11, 13, 14, 30, tzinfo=UTC)  # 09:30 New York
 NOW = OPEN + timedelta(minutes=30, seconds=10)

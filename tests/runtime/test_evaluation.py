@@ -7,32 +7,32 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.broker.base import RateLimited
-from aperture.broker.fake import FakeBroker
-from aperture.broker.webull import BrokerReadFailed, MalformedResponse
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.data.base import FakeMarketData, MarketDataError
-from aperture.data.history import HistoryReader, HistorySettings, HistoryUnavailable
-from aperture.engine.core import Engine
-from aperture.observers.log import DecisionLog
-from aperture.research.records import Admission as RecordAdmission
-from aperture.research.records import load_records
-from aperture.risk.causes import AdmissionCause
-from aperture.runtime import evaluation
-from aperture.runtime.entries import EntryDesk
-from aperture.runtime.evaluation import (
+from tickr import config
+from tickr.broker.base import RateLimited
+from tickr.broker.fake import FakeBroker
+from tickr.broker.webull import BrokerReadFailed, MalformedResponse
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.data.base import FakeMarketData, MarketDataError
+from tickr.data.history import HistoryReader, HistorySettings, HistoryUnavailable
+from tickr.engine.core import Engine
+from tickr.observers.log import DecisionLog
+from tickr.research.records import Admission as RecordAdmission
+from tickr.research.records import load_records
+from tickr.risk.causes import AdmissionCause
+from tickr.runtime import evaluation
+from tickr.runtime.entries import EntryDesk
+from tickr.runtime.evaluation import (
     EVALUATION_STOPPED,
     HISTORY_REFUSED,
     REMAINDER,
     STRATEGY_ERROR,
     Evaluator,
 )
-from aperture.runtime.market import StreamInbox
-from aperture.store import Store
-from aperture.strategy.base import Check, Decision, SymbolContext, Verdict
-from aperture.types import Bar, Quote
+from tickr.runtime.market import StreamInbox
+from tickr.store import Store
+from tickr.strategy.base import Check, Decision, SymbolContext, Verdict
+from tickr.types import Bar, Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")

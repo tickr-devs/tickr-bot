@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.contract import CommandKind
-from aperture.api.server import ApiSettings, make_server, settings_from_config
+from tickr import config
+from tickr.api import contract
+from tickr.api.contract import CommandKind
+from tickr.api.server import ApiSettings, make_server, settings_from_config
 
 from .samples import T0, status
 from .schema_check import errors

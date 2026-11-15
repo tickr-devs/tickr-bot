@@ -38,7 +38,7 @@ _MISSING = object()
 
 def broken_create(kind):
     """A replacement create(values) for price_action_v1 that misbehaves in one way."""
-    from aperture.strategy import price_action_v1
+    from tickr.strategy import price_action_v1
 
     real_create = price_action_v1.create
 
@@ -55,7 +55,7 @@ def broken_create(kind):
 @pytest.fixture
 def break_strategy(monkeypatch):
     """Replace price_action_v1.create with one that misbehaves in the named way."""
-    from aperture.strategy import price_action_v1
+    from tickr.strategy import price_action_v1
 
     def apply(kind):
         monkeypatch.setattr(price_action_v1, "create", broken_create(kind))

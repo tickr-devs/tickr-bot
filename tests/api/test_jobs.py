@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.jobs import NO_BACKUP, NO_DATABASE, jobs_document
-from aperture.api.server import make_server, settings_from_config
-from aperture.runtime.watch import BACKUP, BACKUP_FAILED
-from aperture.store import Store
+from tickr import config
+from tickr.api import contract
+from tickr.api.jobs import NO_BACKUP, NO_DATABASE, jobs_document
+from tickr.api.server import make_server, settings_from_config
+from tickr.runtime.watch import BACKUP, BACKUP_FAILED
+from tickr.store import Store
 
 from .samples import T0, status
 from .schema_check import errors
@@ -83,7 +83,7 @@ def test_running_bot_gives_its_start_next_reconcile_and_last_backup(cfg, tmp_pat
     with store.transaction():
         store.append(BACKUP_FAILED, {"error": "OperationalError", "detail": "/private/path"},
                      run_id=run_id)
-        store.append(BACKUP, {"file": "aperture-2026-11-16.sqlite3"}, run_id=run_id)
+        store.append(BACKUP, {"file": "tickr-2026-11-16.sqlite3"}, run_id=run_id)
     store.close()
     written = status(run_id=run_id)
     jobs = jobs_document(settings.jobs, _response(settings, T0 + timedelta(seconds=2), written))

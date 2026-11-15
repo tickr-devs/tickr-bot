@@ -8,17 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.broker.base import RateLimited
-from aperture.calendar import SessionCalendar
-from aperture.data.base import FakeMarketData
-from aperture.data.history import (
+from tickr import config
+from tickr.broker.base import RateLimited
+from tickr.calendar import SessionCalendar
+from tickr.data.base import FakeMarketData
+from tickr.data.history import (
     HistoryCause,
     HistoryReader,
     HistorySettings,
     HistoryUnavailable,
 )
-from aperture.types import Bar
+from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]
 CALENDAR = SessionCalendar.load(ROOT / "config" / "calendar")

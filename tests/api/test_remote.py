@@ -12,10 +12,10 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from aperture import config
-from aperture.api import __main__ as api_main
-from aperture.api import contract
-from aperture.api.server import make_remote_server, make_server, pair, settings_from_config
+from tickr import config
+from tickr.api import __main__ as api_main
+from tickr.api import contract
+from tickr.api.server import make_remote_server, make_server, pair, settings_from_config
 
 from .samples import T0
 from .schema_check import errors

@@ -1,4 +1,4 @@
-"""`aperture demo`: the real bot on a simulated exchange, in its own folder, never Webull."""
+"""`tickr demo`: the real bot on a simulated exchange, in its own folder, never Webull."""
 
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract as api
-from aperture.api.server import make_server, settings_from_config
-from aperture.calendar import SessionCalendar
-from aperture.data.base import BarSpan, ScreenerKind
-from aperture.demo import run as demo
-from aperture.demo.scenario import (
+from tickr import config
+from tickr.api import contract as api
+from tickr.api.server import make_server, settings_from_config
+from tickr.calendar import SessionCalendar
+from tickr.data.base import BarSpan, ScreenerKind
+from tickr.demo import run as demo
+from tickr.demo.scenario import (
     STOP_UNVERIFIED,
     DemoCommand,
     DemoFault,
@@ -29,7 +29,7 @@ from aperture.demo.scenario import (
     SymbolPlan,
     load,
 )
-from aperture.demo.world import (
+from tickr.demo.world import (
     UNVERIFIED_STOP_STATUS,
     Texture,
     World,
@@ -39,7 +39,7 @@ from aperture.demo.world import (
     textured,
     weekdays_before,
 )
-from aperture.types import (
+from tickr.types import (
     OrderRequest,
     OrderState,
     OrderType,
@@ -355,7 +355,7 @@ def test_demo_fault_shows_the_open_position_unprotected(tmp_path):
                        faults=(DemoFault("11:25", STOP_UNVERIFIED, "BBB"),))
     # The real bot refuses a clean shutdown while a position has no verified stop.
     assert demo.run_demo(root, scenario, SUNDAY, live=False,
-                         log=lambda line: None) == 5  # `aperture run`: work pending
+                         log=lambda line: None) == 5  # `tickr run`: work pending
 
     cfg = config.load(root / scenario.root_dir / "config" / "bot.toml")
     server = make_server(replace(settings_from_config(cfg), port=0))

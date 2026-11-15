@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import signal
 
-from aperture.runtime.signals import StopRequest, install_stop_handler, restore_handlers
+from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
 
 
 def test_sigterm_sets_flag_and_nothing_else():

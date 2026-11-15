@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api.reasons import gate_reason
-from aperture.cli import main
-from aperture.risk.admission import AdmissionLimits
+from tickr import config
+from tickr.api.reasons import gate_reason
+from tickr.cli import main
+from tickr.risk.admission import AdmissionLimits
 
 ROOT = Path(__file__).resolve().parent.parent
 BOT = ROOT / "config" / "bot.toml"
@@ -251,7 +251,7 @@ def test_every_config_field_has_a_reader():
                      if p.name != "config.py")
     # Readers inside config.py too (the gate, helpers); a declaration `name: type` never
     # matches `.name`.
-    own = (ROOT / "src" / "aperture" / "config.py").read_text("utf-8")
+    own = (ROOT / "src" / "tickr" / "config.py").read_text("utf-8")
     unread = [f"{cls.__name__}.{field.name}"
               for _, cls in inspect.getmembers(config, dataclasses.is_dataclass)
               if cls.__module__ == config.__name__
@@ -262,7 +262,7 @@ def test_every_config_field_has_a_reader():
 
 def test_only_webull_adapter_imports_sdk():
     pattern = re.compile(r"^\s*(from|import)\s+webull", re.MULTILINE)
-    allowed = ROOT / "src" / "aperture" / "broker" / "webull.py"
+    allowed = ROOT / "src" / "tickr" / "broker" / "webull.py"
     offenders = [str(p.relative_to(ROOT)) for p in (ROOT / "src").rglob("*.py")
                  if p != allowed and pattern.search(p.read_text("utf-8"))]
     assert offenders == []
@@ -294,8 +294,8 @@ def test_cli_status_without_database(tmp_path, capsys):
 
 
 def test_cli_status_with_run(tmp_path, capsys):
-    from aperture.cli import data_paths
-    from aperture.store import Store
+    from tickr.cli import data_paths
+    from tickr.store import Store
     path = _copy(tmp_path)
     cfg = config.load(path)
     database, _ = data_paths(cfg)
@@ -323,9 +323,9 @@ def test_bad_route_limit_refused(tmp_path, bad):
 
 
 def test_cli_status_is_read_only(tmp_path, capsys):
-    from aperture.cli import data_paths
-    from aperture.lock import SingleInstanceLock
-    from aperture.store import Store
+    from tickr.cli import data_paths
+    from tickr.lock import SingleInstanceLock
+    from tickr.store import Store
     path = _copy(tmp_path)
     cfg = config.load(path)
     database, lock_path = data_paths(cfg)
@@ -340,7 +340,7 @@ def test_cli_status_is_read_only(tmp_path, capsys):
 def test_cli_status_refuses_schema_mismatch(tmp_path, capsys):
     import sqlite3
 
-    from aperture.cli import data_paths
+    from tickr.cli import data_paths
     path = _copy(tmp_path)
     database, _ = data_paths(config.load(path))
     database.parent.mkdir(parents=True)
@@ -420,7 +420,7 @@ def test_chart_slice_is_checked_when_the_config_loads(tmp_path):
 
 
 def test_bars_route_constant_is_the_adapter_route():
-    from aperture.broker.webull import Route
+    from tickr.broker.webull import Route
     assert Route.BARS.path == config.BARS_ROUTE
 
 

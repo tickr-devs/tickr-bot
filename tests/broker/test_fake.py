@@ -4,9 +4,9 @@ from decimal import Decimal as D
 
 import pytest
 
-from aperture.broker.base import Broker, OrderNotFound, OutcomeUnknown, RateLimited, Refused
-from aperture.broker.fake import FakeBroker
-from aperture.types import OrderRequest, OrderState, OrderType, Side, TimeInForce, TradingSession
+from tickr.broker.base import Broker, OrderNotFound, OutcomeUnknown, RateLimited, Refused
+from tickr.broker.fake import FakeBroker
+from tickr.types import OrderRequest, OrderState, OrderType, Side, TimeInForce, TradingSession
 
 
 def req(cid: str, side=Side.BUY, qty="2", kind=OrderType.LIMIT) -> OrderRequest:

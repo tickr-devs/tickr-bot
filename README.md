@@ -1,6 +1,7 @@
-# Aperture
+# Tickr
 
 Single-owner intraday trading bot for US common stocks on Webull OpenAPI.
+Renamed from Aperture on 2026-11-15; a Mac set up under the old name moves with `ops/migrate-from-aperture.sh` (docs/operations.md).  <!-- rename-keep -->
 
 - What v1 does: [`docs/spec-v1.md`](docs/spec-v1.md)
 - Rules for contributors and agents: [`CLAUDE.md`](CLAUDE.md)
@@ -15,7 +16,7 @@ pytest -q
 
 ## Apps in Xcode
 
-`open Aperture.xcworkspace` opens the operator apps and their shared package in Xcode. The projects are kept
+`open Tickr.xcworkspace` opens the operator apps and their shared package in Xcode. The projects are kept
 current with Xcode 27.2 (the owner's version) and still open in Xcode 16 or newer.
-Scheme `Aperture macOS` runs on this Mac. The iOS app joins the workspace with its committed
+Scheme `Tickr macOS` runs on this Mac. The iOS app joins the workspace with its committed
 Xcode project (in progress). Details: `apps/macos/README.md`, `apps/ios/README.md`.

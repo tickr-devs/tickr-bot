@@ -8,16 +8,16 @@ from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.api import contract as api
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Leg
-from aperture.runtime import entries, service
-from aperture.runtime.protection import PROTECTION_LATENCY, LatencyLog, busy
-from aperture.store import Store
-from aperture.types import Quote
+from tickr import config
+from tickr.api import contract as api
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Leg
+from tickr.runtime import entries, service
+from tickr.runtime.protection import PROTECTION_LATENCY, LatencyLog, busy
+from tickr.store import Store
+from tickr.types import Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")

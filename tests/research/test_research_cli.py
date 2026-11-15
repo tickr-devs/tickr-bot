@@ -5,7 +5,7 @@ import json
 
 from research_helpers import HERE, bar_json, flat, series, write_jsonl
 
-from aperture.research.__main__ import main
+from tickr.research.__main__ import main
 
 ROOT = HERE.parent.parent
 BARS = series("10:00", [flat("10.00"), ("10.00", "10.20", "10.00", "10.03"),

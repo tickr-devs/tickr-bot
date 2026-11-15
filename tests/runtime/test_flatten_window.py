@@ -9,17 +9,17 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract as api
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Fence, TradeState
-from aperture.engine.manual import close_refusal
-from aperture.runtime import service
-from aperture.runtime.alerts import Alerter, AlertKind
-from aperture.runtime.watch import ALERT, Watch
-from aperture.store import Store
+from tickr import config
+from tickr.api import contract as api
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Fence, TradeState
+from tickr.engine.manual import close_refusal
+from tickr.runtime import service
+from tickr.runtime.alerts import Alerter, AlertKind
+from tickr.runtime.watch import ALERT, Watch
+from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")

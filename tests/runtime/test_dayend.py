@@ -6,17 +6,17 @@ from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from aperture import config
-from aperture.broker.base import BrokerError
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.engine.core import Engine, TradeState
-from aperture.runtime import service
-from aperture.runtime.alerts import Alerter, AlertKind
-from aperture.runtime.dayend import DAY_END
-from aperture.runtime.watch import ALERT, Watch
-from aperture.store import Store
+from tickr import config
+from tickr.broker.base import BrokerError
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.engine.core import Engine, TradeState
+from tickr.runtime import service
+from tickr.runtime.alerts import Alerter, AlertKind
+from tickr.runtime.dayend import DAY_END
+from tickr.runtime.watch import ALERT, Watch
+from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")

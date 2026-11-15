@@ -23,25 +23,25 @@ from types import SimpleNamespace
 
 import pytest
 
-from aperture import config
-from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, SessionCalendar
-from aperture.config import GateResult
-from aperture.engine.core import Engine, Leg
-from aperture.observers.log import DecisionLog
-from aperture.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation, admit
-from aperture.risk.ticks import round_to_tick
-from aperture.runtime.entries import (
+from tickr import config
+from tickr.broker.fake import FakeBroker
+from tickr.calendar import NEW_YORK, SessionCalendar
+from tickr.config import GateResult
+from tickr.engine.core import Engine, Leg
+from tickr.observers.log import DecisionLog
+from tickr.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation, admit
+from tickr.risk.ticks import round_to_tick
+from tickr.runtime.entries import (
     EntryDesk,
     daily_loss_room,
     last_loss_at,
     realized_loss_today,
 )
-from aperture.runtime.evaluation import Evaluator
-from aperture.store import Store
-from aperture.strategy import price_action_v1 as pa
-from aperture.strategy.base import SymbolContext, Verdict
-from aperture.types import Bar, Quote
+from tickr.runtime.evaluation import Evaluator
+from tickr.store import Store
+from tickr.strategy import price_action_v1 as pa
+from tickr.strategy.base import SymbolContext, Verdict
+from tickr.types import Bar, Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")

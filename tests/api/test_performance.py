@@ -8,17 +8,17 @@ from decimal import Decimal
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.history import NO_ENTRY, NOT_READ
-from aperture.api.performance import (
+from tickr import config
+from tickr.api import contract
+from tickr.api.history import NO_ENTRY, NOT_READ
+from tickr.api.performance import (
     NO_LOSSES,
     NO_TRADES,
     NO_WINS,
     NOT_POSITIVE_PLANNED_LOSS,
     performance,
 )
-from aperture.api.server import settings_from_config
+from tickr.api.server import settings_from_config
 
 from .schema_check import errors
 from .test_history import OPEN, _run, _store, _trade

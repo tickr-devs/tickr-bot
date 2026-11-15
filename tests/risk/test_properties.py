@@ -14,14 +14,14 @@ from decimal import Decimal
 
 import pytest
 
-from aperture.calendar import NEW_YORK, CalendarCause, CalendarRefused
-from aperture.config import GateResult
-from aperture.risk.admission import Admission, admit
-from aperture.risk.causes import AdmissionCause as C
-from aperture.risk.daily import check_daily
-from aperture.risk.sizing import check_size, max_quantity
-from aperture.risk.ticks import CENT, ONE_DOLLAR, SUB_DOLLAR_TICK, round_to_tick
-from aperture.strategy.base import Verdict
+from tickr.calendar import NEW_YORK, CalendarCause, CalendarRefused
+from tickr.config import GateResult
+from tickr.risk.admission import Admission, admit
+from tickr.risk.causes import AdmissionCause as C
+from tickr.risk.daily import check_daily
+from tickr.risk.sizing import check_size, max_quantity
+from tickr.risk.ticks import CENT, ONE_DOLLAR, SUB_DOLLAR_TICK, round_to_tick
+from tickr.strategy.base import Verdict
 
 from .conftest import CALENDAR, NOW, D, inputs, limits, quote
 

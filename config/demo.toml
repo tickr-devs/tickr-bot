@@ -1,12 +1,12 @@
-# `aperture demo`: a made-up trading day for looking at the apps with full data. The real bot runs
-# on a simulated exchange (aperture.demo.world) inside its own folder; it never talks to Webull and
+# `tickr demo`: a made-up trading day for looking at the apps with full data. The real bot runs
+# on a simulated exchange (tickr.demo.world) inside its own folder; it never talks to Webull and
 # never reads or writes the real data_dir. Every key has a comment: what it is, its unit, who reads it.
 # Tickers are invented. Times are New York wall times "HH:MM"; prices are USD strings; volumes are
-# shares per minute. Read by aperture.demo.
+# shares per minute. Read by tickr.demo.
 
 [demo]
 # Folder the demo builds, relative to the repo root: its own copy of config/ and strategies/ plus its
-# data/; deleted and rebuilt by every `aperture demo` (only when it holds the demo marker file).
+# data/; deleted and rebuilt by every `tickr demo` (only when it holds the demo marker file).
 root_dir = "demo"
 # Environment name the demo copy of bot.toml runs as (a copy of the first environment whose trading
 # gate is open without an owner authorization); the apps show it, so it says this is a demo.

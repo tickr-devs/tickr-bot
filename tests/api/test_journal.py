@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from aperture import config
-from aperture.api import contract
-from aperture.api.journal import NO_DATABASE, journal_document
-from aperture.api.server import make_server, settings_from_config
-from aperture.config import ConfigError
-from aperture.store import Store
+from tickr import config
+from tickr.api import contract
+from tickr.api.journal import NO_DATABASE, journal_document
+from tickr.api.server import make_server, settings_from_config
+from tickr.config import ConfigError
+from tickr.store import Store
 
 from .samples import T0
 from .schema_check import errors
