@@ -179,6 +179,39 @@ def test_info_plist_texts_need_a_russian_translation(tmp_path):
     assert load().plist_violations(plist) == []
 
 
+def test_info_plist_declares_every_catalog_language(tmp_path):
+    import plistlib
+
+    def catalog(path: Path, language: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        unit = {"stringUnit": {"state": "translated", "value": "x"}}
+        data = {"sourceLanguage": "en", "strings": {"k": {"localizations": {language: unit}}}}
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    support = tmp_path / "App" / "Support"
+    support.mkdir(parents=True)
+    plist = support / "Info.plist"
+    catalog(tmp_path / "App" / "Sources" / "Localizable.xcstrings", "ru")
+    catalog(tmp_path / "Shared" / "Localizable.xcstrings", "uk")
+    shared = tmp_path / "Shared"
+    plist.write_bytes(plistlib.dumps({"CFBundleName": "Tickr"}))
+    assert load().localization_violations(plist, shared) == [
+        (1, "CFBundleLocalizations lacks en"),
+        (1, "CFBundleLocalizations lacks ru"),
+        (1, "CFBundleLocalizations lacks uk"),
+    ]
+    plist.write_bytes(plistlib.dumps({"CFBundleLocalizations": ["en", "ru"]}))
+    assert load().localization_violations(plist, shared) == [(1, "CFBundleLocalizations lacks uk")]
+    plist.write_bytes(plistlib.dumps({"CFBundleLocalizations": ["en", "ru", "uk"]}))
+    assert load().localization_violations(plist, shared) == []
+
+
+def test_app_info_plists_declare_their_languages():
+    module = load()
+    for plist in module.plist_files():
+        assert module.localization_violations(plist) == [], plist
+
+
 def test_flags_outdated_apple_apis(tmp_path):
     source = (
         "import XCTest\n"
