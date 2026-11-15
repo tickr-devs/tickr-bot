@@ -88,9 +88,17 @@ print(db.execute("SELECT COUNT(*) FROM trades WHERE state != ?", ("closed",)).fe
 fi
 
 # 2. The venv first: if the install fails, the old jobs are still loaded and nothing changed.
-run .venv/bin/pip install -q -e ".[webull]"
-if .venv/bin/pip show -q aperture >/dev/null 2>&1; then
-  run .venv/bin/pip uninstall -y -q aperture
+#    A venv made by uv has no pip: uv installs into it instead.
+if [ -x .venv/bin/pip ]; then
+  PIP=".venv/bin/pip"
+elif command -v uv >/dev/null 2>&1; then
+  PIP="uv pip --python .venv/bin/python"
+else
+  refuse ".venv has no pip and uv is not installed; cannot reinstall the package"
+fi
+run $PIP install -q -e ".[webull]"
+if "$PY" -c 'import importlib.metadata as m; m.version("aperture")' >/dev/null 2>&1; then
+  if [ -x .venv/bin/pip ]; then run $PIP uninstall -y -q aperture; else run $PIP uninstall -q aperture; fi
 fi
 
 # 3. Unload the old launchd jobs and keep their plists aside.
