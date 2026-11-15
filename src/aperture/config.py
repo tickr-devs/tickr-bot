@@ -16,6 +16,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, get_type_hints
 
+# The Webull bars route (protocol constant, also `broker.webull.Route.BARS`): the chart's
+# request slice is carved from this route's limit, which must be counted per 60 s.
+BARS_ROUTE = "/market-data/stocks/bars/list"
+SECONDS_PER_MINUTE = 60
+# One folder name: no separator, no "..", never absolute (keeps a cache inside [run] data_dir).
+PLAIN_FOLDER = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 class ConfigError(ValueError):
     """The configuration is invalid; the bot must not start."""
@@ -163,6 +170,7 @@ class ChartConfig:
     live_ttl_seconds: Decimal
     closed_day_settle_seconds: Decimal
     cache_dir: str
+    cache_max_age_days: int
     session_lookback_days: int
 
 
@@ -425,6 +433,15 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if chart.live_ttl_seconds <= 0 or chart.session_lookback_days < 1:
         raise ConfigError("[chart] live_ttl_seconds must be above 0 and session_lookback_days "
                           "at least 1")
+    if not PLAIN_FOLDER.match(chart.cache_dir):
+        raise ConfigError("[chart] cache_dir must be one plain folder name under [run] data_dir "
+                          f"(letters, digits, '_' and '-'), not {chart.cache_dir!r}")
+    if chart.cache_max_age_days < chart.session_lookback_days:
+        raise ConfigError("[chart] cache_max_age_days must be at least session_lookback_days (a "
+                          "pruned day a 1d or 5d range still reads is read again from Webull)")
+    if chart.webull_enabled:
+        for name, env in environments.items():
+            check_chart_slice(chart, name, env)
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:
         raise ConfigError("[strategy] the active strategy cannot also be an observer")
@@ -435,6 +452,19 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         root=Path(root) if root is not None else path.resolve().parent.parent,
         digest=hashlib.sha256(raw_bytes).hexdigest(),
     )
+
+
+def check_chart_slice(chart: ChartConfig, name: str, env: EnvironmentConfig) -> None:
+    """With the chart on, the bot's bars limit in `env` loses `[chart] requests_per_minute` per
+    60 s to the API: refuse a bars limit over another window or one the slice would empty."""
+    count, window = env.route_limits.get(BARS_ROUTE,
+                                         (env.requests_per_route_per_minute, SECONDS_PER_MINUTE))
+    if window != SECONDS_PER_MINUTE:
+        raise ConfigError(f"[chart] needs the bars route limit of [environments.{name}] per "
+                          f"{SECONDS_PER_MINUTE} s to carve its slice from, not per {window} s")
+    if chart.requests_per_minute >= count:
+        raise ConfigError(f"[chart] requests_per_minute must be below the bars route limit of "
+                          f"[environments.{name}] ({count} per {SECONDS_PER_MINUTE} s)")
 
 
 _KEY_LINE = re.compile(r"^\s*([A-Za-z0-9_\-\"\.]+)\s*=")

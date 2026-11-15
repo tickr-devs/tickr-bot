@@ -215,3 +215,63 @@ def test_keep_sessions_below_one_refused(tmp_path):
     path.write_text(text.replace("maintain_keep_sessions = 20", "maintain_keep_sessions = 0"))
     with pytest.raises(config.ConfigError, match="maintain_keep_sessions"):
         config.load(path)
+
+
+def test_chart_cache_days_past_the_max_age_are_deleted(setup, capsys):
+    path, cfg, _, _ = setup
+    root = cfg.root / cfg.run.data_dir / cfg.chart.cache_dir / cfg.environment_name
+    age = cfg.chart.cache_max_age_days
+    kept_day, old_day = TODAY - timedelta(days=age), TODAY - timedelta(days=age + 1)
+    kept = [root / "AAPL" / f"{kept_day.isoformat()}.json", root / "AAPL" / "notes.json",
+            root / "AAPL" / f".{old_day.isoformat()}.json.0a.tmp",
+            root / "AAPL" / "2026-02-30.json"]  # not a date: never ours to delete
+    old = [root / "AAPL" / f"{old_day.isoformat()}.json", root / "BRK.B" / "2025-01-02.json"]
+    for file in kept + old:
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("{}", "utf-8")
+    assert main(["--config", str(path), "maintain"]) == 0
+    assert f"would delete 2 chart cache files older than {age} days" in capsys.readouterr().out
+    assert all(f.exists() for f in kept + old)
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert f"delete 2 chart cache files older than {age} days" in capsys.readouterr().out
+    assert all(f.exists() for f in kept) and not any(f.exists() for f in old)
+    assert (root / "BRK.B").is_dir()  # folders stay for a running API to write into
+
+
+def test_chart_pruning_never_follows_symlinks_out_of_the_cache(setup, tmp_path, capsys):
+    path, cfg, _, _ = setup
+    root = cfg.root / cfg.run.data_dir / cfg.chart.cache_dir / cfg.environment_name
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "2025-01-02.json"
+    victim.write_text("{}", "utf-8")
+    root.mkdir(parents=True)
+    (root / "LINKED").symlink_to(outside, target_is_directory=True)
+    (root / "AAPL").mkdir()
+    (root / "AAPL" / "2025-01-03.json").symlink_to(victim)
+    plain = root / "AAPL" / "2025-01-04.json"
+    plain.write_text("{}", "utf-8")
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert "delete 1 chart cache files" in capsys.readouterr().out
+    assert victim.exists() and (root / "AAPL" / "2025-01-03.json").is_symlink()
+    assert not plain.exists()
+
+
+def test_a_chart_file_that_vanishes_is_skipped(setup, monkeypatch):
+    from aperture import maintain
+    _, cfg, _, _ = setup
+    root = cfg.root / cfg.run.data_dir / cfg.chart.cache_dir / cfg.environment_name
+    (root / "AAPL").mkdir(parents=True)
+    gone = root / "AAPL" / "2025-01-02.json"
+    gone.write_text("{}", "utf-8")
+    kept = root / "AAPL" / "2025-01-03.json"
+    kept.write_text("{}", "utf-8")
+    real_stat = Path.stat
+
+    def vanishing(self, *args, **kwargs):
+        if self == gone and kwargs.get("follow_symlinks", True):  # stat, not lstat
+            raise FileNotFoundError(self)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", vanishing)
+    assert [f for f, _ in maintain.stale_chart_files(cfg, TODAY)] == [kept]

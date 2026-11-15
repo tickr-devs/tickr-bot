@@ -129,7 +129,8 @@ def test_bot_bars_slice_is_unchanged_while_charts_are_off():
         chart_market_data_from_config(cfg, Scripted())
 
 
-def test_chart_slice_is_carved_from_a_route_specific_bars_limit_and_checked():
+def test_chart_slice_is_carved_from_a_route_specific_bars_limit():
+    """The slice's window and size are refused when the config loads (tests/test_config.py)."""
     cfg = enabled()
     env = cfg.environment
     per_minute = replace(cfg, environments={**cfg.environments, cfg.environment_name: replace(
@@ -139,12 +140,6 @@ def test_chart_slice_is_carved_from_a_route_specific_bars_limit_and_checked():
     # Other routes keep their limits.
     assert budget_from_config(enabled(per_minute)).limit_for(Route.SNAPSHOT.path).max_requests \
         == env.requests_per_route_per_minute
-    other_window = replace(cfg, environments={**cfg.environments, cfg.environment_name: replace(
-        env, route_limits={BARS_PATH: (50, 30)})})
-    with pytest.raises(AdapterConfigError, match="per 60 s"):
-        budget_from_config(enabled(other_window))
-    with pytest.raises(AdapterConfigError, match="below"):
-        budget_from_config(enabled(requests_per_minute=env.requests_per_route_per_minute))
 
 
 def test_http_429_pauses_only_the_chart_budget():

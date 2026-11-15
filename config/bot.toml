@@ -382,15 +382,18 @@ mac_app_timeout_seconds = 2
 
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API
-# process build its own Webull client: it then needs the app key and secret (never the account id) and uses the
-# environment's token folder next to the bot. Keep false until the chart probes C1-C5 in docs/webull-facts.md are
-# answered; false = GET /chart answers 503 unavailable (the demo serves its simulated world instead); read by the api
-# server and the request budget.
+# process build its own Webull client in the background (it then needs the app key and secret, never the account id,
+# and uses the environment's token folder next to the bot; until it is built GET /chart answers 503). Gate, per
+# docs/webull-facts.md section C: C1 and C2 must pass first, and C1 in the environment being enabled (a Sandbox pass
+# does not prove Production); C3 must pass before daily ranges (1m/3m/1y) are trusted, C4 before the newest minute and
+# half days are; C5 is optional. false = GET /chart answers 503 unavailable (the demo serves its simulated world
+# instead); read by the api server and the request budget.
 webull_enabled = false
 # Webull bars requests the API may send per 60 s for charts, count: the chart's own request budget, never the bot's;
 # exhausted = GET /chart answers 429 rate_limited, nothing is queued or retried. With webull_enabled the bot's budget for
 # the bars route is lowered by this many, so the two processes together stay within one route limit (in case Webull
-# counts per App Key); must be below the bot's bars route limit; read by the request budget and the api server.
+# counts per App Key); with webull_enabled it must be below the bars route limit of every environment, which must be
+# counted per 60 s (checked when the config is loaded); read by the request budget and the api server.
 requests_per_minute = 4
 # Most bars asked per chart bars request, count (SDK maximum 1200; one day with pre- and post-market is at most 960
 # minutes, so one request covers a day); read by the api server.
@@ -404,9 +407,12 @@ live_ttl_seconds = 30
 # written; read by the api server.
 closed_day_settle_seconds = 300
 # Chart cache folder relative to [run] data_dir; settled days' M1 bars go to <cache_dir>/<environment>/<symbol>/<NY
-# date>.json and are kept until deleted by hand (minute bars are unadjusted, so a settled day never changes; nothing
-# prunes this folder yet); read by the api server.
+# date>.json (minute bars are unadjusted, so a settled day never changes); read by the api server and maintain.
 cache_dir = "chart"
+# Days, counted back from today's New York date, a settled day's file stays in the chart cache; `aperture maintain`
+# deletes older ones (a later chart of that day reads it from Webull again). At least session_lookback_days; read by
+# maintain.
+cache_max_age_days = 30
 # Most calendar days walked back to find the sessions of a 1d or 5d chart range (weekends and holidays are skipped);
 # read by the api server.
 session_lookback_days = 14

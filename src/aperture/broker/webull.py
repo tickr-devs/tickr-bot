@@ -54,7 +54,7 @@ from aperture.broker.base import (
 from aperture.broker.budget import RequestBudget, RouteLimit
 from aperture.broker.status import map_status
 from aperture.calendar import ny_date_of
-from aperture.config import Config, GateResult, trading_gate
+from aperture.config import BARS_ROUTE, Config, GateResult, check_chart_slice, trading_gate
 from aperture.data.base import (
     BarSpan,
     DelayedData,
@@ -120,7 +120,7 @@ class Route(Enum):
     GAINERS_LOSERS = ("GET", "/market-data/screeners/gainers-losers/list", False)
     TOP_ACTIVES = ("GET", "/market-data/screeners/top-actives/list", False)
     SNAPSHOT = ("GET", "/market-data/stocks/snapshots/list", False)
-    BARS = ("POST", "/market-data/stocks/bars/list", False)
+    BARS = ("POST", BARS_ROUTE, False)
     PROFILES = ("GET", "/trading/instruments/stocks/profiles/list", False)
 
     @property
@@ -1881,7 +1881,9 @@ def budget_from_config(
     """The bot's (and every bot-side tool's) request budget. With `[chart] webull_enabled` the
     bars route keeps `[chart] requests_per_minute` fewer requests per 60 s: that slice belongs to
     the API's chart budget (`chart_budget_from_config`), so both processes together never pass
-    the route limit even if Webull counts it per App Key."""
+    the route limit even if Webull counts it per App Key. The slice's window and size are refused
+    when the config is loaded (`config.check_chart_slice`); checked again here for a config built
+    another way."""
     env = config.environment
     pause = float(env.rate_limit_cooldown_seconds)
     default = RouteLimit(env.requests_per_route_per_minute, SECONDS_PER_MINUTE, pause)
@@ -1891,13 +1893,8 @@ def budget_from_config(
     }
     chart = config.chart
     if chart.webull_enabled:
+        check_chart_slice(chart, config.environment_name, env)
         bars = limits.get(Route.BARS.path, default)
-        if bars.window_seconds != SECONDS_PER_MINUTE:
-            raise AdapterConfigError("[chart] needs the bars route limit per 60 s to carve its "
-                                     "slice from")
-        if chart.requests_per_minute >= bars.max_requests:
-            raise AdapterConfigError("[chart] requests_per_minute must be below the bot's bars "
-                                     f"route limit ({bars.max_requests} per 60 s)")
         limits[Route.BARS.path] = RouteLimit(bars.max_requests - chart.requests_per_minute,
                                              SECONDS_PER_MINUTE, pause)
     return RequestBudget(default, limits, clock=clock)
@@ -1961,7 +1958,6 @@ def chart_market_data_from_config(
     budget. Refused unless `[chart] webull_enabled`."""
     if not config.chart.webull_enabled:
         raise AdapterConfigError("[chart] webull_enabled is false")
-    budget_from_config(config)  # the same carve-out checks the bot applies
     return market_data_from_config(
         config,
         transport if transport is not None

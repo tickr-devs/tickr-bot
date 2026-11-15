@@ -23,11 +23,12 @@ How an answer is built:
   passed after its extended close (minute bars are unadjusted, so a settled day never changes),
   and only if the day has bars; until then, and for a day without bars, they stay in memory for
   `[chart] live_ttl_seconds`. The daily series stays in memory for the live TTL while today's
-  session is not over, then until the next session's pre-market opens. Nothing prunes the disk
-  cache yet (a known gap).
+  session is not over, then until the next session's pre-market opens. `aperture maintain`
+  deletes day files older than `[chart] cache_max_age_days`.
 - Concurrency: the provider is read outside the shared state lock. Answers for one symbol run one
   at a time (a per-symbol lock), so a second request for the same symbol waits and then finds the
-  first one's cache instead of spending budget twice; other symbols are not held up.
+  first one's cache instead of spending budget twice; other symbols are not held up. A symbol's
+  lock lives only while an answer for it runs or waits (weak map), so the map stays small.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ import calendar as gregorian
 import json
 import re
 import threading
+import weakref
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -234,7 +236,10 @@ class Chart:
         self._source = source
         self._off_cause = off_cause
         self._lock = threading.Lock()  # source, calendar, live cache, symbol locks
-        self._symbol_locks: dict[str, threading.Lock] = {}
+        # Held only while an answer for the symbol runs or waits: a lock nobody holds is dropped,
+        # so one per symbol ever asked never piles up.
+        self._symbol_locks: weakref.WeakValueDictionary[str, threading.Lock] = (
+            weakref.WeakValueDictionary())
         self._calendar: SessionCalendar | None = None
         self._live: dict[tuple[str, str, date | None], _Live] = {}
 
@@ -250,7 +255,9 @@ class Chart:
         with self._lock:
             source = self._source
             off_cause = self._off_cause
-            symbol_lock = self._symbol_locks.setdefault(symbol, threading.Lock())
+            symbol_lock = self._symbol_locks.get(symbol)
+            if symbol_lock is None:
+                symbol_lock = self._symbol_locks[symbol] = threading.Lock()
         if source is None:
             raise ChartRefused("unavailable", off_cause)
         with symbol_lock:

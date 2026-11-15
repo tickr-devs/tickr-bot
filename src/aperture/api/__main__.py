@@ -5,10 +5,11 @@
 keeps only its SHA-256 under data_dir, and leaves the pairing link in a 0600 file there for the
 owner to move to the phone. The token is never printed. A new pairing replaces the old one.
 
-With `[chart] webull_enabled`, `serve` builds the chart's own Webull market-data client first
-(app key and secret from the environment, never the account id; it may wait for a token
-confirmation like the bot). If that fails, GET /chart answers 503 with the cause and everything
-else is served as usual.
+With `[chart] webull_enabled`, `serve` builds the chart's own Webull market-data client in a
+background thread once serving has begun (app key and secret from the environment, never the
+account id; it may wait for a token confirmation like the bot). Status and commands (stop,
+emergency) never wait for it: until it is ready GET /chart answers 503 "starting", and if the
+build fails it answers 503 with the cause.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from aperture import config as config_module
@@ -26,20 +28,48 @@ from aperture.api.server import (
     pair,
     settings_from_config,
 )
+from aperture.broker.base import BrokerError
+from aperture.data.base import MarketData
+
+CHART_STARTING = "chart market data is starting: its Webull client is still being built"
 
 
-def attach_chart_source(server: ApiServer, cfg: config_module.Config) -> None:
-    """Give GET /chart its Webull source when `[chart] webull_enabled`; else leave it off."""
-    if not cfg.chart.webull_enabled:
-        return
-    from aperture.broker.base import BrokerError
+def _webull_chart_source(cfg: config_module.Config) -> MarketData:
     from aperture.broker.webull import chart_market_data_from_config
 
-    try:
-        server.chart.use(chart_market_data_from_config(cfg))
-    except BrokerError as exc:  # AdapterConfigError: credentials, token, budget slice
-        server.chart.use(None, f"chart market data unavailable: {exc}")
-        print(f"aperture api: GET /chart is off: {exc}", file=sys.stderr)
+    return chart_market_data_from_config(cfg)
+
+
+def attach_chart_source(
+    server: ApiServer, cfg: config_module.Config,
+    build: Callable[[config_module.Config], MarketData] = _webull_chart_source,
+) -> threading.Thread | None:
+    """Give GET /chart its Webull source when `[chart] webull_enabled`; else leave it off. The
+    client is built in a daemon thread (returned) so nothing else the API serves waits for it;
+    GET /chart answers 503 while it builds and, if the build fails, 503 with the cause."""
+    if not cfg.chart.webull_enabled:
+        return None
+    server.chart.use(None, CHART_STARTING)
+
+    def build_source() -> None:
+        try:
+            source = build(cfg)
+        except (BrokerError, config_module.ConfigError) as exc:  # our own texts: no secrets
+            cause = f"chart market data unavailable: {type(exc).__name__}: {exc}"
+            server.chart.use(None, cause)
+            print(f"aperture api: GET /chart is off: {cause}", file=sys.stderr)
+            return
+        except Exception as exc:  # noqa: BLE001 - SDK text may carry a key or token: type only
+            cause = f"chart market data unavailable: client build failed ({type(exc).__name__})"
+            server.chart.use(None, cause)
+            print(f"aperture api: GET /chart is off: {cause}", file=sys.stderr)
+            return
+        server.chart.use(source)
+        print("aperture api: GET /chart is served from Webull market data", file=sys.stderr)
+
+    thread = threading.Thread(target=build_source, name="chart-source", daemon=True)
+    thread.start()
+    return thread
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,7 +95,6 @@ def main(argv: list[str] | None = None) -> int:
               "when the phone first connects with it.")
         return 0
     server = make_server(settings)
-    attach_chart_source(server, cfg)
     print(f"aperture api on http://{settings.host}:{server.server_port}/", file=sys.stderr)
     remote = None
     if settings.remote_hosts:
@@ -73,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         threading.Thread(target=remote.serve_forever, daemon=True).start()
         print(f"aperture api for the phone on http://{settings.host}:{remote.server_port}/ "
               "(bearer token required; point tailscale serve here)", file=sys.stderr)
+    attach_chart_source(server, cfg)  # in the background: serving does not wait for it
     try:
         server.serve_forever()
     except KeyboardInterrupt:

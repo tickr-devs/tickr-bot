@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from aperture import config
+from aperture.api.__main__ import CHART_STARTING, attach_chart_source
 from aperture.api.chart import (
     Chart,
     ChartRefused,
@@ -25,6 +26,7 @@ from aperture.api.chart import (
 )
 from aperture.api.contract import ChartInterval, ChartRange
 from aperture.api.server import make_server, settings_from_config
+from aperture.broker.base import BrokerError
 from aperture.broker.budget import RequestBudget, RouteLimit
 from aperture.broker.webull import Route, WebullMarketData, WireResponse
 from aperture.calendar import NEW_YORK, SessionCalendar
@@ -288,6 +290,7 @@ def test_a_slow_read_holds_up_only_its_own_symbol(tmp_path):
     second.join(5)
     assert [r.symbol for r in results] == ["FAST", "SLOW", "SLOW"]
     assert [c for c in source.calls if c[1][0] == "SLOW"] == [("history_bars", ("SLOW", "D"))]
+    assert len(chart._symbol_locks) == 0  # a lock nobody holds or waits on is dropped
 
 
 def test_five_days_skip_the_weekend_and_wait_for_the_pre_market(tmp_path):
@@ -468,6 +471,69 @@ def test_http_budget_exhaustion_is_429_with_retry_after(served):
     assert resp.status == 429 and doc(payload)["error"] == "rate_limited"
     assert resp.getheader("Retry-After") == "60"
     assert len(transport.sent) == 1  # nothing queued, nothing retried
+
+
+def chart_on(tmp_path: Path) -> config.Config:
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    return replace(cfg, chart=replace(cfg.chart, webull_enabled=True))
+
+
+def test_status_and_commands_answer_while_the_chart_client_builds(served, tmp_path):
+    """The chart's client (which may wait for a token confirmation) is built in the background:
+    status and the stop and emergency commands never wait for it; /chart is 503 until ready."""
+    fake, _ = a_day(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_build(cfg: config.Config) -> FakeMarketData:
+        entered.set()
+        assert release.wait(5)
+        return fake
+
+    builder = attach_chart_source(served, chart_on(tmp_path), slow_build)
+    assert builder is not None and entered.wait(5)
+    resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=5m&range=1d")
+    assert resp.status == 503 and doc(payload)["cause"] == CHART_STARTING
+    resp, payload = request(served, "GET", "/status")
+    assert resp.status == 200 and "unavailable_cause" in doc(payload)  # no bot in this test
+    for path in ("/commands/stop-bot", "/commands/emergency"):
+        resp, _ = request(served, "POST", path, {})
+        assert resp.status == 202
+    assert builder.is_alive()  # all of the above answered while the build was still waiting
+    release.set()
+    builder.join(5)
+    resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=5m&range=1d")
+    assert resp.status == 200 and doc(payload)["source"] == "fake"
+
+
+@pytest.mark.parametrize("error, shown, hidden", [
+    (BrokerError("token not confirmed in time"), "BrokerError: token not confirmed in time", None),
+    (RuntimeError("secret-ish"), "client build failed (RuntimeError)", "secret-ish"),
+])
+def test_a_failed_chart_client_build_is_503_with_its_cause(served, tmp_path, capsys, error,
+                                                           shown, hidden):
+    """Our own errors show their text; anything else (SDK text could carry a key or a token)
+    shows only its type, in the answer and on stderr."""
+    def failing_build(cfg: config.Config) -> FakeMarketData:
+        raise error
+
+    builder = attach_chart_source(served, chart_on(tmp_path), failing_build)
+    assert builder is not None
+    builder.join(5)
+    resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=5m&range=1d")
+    assert resp.status == 503 and doc(payload)["error"] == "unavailable"
+    assert shown in doc(payload)["cause"]
+    if hidden is not None:
+        assert hidden not in payload.decode() and hidden not in capsys.readouterr().err
+    resp, _ = request(served, "POST", "/commands/stop-bot", {})
+    assert resp.status == 202
+
+
+def test_chart_off_builds_nothing(served, tmp_path):
+    def never(cfg: config.Config) -> FakeMarketData:
+        raise AssertionError("built while [chart] webull_enabled is false")
+
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    assert attach_chart_source(served, cfg, never) is None
 
 
 # ---------------------------------------------------------------- demo

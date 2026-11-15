@@ -310,21 +310,22 @@ from the bot's capture). Code: `src/aperture/api/chart.py`; settings: `[chart]` 
   never changes). Before that, a day without bars, the session in progress, and the daily series
   while the day's session is not over are read again after `[chart] live_ttl_seconds`; after the
   session the daily series is kept until the next pre-market opens.
-- Known gap: nothing prunes the disk cache yet; it grows by one file per symbol and settled day
-  charted (about 100 KB each at most). Delete the folder by hand if it gets large; it is rebuilt
-  on demand.
+- Pruning: the disk cache grows by one file per symbol and settled day charted (about 100 KB each
+  at most); `aperture maintain --apply` deletes day files older than `[chart] cache_max_age_days`
+  (docs/operations.md). A pruned day is read from Webull again when charted.
 - Budget: the chart has its own request budget, `[chart] requests_per_minute` per 60 s, never the
   bot's. When it is spent the answer is `429 rate_limited` with `Retry-After` (seconds); nothing is
   queued or retried. A 1d range costs at most one request per uncached session, a daily range one.
   With the chart on, the bot's own budget for the bars route is lowered by the same number, so the
   two processes together never pass one route limit (docs/webull-facts.md, section C).
 - Off by default: `[chart] webull_enabled = false` answers every chart `503 unavailable` with that
-  cause. Turned on, `python -m aperture.api` builds its own Webull market-data client at start: it
-  needs the app key and secret in its environment (the launchd job and the container do not load
-  them for the API today) and uses the environment's token folder; it never reads the account id
-  and refuses any non-market-data route. If that client cannot be built, `/chart` answers `503`
-  with the cause and the rest of the API works. The open questions before turning it on are C1-C5
-  in docs/webull-facts.md. `aperture demo` serves its simulated world here (regular session only).
+  cause. Turned on, `python -m aperture.api` builds its own Webull market-data client in a
+  background thread once it serves (status and commands never wait for it, even while the token
+  awaits confirmation): it needs the app key and secret in its environment (the launchd job and
+  the container do not load them for the API today) and uses the environment's token folder; it
+  never reads the account id and refuses any non-market-data route. Until the client is ready
+  `/chart` answers `503` "starting"; if it cannot be built, `503` with the cause. The gate for
+  turning it on is in docs/webull-facts.md, section C (C1 and C2, C1 in that environment). `aperture demo` serves its simulated world here (regular session only).
 - Delayed data (`delay_minutes` not 0), a failed read or a calendar refusal is `503 unavailable`
   with the cause.
 

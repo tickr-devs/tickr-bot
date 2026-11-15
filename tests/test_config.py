@@ -343,3 +343,49 @@ def test_candidates_must_leave_the_reserved_stream_slots(tmp_path):
     path = _copy(tmp_path, text)
     with pytest.raises(config.ConfigError, match="stream_reserved_symbols"):
         config.load(path)
+
+
+def _copy_in(tmp_path: Path, name: str, text: str) -> Path:
+    (tmp_path / name).mkdir()
+    return _copy(tmp_path / name, text)
+
+
+def _chart_on(text: str | None = None) -> str:
+    return (text or BOT.read_text("utf-8")).replace("webull_enabled = false",
+                                                    "webull_enabled = true", 1)
+
+
+def test_chart_slice_is_checked_when_the_config_loads(tmp_path):
+    """With the chart on, its slice must fit below every environment's bars limit, counted per
+    60 s: refused at load, not later when the bot builds its budget."""
+    loaded = config.load(_copy_in(tmp_path, "ok", _chart_on()))
+    assert loaded.chart.webull_enabled
+    smallest = min(e.requests_per_route_per_minute for e in loaded.environments.values())
+    too_big = f"requests_per_minute = {smallest}"
+    text = BOT.read_text("utf-8").replace("requests_per_minute = 4", too_big, 1)
+    assert config.load(_copy_in(tmp_path, "off", text)).chart.requests_per_minute == smallest
+    with pytest.raises(config.ConfigError, match="must be below the bars route limit"):
+        config.load(_copy_in(tmp_path, "big", _chart_on(text)))
+    window = BOT.read_text("utf-8").replace(
+        "route_limits = {}", f'route_limits = {{ "{config.BARS_ROUTE}" = [50, 30] }}', 1)
+    assert config.load(_copy_in(tmp_path, "window-off", window)).chart.webull_enabled is False
+    with pytest.raises(config.ConfigError, match="per 60 s"):
+        config.load(_copy_in(tmp_path, "window", _chart_on(window)))
+
+
+def test_bars_route_constant_is_the_adapter_route():
+    from aperture.broker.webull import Route
+    assert Route.BARS.path == config.BARS_ROUTE
+
+
+@pytest.mark.parametrize("bad", ["/tmp/chart", "../chart", "a/b", "..", ".", "", "a\\\\b"])
+def test_chart_cache_dir_must_be_one_plain_folder(tmp_path, bad):
+    text = BOT.read_text("utf-8").replace('cache_dir = "chart"', f'cache_dir = "{bad}"', 1)
+    with pytest.raises(config.ConfigError, match="cache_dir must be one plain folder"):
+        config.load(_copy(tmp_path, text))
+
+
+def test_chart_cache_must_outlive_the_session_lookback(tmp_path):
+    text = BOT.read_text("utf-8").replace("cache_max_age_days = 30", "cache_max_age_days = 13", 1)
+    with pytest.raises(config.ConfigError, match="cache_max_age_days"):
+        config.load(_copy(tmp_path, text))

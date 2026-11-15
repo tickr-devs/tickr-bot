@@ -225,6 +225,8 @@ stopped, after the close or on a non-trading day:
   maintain_keep_sessions` sessions before today (today included), on or after the day of a trade
   still open in the database, without its `day-end` journal row, or when a plain file sits beside
   a `.gz` that is unreadable or holds other bytes (look at both, remove the wrong one).
+- Chart cache (`chart/<env>/<SYMBOL>/<date>.json`, written by the API): day files older than
+  `[chart] cache_max_age_days` are deleted (the dry run counts them); symbol folders stay.
 - `--apply` also runs a SQLite WAL checkpoint; it deletes no row and never vacuums.
 - Refused (exit 3, nothing touched) while the bot holds its lock, when the calendar cannot count
   the sessions, or when the database is missing or has another schema. Exit 1 means one file

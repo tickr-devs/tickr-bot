@@ -1,4 +1,5 @@
-"""`aperture maintain`: archive closed days' capture and decision files, checkpoint the database.
+"""`aperture maintain`: archive closed days' capture and decision files, prune the chart cache,
+checkpoint the database.
 
 Run with the bot stopped: the command holds the bot's SingleInstanceLock for its whole run and
 refuses when another process has it. Dry run by default; `--apply` acts.
@@ -10,6 +11,11 @@ when all of these hold, otherwise it is kept with one printed cause:
 - it is older than the oldest trade still open in the database (any environment);
 - the journal has its `day-end` row for this environment (the day was finished by the bot).
 - no plain file has a `.gz` twin that is unreadable or holds other bytes.
+
+Chart cache (`<[chart] cache_dir>/<environment>/<symbol>/<NY date>.json`, written by the API):
+day files older than `[chart] cache_max_age_days` before today are deleted (a later chart of that
+day reads it from Webull again). Symbol folders are left in place, even empty, so a running API
+never loses the folder it is writing into.
 
 Refusals (exit 3, nothing touched): the lock is held, the calendar cannot count the sessions,
 the database is missing or has another schema version. The journal is never edited or vacuumed;
@@ -35,6 +41,7 @@ from aperture.store import MIGRATIONS, Store
 
 DAY_FOLDER = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PLAIN_SUFFIX = ".jsonl"
+CHART_SUFFIX = ".json"
 WAL_SUFFIX = "-wal"
 
 
@@ -127,6 +134,34 @@ def plan(cfg: Config, calendar: SessionCalendar, database: Path, today: date) ->
     return plans
 
 
+def chart_root(cfg: Config) -> Path:
+    return cfg.root / cfg.run.data_dir / cfg.chart.cache_dir / cfg.environment_name
+
+
+def stale_chart_files(cfg: Config, today: date) -> list[tuple[Path, int]]:
+    """(file, size) of the chart cache day files of this environment older than `[chart]
+    cache_max_age_days`. Symlinked folders and files are skipped (never followed out of the
+    cache), and so is a file that vanishes meanwhile."""
+    root = chart_root(cfg)
+    oldest_kept = today - timedelta(days=cfg.chart.cache_max_age_days)
+    stale = []
+    for folder in sorted(root.iterdir()) if root.is_dir() else []:
+        if folder.is_symlink() or not folder.is_dir():
+            continue
+        for file in sorted(folder.glob(f"*{CHART_SUFFIX}")):
+            try:
+                day = date.fromisoformat(file.stem) if DAY_FOLDER.match(file.stem) else None
+            except ValueError:
+                day = None  # not a day file: never ours to delete
+            if day is None or day >= oldest_kept or file.is_symlink():
+                continue
+            try:
+                stale.append((file, file.stat().st_size))
+            except FileNotFoundError:
+                continue  # deleted meanwhile
+    return stale
+
+
 def checkpoint(database: Path) -> str:
     """WAL checkpoint (TRUNCATE): moves committed pages into the database file, deletes no row."""
     db = sqlite3.connect(database.resolve().as_uri() + "?mode=rw", uri=True)
@@ -155,6 +190,22 @@ def run(cfg: Config, calendar: SessionCalendar, database: Path, today: date, *,
                 compress(file)
             except OSError as exc:
                 out(f"FAILED {file}: {exc}; stopped here, the file is left as it was")
+                return 1
+    stale = stale_chart_files(cfg, today)
+    if stale:
+        size = sum(size for _, size in stale)
+        out(f"{'delete' if apply else 'would delete'} {len(stale)} chart cache files older than "
+            f"{cfg.chart.cache_max_age_days} days, {size} bytes")
+    if apply:
+        inside = chart_root(cfg).resolve()
+        for file, _ in stale:
+            if file.is_symlink() or not file.resolve().is_relative_to(inside):
+                out(f"skip {file}: not a plain file inside the chart cache")
+                continue
+            try:
+                file.unlink(missing_ok=True)
+            except OSError as exc:
+                out(f"FAILED {file}: {exc}; stopped here")
                 return 1
     wal = database.with_name(database.name + WAL_SUFFIX)
     wal_size = wal.stat().st_size if wal.is_file() else 0
