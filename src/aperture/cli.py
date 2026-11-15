@@ -24,6 +24,7 @@ from aperture.engine.manual import (
     CLOSE_WAITS,
     ManualRefused,
     check_window,
+    close_refusal,
     flatten_deadline,
     plan_probe,
     run_until_closed,
@@ -171,8 +172,14 @@ def _engine(path: Path, broker: Broker | None = None,
                                  strategy="manual", strategy_version="-", code_version="-")
         cause = "crashed"
         try:
+            try:
+                calendar: SessionCalendar | None = SessionCalendar.load(
+                    (cfg.root / cfg.session.calendar_file).parent)
+            except CalendarRefused:
+                calendar = None  # closes at once, as `flatten_deadline` without a calendar
             engine = Engine(store, broker if broker is not None else BROKER_FACTORY(cfg), cfg,
-                            run_id, lambda: config_module.trading_gate(cfg))
+                            run_id, lambda: config_module.trading_gate(cfg),
+                            close_refusal=lambda: close_refusal(cfg, calendar, NOW()))
             if precheck is not None:
                 precheck(engine)
             engine.recover()
@@ -466,10 +473,11 @@ def _run(path: Path) -> int:
                     store.append(ALERT, outcome.journal_body(), run_id=run_id)
 
             adapters = RUN_ADAPTERS(cfg, inbox.on_error, token_pending)
+            calendar = service.load_calendar(cfg)
             engine = Engine(store, adapters.broker, cfg, run_id,
                             lambda: config_module.trading_gate(cfg),
-                            clock=lambda: NOW().timestamp())
-            calendar = service.load_calendar(cfg)
+                            clock=lambda: NOW().timestamp(),
+                            close_refusal=lambda: close_refusal(cfg, calendar, NOW()))
             capture = CaptureWriter.from_config(cfg, adapters.market.provider)
             market = MarketRuntime(engine, cfg, adapters.market,
                                    health=StreamHealth.from_config(cfg), inbox=inbox,

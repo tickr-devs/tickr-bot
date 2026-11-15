@@ -58,6 +58,10 @@ flatten_minutes_before_close = 5
 # Seconds after the flatten time before broker reads must show nothing of ours left (alert not-flat-after-flatten,
 # day-end record); keep it above [orders] reconcile_interval_seconds; read by runtime.dayend.
 flatten_grace_seconds = 120
+# Seconds before the regular close (the calendar's early close on a half day) from which no closing MARKET order is sent
+# until the next regular open: the trade keeps its broker stop, the engine sets the market-closed fence and the owner gets
+# the flatten-after-close alert; keep it below the flatten-to-close time; read by engine.manual.close_refusal.
+close_order_cutoff_seconds = 60
 # Trade on half days: false = no trading on half days; read by safety.
 half_days_enabled = false
 

@@ -161,7 +161,9 @@ def test_cli_exit_closes_open_trade_after_restart(tmp_path, monkeypatch, capsys)
     assert cli.main(["--config", str(bot), "clear-fence", "unprotected:t1"]) == 1
 
 
-def test_resume_after_close_flattens_at_once(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize(("hour", "minute", "closed"), [(15, 57, True), (17, 0, False)])
+def test_resume_late_closes_only_before_the_close(tmp_path, monkeypatch, capsys, hour,
+                                                  minute, closed):
     bot = copy_config(tmp_path)
     cfg = config.load(bot)
     database, _ = cli.data_paths(cfg)
@@ -175,10 +177,19 @@ def test_resume_after_close_flattens_at_once(tmp_path, monkeypatch, capsys):
     store.close()
     monkeypatch.setattr(cli, "BROKER_FACTORY", lambda cfg: market)
     monkeypatch.setattr(cli, "SLEEP", lambda s: market.tick())
-    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11.replace(hour=17))  # after the close
-    assert cli.main(["--config", str(bot), "resume"]) == 0
-    assert f"trade {t} ABC: closed (session-flatten)" in capsys.readouterr().out
-    assert market.positions() == []
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11.replace(hour=hour, minute=minute))
+    if closed:  # after the flatten time, before the close: closes at once
+        assert cli.main(["--config", str(bot), "resume"]) == 0
+        assert f"trade {t} ABC: closed (session-flatten)" in capsys.readouterr().out
+        assert market.positions() == []
+        return
+    # After the close no MARKET order is sent: the stop stays and the operator is told.
+    assert cli.main(["--config", str(bot), "resume"]) == 4
+    err = capsys.readouterr().err
+    assert f"market-closed:{t}" in err and "Webull app" in err
+    assert [o.order_type for o in market.orders.values() if not o.state.terminal] == [
+        "STOP_LOSS"]
+    assert not any(o.order_type == "MARKET" for o in market.orders.values())
 
 
 def test_flatten_deadline_from_calendar():

@@ -86,13 +86,18 @@ class Fence(StrEnum):
     REPLACE_UNRESOLVED = "replace-unresolved"  # a stop replace whose result is not confirmed
     STOP_HELD = "stop-held"  # no stop and no close sent: an untracked SELL may rest at Webull
     EXIT_NOT_FILLED = "exit-not-filled"  # a closing order still not filled after max_exit_seconds
+    # A close was due outside the regular session (engine.manual.close_refusal): no MARKET
+    # order was sent, the stop stays; only the operator clears it, so it never sells at the
+    # next open with nobody deciding.
+    MARKET_CLOSED = "market-closed"
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
 # when their condition is gone.
 OPERATOR_FENCES = frozenset({Fence.STOP_REJECTED, Fence.EXIT_REFUSED, Fence.CANCEL_FAILED,
                              Fence.RESURRECTED, Fence.UNPROTECTED_TIMEOUT,
-                             Fence.REPLACE_UNRESOLVED, Fence.EXIT_NOT_FILLED})
+                             Fence.REPLACE_UNRESOLVED, Fence.EXIT_NOT_FILLED,
+                             Fence.MARKET_CLOSED})
 
 _LEG_LETTER = {Leg.ENTRY: "e", Leg.STOP: "s", Leg.EXIT: "x"}
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
@@ -227,13 +232,17 @@ class BrokerView:
 class Engine:
     def __init__(self, store: Store, broker: Broker, config: Config, run_id: str,
                  gate: Callable[[], GateResult],
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time,
+                 close_refusal: Callable[[], str | None] = lambda: None) -> None:
         self.store = store
         self.broker = broker
         self.config = config
         self.run_id = run_id
         self.gate = gate
         self.clock = clock
+        # Why a closing MARKET order may not be sent now, or None (engine.manual.close_refusal
+        # with the session calendar; the default never refuses: tests and tools).
+        self.close_refusal = close_refusal
         self._positions: list[Position] | None = None  # this pass's positions read
         # The latest reconcile's reads; None after a failed read (or when a caller drops it).
         self.broker_view: BrokerView | None = None
@@ -993,6 +1002,16 @@ class Engine:
             # Positions and Detail disagree: never sell on that; keep the Detail quantity
             # protected until they agree (the mismatch fence is already set).
             self._protect(trade, stops, max(expected, ZERO))
+            return
+        if not self._has_fence(Fence.MARKET_CLOSED, trade.trade_id):
+            refusal = self.close_refusal()
+            if refusal is not None:
+                self._set_fence(Fence.MARKET_CLOSED, trade.trade_id, (
+                    f"{trade.exit_requested} of {expected} {trade.symbol} not sent: {refusal}; "
+                    "the stop stays. Close the position in the Webull app, or clear this fence in "
+                    "the next regular session and the bot sends the close"))
+        if self._has_fence(Fence.MARKET_CLOSED, trade.trade_id):
+            self._protect(trade, stops, expected)  # no MARKET order outside the session
             return
         if self._replace_blocks(trade, stops):
             return  # keep our stops; a sale could add to an untracked stop of the replace

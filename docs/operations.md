@@ -42,7 +42,8 @@ waiting; launchd sends SIGKILL at `bot_exit_timeout_seconds`.
 
 `aperture.cli run` (the bot job's command) recovers and reconciles, keeps the positions it owns
 protected, acts on API commands (entry-stop on/off, cancel-own-orders, flatten), asks every open
-trade to exit at the session's flatten time (at once when there is no session or no calendar),
+trade to exit at the session's flatten time (at once when there is no session or no calendar;
+see `flatten-after-close` for a start after the close),
 and writes `data/status.json` on every loop pass. On SIGTERM it cancels working entries, leaves
 stops resting and exits 0, or 5 if `shutdown_deadline_seconds` passed with work pending. Once per
 completed minute in the regular session it runs the active strategy on the open position's
@@ -242,7 +243,8 @@ straight to the supervisor. Limits:
 `unprotected-position`, `stop-rejected`, `unknown-order-status`, `foreign-exposure`,
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
-`exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`, and from
+`exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`,
+`flatten-after-close`, and from
 the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
 `watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`. Every alert goes to
 the Mac notification and to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4).
@@ -312,6 +314,30 @@ broker stop while it works (the stop was cancelled before the close was sent).
    back on what is still held and sends no other close.
 3. When you have looked, `aperture clear-fence exit-not-filled:<trade>`. If the trade is still
    open, the bot then sends one new closing order.
+
+### `flatten-after-close`
+
+A close was due (the session flatten, or any other exit) but it is outside the regular session:
+from `[session] close_order_cutoff_seconds` (60 s) before the regular close, 15:59 ET on a
+normal day and 12:59 ET on a half day (the calendar's early close), until the next regular
+open, or on a day without a session. What Webull does with a MARKET SELL, DAY, session CORE
+sent then is unproven (docs/webull-facts.md, F6b): it may reject it, or queue it and sell at
+the next open with nobody deciding. So the bot sends no closing order: the trade stays
+`exiting`, its broker stop stays resting (never cancelled for this), entries are blocked, and
+the operator fence `market-closed:<trade>` carries the one cause. The usual way here is a bot
+that started late, after the close (a manual start, or a restart by a supervisor), with a trade
+still open. An operator `flatten` or `emergency` in that time is refused the same way (the
+command record says "no closing order is sent now"); `aperture exit` and `aperture resume`
+stop with exit 4 and print the fence.
+
+1. Open the Webull app: the position and its stop. The stop is a DAY order and expires at the
+   close; after that the position has no broker-side stop.
+2. Close it in the Webull app (extended hours, or at the next open), or place your own stop
+   for the next session.
+3. The fence does not clear itself, so nothing is sold at the next open on its own. If you
+   want the bot to close the trade instead, `aperture clear-fence market-closed:<trade>`
+   during the regular session: the bot then sends one closing order. Cleared outside the
+   session, the fence is set again at once with the same alert.
 
 ## Watchdog
 

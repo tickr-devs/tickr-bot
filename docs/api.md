@@ -221,8 +221,14 @@ preconditions to every command.
 
 - **flatten**: every open trade, or only the trades of `symbol`, gets an exit request through
   the normal exit path. Refused when `symbol` has no open position ("no open position in
-  XYZ"), and while a closing order of a chosen trade was refused before (fence
-  `exit-refused:<trade>`: look in the Webull app first). `{"symbol": null}`, a lower-case ticker
+  XYZ"), while a closing order of a chosen trade was refused before (fence
+  `exit-refused:<trade>`: look in the Webull app first), while a chosen trade holds the fence
+  `market-closed:<trade>` ("a close of <trade> was due outside the regular session and was not
+  sent ..."), and with a
+  trade to close outside the regular session ("no closing order is sent now: at or after
+  15:59:00 ET, ...": no MARKET order is sent from `[session] close_order_cutoff_seconds`
+  before the regular close until the next open; the stops stay; close in the Webull app).
+  The emergency's flatten step is refused the same way. `{"symbol": null}`, a lower-case ticker
   or any other key is `400`: a client bug never widens a one-symbol flatten to everything.
 - **stop-bot**: a graceful stop, obeyed only when the bot is flat. The bot writes its stop
   marker (`<data_dir>/<[runtime] stop_marker_file>`), journals the command `done`, ends its

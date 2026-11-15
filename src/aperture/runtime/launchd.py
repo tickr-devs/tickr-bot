@@ -87,7 +87,9 @@ def check_timings(config: Config) -> None:
     and unless the watchdog's restart of a down bot comes after the last entry time:
     0 < watchdog_restart_before_flatten_seconds
       < (last_entry_minutes_before_close - flatten_minutes_before_close) in seconds,
-    with a restart command and a positive timeout for it."""
+    with a restart command and a positive timeout for it;
+    and unless the session flatten can still send its close:
+    0 <= [session] close_order_cutoff_seconds < flatten_minutes_before_close (in seconds)."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -116,6 +118,10 @@ def check_timings(config: Config) -> None:
         raise ConfigError(
             f"[runtime] watchdog_after_flatten_seconds ({after}) + watchdog_before_close_seconds "
             f"({before}) must be below the flatten-to-close time ({window} s), both positive")
+    cutoff = config.session.close_order_cutoff_seconds
+    if not 0 <= cutoff < window:
+        raise ConfigError(f"[session] close_order_cutoff_seconds ({cutoff}) must be from 0 to "
+                          f"below the flatten-to-close time ({window} s)")
     restart = runtime.watchdog_restart_before_flatten_seconds
     entry_gap = (config.session.last_entry_minutes_before_close
                  - config.session.flatten_minutes_before_close) * SECONDS_PER_MINUTE

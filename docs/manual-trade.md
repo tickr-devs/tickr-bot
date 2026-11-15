@@ -91,13 +91,15 @@ non-trading day, or if the calendar cannot be read, they close open trades right
 Ctrl-C once: close through the normal exit path. Ctrl-C twice, closing the terminal, or a
 SIGTERM: the command stops and the stop stays resting at the broker, with the position still
 open. Run `aperture resume` (keeps protecting and closes at the flatten time) or `aperture exit`
-(closes now) afterwards; the position never closes by itself while no command runs, except by
+(closes now; after the close neither sends a closing order) afterwards; the position never closes by itself while no command runs, except by
 its stop.
 
 Entries stay blocked while any fence is set (printed at the end of every command). Operator
 fences need a look and are cleared with `aperture clear-fence NAME`: `stop-rejected:*`,
 `exit-refused:*`, `exit-not-filled:*`, `replace-unresolved:*`, `cancel-failed:*`,
-`resurrected:*`, `unprotected-timeout:*`. All others clear themselves, including
+`resurrected:*`, `unprotected-timeout:*`, `market-closed:*` (a close due after the close:
+nothing sent, the stop stays; docs/operations.md, `flatten-after-close`). All others clear
+themselves, including
 `stop-held:*` (see F5 results).
 
 ## Probe day (Monday 2026-11-16)

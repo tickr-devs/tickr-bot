@@ -91,6 +91,9 @@ class AlertKind(StrEnum):
     WATCHDOG_RESTART_FAILED = "watchdog-restart-failed"
     # A closing order is still not filled [orders] max_exit_seconds after it was sent.
     EXIT_NOT_FILLED = "exit-not-filled"
+    # A close (session flatten or any other exit) was due outside the regular session: no
+    # MARKET order was sent and the stop stays; the owner closes by hand (fence market-closed).
+    FLATTEN_AFTER_CLOSE = "flatten-after-close"
 
 
 class Delivery(StrEnum):

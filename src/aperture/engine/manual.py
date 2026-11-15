@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import ROUND_DOWN, Decimal
 
 from aperture.calendar import NEW_YORK, CalendarRefused, SessionCalendar
@@ -97,8 +97,32 @@ def flatten_deadline(config: Config, calendar: SessionCalendar, now: datetime) -
     return now if now >= times.flatten else times.flatten
 
 
+def close_refusal(config: Config, calendar: SessionCalendar | None,
+                  now: datetime) -> str | None:
+    """Why a closing MARKET order (DAY, session CORE) may not be sent at `now`, or None.
+    It is sent only from the regular open until `[session] close_order_cutoff_seconds`
+    before the regular close of that day (the calendar's early close on a half day): what
+    Webull does with one sent outside that window is unproven (docs/webull-facts.md), and a
+    MARKET order queued for the next open would sell with nobody deciding. No calendar:
+    None, as `flatten_deadline` (the caller had no way to know the session either)."""
+    if calendar is None:
+        return None
+    try:
+        day = calendar.day_at(now)
+    except CalendarRefused as exc:
+        return f"no regular session now ({exc})"
+    cutoff_seconds = config.session.close_order_cutoff_seconds
+    cutoff = day.regular_close - timedelta(seconds=float(cutoff_seconds))
+    if now < day.regular_open:
+        return f"before the regular open {day.regular_open:%H:%M} ET"
+    if now >= cutoff:
+        return (f"at or after {cutoff:%H:%M:%S} ET, {cutoff_seconds} s before the regular "
+                f"close {day.regular_close:%H:%M} ET of {day.ny_date.isoformat()}")
+    return None
+
+
 # A close the engine will not send again until the operator clears the fence.
-CLOSE_WAITS = (Fence.EXIT_REFUSED, Fence.EXIT_NOT_FILLED)
+CLOSE_WAITS = (Fence.EXIT_REFUSED, Fence.EXIT_NOT_FILLED, Fence.MARKET_CLOSED)
 
 
 def run_until_closed(engine: Engine, *, sleep: Callable[[float], None],

@@ -125,6 +125,16 @@ def test_flatten_grace_must_cover_a_reconcile_pass(config_path):
         launchd.check_timings(cfg)
 
 
+@pytest.mark.parametrize("value", ["300", "-1"])
+def test_close_order_cutoff_must_leave_the_flatten_its_close(config_path, value):
+    text = re.sub(r"(?m)^close_order_cutoff_seconds = .*$",
+                  f"close_order_cutoff_seconds = {value}", config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    cfg = config_module.load(config_path)
+    with pytest.raises(config_module.ConfigError, match="close_order_cutoff_seconds"):
+        launchd.check_timings(cfg)
+
+
 def test_watchdog_job_scheduled_and_both_long_jobs_keep_the_mac_awake(config_path, repo,
                                                                       tmp_path):
     cfg = config_module.load(config_path)

@@ -56,6 +56,7 @@ class SessionConfig:
     last_entry_minutes_before_close: int
     flatten_minutes_before_close: int
     flatten_grace_seconds: Decimal
+    close_order_cutoff_seconds: Decimal
     half_days_enabled: bool
 
 
