@@ -10,6 +10,7 @@ import pytest
 
 from aperture import cli, config
 from aperture.api import contract as api
+from aperture.broker.base import RateLimited
 from aperture.broker.fake import FakeBroker
 from aperture.calendar import NEW_YORK, SessionCalendar
 from aperture.config import GateResult
@@ -843,3 +844,26 @@ def test_a_bot_started_after_the_flatten_time_flattens_the_previous_runs_trade(t
     trade = late.engine.trade(t)
     assert (trade.state, trade.exit_requested) == (TradeState.CLOSED, "session-flatten")
     assert late.broker.positions() == [] and late.broker.open_orders() == []
+
+
+def test_a_failed_open_orders_read_keeps_the_broker_read_time_old(tmp_path):
+    """Admission reads this time: entries stay refused until a reconcile succeeds, not only
+    on the one pass in which the open-orders read failed."""
+    bot = Bot(tmp_path)
+    assert bot.run(1)
+    before = bot.service.last_broker_read_at
+    assert before is not None
+
+    def fail():
+        raise RateLimited("x")
+
+    bot.broker.open_orders = fail
+    bot.now += timedelta(seconds=30)
+    bot.service._observe(reconcile=True)
+    for _ in range(3):
+        bot.now += timedelta(seconds=3)
+        bot.service._observe(reconcile=False)
+    assert bot.service.last_broker_read_at == before
+    del bot.broker.open_orders
+    bot.service._observe(reconcile=True)
+    assert bot.service.last_broker_read_at == bot.now

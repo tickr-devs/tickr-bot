@@ -723,3 +723,39 @@ def test_trade_opened_journal_carries_the_window_bottom(store):
                      entry_low_price=D("9.95"))
     (row,) = store.journal("trade-opened", t)
     assert row.body["entry_low_price"] == "9.95"
+
+
+def test_a_failed_open_orders_read_fences_until_a_reconcile_succeeds(store):
+    b = FakeBroker()
+    e = make(store, b)
+    e.recover()
+    real = b.open_orders
+
+    def fail():
+        raise RateLimited("x")
+
+    b.open_orders = fail
+    assert not e.reconcile()
+    assert has(e, Fence.BROKER_READ)
+    run(e, 3)  # the positions reads between reconciles work: they prove nothing about orders
+    assert has(e, Fence.BROKER_READ)
+    b.open_orders = real
+    assert e.reconcile()
+    assert e.fences() == {}
+
+
+def test_a_failed_open_orders_read_does_not_skip_protection(store):
+    b = FakeBroker()
+    e = make(store, b)
+    t = enter(e)
+    b.fill(legs(e, t, Leg.ENTRY)[0].client_order_id, D(2), D(10))
+
+    def fail():
+        raise RateLimited("x")
+
+    b.open_orders = fail
+    for _ in range(3):
+        e.clock.now += POLL
+        assert not e.reconcile()
+    assert [r.order_type for r in b.sent if r.order_type == OrderType.STOP_LOSS]
+    assert legs(e, t, Leg.STOP)[0].quantity == D(2)

@@ -101,6 +101,8 @@ OPERATOR_FENCES = frozenset({Fence.STOP_REJECTED, Fence.EXIT_REFUSED, Fence.CANC
 
 _LEG_LETTER = {Leg.ENTRY: "e", Leg.STOP: "s", Leg.EXIT: "x"}
 # A Detail read that changed an order's state or filled quantity.
+# Key of the broker-read fence a failed open-orders read sets; only a reconcile clears it.
+OPEN_ORDERS_READ = "open-orders"
 ORDER_OBSERVED = "order-observed"
 # A Detail read showing a stop still working with nothing filled, journaled at most once per
 # `[orders] stop_held_proof_seconds` when no change was seen: a display-only record of how long
@@ -1225,8 +1227,13 @@ class Engine:
         try:
             open_orders = self.broker.open_orders()
         except BrokerError as exc:
-            self._set_fence(Fence.BROKER_READ, "", f"open orders read failed: {type(exc).__name__}")
+            # Its own keyed fence: a positions read that works (step) must not clear it, or
+            # entries would go out between reconciles while foreign orders cannot be seen.
+            self._set_fence(Fence.BROKER_READ, OPEN_ORDERS_READ,
+                            f"open orders read failed: {type(exc).__name__}")
+            self.step()  # fills are still observed and protection maintained
             return False
+        self._clear_fence(Fence.BROKER_READ, OPEN_ORDERS_READ)
         rows = {o.client_order_id: o for o in self.orders()}
         broker_ids = set()
         for order in open_orders:

@@ -668,8 +668,12 @@ class Service:
             self.engine.step()
         elif ok:
             self.write_account()
-        if ok and not any(n == Fence.BROKER_READ for n in self.engine.fences()):
+        if ok and not self._broker_read_failing():
             self.last_broker_read_at = self.now()
+
+    def _broker_read_failing(self) -> bool:
+        """A positions or open-orders read is failing (the fence, plain or keyed)."""
+        return any(n.split(":", 1)[0] == Fence.BROKER_READ for n in self.engine.fences())
 
     def run(self, *, should_stop: Callable[[], bool],
             sleep: Callable[[float], None] = time.sleep,
@@ -680,7 +684,7 @@ class Service:
         orders = self.config.orders
         self.write_status()
         self.engine.recover()
-        if not any(n == Fence.BROKER_READ for n in self.engine.fences()):
+        if not self._broker_read_failing():
             self.last_broker_read_at = self.now()
             self.write_account()
         self.state = api.BotState.RUNNING
