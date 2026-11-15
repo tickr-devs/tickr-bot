@@ -38,6 +38,7 @@ from tickr.backtest.settings import BacktestSettings
 from tickr.backtest.universe import (
     CAP_FILE,
     POOL_FILE,
+    active_screen,
     read_caps,
     read_pool,
     select_pool,
@@ -200,7 +201,7 @@ def _night(source: fetch.HistorySource, calendar: SessionCalendar, cfg: Config,
     rows = fetch.load_daily(scratch / fetch.DAILY_DIR)
     window = fetch.daily_window(calendar, first, last, lookback)
     added, caps = select_pool(rows, [d.ny_date for d in window], settings.gainer_change_percent,
-                              cfg.market_data.min_session_dollar_volume_usd,
+                              active_screen(cfg),
                               settings.max_pool_per_day)
     _keep_new_daily(scratch / fetch.DAILY_DIR, staging / fetch.DAILY_DIR, first, last)
     shutil.rmtree(scratch)

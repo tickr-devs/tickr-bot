@@ -12,6 +12,7 @@ from tickr.backtest import fetch
 from tickr.backtest.errors import BacktestError
 from tickr.backtest.settings import load_settings
 from tickr.backtest.universe import (
+    active_screen,
     drop_unpriced,
     read_pool,
     select_liquid,
@@ -21,10 +22,24 @@ from tickr.backtest.universe import (
 from tickr.broker.base import RateLimited
 from tickr.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
 from tickr.broker.webull import InstrumentPage
+from tickr.strategy.price_action_v1 import dollar_volume_check
 
 from .helpers import ROOT, UTC, FakeHistory, calendar, cfg, daily_bar, flat_bars, row
 
 SETTINGS = load_settings(ROOT / "config" / "backtest.toml")
+
+
+class Floor:
+    """Session liquidity rules with only a dollar-volume floor, USD."""
+
+    def __init__(self, floor: int) -> None:
+        self.floor = Decimal(floor)
+
+    def session_liquidity(self, session_bars):
+        return (dollar_volume_check(session_bars, self.floor),)
+
+
+SHIPPED = active_screen(cfg())  # the active strategy's own [liquidity] floor
 
 
 def no_sleep(_seconds: float) -> None:
@@ -96,7 +111,7 @@ def test_daily_maps_labels_to_sessions_and_pool_selects_gainers(tmp_path):
     rows = fetch.load_daily(directory)
     assert {(r["symbol"], r["date"]) for r in rows} >= {("UP", "2026-11-09")}
     window = [d.ny_date for d in fetch.daily_window(calendar(), DAYS[1], DAYS[-1], 14)]
-    pool, caps = select_pool(rows, window, Decimal(5), Decimal(5_000_000), 200)
+    pool, caps = select_pool(rows, window, Decimal(5), SHIPPED, 200)
     assert [(c.candidates, c.dropped) for c in caps][-1] == (1, 0)
     assert [(e.symbol, e.session_date) for e in pool] == [("UP", DAYS[-1])]
     assert pool[0].day_high_change_percent == Decimal("12.0")
@@ -177,7 +192,7 @@ def test_pool_cap_records_dropped_candidates():
         rows.append({"symbol": name, "date": "2026-11-13", "open": "10", "high": high,
                      "low": "10", "close": "10", "volume": "1000000"})
     pool, caps = select_pool(rows, [date(2026, 11, 12), date(2026, 11, 13)], Decimal(5),
-                             Decimal(1), 2)
+                             Floor(1), 2)
     assert [e.symbol for e in pool] == ["A", "B"]
     assert (caps[0].candidates, caps[0].kept, caps[0].dropped) == (3, 2, 1)
 
@@ -249,5 +264,20 @@ def test_symbols_with_a_non_positive_daily_price_are_left_out():
     assert {r["symbol"] for r in kept} == {"OK"}
     assert refused == {"NEG": "2026-11-12 open -84.0548 not positive"}
     pool, _ = select_pool(kept, [date(2026, 11, 12), date(2026, 11, 13)], Decimal(5),
-                          Decimal(1), 10)
+                          Floor(1), 10)
     assert [e.symbol for e in pool] == ["OK"]
+
+
+def test_pool_uses_the_strategy_floor_on_the_whole_day():
+    """Day dollar volume = typical price x volume; the floor is the strategy's, not a copy."""
+    rows = []
+    for name, volume in (("AT", "500000"), ("UNDER", "499999")):
+        rows.append({"symbol": name, "date": "2026-11-12", "open": "10", "high": "10",
+                     "low": "10", "close": "10", "volume": volume})
+        rows.append({"symbol": name, "date": "2026-11-13", "open": "10", "high": "11",
+                     "low": "9", "close": "10", "volume": volume})
+    days = [date(2026, 11, 12), date(2026, 11, 13)]
+    pool, _ = select_pool(rows, days, Decimal(5), Floor(5_000_000), 10)
+    assert [e.symbol for e in pool] == ["AT"]
+    pool, _ = select_pool(rows, days, Decimal(5), Floor(4_000_000), 10)
+    assert [e.symbol for e in pool] == ["AT", "UNDER"]

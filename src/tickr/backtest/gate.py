@@ -5,8 +5,9 @@ For a (symbol, session) in the pool, the symbol is eligible from the first compl
 which BOTH hold, using bars up to that bar only:
 - close >= previous session's last M1 close x (1 + `gainer_change_percent` / 100) (on the
   gainers list; Webull ranks by change against the previous close), and
-- the session's dollar volume so far (sum of close x volume) >= bot.toml
-  `min_session_dollar_volume_usd` (discovery's platform floor).
+- the wrapped strategy's `session_liquidity` rules pass on the session's bars so far (live,
+  discovery applies them to the active strategy's candidates; the spread rules need a quote
+  and are left to the strategy's own evaluation).
 Once eligible, it stays eligible for the rest of the session (live, a WATCH symbol stays on
 the stream). An open simulated position is always passed through, so the strategy can manage
 it. Every other bar gets IGNORE with one recorded check and the strategy is not called.
@@ -17,12 +18,13 @@ when it is asked, and its decisions carry the wrapped strategy's name and versio
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 
 from tickr.strategy import indicators as ind
 from tickr.strategy.base import Check, Decision, Strategy, SymbolContext, Verdict
+from tickr.types import Bar, Quote
 
 PERCENT = Decimal(100)
 ONE = Decimal(1)
@@ -33,14 +35,15 @@ RULE_GAINER = "backtest_gainer_eligible"
 
 class GainerGate:
     def __init__(self, inner: Strategy, pool_days: Collection[tuple[str, date]],
-                 change_percent: Decimal, dollar_volume_floor: Decimal) -> None:
+                 change_percent: Decimal) -> None:
         self.inner = inner
         self.name = inner.name
         self.version = inner.version
         self._pool = frozenset(pool_days)
         self._factor = ONE + change_percent / PERCENT
-        self._floor = dollar_volume_floor
+        # Keyed by day only: the backtest builds one gate per symbol (backtest/run.py).
         self._since: dict[date, datetime] = {}
+        self._scanned: dict[date, int] = {}  # session bars already found not eligible
 
     def _ignore(self, context: SymbolContext, check: Check) -> Decision:
         return Decision(self.name, self.version, context.symbol, Verdict.IGNORE, (check,))
@@ -54,13 +57,21 @@ class GainerGate:
             return known
         previous_close = context.prior_sessions[-1][-1].close
         level = previous_close * self._factor
-        dollar_volume = Decimal(0)
-        for bar in ind.current_session(context.bars):
-            dollar_volume += bar.close * bar.volume
-            if bar.close >= level and dollar_volume >= self._floor:
+        session = ind.current_session(context.bars)
+        for i in range(self._scanned.get(day, 0), len(session)):
+            bar = session[i]
+            if bar.close >= level and all(
+                    c.passed for c in self.inner.session_liquidity(session[:i + 1])):
                 self._since[day] = bar.start
                 return bar.start
+        self._scanned[day] = len(session)
         return None
+
+    def quote_liquidity(self, quote: Quote) -> tuple[Check, ...]:
+        return self.inner.quote_liquidity(quote)
+
+    def session_liquidity(self, session_bars: Sequence[Bar]) -> tuple[Check, ...]:
+        return self.inner.session_liquidity(session_bars)
 
     def evaluate(self, context: SymbolContext) -> Decision:
         if context.position is not None or not context.bars:
@@ -77,5 +88,6 @@ class GainerGate:
             change = (context.bars[-1].close / previous_close - ONE) * PERCENT
             return self._ignore(context, Check(RULE_GAINER, change, ">=",
                                                (self._factor - ONE) * PERCENT, False,
-                                               "change vs previous close; dollar-volume floor"))
+                                               "change vs previous close; strategy's session "
+                                               "liquidity"))
         return self.inner.evaluate(context)

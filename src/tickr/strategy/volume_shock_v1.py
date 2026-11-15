@@ -4,8 +4,10 @@ selects it).
 
 Values come from `strategies/volume-shock-v1/strategy.toml`. On the last completed M1 bar:
 
-1. The previous session's last close is at least `min_previous_close_usd`, and the bar's
-   close is between `change_min_percent` and `change_max_percent` above it.
+1. The previous session's last close is at least `min_previous_close_usd`, the session's
+   dollar volume so far is at least `min_dollar_volume_usd` ([liquidity], also applied by
+   discovery), and the bar's close is between `change_min_percent` and `change_max_percent`
+   above it.
 2. The volume of the last `volume_window_bars` bars is at least `volume_shock_multiple` times
    the median volume of the same New York minutes over the `prior_sessions` prior sessions.
    Every prior session must hold every one of those minutes; a missing minute (half day,
@@ -69,7 +71,7 @@ def _volume_by_minute(bars: Sequence[Bar]) -> dict[time, Decimal]:
     return {ind.ny_time(b): b.volume for b in bars}
 
 
-class VolumeShockV1:
+class VolumeShockV1(simple.Liquid):
     def __init__(self, common: simple.Common, signal: Signal) -> None:
         self.common, self.signal = common, signal
         self.name, self.version = common.name, common.version
@@ -99,6 +101,9 @@ class VolumeShockV1:
             return ignore()
         session = ind.current_session(context.bars)
         checks.append(simple.session_from_open(session))
+        if not checks[-1].passed:
+            return ignore()
+        checks.append(v1.dollar_volume_check(session, c.min_dollar_volume_usd))
         if not checks[-1].passed:
             return ignore()
         low = previous * (simple.ONE + s.change_min_percent / simple.PERCENT)

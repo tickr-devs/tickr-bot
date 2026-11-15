@@ -4,9 +4,10 @@ the run: the run decides per minute when a pool symbol became a gainer, see gate
 A (symbol, session) enters the pool when, against the previous session's close,
 - the day's HIGH reached `gainer_change_percent` (a symbol on the gainers list at any minute
   had a price at least that far up, so this is a superset of the minute-level rule), and
-- the day's dollar volume, typical price x volume, reached bot.toml
-  `min_session_dollar_volume_usd` (discovery's floor applies to the session so far, which can
-  never exceed the whole day).
+- the strategy's `session_liquidity` rules pass on the whole day taken as one bar (close =
+  typical price, volume = the day's volume): its dollar-volume floor applies live to the session
+  so far, which can never exceed the whole day. The rules are the active strategy's
+  ([liquidity] in its strategy.toml), so the floor is written in one place only.
 Per session at most `max_pool_per_day` symbols, best daily-high change first. Ranking by the
 day's high looks ahead, so the cap should not bind: `pool_cap.csv` records every session's
 candidates and drops, and the report shows where it bound.
@@ -23,12 +24,17 @@ from __future__ import annotations
 import csv
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from tickr.backtest.errors import BacktestError
+from tickr.config import Config
+from tickr.observers.errors import ObserverError
+from tickr.observers.loader import load_active
+from tickr.strategy.base import Liquidity
+from tickr.types import Bar
 
 POOL_FILE = "pool.csv"
 POOL_COLUMNS = ("session_date", "rank", "symbol", "previous_close", "day_close",
@@ -101,7 +107,7 @@ def write_refused(refused: dict[str, str], path: Path) -> None:
 
 
 def select_pool(rows: Iterable[dict[str, Any]], sessions: Sequence[date],
-                change_percent: Decimal, dollar_volume_floor: Decimal,
+                change_percent: Decimal, screen: Liquidity,
                 max_per_day: int) -> tuple[list[PoolEntry], list[CapRecord]]:
     """`sessions` are the window's session dates oldest first; the first one only supplies the
     previous close of the second."""
@@ -120,7 +126,7 @@ def select_pool(rows: Iterable[dict[str, Any]], sessions: Sequence[date],
             high, close = Decimal(today["high"]), Decimal(today["close"])
             change = (high / previous_close - 1) * PERCENT
             dollar_volume = _dollar_volume(today)
-            if change >= change_percent and dollar_volume >= dollar_volume_floor:
+            if change >= change_percent and _liquid_day(screen, symbol, day, today):
                 candidates.append((change, symbol, previous_close, close, dollar_volume))
         candidates.sort(key=lambda c: (-c[0], c[1]))
         kept = candidates[:max_per_day]
@@ -163,6 +169,23 @@ def select_liquid(rows: Iterable[dict[str, Any]], sessions: Sequence[date], top_
                                   (high / previous_close - 1) * PERCENT, _dollar_volume(today)))
         caps.append(CapRecord(day, len(chosen), kept))
     return pool, caps
+
+
+def active_screen(cfg: Config) -> Liquidity:
+    """The active strategy (bot.toml [strategy] active), whose liquidity rules choose the pool."""
+    try:
+        return load_active(cfg).strategy
+    except ObserverError as exc:
+        raise BacktestError(f"active strategy: {exc}") from exc
+
+
+def _liquid_day(screen: Liquidity, symbol: str, day: date, row: dict[str, Any]) -> bool:
+    """The strategy's session rules on the whole day as one bar (close = typical price)."""
+    high, low = Decimal(row["high"]), Decimal(row["low"])
+    typical = _dollar_volume(row) / Decimal(row["volume"]) if Decimal(row["volume"]) else low
+    start = datetime.combine(day, time(), UTC)
+    whole = Bar(symbol, start, Decimal(row["open"]), high, low, typical, Decimal(row["volume"]))
+    return all(c.passed for c in screen.session_liquidity((whole,)))
 
 
 def _dollar_volume(row: dict[str, Any]) -> Decimal:

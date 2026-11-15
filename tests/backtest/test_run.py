@@ -17,6 +17,7 @@ from tickr.backtest.universe import CapRecord, PoolEntry, write_caps, write_pool
 from tickr.data.capture import bar_record
 from tickr.replay.settings import load_settings as load_replay
 from tickr.strategy.base import Decision, SymbolContext, Verdict
+from tickr.strategy.price_action_v1 import dollar_volume_check
 from tickr.types import Bar
 
 from .helpers import ROOT, cfg, flat_bars, minute
@@ -29,8 +30,12 @@ SETTINGS = replace(load_settings(ROOT / "config" / "backtest.toml"), workers=1)
 class Spy:
     name, version = "spy", "1"
 
-    def __init__(self):
+    def __init__(self, floor: Decimal = Decimal(5_000_000)):
         self.asked = 0
+        self.floor = floor
+
+    def session_liquidity(self, session_bars):
+        return (dollar_volume_check(session_bars, self.floor),)
 
     def evaluate(self, context):
         self.asked += 1
@@ -55,20 +60,24 @@ def test_gate_asks_the_strategy_only_from_the_gainer_minute():
     prior = [flat_bars("ABCD", d, "20") for d in PRIOR]
     today = rising("ABCD", "20", "0.30", 10, "300000")  # +5% is 21.00: reached on bar 3
     spy = Spy()
-    gate = GainerGate(spy, [("ABCD", TODAY)], Decimal(5), Decimal(5_000_000))
+    gate = GainerGate(spy, [("ABCD", TODAY)], Decimal(5))
     verdicts = [gate.evaluate(context(today[: i + 1], prior)) for i in range(10)]
     assert [d.checks[0].rule for d in verdicts[:3]] == [RULE_GAINER] * 3
     assert all(d.verdict is Verdict.WATCH for d in verdicts[3:]) and spy.asked == 7
     assert verdicts[0].strategy == "spy"
-    other_day = GainerGate(spy, [("ABCD", PRIOR[-1])], Decimal(5), Decimal(1))
+    other_day = GainerGate(spy, [("ABCD", PRIOR[-1])], Decimal(5))
     assert other_day.evaluate(context(today, prior)).checks[0].rule == RULE_POOL
 
 
 def test_gate_waits_for_the_dollar_volume_floor():
     prior = [flat_bars("ABCD", d, "20") for d in PRIOR]
     today = rising("ABCD", "20", "0.30", 10, "1000")  # up 15% but tiny volume
-    gate = GainerGate(Spy(), [("ABCD", TODAY)], Decimal(5), Decimal(5_000_000))
+    gate = GainerGate(Spy(), [("ABCD", TODAY)], Decimal(5))
     assert gate.evaluate(context(today, prior)).verdict is Verdict.IGNORE
+    # The floor is the strategy's own: a strategy with a lower one is asked.
+    low = Spy(Decimal(1000))
+    assert GainerGate(low, [("ABCD", TODAY)], Decimal(5)).evaluate(
+        context(today, prior)).verdict is Verdict.WATCH and low.asked == 1
 
 
 def test_stats_interval_and_buckets():

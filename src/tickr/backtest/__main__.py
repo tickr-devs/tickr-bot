@@ -21,6 +21,7 @@ from tickr.backtest.universe import (
     CAP_FILE,
     POOL_FILE,
     REFUSED_FILE,
+    active_screen,
     drop_unpriced,
     read_pool,
     select_liquid,
@@ -66,7 +67,7 @@ def step_select(cfg: Config, settings: BacktestSettings, out: Path, first: date,
                                    settings.liquid_min_price_usd)
     else:
         pool, caps = select_pool(rows, sessions, settings.gainer_change_percent,
-                                 cfg.market_data.min_session_dollar_volume_usd,
+                                 active_screen(cfg),
                                  settings.max_pool_per_day)
     path = out / POOL_FILE
     write_pool(pool, path)

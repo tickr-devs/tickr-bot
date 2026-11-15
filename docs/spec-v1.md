@@ -60,6 +60,7 @@ Modules (`src/tickr/`): `config`, `store`, `broker/` (interface, `fake.py`, `web
 
 - The platform owns data, risk, orders, protection, timers and recording. A strategy owns only its analysis: it receives completed M1 bars and L1 quotes for a symbol and returns a decision: `IGNORE`, `WATCH(trigger, invalidation)`, `ENTER(price window, stop)`, `HOLD`, `EXIT`, each with the list of checks (rule, measured value, threshold, pass/fail).
 - The strategy computes the stop and the quantity from configured risk; the platform only checks limits and refuses on breach. A strategy can only be stricter than the platform.
+- The strategy owns every liquidity threshold (spread, session dollar volume, any later one) in its own `[liquidity]` section; the platform has none (owner 2026-11-15). Besides `evaluate`, a strategy exposes its liquidity rules as `quote_liquidity(quote)` and `session_liquidity(session bars)`, each returning checks; discovery applies the active strategy's rules to candidates, and `evaluate` applies them again, so an observer, a replay or a backtest keeps its own.
 - Strategy identity = name + `version` from its file; recorded with every decision and trade.
 - The interface must allow several strategy instances on the same data, each decision tagged with role `active` or `observer`. Only `active` reaches the safety layer. v1 runs only the active one.
 - `price-action-v1` values: see `strategies/price-action-v1/strategy.toml` (breakout and impulse-continuation setups on M1 bars, VWAP/EMA9/EMA20 filters, ATR 14, relative volume at least 2.0, price window up to 1.0 ATR above trigger, cost rule, minimum stop distance).
@@ -67,7 +68,7 @@ Modules (`src/tickr/`): `config`, `store`, `broker/` (interface, `fake.py`, `web
 
 ## 6. Market data
 
-- Discovery once per configured interval in the regular session: gainers, losers, top actives (top 200 each); merge by `instrument_id`; universe and liquidity checks; M1 bars for candidates; L1 subscription for WATCH symbols and the open position.
+- Discovery once per configured interval in the regular session: gainers, losers, top actives (top 200 each); merge by `instrument_id`; platform checks of universe (exchange, currency, security type), quote validity (present, fresh, not from the future, 0 < bid <= ask) and bar availability, then the active strategy's liquidity rules (refusal cause = the strategy's failed check); M1 bars for candidates; L1 subscription for WATCH symbols and the open position.
 - All work stays inside the per-route request budget (Sandbox: 30 per 60 s per route). Hitting the budget produces a visible state ("evaluated 140 of 200: bars budget"), never a silent cut.
 - Quotes keep provider time and receipt time. Decisions use bid/ask only, never mid or last, and only quotes not older than `max_quote_age_seconds` end to end. Delayed data means no entries.
 - Stream health per symbol: fresh / quiet (transport up, no quotes) / lost (transport down). Quiet is not loss. Transport loss with a position open = market exit (regular session).

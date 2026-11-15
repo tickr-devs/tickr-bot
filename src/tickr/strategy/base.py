@@ -91,9 +91,28 @@ class SymbolContext:
     planned loss; the platform still checks the ceiling on admission."""
 
 
-class Strategy(Protocol):
+class Liquidity(Protocol):
+    """A strategy's liquidity rules, which discovery applies to the active strategy's
+    candidates (owner decision 2026-11-15: the strategy owns every liquidity threshold; the
+    platform keeps only the universe and quote validity). Each method returns its checks in
+    order, and discovery refuses a symbol on the first failed one, with that check as the
+    cause. `evaluate` applies the same rules again, so a strategy run as an observer, in
+    replay or in research keeps them too."""
+
     name: str
     version: str
+
+    def quote_liquidity(self, quote: Quote) -> tuple[Check, ...]:
+        """Rules on one valid snapshot quote (0 < bid <= ask, fresh), such as the spread."""
+        ...
+
+    def session_liquidity(self, session_bars: Sequence[Bar]) -> tuple[Check, ...]:
+        """Rules on the current regular session's completed M1 bars, oldest first (at least
+        one), such as the session dollar volume."""
+        ...
+
+
+class Strategy(Liquidity, Protocol):
     prior_sessions_needed: int
     """How many completed prior sessions of M1 bars `evaluate` needs in
     `SymbolContext.prior_sessions`. The platform refuses to run a strategy that needs more

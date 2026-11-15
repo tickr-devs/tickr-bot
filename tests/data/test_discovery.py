@@ -4,7 +4,8 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from md_helpers import NOW, OPEN, bars, quote, row, settings
+import pytest
+from md_helpers import NOW, OPEN, Screen, bars, quote, row, settings
 
 from tickr import config
 from tickr.data.base import FakeMarketData, ScreenerKind
@@ -16,7 +17,6 @@ from tickr.data.discovery import (
     completed_session_bars,
     discover,
     merge,
-    session_dollar_volume,
 )
 
 G, L, A = ScreenerKind.GAINERS, ScreenerKind.LOSERS, ScreenerKind.TOP_ACTIVES
@@ -44,8 +44,8 @@ def liquid(md: FakeMarketData, symbol: str, minutes: int = 30) -> None:
     md.add_bars(bars(symbol, minutes))
 
 
-def run(md: FakeMarketData, sink=None, **overrides):
-    return discover(md, settings(**overrides), OPEN, lambda: NOW, sink)
+def run(md: FakeMarketData, sink=None, screen=None, **overrides):
+    return discover(md, settings(**overrides), screen or Screen(), OPEN, lambda: NOW, sink)
 
 
 def test_settings_from_bot_config():
@@ -82,10 +82,7 @@ def test_happy_path_candidate_with_dollar_volume():
     result = run(md)
     assert result.screeners_read == (G, L, A)
     assert [c.instrument.symbol for c in result.candidates] == ["AAA"]
-    c = result.candidates[0]
-    # 30 completed minutes x 10 USD x 20000 shares
-    assert c.session_dollar_volume == Decimal(6000000)
-    assert c.spread_ratio == Decimal("0.02") / Decimal("10.01")
+    assert len(result.candidates[0].session_bars) == 30
     assert result.summary() == "evaluated 1 of 1"
 
 
@@ -118,8 +115,14 @@ def test_quote_refusals():
     causes = {r.symbol: r.cause for r in result.rejections}
     assert causes == {"NOQ": Cause.NO_QUOTE, "OLD": Cause.QUOTE_STALE,
                       "FUT": Cause.QUOTE_FROM_FUTURE, "BAD": Cause.QUOTE_INVALID,
-                      "WIDE": Cause.SPREAD_TOO_WIDE, "SKEW": Cause.NO_BARS}
+                      "WIDE": Cause.STRATEGY_LIQUIDITY, "SKEW": Cause.NO_BARS}
     assert result.evaluated == 6  # SKEW is 1 s ahead, within the allowed skew: it reached bars
+    wide = next(r for r in result.rejections if r.symbol == "WIDE")
+    assert wide.check is not None and wide.check.rule == "spread_ratio"
+    assert wide.measured.startswith("screen 1 spread_ratio ") and wide.threshold == "<= 0.015"
+    # No snapshot spread limit of its own: a strategy with a wider limit keeps WIDE.
+    looser = run(md, screen=Screen(max_spread_ratio="0.05"))
+    assert {r.symbol: r.cause for r in looser.rejections}["WIDE"] is Cause.NO_BARS
 
 
 def test_dollar_volume_counts_only_completed_session_minutes():
@@ -134,18 +137,30 @@ def test_dollar_volume_counts_only_completed_session_minutes():
     md.add_bars(bars("LOW", 31, volume="16666"))
     result = run(md)
     assert [c.instrument.symbol for c in result.candidates] == ["AAA"]
-    assert result.candidates[0].session_dollar_volume == Decimal(30 * 10 * 16667)
     assert len(result.candidates[0].session_bars) == 30
     causes = {r.symbol: r.cause for r in result.rejections}
-    assert causes == {"LOW": Cause.DOLLAR_VOLUME_TOO_LOW, "NOB": Cause.NO_BARS}
+    assert causes == {"LOW": Cause.STRATEGY_LIQUIDITY, "NOB": Cause.NO_BARS}
+    low = next(r for r in result.rejections if r.symbol == "LOW")
+    assert low.check is not None and low.check.rule == "dollar_volume_usd"
+    assert low.check.measured == Decimal(30 * 10 * 16666)
+    # The floor is the strategy's: a lower one keeps LOW.
+    lower = run(md, screen=Screen(min_dollar_volume_usd="4000000"))
+    assert [c.instrument.symbol for c in lower.candidates] == ["AAA", "LOW"]
 
 
-def test_completed_session_bars_and_volume_helpers():
+def test_completed_session_bars():
     series = bars("X", 3, start=OPEN - timedelta(minutes=1))
     kept = completed_session_bars(series, OPEN, OPEN + timedelta(minutes=1))
     assert [b.start for b in kept] == [OPEN]
-    assert session_dollar_volume(kept) == Decimal(200000)
-    assert session_dollar_volume(()) == Decimal(0)
+
+
+def test_bars_only_before_the_session_are_no_session_bars():
+    md = FakeMarketData()
+    md.set_screener(G, [row(G, 1, "PRE")])
+    md.set_quote(quote("PRE"))
+    md.add_bars(bars("PRE", 5, volume="9999999", start=OPEN - timedelta(minutes=10)))
+    (refusal,) = run(md).rejections
+    assert refusal.cause is Cause.NO_BARS and refusal.check is None
 
 
 def test_requests_are_chunked():
@@ -213,3 +228,33 @@ def test_capture_receives_rows_quotes_and_completed_bars():
     assert len(sink.screener_rows) == 2
     assert [q.symbol for q in sink.quotes_seen] == ["AAA"]
     assert len(sink.bars_seen) == 30
+
+
+@pytest.mark.parametrize("name", ["price-action-v1", "price-action-v2", "noise-band-v1",
+                                  "volume-shock-v1"])
+def test_every_shipped_strategy_screens_like_the_former_platform_limits(name):
+    """Moving the limits into the strategies changed no candidate (owner 2026-11-15): with each
+    shipped strategy, discovery keeps and refuses exactly what spread 1.5% and 5M USD did."""
+    import importlib
+    import tomllib
+    module = importlib.import_module("tickr.strategy." + name.replace("-", "_"))
+    values = tomllib.loads((ROOT / "strategies" / name / "strategy.toml").read_text())
+    strategy = module.create(values)
+    md = FakeMarketData()
+    md.set_screener(G, [row(G, 1, s) for s in ("OK", "WIDE", "EDGE", "LOW", "FLOOR")])
+    md.set_quote(quote("OK"))
+    md.set_quote(quote("WIDE", bid="10.00", ask="10.16"))  # 1.587% > 1.5%
+    md.set_quote(quote("EDGE", bid="9.925", ask="10.075"))  # exactly 1.5%: kept
+    md.set_quote(quote("LOW"))
+    md.set_quote(quote("FLOOR"))
+    md.add_bars(bars("OK", 31))
+    md.add_bars(bars("WIDE", 31))
+    md.add_bars(bars("EDGE", 31))
+    md.add_bars(bars("LOW", 31, volume="16666"))  # 4,999,800 USD
+    md.add_bars(bars("FLOOR", 25, volume="20000") + bars(
+        "FLOOR", 6, volume="0", start=OPEN + timedelta(minutes=25)))  # exactly 5M by 10:00
+    result = run(md, screen=strategy)
+    assert [c.instrument.symbol for c in result.candidates] == ["OK", "EDGE", "FLOOR"]
+    refused = {r.symbol: (r.cause, r.check.rule if r.check else None) for r in result.rejections}
+    assert refused == {"WIDE": (Cause.STRATEGY_LIQUIDITY, "spread_ratio"),
+                       "LOW": (Cause.STRATEGY_LIQUIDITY, "dollar_volume_usd")}

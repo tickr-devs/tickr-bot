@@ -18,7 +18,7 @@ from typing import Any
 from tickr.strategy import indicators as ind
 from tickr.strategy import price_action_v1 as v1
 from tickr.strategy.base import Check, Decision, SymbolContext, Verdict
-from tickr.types import Bar
+from tickr.types import Bar, Quote
 
 ZERO = v1.ZERO
 ONE = v1.ONE
@@ -34,7 +34,8 @@ COMMON: Schema = {
     "strategy": {"name": v1._text, "version": v1._text},
     "entry": {"entry_window_percent": v1._positive, "minimum_stop_percent": v1._positive,
               "signal_valid_minutes": v1._positive_int},
-    "liquidity": {"max_spread_ratio": v1._positive, "min_previous_close_usd": v1._positive},
+    "liquidity": {"max_spread_ratio": v1._positive, "min_dollar_volume_usd": v1._positive,
+                  "min_previous_close_usd": v1._positive},
     "sizing": {"planned_loss_usd": v1._positive, "max_position_notional_usd": v1._positive},
 }
 
@@ -47,6 +48,7 @@ class Common:
     minimum_stop_percent: Decimal
     signal_valid_minutes: int
     max_spread_ratio: Decimal
+    min_dollar_volume_usd: Decimal
     min_previous_close_usd: Decimal
     planned_loss_usd: Decimal
     max_position_notional_usd: Decimal
@@ -87,6 +89,19 @@ def parse(values: Mapping[str, Any], schema: Schema, name: str) -> dict[str, Any
 
 def common(flat: Mapping[str, Any]) -> Common:
     return Common(**{k: flat[k] for k in Common.__dataclass_fields__})
+
+
+class Liquid:
+    """The [liquidity] rules every simple strategy shares (strategy.base.Liquidity):
+    discovery applies them to candidates, `evaluate` applies them again."""
+
+    common: Common
+
+    def quote_liquidity(self, quote: Quote) -> tuple[Check, ...]:
+        return (v1.spread_check(quote, self.common.max_spread_ratio),)
+
+    def session_liquidity(self, session_bars: Sequence[Bar]) -> tuple[Check, ...]:
+        return (v1.dollar_volume_check(session_bars, self.common.min_dollar_volume_usd),)
 
 
 def consistent(context: SymbolContext) -> Check:
@@ -166,8 +181,7 @@ def enter(strategy: Any, c: Common, context: SymbolContext, checks: list[Check],
     if not valid:
         return ignore()
     spread = quote.ask - quote.bid
-    checks.append(v1._check("spread_ratio", spread / ((quote.ask + quote.bid) / TWO), "<=",
-                            c.max_spread_ratio))
+    checks.append(v1.spread_check(quote, c.max_spread_ratio))
     if not checks[-1].passed:
         return ignore()
     checks.append(v1._check("ask_within_price_window", quote.ask, "<=", entry_high))

@@ -30,8 +30,9 @@ names. The first response of each kind and every failed one are kept in `<out>/r
 2. **Daily bars** (`daily/*.jsonl`): the window's sessions plus the one before, 20 symbols per
    request. A bar label whose New York date is not a session of the window stops the step.
 3. **Pool** (`pool.csv`): per session, symbols whose daily high reached `gainer_change_percent`
-   above the previous close and whose day dollar volume reached bot.toml
-   `min_session_dollar_volume_usd`; at most `max_pool_per_day`, best first. This is a superset of
+   above the previous close and whose whole day passes the active strategy's session liquidity
+   rules (its `[liquidity]` `min_dollar_volume_usd` on the day's typical price x volume; the
+   floor lives only in the strategy's file); at most `max_pool_per_day`, best first. This is a superset of
    the minute-level rule below and uses no minute data. Ranking by the day's high is look-ahead,
    so the cap is set not to bind; `pool_cap.csv` records each session's candidates and drops,
    and the report states on how many sessions it bound.
@@ -95,7 +96,8 @@ the pool only after the next `fetch-all`.
   skipped as `REPLAY_REFUSED` with the engine's message; the run never stops for one bar.
 - The strategy sits behind a gate (`backtest/gate.py`): it is asked only from the first completed
   bar at which close >= previous session's last close x (1 + `gainer_change_percent` / 100) and the
-  session's dollar volume so far reached the discovery floor; then for the rest of the day. Before
+  strategy's own `session_liquidity` rules (its `[liquidity]` dollar-volume floor) pass on the
+  session's bars so far, as discovery applies them live; then for the rest of the day. Before
   that, and on every non-pool session, the decision is IGNORE with one check. An open simulated
   position is always passed through.
 - Fills, slippage, the synthetic quote, last entry and flatten are the replay's

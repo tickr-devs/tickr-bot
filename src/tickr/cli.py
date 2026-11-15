@@ -517,6 +517,7 @@ def _run(path: Path) -> int:
                                  run_id=run_id)
             if wired is not None:
                 evaluator, observers = wired
+                market.screen = evaluator.strategy  # discovery applies its liquidity rules
             bot = service.Service(engine, now=NOW, calendar=calendar, strategy=strategy,
                                   paths=service.ServicePaths.from_config(cfg), market=market,
                                   evaluator=evaluator, entries_off=entries_off,

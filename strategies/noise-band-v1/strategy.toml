@@ -29,8 +29,13 @@ minimum_stop_percent = 0.5
 signal_valid_minutes = 5
 
 [liquidity]
-# Regular session: maximum (ask - bid) / mid. Read by strategy.simple.
+# The strategy owns every liquidity threshold (owner 2026-11-15): discovery applies these to the
+# active strategy's candidates, and evaluate applies them again.
+# Regular session: maximum (ask - bid) / mid, ratio. Read by strategy.simple.
 max_spread_ratio = 0.015
+# Regular session: minimum current-session dollar volume (sum of close x volume of completed minutes), USD.
+# Read by strategy.simple.
+min_dollar_volume_usd = 5000000
 # Minimum previous session close, USD (the history test's universe floor). Read by noise_band_v1.
 min_previous_close_usd = 10
 

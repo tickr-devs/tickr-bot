@@ -832,8 +832,8 @@ recently listed first (within a discovery pass: gainers, losers, top actives, ea
   journals only each pass's totals, so the API applies the discovery code's own `merge` and
   `universe_cause` again to every captured pass (the rows of one screener read share a receipt
   time; a pass reads gainers, losers, top actives in that order), with the allowed lists of
-  `[market_data]` as the API loaded them. Liquidity refusals (spread, dollar volume) and
-  halts are not recorded per symbol and are not shown.
+  `[market_data]` as the API loaded them. The active strategy's liquidity refusals at discovery
+  (spread, dollar volume) and halts are not recorded per symbol and are not shown.
 
 `stages`: always six, in this order, each `{stage, count, symbols}` (distinct symbols, sorted):
 - `screeners`: every chip; `universe`: the chips with `excluded_cause` `null`;

@@ -21,9 +21,10 @@ from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import Config
 from tickr.data.base import MarketData, MarketDataError, QuoteListener, StreamNotice
 from tickr.data.capture import CaptureWriter
-from tickr.data.discovery import Candidate, DiscoverySettings, discover
+from tickr.data.discovery import Candidate, DiscoverySettings, NoStrategy, discover
 from tickr.data.health import FanOut, StreamHealth, StreamState
 from tickr.engine.core import Engine, Leg
+from tickr.strategy.base import Liquidity
 from tickr.types import Quote
 
 STREAM_TRANSPORT = "stream-transport"
@@ -117,6 +118,9 @@ class MarketRuntime:
         # Observers' WATCH and ENTER symbols, set by the service; lowest priority on the stream
         self.observer_watch: set[str] = set()
         self.discovery: DiscoveryState | None = None
+        # The active strategy's liquidity rules, set by the caller once the strategy is loaded;
+        # until then discovery still captures screeners and quotes but keeps no candidate.
+        self.screen: Liquidity = NoStrategy()
         self._candidates_retry_at = monotonic()  # candidates off until then after a refusal
         self._observers_retry_at = monotonic()  # observer symbols off until then after one
         self._observers_next_sync = monotonic()  # observer tier changes at most once until then
@@ -335,8 +339,8 @@ class MarketRuntime:
         self._next_discovery = (self.monotonic()
                                 + float(self.config.market_data.discovery_interval_seconds))
         try:
-            result = discover(self.source, self.settings, session_open, self.now,
-                              self.capture)
+            result = discover(self.source, self.settings, self.screen, session_open,
+                              self.now, self.capture)
         except (MarketDataError, BrokerError) as exc:  # MalformedResponse is a BrokerError
             with self.engine.store.transaction():
                 self.engine.store.append(DISCOVERY_FAILED, {"error": type(exc).__name__},

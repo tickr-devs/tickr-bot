@@ -35,7 +35,10 @@ Rule order:
    on both legs. ENTER carries it in `Decision.quantity`. Then ENTER with entry window
    [trigger, trigger + extension], stop = invalidation.
 
-Quote freshness is the platform's rule (the strategy never reads the clock). Prices are
+The spread and session dollar-volume rules ([liquidity]) are also `quote_liquidity` and
+`session_liquidity`, which discovery applies to the active strategy's candidates (the platform
+has no liquidity threshold of its own). Quote freshness is the platform's rule (the strategy
+never reads the clock). Prices are
 not rounded to the tick here; the order layer does that.
 """
 
@@ -238,6 +241,18 @@ def _flag(rule: str, passed: bool, note: str) -> Check:
     return Check(rule, None, "is", None, passed, note)
 
 
+def spread_check(quote: Quote, max_spread_ratio: Decimal) -> Check:
+    """(ask - bid) / mid of a valid quote (0 < bid <= ask) against the strategy's limit."""
+    mid = (quote.ask + quote.bid) / TWO
+    return _check("spread_ratio", (quote.ask - quote.bid) / mid, "<=", max_spread_ratio)
+
+
+def dollar_volume_check(session_bars: Sequence[Bar], min_dollar_volume_usd: Decimal) -> Check:
+    """Sum of close x volume of the session's completed bars against the strategy's floor."""
+    return _check("dollar_volume_usd", ind.dollar_volume(session_bars), ">=",
+                  min_dollar_volume_usd)
+
+
 class PriceActionV1:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -245,6 +260,12 @@ class PriceActionV1:
         self.version = settings.version
         # Relative volume is the only rule that reads prior sessions.
         self.prior_sessions_needed = settings.relative_volume_sessions
+
+    def quote_liquidity(self, quote: Quote) -> tuple[Check, ...]:
+        return (spread_check(quote, self.settings.max_spread_ratio),)
+
+    def session_liquidity(self, session_bars: Sequence[Bar]) -> tuple[Check, ...]:
+        return (dollar_volume_check(session_bars, self.settings.min_dollar_volume_usd),)
 
     # A decision is built from the checks gathered so far.
     def _decide(
@@ -305,9 +326,7 @@ class PriceActionV1:
             if not checks[-1].passed:
                 return ignore()
 
-        checks.append(
-            _check("dollar_volume_usd", ind.dollar_volume(session), ">=", s.min_dollar_volume_usd)
-        )
+        checks.append(dollar_volume_check(session, s.min_dollar_volume_usd))
         if not checks[-1].passed:
             return ignore()
 
@@ -366,8 +385,7 @@ class PriceActionV1:
             return ignore()
 
         spread = quote.ask - quote.bid
-        mid = (quote.ask + quote.bid) / TWO
-        checks.append(_check("spread_ratio", spread / mid, "<=", s.max_spread_ratio))
+        checks.append(spread_check(quote, s.max_spread_ratio))
         if not checks[-1].passed:
             return ignore()
 

@@ -269,12 +269,6 @@ allowed_security_types = ["COMMON_STOCK"]
 # Symbols per instrument-profile request (security type lookup, cached per symbol per New York day; limit unverified);
 # read by broker.webull market data.
 profile_symbols_per_request = 100
-# Platform floor: maximum snapshot spread (ask - bid) / mid for a discovery candidate, ratio; read by data.discovery.
-# Independent of strategies/<name>/strategy.toml [liquidity]: a strategy may be stricter; edit each on its own.
-max_spread_ratio = 0.015
-# Platform floor: minimum current-session dollar volume (sum of close x volume of completed M1 bars), USD; read by data.discovery.
-# Independent of the strategy's min_dollar_volume_usd: a strategy may be stricter; edit each on its own.
-min_session_dollar_volume_usd = 5000000
 # Webull gainers/losers `rank_type` during the regular session (DAY_1 = today's change); read by broker.webull market data.
 gainers_losers_rank_type = "DAY_1"
 # Webull top-actives `rank_type` (RELATIVE_VOLUME_10D, as in the 2026-11-10 probe); read by broker.webull market data.

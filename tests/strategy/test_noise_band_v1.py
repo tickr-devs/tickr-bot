@@ -20,8 +20,14 @@ ROOT = Path(__file__).resolve().parents[2]
 VALUES = tomllib.loads((ROOT / "strategies" / "noise-band-v1" / "strategy.toml").read_text())
 
 
+# The fixture bars trade little; the signal tests lower the dollar-volume floor (the shipped one
+# is tested on its own below).
+SIGNAL_TESTS_FLOOR = 1
+
+
 def make(**overrides):
     vals = copy.deepcopy(VALUES)
+    overrides = {"liquidity__min_dollar_volume_usd": SIGNAL_TESTS_FLOOR, **overrides}
     for dotted, value in overrides.items():
         section, key = dotted.split("__")
         vals[section][key] = value
@@ -202,3 +208,26 @@ def test_a_signal_whose_band_level_was_broken_is_not_entered():
     decision = make().evaluate(ctx(bars, quote("20.39", "20.41")))
     assert decision.verdict is Verdict.IGNORE
     assert rules(decision)[-1] == ("signal_not_invalidated", False)
+
+
+def test_shipped_dollar_volume_floor_refuses_a_thin_session():
+    shipped = VALUES["liquidity"]["min_dollar_volume_usd"]
+    decision = make(liquidity__min_dollar_volume_usd=shipped).evaluate(ctx(today(41, jump_at=40)))
+    assert decision.verdict is Verdict.IGNORE
+    assert rules(decision)[-1] == ("dollar_volume_usd", False)
+    assert decision.checks[-1].threshold == d(str(shipped))
+
+
+def test_liquidity_rules_are_exposed_for_discovery():
+    strategy = make(liquidity__min_dollar_volume_usd=1000, liquidity__max_spread_ratio=0.01)
+    (spread,) = strategy.quote_liquidity(quote("20.00", "20.30"))
+    assert spread.rule == "spread_ratio" and not spread.passed
+    (volume,) = strategy.session_liquidity(today(41, jump_at=40)[:1])
+    assert volume.rule == "dollar_volume_usd" and volume.passed
+
+
+def test_missing_liquidity_key_is_refused():
+    vals = copy.deepcopy(VALUES)
+    del vals["liquidity"]["min_dollar_volume_usd"]
+    with pytest.raises(ValueError, match="min_dollar_volume_usd"):
+        nb.create(vals)

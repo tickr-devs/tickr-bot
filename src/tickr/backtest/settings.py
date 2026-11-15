@@ -1,8 +1,9 @@
 """Backtest settings from `config/backtest.toml` (one comment per key, tested).
 
 Exactly the keys in `KEYS` under `[backtest]`; missing, unknown, mistyped or out-of-range values
-are refused. Platform values (universe lists, dollar-volume floor, request sizes, risk limits)
-are read from `config/bot.toml`, simulation values from `config/replay.toml`, never duplicated.
+are refused. Platform values (universe lists, request sizes, risk limits) are read from
+`config/bot.toml`, simulation values from `config/replay.toml`, never duplicated. Liquidity rules
+are the strategy's own.
 """
 
 from __future__ import annotations

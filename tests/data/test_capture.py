@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from md_helpers import NOW, OPEN, bars, quote, row, settings
+from md_helpers import NOW, OPEN, Screen, bars, quote, row, settings
 
 from tickr import config
 from tickr.data.base import FakeMarketData, ScreenerKind, StreamNotice
@@ -128,7 +128,7 @@ def test_discovery_writes_through_capture(tmp_path):
     md.set_quote(quote("AAA"))
     md.add_bars(bars("AAA", 31))
     w = CaptureWriter(tmp_path, md.provider)
-    result = discover(md, settings(), OPEN, lambda: NOW, w)
+    result = discover(md, settings(), Screen(), OPEN, lambda: NOW, w)
     w.close()
     assert [c.instrument.symbol for c in result.candidates] == ["AAA"]
     day = tmp_path / DAY

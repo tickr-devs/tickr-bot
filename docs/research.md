@@ -13,6 +13,10 @@ format (`records.py`), through the observers (`docs/observers.md`).
 | `latency` | How late do captured quotes arrive, by symbol and hour? What do stream notices say? | (measured) |
 | `refusals` | Per day and setup: which check refused first, which platform causes, how many entries? | (counts) |
 
+Live observers see only the symbols discovery kept, and discovery applies the active strategy's
+liquidity rules, so observer results are comparable only while the active strategy (and its
+`[liquidity]` values) stays the same.
+
 Outcomes are price moves, never called profit. What-if results are simulated with the replay's
 conservative fill model and prove nothing about real fills.
 

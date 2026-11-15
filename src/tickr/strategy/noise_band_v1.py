@@ -6,8 +6,9 @@ Values come from `strategies/noise-band-v1/strategy.toml`. On the last completed
 `minutes` after the regular open:
 
 1. The session's first bar is the 09:30 bar (its open is the session open), the previous
-   session's last close is at least `min_previous_close_usd`, and `minutes` is within
-   [`earliest_minutes_after_open`, `latest_minutes_after_open`].
+   session's last close is at least `min_previous_close_usd`, the session's dollar volume so
+   far is at least `min_dollar_volume_usd` ([liquidity], also applied by discovery), and
+   `minutes` is within [`earliest_minutes_after_open`, `latest_minutes_after_open`].
 2. Band = mean over the `prior_sessions` prior sessions of |close of their bar at the same New
    York minute / their 09:30 open - 1|. Every prior session must have both bars.
 3. The close is above session open x (1 + `band_multiple` x band).
@@ -74,7 +75,7 @@ def _closes_by_minute(session: Sequence[Bar]) -> tuple[Decimal | None, dict[int,
     return (session[0].open if has_open else None), closes
 
 
-class NoiseBandV1:
+class NoiseBandV1(simple.Liquid):
     def __init__(self, common: simple.Common, signal: Signal) -> None:
         self.common, self.signal = common, signal
         self.name, self.version = common.name, common.version
@@ -104,6 +105,9 @@ class NoiseBandV1:
             return ignore()
         session = ind.current_session(context.bars)
         checks.append(simple.session_from_open(session))
+        if not checks[-1].passed:
+            return ignore()
+        checks.append(v1.dollar_volume_check(session, c.min_dollar_volume_usd))
         if not checks[-1].passed:
             return ignore()
         session_open = session[0].open

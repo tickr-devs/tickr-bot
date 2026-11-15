@@ -49,7 +49,6 @@ class Task:
     strategy_module: str
     values: dict
     change_percent: Decimal
-    dollar_volume_floor: Decimal
     calendar_dir: Path
     cfg: Config
     settings: ReplaySettings
@@ -81,8 +80,7 @@ def run_symbol(task: Task) -> tuple[ReplayResult | None, list[dict[str, str]]]:
 
     def one(days: tuple[date, ...], series: tuple) -> ReplayResult:
         pool = [(task.symbol, d) for d in days]
-        return replay(lambda: GainerGate(create(), pool, task.change_percent,
-                                         task.dollar_volume_floor),
+        return replay(lambda: GainerGate(create(), pool, task.change_percent),
                       {task.symbol: series}, task.settings, clock)
 
     try:
@@ -203,9 +201,8 @@ def run_backtest(cfg: Config, settings: BacktestSettings, replay_settings: Repla
     caps = read_caps(out / CAP_FILE)
     if window is not None:
         caps = [c for c in caps if c.session_date in set(window)]
-    floor = cfg.market_data.min_session_dollar_volume_usd
     tasks = [Task(symbol, out / fetch.MINUTES_DIR / f"{symbol}.jsonl", tuple(sorted(d)),
-                  strategy_module, values, settings.gainer_change_percent, floor, calendar_dir,
+                  strategy_module, values, settings.gainer_change_percent, calendar_dir,
                   cfg, replay_settings) for symbol, d in sorted(days.items())]
     if not tasks:
         raise BacktestError("no pool day has complete history")

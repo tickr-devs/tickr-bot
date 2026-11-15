@@ -517,3 +517,12 @@ def test_quantity_shrinks_to_the_daily_loss_budget():
     assert quantity(sized(None)) == d(71)
     # no room: refused with the quantity rule, never a negative or zero order
     assert_refused(sized(d(0)), Verdict.IGNORE, "quantity")
+
+
+def test_liquidity_rules_are_exposed_for_discovery():
+    s = make()
+    (spread,) = s.quote_liquidity(quote("10.00", "10.20"))
+    assert spread.rule == "spread_ratio" and spread.threshold == s.settings.max_spread_ratio
+    assert not spread.passed
+    (volume,) = s.session_liquidity(())
+    assert volume.rule == "dollar_volume_usd" and volume.measured == 0 and not volume.passed

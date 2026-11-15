@@ -1,4 +1,4 @@
-"""Discovery: screeners -> merged instruments -> universe -> liquidity -> candidates.
+"""Discovery: screeners -> merged instruments -> universe -> quote -> bars -> candidates.
 
 One pass (spec section 6):
 1. Read gainers, losers and top actives; merge rows by `instrument_id` (first-seen order).
@@ -7,11 +7,17 @@ One pass (spec section 6):
 2. Universe: exchange, currency and security type must be in the configured lists. A row without
    a security type is refused (`SECURITY_TYPE_UNKNOWN`). Webull screener rows carry no type; the
    provider fills it from its instrument profile (no symbol lists, owner 2026-11-14).
-3. Spread: one snapshot quote per symbol, fresh (provider time within `max_quote_age` and not
-   ahead of our clock by more than `max_clock_skew`), bid and
-   ask positive and not crossed, (ask - bid) / mid within the limit.
-4. Session dollar volume: M1 bars; sum of close x volume over completed minutes of the current
-   regular session (bar start >= session open, bar end <= now) must reach the minimum.
+3. Quote: one snapshot quote per symbol, fresh (provider time within `max_quote_age` and not
+   ahead of our clock by more than `max_clock_skew`), bid and ask positive and not crossed.
+   Then the active strategy's `quote_liquidity` rules (the spread).
+4. Bars: M1 bars, at least one completed. Then the strategy's `session_liquidity` rules on the
+   completed minutes of the current regular session (bar start >= session open, bar end <=
+   now), such as the session dollar volume.
+
+The platform holds no liquidity threshold (owner 2026-11-15): spread, dollar volume and any
+other liquidity rule are the strategy's, refused here as `STRATEGY_LIQUIDITY` with the
+strategy's failed check, so fewer bar reads, history reads and stream slots go to symbols the
+strategy would refuse anyway.
 
 Every refusal has one cause and the measured value. When the request budget refuses a call
 (`RateLimited`) or the provider reports delayed data, the pass stops at that point and the result
@@ -26,17 +32,16 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
 from tickr.broker.base import RateLimited
 from tickr.config import Config
 from tickr.data.base import DelayedData, MarketData, ScreenerKind, ScreenerRow
+from tickr.strategy.base import Check, Liquidity
 from tickr.types import Bar, Quote
 
 BAR_LENGTH = timedelta(minutes=1)
-HALF = Decimal(2)
 
 
 class Cause(StrEnum):
@@ -51,9 +56,8 @@ class Cause(StrEnum):
     QUOTE_STALE = "QUOTE_STALE"
     QUOTE_FROM_FUTURE = "QUOTE_FROM_FUTURE"
     QUOTE_INVALID = "QUOTE_INVALID"
-    SPREAD_TOO_WIDE = "SPREAD_TOO_WIDE"
     NO_BARS = "NO_BARS"
-    DOLLAR_VOLUME_TOO_LOW = "DOLLAR_VOLUME_TOO_LOW"
+    STRATEGY_LIQUIDITY = "STRATEGY_LIQUIDITY"
 
 
 class Stage(StrEnum):
@@ -95,14 +99,14 @@ class Rejection:
     cause: Cause
     measured: str
     threshold: str
+    check: Check | None = None
+    """The strategy's failed check, for `STRATEGY_LIQUIDITY`; None for a platform cause."""
 
 
 @dataclass(frozen=True)
 class Candidate:
     instrument: Instrument
     quote: Quote
-    spread_ratio: Decimal
-    session_dollar_volume: Decimal
     session_bars: tuple[Bar, ...]
 
 
@@ -143,8 +147,6 @@ class DiscoverySettings:
     allowed_exchanges: frozenset[str]
     allowed_currencies: frozenset[str]
     allowed_security_types: frozenset[str]
-    max_spread_ratio: Decimal
-    min_session_dollar_volume_usd: Decimal
     max_quote_age: timedelta
     max_clock_skew: timedelta
     snapshot_symbols_per_request: int
@@ -158,8 +160,6 @@ class DiscoverySettings:
             allowed_exchanges=frozenset(md.allowed_exchanges),
             allowed_currencies=frozenset(md.allowed_currencies),
             allowed_security_types=frozenset(md.allowed_security_types),
-            max_spread_ratio=md.max_spread_ratio,
-            min_session_dollar_volume_usd=md.min_session_dollar_volume_usd,
             max_quote_age=timedelta(seconds=float(config.risk.max_quote_age_seconds)),
             max_clock_skew=timedelta(seconds=float(config.risk.max_clock_skew_seconds)),
             snapshot_symbols_per_request=md.snapshot_symbols_per_request,
@@ -237,12 +237,37 @@ def universe_cause(instrument: Instrument, settings: DiscoverySettings) -> Rejec
     return None
 
 
-def spread_check(instrument: Instrument, quote: Quote | None, now: datetime,
-                 settings: DiscoverySettings) -> tuple[Rejection | None, Decimal]:
-    """Refusal (or None) and the measured spread ratio of the snapshot quote."""
-    def reject(cause: Cause, measured: str, threshold: str) -> tuple[Rejection, Decimal]:
-        return Rejection(instrument.instrument_id, instrument.symbol, cause, measured,
-                         threshold), Decimal(0)
+class NoStrategy:
+    """Liquidity rules that refuse every symbol, for when the active strategy did not load:
+    discovery still reads and captures screeners and snapshot quotes (replay input), but no
+    symbol becomes a candidate, so nothing is subscribed or evaluated for it."""
+
+    name, version = "none", "-"
+    REFUSED = (Check("strategy_loaded", None, "is", None, False, "no active strategy"),)
+
+    def quote_liquidity(self, quote: Quote) -> tuple[Check, ...]:
+        return self.REFUSED
+
+    def session_liquidity(self, session_bars: Sequence[Bar]) -> tuple[Check, ...]:
+        return self.REFUSED
+
+
+def strategy_refusal(instrument: Instrument, checks: Sequence[Check],
+                     screen: Liquidity) -> Rejection | None:
+    """The first failed check of the strategy's liquidity rules as a refusal, or None."""
+    failed = next((c for c in checks if not c.passed), None)
+    if failed is None:
+        return None
+    return Rejection(instrument.instrument_id, instrument.symbol, Cause.STRATEGY_LIQUIDITY,
+                     f"{screen.name} {screen.version} {failed.rule} {failed.measured}",
+                     f"{failed.operator} {failed.threshold}", failed)
+
+
+def quote_check(instrument: Instrument, quote: Quote | None, now: datetime,
+                settings: DiscoverySettings, screen: Liquidity) -> Rejection | None:
+    """Refusal of the snapshot quote (platform validity, then the strategy's rules), or None."""
+    def reject(cause: Cause, measured: str, threshold: str) -> Rejection:
+        return Rejection(instrument.instrument_id, instrument.symbol, cause, measured, threshold)
 
     if quote is None:
         return reject(Cause.NO_QUOTE, "none", "one snapshot quote")
@@ -256,10 +281,7 @@ def spread_check(instrument: Instrument, quote: Quote | None, now: datetime,
     if quote.bid <= 0 or quote.ask <= 0 or quote.ask < quote.bid:
         return reject(Cause.QUOTE_INVALID, f"bid {quote.bid} ask {quote.ask}",
                       "0 < bid <= ask")
-    ratio = (quote.ask - quote.bid) / ((quote.ask + quote.bid) / HALF)
-    if ratio > settings.max_spread_ratio:
-        return reject(Cause.SPREAD_TOO_WIDE, str(ratio), f"<= {settings.max_spread_ratio}")
-    return None, ratio
+    return strategy_refusal(instrument, screen.quote_liquidity(quote), screen)
 
 
 def completed_session_bars(bars: Sequence[Bar], session_open: datetime,
@@ -269,18 +291,16 @@ def completed_session_bars(bars: Sequence[Bar], session_open: datetime,
     return tuple(sorted(kept, key=lambda b: b.start))
 
 
-def session_dollar_volume(bars: Sequence[Bar]) -> Decimal:
-    return sum((b.close * b.volume for b in bars), Decimal(0))
-
-
 def discover(
     source: MarketData,
     settings: DiscoverySettings,
+    screen: Liquidity,
     session_open: datetime,
     clock: Callable[[], datetime],
     capture: CaptureSink | None = None,
 ) -> DiscoveryResult:
-    """Run one discovery pass. `clock` returns the aware current time."""
+    """Run one discovery pass with `screen` (the active strategy) as the liquidity rules.
+    `clock` returns the aware current time."""
     started = clock()
     provider = source.provider
     rows: list[ScreenerRow] = []
@@ -315,9 +335,9 @@ def discover(
     if stopped is not None:
         return result([], stopped)
 
-    # Spread, from snapshot quotes.
+    # Quote validity and the strategy's quote rules, from snapshot quotes.
     by_symbol = {i.symbol: i for i in universe}
-    spread_ok: list[tuple[Instrument, Quote, Decimal]] = []
+    quote_ok: list[tuple[Instrument, Quote]] = []
     for chunk in _chunks([i.symbol for i in universe], settings.snapshot_symbols_per_request):
         try:
             quotes = source.snapshot(chunk)
@@ -330,16 +350,16 @@ def discover(
         now = clock()
         for symbol in chunk:
             instrument = by_symbol[symbol]
-            refusal, ratio = spread_check(instrument, latest.get(symbol), now, settings)
+            refusal = quote_check(instrument, latest.get(symbol), now, settings, screen)
             if refusal is None:
-                spread_ok.append((instrument, latest[symbol], ratio))
+                quote_ok.append((instrument, latest[symbol]))
             else:
                 rejections.append(refusal)
 
-    # Session dollar volume, from M1 bars.
+    # The strategy's session rules, from M1 bars.
     candidates: list[Candidate] = []
-    entries = {i.symbol: (i, q, r) for i, q, r in spread_ok}
-    for chunk in _chunks([i.symbol for i, _, _ in spread_ok], settings.bars_symbols_per_request):
+    entries = {i.symbol: (i, q) for i, q in quote_ok}
+    for chunk in _chunks([i.symbol for i, _ in quote_ok], settings.bars_symbols_per_request):
         try:
             bars = source.bars(chunk, settings.bars_per_symbol)
         except RateLimited as exc:
@@ -351,19 +371,22 @@ def discover(
         if capture is not None:
             capture.bars(completed, provider, now)
         for symbol in chunk:
-            instrument, quote, ratio = entries[symbol]
+            instrument, quote = entries[symbol]
             own = [b for b in completed if b.symbol == symbol]
             if not own:
                 rejections.append(Rejection(instrument.instrument_id, symbol, Cause.NO_BARS,
                                             "0 bars", "at least one completed M1 bar"))
                 continue
             session = completed_session_bars(own, session_open, now)
-            volume = session_dollar_volume(session)
-            if volume < settings.min_session_dollar_volume_usd:
-                rejections.append(Rejection(
-                    instrument.instrument_id, symbol, Cause.DOLLAR_VOLUME_TOO_LOW, str(volume),
-                    f">= {settings.min_session_dollar_volume_usd}"))
+            if not session:
+                rejections.append(Rejection(instrument.instrument_id, symbol, Cause.NO_BARS,
+                                            "0 session bars",
+                                            "at least one completed bar of this session"))
                 continue
-            candidates.append(Candidate(instrument, quote, ratio, volume, session))
+            refusal = strategy_refusal(instrument, screen.session_liquidity(session), screen)
+            if refusal is not None:
+                rejections.append(refusal)
+                continue
+            candidates.append(Candidate(instrument, quote, session))
 
     return result(candidates, None)
