@@ -80,6 +80,17 @@ class StopState(StrEnum):
     UNKNOWN = "unknown"  # outcome unknown: broker read in progress
 
 
+class SendOutcome(StrEnum):
+    """The engine's send states (engine.core.SendState), mirrored value for value."""
+
+    INTENT = "intent"  # journaled, not attempted yet
+    ATTEMPTED = "attempted"  # attempt recorded, no outcome yet (in flight, or crashed)
+    ACKNOWLEDGED = "acknowledged"  # the broker accepted the order
+    REFUSED = "refused"  # refused by the broker or our request budget: no order exists
+    UNKNOWN = "unknown"  # may or may not exist: never resent, resolved by broker reads
+    ABSENT = "absent"  # never at the broker (not attempted, or not found by reads)
+
+
 class StreamHealth(StrEnum):
     FRESH = "fresh"
     QUIET = "quiet"
@@ -139,12 +150,28 @@ class Stop:
 
 
 @dataclass(frozen=True)
+class EntrySend:
+    """The first link of the protection chain: the entry order's single send, from the journal
+    (docs/api.md, "Entry send"). Display only; each null is explained by `entry_cause`."""
+
+    client_order_id: str | None  # the bot's own id for the entry order
+    intent_at: datetime | None  # `order-intent` row: written before the send
+    sent_at: datetime | None  # first `order-attempted` row: just before the HTTP call
+    send_outcome: SendOutcome | None  # the state the send itself recorded
+    latest_outcome: SendOutcome | None  # the latest send state (a broker read may resolve it)
+    sends: int | None  # `order-attempted` rows of the entry order: 1, never clamped
+    filled_at: datetime | None  # first `order-observed` row showing filled quantity > 0
+
+
+@dataclass(frozen=True)
 class Position:
     symbol: str
     quantity: Decimal
     entry_price: Decimal
     opened_at: datetime
     stop: Stop
+    entry: EntrySend
+    entry_cause: str | None  # why a field of `entry` is null; null when none is
 
 
 @dataclass(frozen=True)
@@ -160,6 +187,8 @@ class Trade:
     planned_loss_usd: Decimal  # 1 R, as recorded when the trade was opened
     # First entry fill observed -> first stop seen working at the broker; null = never.
     stop_confirmed_after_seconds: Decimal | None
+    entry: EntrySend
+    entry_cause: str | None  # why a field of `entry` is null; null when none is
 
 
 @dataclass(frozen=True)
@@ -341,6 +370,8 @@ class DayTrade:
     stop_confirmed_after_seconds: Decimal | None
     mae_usd: Decimal | None
     mfe_usd: Decimal | None
+    entry: EntrySend  # as in `Position`
+    entry_cause: str | None
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,17 @@
       "result_gross_usd": "-1.60",
       "stop_confirmed_after_seconds": "1.250",
       "mae_usd": "-2.20",
-      "mfe_usd": "0.80"
+      "mfe_usd": "0.80",
+      "entry": {
+        "client_order_id": "ap-0002-e",
+        "intent_at": "2026-11-16T15:00:00.123Z",
+        "sent_at": "2026-11-16T15:00:00.125Z",
+        "send_outcome": "acknowledged",
+        "latest_outcome": "acknowledged",
+        "sends": 1,
+        "filled_at": "2026-11-16T15:00:01.625Z"
+      },
+      "entry_cause": null
     },
     {
       "trade_id": "t-0002",
@@ -32,7 +42,17 @@
       "result_gross_usd": "4.10",
       "stop_confirmed_after_seconds": null,
       "mae_usd": null,
-      "mfe_usd": null
+      "mfe_usd": null,
+      "entry": {
+        "client_order_id": null,
+        "intent_at": null,
+        "sent_at": null,
+        "send_outcome": null,
+        "latest_outcome": null,
+        "sends": null,
+        "filled_at": null
+      },
+      "entry_cause": "journal unreadable: journal row 812 (order-observed ap-0003-e): KeyError: 'filled_quantity'"
     }
   ],
   "result_gross_usd": "2.50",

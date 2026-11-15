@@ -32,6 +32,7 @@ from aperture.api.contract import (
     DayV1,
     DecisionsV1,
     DecisionV1,
+    EntrySend,
     ErrorV1,
     ExplainV1,
     Fence,
@@ -56,12 +57,13 @@ from aperture.api.contract import (
     WatchingRowV1,
     WatchingV1,
 )
+from aperture.api.history import NO_ENTRY, NOT_READ
 from aperture.api.performance import performance
 from aperture.data.base import ScreenerKind
 from aperture.research.records import Admission
 from aperture.strategy.base import Verdict
 
-from .samples import T0, account, status
+from .samples import T0, account, entry, status
 from .schema_check import errors
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -116,10 +118,14 @@ def documents() -> dict[str, object]:
         "day-v1": DayV1("sandbox", DAY, (
             DayTrade("t-0001", "WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0,
                      T0 + timedelta(minutes=7), "stop", Decimal("5.02"), Decimal("50"),
-                     Decimal("-1.60"), Decimal("1.250"), Decimal("-2.20"), Decimal("0.80")),
+                     Decimal("-1.60"), Decimal("1.250"), Decimal("-2.20"), Decimal("0.80"),
+                     entry("ap-0002-e", T0), None),
             DayTrade("t-0002", "ABCD", Decimal("10"), Decimal("12.34"), Decimal("12.75"),
                      T0 + timedelta(minutes=20), T0 + timedelta(minutes=48), "strategy_exit",
-                     None, Decimal("50"), Decimal("4.10"), None, None, None)),
+                     None, Decimal("50"), Decimal("4.10"), None, None, None,
+                     EntrySend(None, None, None, None, None, None, None),
+                     "journal unreadable: journal row 812 (order-observed ap-0003-e): "
+                     "KeyError: 'filled_quantity'")),
             Decimal("2.50"), ("ABCD", "WXYZ")),
         "settings-v1": SettingsV1(
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
@@ -251,7 +257,8 @@ def _closed(trade_id: str, day_offset: int, result: str, planned_loss: str) -> D
     exit_price = Decimal("10") + Decimal(result) / 10
     return DayTrade(trade_id, "ABCD", Decimal("10"), Decimal("10.00"), exit_price,
                     closed_at - timedelta(minutes=1), closed_at, "strategy_exit", None,
-                    Decimal(planned_loss), Decimal(result), None, None, None)
+                    Decimal(planned_loss), Decimal(result), None, None, None, NO_ENTRY,
+                    NOT_READ)
 
 
 def _text(document: object) -> str:

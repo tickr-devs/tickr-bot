@@ -165,10 +165,11 @@ def test_unresolved_fence_blocks_entries(tmp_path):
 
 def test_realized_loss_is_the_net_loss_of_the_day(tmp_path, monkeypatch):
     from aperture.api import contract as api
+    from aperture.api.history import NO_ENTRY, NOT_READ
 
     def trade(result):
         return api.Trade("ABC", D(1), D(10), D(10) + result, NOW, NOW, "x", result, D(5),
-                         None)
+                         None, NO_ENTRY, NOT_READ)
 
     monkeypatch.setattr("aperture.runtime.entries.trades_today",
                         lambda engine, now: (trade(D(-20)), trade(D(5)), trade(D(-5))))

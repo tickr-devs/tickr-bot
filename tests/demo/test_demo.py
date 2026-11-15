@@ -118,9 +118,14 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
         (closed,) = status.trades_today
         assert closed.planned_loss_usd > 0
         assert closed.stop_confirmed_after_seconds is not None
+        for shown in (closed, status.positions[0]):  # entry sent once, then seen filled
+            assert shown.entry_cause is None and shown.entry.sends == 1
+            assert shown.entry.send_outcome is api.SendOutcome.ACKNOWLEDGED
+            assert shown.entry.intent_at <= shown.entry.sent_at <= shown.entry.filled_at
         (day_trade,) = server.history.day(FRIDAY, FRIDAY).trades
         assert day_trade.stop_confirmed_after_seconds == closed.stop_confirmed_after_seconds
         assert day_trade.planned_loss_usd == closed.planned_loss_usd
+        assert (day_trade.entry, day_trade.entry_cause) == (closed.entry, None)
         assert day_trade.mae_usd is not None and day_trade.mfe_usd is not None
         # Lower bound: the stop-out shows its 1 R loss, not the fall after the stop filled.
         assert day_trade.mae_usd == day_trade.result_gross_usd == -day_trade.planned_loss_usd

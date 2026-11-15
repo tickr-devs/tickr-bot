@@ -442,6 +442,36 @@ def test_a_malformed_journal_row_shows_null_metrics_not_an_error(paths):
     assert trade.result_gross_usd == Decimal("4.10")
 
 
+def test_day_trade_carries_its_entry_send(paths):
+    _journaled_trade(paths)
+    store, clock = _timed_store(paths)
+    for seconds, kind in ((1, "order-intent"), (1.25, "order-attempted"),
+                          (1.5, "order-acknowledged")):
+        clock.now = OPEN + timedelta(seconds=seconds)
+        with store.transaction():
+            store.append(kind, {}, key="t1-entry")
+    store.close()
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert trade.entry == contract.EntrySend(
+        "t1-entry", OPEN + timedelta(seconds=1), OPEN + timedelta(seconds=1.25),
+        contract.SendOutcome.ACKNOWLEDGED, contract.SendOutcome.ACKNOWLEDGED, 1,
+        OPEN + timedelta(seconds=40.5))
+    assert trade.entry_cause is None
+
+
+def test_an_unreadable_entry_row_shows_null_entry_and_keeps_the_metrics(paths):
+    _journaled_trade(paths)
+    store, clock = _timed_store(paths)
+    with store.transaction():
+        store.execute("INSERT INTO journal(at_utc, run_id, kind, key, body) "
+                      "VALUES ('not a time', NULL, 'order-attempted', 't1-entry', '{}')")
+    store.close()
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert trade.entry == contract.EntrySend(None, None, None, None, None, None, None)
+    assert trade.entry_cause.startswith("journal unreadable: journal row ")
+    assert trade.stop_confirmed_after_seconds == Decimal("2.250")
+
+
 @pytest.mark.parametrize("rows", [
     [("t1-entry", 5, "FILLED", "10"), ("t1-stop", 6, "REJECTED", "0")],
     [("t1-entry", 5, "FILLED", "10")],

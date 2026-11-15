@@ -24,7 +24,14 @@ from aperture.archive import existing
 from aperture.calendar import NEW_YORK, ny_date_of
 from aperture.config import Config
 from aperture.data.capture import BARS_FILE, CaptureError, read_captured_bars
-from aperture.engine.core import ORDER_HELD, ORDER_OBSERVED, Leg, OrderRow, order_from_row
+from aperture.engine.core import (
+    ORDER_HELD,
+    ORDER_OBSERVED,
+    Leg,
+    OrderRow,
+    SendState,
+    order_from_row,
+)
 from aperture.store import DATABASE_FILE, MIGRATIONS, Store
 from aperture.types import OrderState
 
@@ -184,6 +191,67 @@ def trade_metrics(store: Store, trade: api.DayTrade,
     return replace(trade, stop_confirmed_after_seconds=confirmed, mae_usd=mae, mfe_usd=mfe)
 
 
+# Entry send (docs/api.md, "Entry send"): the engine journals `order-<SendState>` for every
+# change of an order's send state: `order-intent` before the send, `order-attempted` just
+# before the HTTP call, then the outcome.
+_SEND_KINDS = {f"order-{state}": state for state in SendState}
+NO_ENTRY = api.EntrySend(None, None, None, None, None, None, None)
+NOT_READ = "not read on this path"  # the daily-loss path never reads the journal
+
+
+def _send_outcome(states: list[SendState]) -> SendState | None:
+    """The state the send itself recorded: the row after the first attempt (acknowledged,
+    refused or unknown); without an attempt, the row after the intent (absent when recovery
+    found it never attempted); with no such row yet, that last state (intent or attempted).
+    A later resolution by a broker read (unknown -> acknowledged) does not change it."""
+    for anchor in (SendState.ATTEMPTED, SendState.INTENT):
+        if anchor in states:
+            at = states.index(anchor)
+            return states[at + 1] if at + 1 < len(states) else anchor
+    return states[-1] if states else None
+
+
+def entry_send(store: Store, trade_id: str) -> tuple[api.EntrySend, str | None]:
+    """The trade's entry send as journaled, and why any field is null (None when none is).
+    Raises MalformedJournal for a row it cannot read. Display only: never on the daily-loss
+    or trading path."""
+    entries = [order_from_row(o) for o in store.query(
+        "SELECT * FROM orders WHERE trade_id = ? AND leg = ? ORDER BY rowid",
+        (trade_id, str(Leg.ENTRY)))]
+    if len(entries) != 1:
+        return NO_ENTRY, f"trade {trade_id} has {len(entries)} entry orders, expected 1"
+    cid = entries[0].client_order_id
+    kinds = (*_SEND_KINDS, OBSERVED)
+    marks = ", ".join("?" for _ in kinds)
+    rows = store.query("SELECT seq, at_utc, kind, key, body FROM journal WHERE kind IN "
+                       f"({marks}) AND key = ? ORDER BY seq", (*kinds, cid))
+    intent = sent = filled = None
+    states: list[SendState] = []
+    for row in rows:
+        at, body = _parsed(row)
+        if row["kind"] == OBSERVED:
+            quantity, _ = _observed(row, body)
+            if filled is None and quantity > 0:
+                filled = at
+            continue
+        state = _SEND_KINDS[row["kind"]]
+        states.append(state)
+        if state is SendState.INTENT and intent is None:
+            intent = at
+        elif state is SendState.ATTEMPTED and sent is None:
+            sent = at
+    outcome = _send_outcome(states)
+    causes = [text for missing, text in (
+        (intent is None, "no order-intent row"),
+        (sent is None, "never attempted: no order-attempted row"),
+        (filled is None, "no order-observed row shows the entry filled")) if missing]
+    entry = api.EntrySend(cid, intent, sent,
+                          None if outcome is None else api.SendOutcome(outcome),
+                          api.SendOutcome(states[-1]) if states else None,
+                          states.count(SendState.ATTEMPTED), filled)
+    return entry, "; ".join(causes) or None
+
+
 def closed_trades(store: Store, environment: str | None = None,
                   closed_on: date | None = None) -> list[api.DayTrade]:
     """Closed trades that had fills, oldest close first, with their gross result.
@@ -223,7 +291,8 @@ def closed_trades(store: Store, environment: str | None = None,
             result_gross_usd=(exit_price - entry_price) * quantity,
             # Display metrics are never read here (see `trade_metrics`): this path feeds the
             # daily-loss check and stays as it was.
-            stop_confirmed_after_seconds=None, mae_usd=None, mfe_usd=None))
+            stop_confirmed_after_seconds=None, mae_usd=None, mfe_usd=None,
+            entry=NO_ENTRY, entry_cause=NOT_READ))
     return result
 
 
@@ -334,11 +403,17 @@ class History:
                       today: date) -> api.DayTrade:
         if ny_date_of(trade.closed_at) != day:
             return trade
+        # Display only: an unreadable journal row shows null, each part on its own.
+        try:
+            entry, cause = entry_send(store, trade.trade_id)
+        except MalformedJournal as exc:
+            entry, cause = NO_ENTRY, f"journal unreadable: {exc}"
+        trade = replace(trade, entry=entry, entry_cause=cause)
         try:
             return trade_metrics(store, trade,
                                  self._bars_by_symbol(day, today).get(trade.symbol, []))
         except MalformedJournal:
-            return trade  # display only: an unreadable journal row shows null metrics
+            return trade
 
     def _capture_days(self) -> set[date]:
         if not self.paths.capture.is_dir():

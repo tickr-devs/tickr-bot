@@ -32,7 +32,17 @@
       "state": "verified",
       "price": "11.90",
       "client_order_id": "ap-0001-s"
-    }
+    },
+    "entry": {
+      "client_order_id": "ap-0001-e",
+      "intent_at": "2026-11-16T15:00:00.123Z",
+      "sent_at": "2026-11-16T15:00:00.125Z",
+      "send_outcome": "acknowledged",
+      "latest_outcome": "acknowledged",
+      "sends": 1,
+      "filled_at": "2026-11-16T15:00:01.625Z"
+    },
+    "entry_cause": null
   },
   "trades_today": [
     {
@@ -45,7 +55,17 @@
       "exit_reason": "stop",
       "result_gross_usd": "-1.60",
       "planned_loss_usd": "50",
-      "stop_confirmed_after_seconds": "1.250"
+      "stop_confirmed_after_seconds": "1.250",
+      "entry": {
+        "client_order_id": "ap-0002-e",
+        "intent_at": "2026-11-16T15:00:00.123Z",
+        "sent_at": "2026-11-16T15:00:00.125Z",
+        "send_outcome": "unknown",
+        "latest_outcome": "acknowledged",
+        "sends": 1,
+        "filled_at": "2026-11-16T15:00:04.123Z"
+      },
+      "entry_cause": null
     }
   ],
   "result_today_gross_usd": "-1.60",
@@ -77,7 +97,17 @@
         "state": "verified",
         "price": "11.90",
         "client_order_id": "ap-0001-s"
-      }
+      },
+      "entry": {
+        "client_order_id": "ap-0001-e",
+        "intent_at": "2026-11-16T15:00:00.123Z",
+        "sent_at": "2026-11-16T15:00:00.125Z",
+        "send_outcome": "acknowledged",
+        "latest_outcome": "acknowledged",
+        "sends": 1,
+        "filled_at": "2026-11-16T15:00:01.625Z"
+      },
+      "entry_cause": null
     }
   ],
   "schema_version": 1

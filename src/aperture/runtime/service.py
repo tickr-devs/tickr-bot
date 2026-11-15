@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aperture.api import contract as api
-from aperture.api.history import average_fill_price, closed_trades, trade_metrics
+from aperture.api.history import (
+    NO_ENTRY,
+    average_fill_price,
+    closed_trades,
+    entry_send,
+    trade_metrics,
+)
 from aperture.calendar import NEW_YORK, CalendarRefused, SessionCalendar
 from aperture.config import Config, trading_gate
 from aperture.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
@@ -54,6 +60,7 @@ LATENCY_FAILED = "protection-latency-failed"
 STRATEGY_NOT_LOADED = "strategy-not-loaded"
 ACCOUNT_WRITE_FAILED = "account-write-failed"  # one row per stretch of failed writes
 STOP_TIMING_FAILED = "stop-timing-failed"  # one row per trade whose stop timing is unreadable
+ENTRY_SEND_FAILED = "entry-send-failed"  # one row per trade whose entry send is unreadable
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
@@ -96,12 +103,12 @@ def _iso(text: str) -> datetime:
 def _status_trade(t: api.DayTrade) -> api.Trade:
     return api.Trade(t.symbol, t.quantity, t.entry_price, t.exit_price, t.opened_at,
                      t.closed_at, t.exit_reason, t.result_gross_usd, t.planned_loss_usd,
-                     t.stop_confirmed_after_seconds)
+                     t.stop_confirmed_after_seconds, t.entry, t.entry_cause)
 
 
 def trades_today(engine: Engine, now: datetime) -> tuple[api.Trade, ...]:
     """Trades closed today (New York date) that had fills, with gross result. The daily-loss
-    check reads this: it never reads the journal, so the display metric is null here."""
+    check reads this: it never reads the journal, so the display metrics are null here."""
     today = now.astimezone(NEW_YORK).date()
     return tuple(_status_trade(t) for t in closed_trades(engine.store, closed_on=today))
 
@@ -136,6 +143,8 @@ class Service:
         self._account_failing = False  # the last account file write failed (journaled once)
         # Stop confirmation time of each closed trade shown in status (final once closed).
         self._stop_timing: dict[str, Decimal | None] = {}
+        # Entry send of each trade shown, once final (trade closed, or its journal unreadable).
+        self._entry: dict[str, tuple[api.EntrySend, str | None]] = {}
 
     # --- commands --------------------------------------------------------------------------
 
@@ -540,8 +549,10 @@ class Service:
             if quantity <= 0 or entry_price is None:
                 continue
             stops = [o for o in orders if o.leg is Leg.STOP]
+            entry, cause = self._entry_send(trade.trade_id, final=False)
             found.append(api.Position(trade.symbol, quantity, entry_price,
-                                      self._opened_at(trade.trade_id), self._stop(trade, stops)))
+                                      self._opened_at(trade.trade_id), self._stop(trade, stops),
+                                      entry, cause))
         return tuple(found)
 
     def _daily_money(self) -> tuple[Decimal | None, Decimal, Decimal | None]:
@@ -574,7 +585,28 @@ class Service:
                             "error": type(exc).__name__, "detail": str(exc)},
                             key=trade.trade_id, run_id=self.engine.run_id)
             self._stop_timing[trade.trade_id] = timing
-        return replace(trade, stop_confirmed_after_seconds=self._stop_timing[trade.trade_id])
+        entry, cause = self._entry_send(trade.trade_id, final=True)
+        return replace(trade, stop_confirmed_after_seconds=self._stop_timing[trade.trade_id],
+                       entry=entry, entry_cause=cause)
+
+    def _entry_send(self, trade_id: str, *, final: bool) -> tuple[api.EntrySend, str | None]:
+        """As `_shown`: display only, never ends the loop; an unreadable journal shows null
+        with the cause, journaled once per trade. Cached once final: the trade is closed
+        (`final`), or a row is unreadable (journal rows never change)."""
+        if trade_id in self._entry:
+            return self._entry[trade_id]
+        try:
+            found = entry_send(self.engine.store, trade_id)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            found, final = (NO_ENTRY, f"journal unreadable: {type(exc).__name__}: {exc}"), True
+            if not self.engine.store.journal(ENTRY_SEND_FAILED, trade_id):
+                with self.engine.store.transaction():
+                    self.engine.store.append(ENTRY_SEND_FAILED, {
+                        "error": type(exc).__name__, "detail": str(exc)},
+                        key=trade_id, run_id=self.engine.run_id)
+        if final:
+            self._entry[trade_id] = found
+        return found
 
     def _recent_commands(self) -> tuple[api.CommandRecord, ...]:
         rows = self.engine.store.journal(COMMAND)[-self.config.api.status_recent_commands:]

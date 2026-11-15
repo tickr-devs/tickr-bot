@@ -10,6 +10,7 @@ import pytest
 
 from aperture import config
 from aperture.api import contract
+from aperture.api.history import NO_ENTRY, NOT_READ
 from aperture.api.performance import (
     NO_LOSSES,
     NO_TRADES,
@@ -34,7 +35,7 @@ def _closed(n: int, day: date, result: str, planned_loss: str = "50") -> contrac
     return contract.DayTrade(
         f"t{n}", "ABCD", Decimal(10), Decimal("10.00"), Decimal(10) + Decimal(result) / 10,
         closed_at - timedelta(minutes=1), closed_at, "strategy_exit", None,
-        Decimal(planned_loss), Decimal(result), None, None, None)
+        Decimal(planned_loss), Decimal(result), None, None, None, NO_ENTRY, NOT_READ)
 
 
 def _of(*trades: contract.DayTrade, first: date = FRIDAY, last: date = DAY):

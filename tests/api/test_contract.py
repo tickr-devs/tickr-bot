@@ -195,3 +195,9 @@ def test_write_command_refuses_bad_id(tmp_path):
     bad = replace(contract.new_command(CommandKind.FLATTEN, T0, "api"), command_id="../x")
     with pytest.raises(ContractError, match="uuid"):
         contract.write_command(tmp_path, bad)
+
+
+def test_send_outcome_mirrors_the_engine_send_state():
+    from aperture.engine.core import SendState
+
+    assert [m.value for m in contract.SendOutcome] == [m.value for m in SendState]

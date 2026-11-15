@@ -119,6 +119,9 @@ Each `trades_today` entry also has `planned_loss_usd` (1 R as recorded when the 
 and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE are only in
 `day-v1`: the bot does not read capture files to write its status.
 
+Every `positions` element (so also `position`) and every `trades_today` entry has `entry` and
+`entry_cause`, the first link of the protection chain (see "Entry send" below).
+
 ### GET /account
 
 `account` is the bot's `account-v1` document, written (temp file + fsync + rename, like status)
@@ -217,6 +220,60 @@ Computed by the reader from what the bot already records; `null` means unknown, 
   excursions, never an error. In the bot it is journaled once per trade
   (`stop-timing-failed`) and the step goes on. The daily-loss check never reads them: the
   bot computes them only for the status file.
+
+#### Entry send
+
+The protection chain per position is: entry sent once -> filled -> broker stop verified
+(`stop`). `entry` (status `Position` and `Trade`, `day-v1` trades) is its first link, read from
+the journal rows the engine writes for the trade's entry order (`journal.key` = its client
+order id; the engine records every send durably before the HTTP call, sends it once and never
+retries it):
+
+```json
+"entry": {
+  "client_order_id": "ap-1a2b3c4d-t1-e1",
+  "intent_at": "2026-11-16T15:00:00.123Z",
+  "sent_at": "2026-11-16T15:00:00.125Z",
+  "send_outcome": "unknown",
+  "latest_outcome": "acknowledged",
+  "sends": 1,
+  "filled_at": "2026-11-16T15:00:01.625Z"
+},
+"entry_cause": null
+```
+
+- `client_order_id`: the bot's own id for the entry order (`[orders] client_order_id_prefix`,
+  the first 8 hex characters of the random run id, trade id, leg and number). No account or
+  broker id.
+- `intent_at`: the `order-intent` row, written before the send.
+- `sent_at`: the first `order-attempted` row, written just before the HTTP call (see `sends`).
+- `send_outcome`: the engine's send state (`SendState`) that the send itself recorded:
+  `acknowledged`, `refused` (no order exists) or `unknown` (may exist; never resent, resolved
+  by broker reads), the row after the attempt. It is not changed by a later resolution: an
+  `unknown` send that a read then found at the broker stays `unknown`, with `filled_at` once
+  filled. With no attempt row it is the row after the intent (`absent`: never attempted, as
+  recovery found it), and while nothing follows it is the last state (`intent` or
+  `attempted`).
+- `latest_outcome`: the latest send state of the entry order (same values; its last
+  `order-<state>` row). With `send_outcome` it says, for example, "unknown at send, confirmed
+  by a broker read" (`unknown` then `acknowledged`, as in the example above), or `absent`
+  when reads found no such order. Usually the same as `send_outcome`.
+- `sends`: the number of send attempts of the entry order (its `order-attempted` rows): 1.
+  Shown as counted, never clamped; anything else than 1 is something to look at. An attempt
+  is journaled before the request goes out, so an attempt that our own request budget refused
+  (`send_outcome` `refused`) counts as one although no HTTP call was made.
+- `filled_at`: the first `order-observed` row of the entry showing filled quantity > 0 (when
+  the fill was seen, as in "Per-trade metrics").
+- `entry_cause`: `null` when every field is known; otherwise why each null one is, joined by
+  `; ` (for example `never attempted: no order-attempted row`, `no order-observed row shows
+  the entry filled`, or `trade t3 has 2 entry orders, expected 1`, which leaves every field
+  null). No field is ever defaulted.
+
+Display only, like the stop timing: the trading loop and the daily-loss check never read it.
+A journal row it cannot read makes every field `null` with `entry_cause` = `journal
+unreadable: <error>`; in the bot it is journaled once per trade (`entry-send-failed`) and the
+step goes on. The bot reads it again on every status write while the trade is open, and keeps
+it once the trade is closed (or a row is unreadable). `/days/<date>` computes it the same way.
 
 ### GET /performance (read-only)
 

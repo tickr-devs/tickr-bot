@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from aperture.api.contract import (
@@ -14,10 +14,12 @@ from aperture.api.contract import (
     CommandOutcome,
     CommandRecord,
     EntryBlock,
+    EntrySend,
     Fence,
     Freshness,
     Gate,
     Position,
+    SendOutcome,
     StatusV1,
     Stop,
     StopState,
@@ -27,8 +29,17 @@ from aperture.api.contract import (
 )
 
 T0 = datetime(2026, 11, 16, 15, 0, 0, 123000, tzinfo=UTC)
+
+
+def entry(cid: str, at: datetime) -> EntrySend:
+    """A clean entry send: journaled, attempted once 2 ms later, filled 1.5 s later."""
+    return EntrySend(cid, at, at + timedelta(milliseconds=2), SendOutcome.ACKNOWLEDGED,
+                     SendOutcome.ACKNOWLEDGED, 1, at + timedelta(milliseconds=1502))
+
+
 POSITION = Position("ABCD", Decimal("10"), Decimal("12.34"), T0,
-                    Stop(StopState.VERIFIED, Decimal("11.90"), "ap-0001-s"))
+                    Stop(StopState.VERIFIED, Decimal("11.90"), "ap-0001-s"),
+                    entry("ap-0001-e", T0), None)
 
 
 def status(written_at: datetime = T0, **overrides) -> StatusV1:
@@ -45,7 +56,13 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
         fences=(Fence("foreign_exposure", T0, "A position not opened by the bot exists."),),
         position=POSITION,
         trades_today=(Trade("WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0, T0,
-                            "stop", Decimal("-1.60"), Decimal("50"), Decimal("1.250")),),
+                            "stop", Decimal("-1.60"), Decimal("50"), Decimal("1.250"),
+                            # Send outcome unknown (timeout), then confirmed by a broker
+                            # read and seen filled.
+                            EntrySend("ap-0002-e", T0, T0 + timedelta(milliseconds=2),
+                                      SendOutcome.UNKNOWN, SendOutcome.ACKNOWLEDGED, 1,
+                                      T0 + timedelta(seconds=4)),
+                            None),),
         result_today_gross_usd=Decimal("-1.60"),
         freshness=Freshness(T0, None, StreamHealth.FRESH),
         recent_commands=(CommandRecord("0b6f7c1e-2f0a-4c55-9d1e-6a1d2f3e4b5c",
