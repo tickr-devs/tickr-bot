@@ -360,3 +360,19 @@ def test_settings_that_weaken_strict_concurrency_fail(tmp_path):
     )
     found = load().settings_violations(write(tmp_path, source, "project.pbxproj"))
     assert [line for line, _ in found] == [1, 2, 3]
+
+
+def test_catalogs_must_be_in_xcode_form(tmp_path):
+    rules = load()
+    xcode = (
+        '{\n  "sourceLanguage" : "en",\n  "strings" : {\n'
+        '    "a.m5" : {\n      "comment" : "Пять"\n    },\n'
+        '    "a.m15" : {\n      "comment" : "x/y"\n    },\n'
+        '    "B" : {\n      "comment" : "b"\n    }\n'
+        '  },\n  "version" : "1.0"\n}'
+    )
+    assert rules.format_xcstrings.xcode_form(xcode) == xcode
+    assert rules.catalog_form_violations(write(tmp_path, xcode, "Localizable.xcstrings")) == []
+    plain = json.dumps(json.loads(xcode), indent=2, sort_keys=True) + "\n"
+    found = rules.catalog_form_violations(write(tmp_path, plain, "Localizable.xcstrings"))
+    assert [line for line, _ in found] == [1]
