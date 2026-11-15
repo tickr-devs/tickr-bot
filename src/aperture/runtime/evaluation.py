@@ -262,5 +262,9 @@ class Evaluator:
             self.watch.add(symbol)
         elif decision.verdict is Verdict.IGNORE:
             self.watch.discard(symbol)
-        self.desk.on_decision(decision, bar_start=today_bars[-1].start, quote=quote, now=now)
+        # Admission compares the quote and the last broker read with the clock, so it gets the
+        # time of this decision: the reads above take time, and the tick's own start would make
+        # a quote received meanwhile look like the future and an old one look fresh.
+        self.desk.on_decision(decision, bar_start=today_bars[-1].start, quote=quote,
+                              now=self.now())
         self.contexts.append(context)

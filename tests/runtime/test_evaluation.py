@@ -17,7 +17,9 @@ from aperture.data.base import FakeMarketData, MarketDataError
 from aperture.data.history import HistoryReader, HistorySettings, HistoryUnavailable
 from aperture.engine.core import Engine
 from aperture.observers.log import DecisionLog
+from aperture.research.records import Admission as RecordAdmission
 from aperture.research.records import load_records
+from aperture.risk.causes import AdmissionCause
 from aperture.runtime import evaluation
 from aperture.runtime.entries import EntryDesk
 from aperture.runtime.evaluation import (
@@ -410,3 +412,42 @@ def test_the_strategy_sizes_into_the_daily_room_only_above_the_minimum(tmp_path,
     rig.evaluator.tick(["ABC"])
     (context,) = rig.strategy.seen
     assert context.loss_budget_usd == budget
+
+
+def _reads_take(rig: Rig, delay: timedelta, quote_on_the_way: bool) -> None:
+    """Make the bar read last `delay`, optionally with an L1 quote arriving during it."""
+    read = rig.source.bars
+
+    def slow(symbols, count):
+        rig.now += delay
+        if quote_on_the_way:
+            rig.inbox.on_quote(Quote("ABC", D("10.04"), D("10.05"), D(100), D(100),
+                                     rig.now, rig.now))
+        return read(symbols, count)
+
+    rig.source.bars = slow
+    rig.evaluator.desk.last_broker_read_at = lambda: rig.now
+
+
+def test_a_quote_received_during_the_bar_read_is_admitted(tmp_path):
+    rig = Rig(tmp_path)
+    rig.symbol("ABC")
+    rig.strategy.verdicts["ABC"] = Verdict.ENTER
+    _reads_take(rig, timedelta(milliseconds=300), quote_on_the_way=True)
+    rig.evaluator.tick(["ABC"])
+    (record,) = load_records(list(rig.dir.rglob("*.jsonl")))
+    assert record.refusal_cause is None and record.admission is RecordAdmission.TAKEN
+    assert record.time == rig.now
+
+
+def test_a_slow_bar_read_cannot_hide_the_age_of_the_quote(tmp_path):
+    rig = Rig(tmp_path)
+    rig.symbol("ABC")  # its quote is received before the read starts
+    rig.strategy.verdicts["ABC"] = Verdict.ENTER
+    slow = timedelta(seconds=float(CFG.risk.max_quote_age_seconds) + 1)
+    _reads_take(rig, slow, quote_on_the_way=False)
+    rig.evaluator.tick(["ABC"])
+    (record,) = load_records(list(rig.dir.rglob("*.jsonl")))
+    assert record.admission is RecordAdmission.REFUSED
+    assert record.refusal_cause.startswith(AdmissionCause.QUOTE_STALE)
+    assert rig.broker.sent == []
