@@ -10,8 +10,10 @@ The server keeps only the token's SHA-256, written by `pair`.
 Commands additionally require `Content-Type: application/json`, which a cross-site form
 cannot send without a CORS preflight, and this server answers no preflight.
 
-The API never talks to the broker and never changes bot state itself: it reads the bot's status
-file and drops command files into the inbox. The bot decides, acts and journals.
+The API never talks to the broker's trading or account routes and never changes bot state
+itself: it reads the bot's status file and drops command files into the inbox. The bot decides,
+acts and journals. The one market-data read, GET /chart, goes through its own source and request
+budget (api/chart.py), off unless `[chart] webull_enabled`.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -35,6 +38,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from aperture.api import contract, flow
+from aperture.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from aperture.api.contract import (
     AccountResponseV1,
     CommandAcceptedV1,
@@ -114,6 +118,7 @@ class ApiSettings:
     change_pct_places: int  # decimal places of GET /flow change_pct
     performance_max_range_days: int  # longest GET /performance range, both ends counted
     performance_decimal_places: int  # rounding of GET /performance quotients
+    chart: ChartSettings  # GET /chart: source switch, cache and calendar
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -178,6 +183,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         change_pct_places=api.flow_change_pct_decimal_places,
         performance_max_range_days=api.performance_max_range_days,
         performance_decimal_places=api.performance_decimal_places,
+        chart=ChartSettings.from_config(cfg),
     )
 
 
@@ -222,6 +228,8 @@ class ApiServer(ThreadingHTTPServer):
         self.page = (STATIC_DIR / "status.html").read_bytes()
         self.history = History(settings.history)
         self.observer_results = ObserverResults(settings.simulation)
+        # No source until one is attached (python -m aperture.api, or the demo's world).
+        self.chart = Chart(settings.chart)
         port = settings.remote_port if remote else settings.port
         super().__init__((settings.host, port), Handler)
 
@@ -349,10 +357,11 @@ _ERROR_CODES = {
     "method_not_allowed": 405, "length_required": 411, "payload_too_large": 413,
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
     "internal": 500, "unavailable": 503, "unauthorized": 401, "conflict": 409,
+    "rate_limited": 429,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
-              "/watching", "/performance")
+              "/watching", "/performance", "/chart")
 DAY_PREFIX = "/days/"
 
 
@@ -500,6 +509,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._recorded_decisions(path)
             elif path == "/account":
                 self._account()
+            elif path == "/chart":
+                self._chart()
             elif path in COMMAND_ROUTES:
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
             elif path in ("/days", "/bars", "/performance") or path.startswith(DAY_PREFIX):
@@ -606,6 +617,23 @@ class Handler(BaseHTTPRequestHandler):
             self._error(result.error, result.cause)
         else:
             self._json(200, result)
+
+    def _chart(self) -> None:
+        """GET /chart?symbol=&interval=&range=: candles from market data (api/chart.py)."""
+        try:
+            params = _query(urlsplit(self.path).query, frozenset({"symbol", "interval", "range"}))
+            symbol, interval, span = parse_query(params)
+            document = self.server.chart.answer(symbol, interval, span, self.server.clock())
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        except ChartRefused as exc:
+            extra = {}
+            if exc.retry_after is not None and math.isfinite(exc.retry_after):
+                extra["Retry-After"] = str(math.ceil(exc.retry_after))
+            self._error(exc.error, exc.cause, extra)
+            return
+        self._json(200, document)
 
     def _explain(self) -> None:
         """GET /explain?symbol=: the latest active-strategy decision recorded today."""

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,6 +22,10 @@ from aperture.api.contract import (
     Agreement,
     BarsV1,
     BarV1,
+    ChartBarV1,
+    ChartInterval,
+    ChartRange,
+    ChartV1,
     CheckV1,
     CommandAcceptedV1,
     CommandKind,
@@ -144,6 +148,19 @@ def documents() -> dict[str, object]:
                 ("12.30", "12.38", "12.28", "12.36", "18450"),
                 ("12.36", "12.41", "12.33", "12.34", "9120"),
                 ("12.34", "12.52", "12.34", "12.50", "40211"))))),
+        # 5m candles around the regular open of 2026-11-16 (09:20 and 09:25 New York are
+        # pre-market, 09:30 is the first regular candle).
+        "chart-v1": ChartV1("ABCD", ChartInterval.M5, ChartRange.D1, "webull",
+                            datetime(2026, 11, 16, 14, 41, 2, 250000, tzinfo=UTC), None, tuple(
+            ChartBarV1(datetime(2026, 11, 16, 14, 20, tzinfo=UTC) + timedelta(minutes=5 * i),
+                       Decimal(o), Decimal(h), Decimal(lo), Decimal(c), Decimal(v), i < 2)
+            for i, (o, h, lo, c, v) in enumerate((
+                ("12.10", "12.18", "12.05", "12.16", "3120"),
+                ("12.16", "12.31", "12.15", "12.30", "5410"),
+                ("12.30", "12.52", "12.28", "12.47", "182300"))))),
+        "chart-v1.empty": ChartV1("ABCD", ChartInterval.D1, ChartRange.Y1, "webull",
+                                  datetime(2026, 11, 16, 14, 41, 2, 250000, tzinfo=UTC),
+                                  "no 1d bars from webull for ABCD in range 1y", ()),
         "account-v1": account(),
         "account-v1.mismatch": mismatch,
         "account-response-v1": AccountResponseV1(T0 + timedelta(seconds=4), account(),

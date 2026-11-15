@@ -215,6 +215,7 @@ def _demo_day(session: Session, world: World, cfg: config_module.Config,
         def go_live() -> None:
             world.go_live()
             live.clock = world.clock
+            live.chart.use(world.feed)  # GET /chart serves the simulated world
             threading.Thread(target=live.serve_forever, daemon=True).start()
             log(f"demo: live on http://{live.settings.host}:{live.server_port}/ "
                 f"(New York {scenario.clock} on {session.day.isoformat()}); Ctrl-C stops it")

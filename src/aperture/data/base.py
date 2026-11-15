@@ -51,6 +51,23 @@ class ScreenerRow:
     fields: Mapping[str, str] = field(default_factory=dict)
 
 
+class BarSpan(StrEnum):
+    """Bar sizes read for charts (`MarketData.history_bars`), as Webull names its timespans.
+    Every other chart interval is aggregated from these by `aperture.api.chart`."""
+
+    M1 = "M1"  # one minute, unadjusted (SDK docstring); pre-, regular and post-market
+    D = "D"  # one day, forward-adjusted (SDK docstring)
+
+
+@dataclass(frozen=True)
+class SessionBar:
+    """A chart bar and the provider's session label: "PRE", "RTH" or "ATH" for M1, None for D.
+    The label is checked against the session calendar, never trusted alone."""
+
+    bar: Bar
+    session: str | None
+
+
 class MarketDataError(Exception):
     """Base class for typed market-data failures."""
 
@@ -120,6 +137,13 @@ class MarketData(Protocol):
         aware `end`, oldest first. One page of history; `aperture.data.history` pages and caches."""
         ...
 
+    def history_bars(self, symbol: str, span: BarSpan, end: datetime,
+                     count: int) -> list[SessionBar]:
+        """Up to `count` bars of size `span` of one symbol that START strictly before the aware
+        `end`, oldest first, for charts only (never read by the trading loop). M1 includes the pre-
+        and post-market minutes, each labelled with its session."""
+        ...
+
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]: ...
 
     def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
@@ -140,6 +164,7 @@ class FakeMarketData:
         self._provider = provider
         self._rows: dict[ScreenerKind, list[ScreenerRow]] = {}
         self._bars: dict[str, list[Bar]] = {}
+        self._history: dict[tuple[str, BarSpan], list[SessionBar]] = {}
         self._quotes: dict[str, Quote] = {}
         self._limits: dict[str, int] = {}
         self._bars_delay: Decimal | None = None
@@ -158,6 +183,10 @@ class FakeMarketData:
     def add_bars(self, bars: Iterable[Bar]) -> None:
         for bar in bars:
             self._bars.setdefault(bar.symbol, []).append(bar)
+
+    def add_history_bars(self, span: BarSpan, bars: Iterable[SessionBar]) -> None:
+        for item in bars:
+            self._history.setdefault((item.bar.symbol, span), []).append(item)
 
     def set_quote(self, quote: Quote) -> None:
         self._quotes[quote.symbol] = quote
@@ -199,6 +228,13 @@ class FakeMarketData:
             raise DelayedData([symbol], self._bars_delay)
         older = sorted((b for b in self._bars.get(symbol, []) if b.start < end),
                        key=lambda b: b.start)
+        return older[-count:] if count > 0 else []
+
+    def history_bars(self, symbol: str, span: BarSpan, end: datetime,
+                     count: int) -> list[SessionBar]:
+        self._call("history_bars", [symbol, span.value])
+        older = sorted((b for b in self._history.get((symbol, span), []) if b.bar.start < end),
+                       key=lambda b: b.bar.start)
         return older[-count:] if count > 0 else []
 
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]:

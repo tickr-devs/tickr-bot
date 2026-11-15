@@ -432,6 +432,59 @@ class BarsV1:
     api_version: int = _const(API_VERSION)
 
 
+class ChartInterval(StrEnum):
+    """Candle size of GET /chart."""
+
+    M1 = "1m"
+    M5 = "5m"
+    M30 = "30m"
+    H1 = "1h"
+    D1 = "1d"
+    W1 = "1w"
+    MO1 = "1mo"
+
+
+class ChartRange(StrEnum):
+    """Span of GET /chart: the latest 1 or 5 sessions, or the last 1, 3 or 12 months."""
+
+    D1 = "1d"
+    D5 = "5d"
+    M1 = "1m"
+    M3 = "3m"
+    Y1 = "1y"
+
+
+@dataclass(frozen=True)
+class ChartBarV1:
+    """One candle. `start` is the candle's first instant: for 1d/1w/1mo, 00:00 New York time
+    of its first calendar day (the date, the Monday, the 1st). `extended` is true for a pre- or
+    post-market candle, decided by the session calendar; always false for 1d/1w/1mo."""
+
+    start: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+    extended: bool
+
+
+@dataclass(frozen=True)
+class ChartV1:
+    """GET /chart?symbol=&interval=&range=: candles of any US stock from market data, oldest
+    first. `source` names the provider; `cached_at` is when the oldest data in the answer was
+    read from it; `cause` says why `bars` is empty (null when it is not)."""
+
+    symbol: str
+    interval: ChartInterval
+    range: ChartRange
+    source: str
+    cached_at: datetime
+    cause: str | None
+    bars: tuple[ChartBarV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
 # ---------------------------------------------------------------- settings (read-only)
 
 
@@ -1019,6 +1072,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "days-v1": DaysV1,
     "day-v1": DayV1,
     "bars-v1": BarsV1,
+    "chart-v1": ChartV1,
     "settings-v1": SettingsV1,
     "explain-v1": ExplainV1,
     "observers-v1": ObserversV1,

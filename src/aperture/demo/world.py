@@ -33,11 +33,12 @@ from decimal import ROUND_FLOOR, Decimal
 
 from aperture.broker.base import Acknowledgement
 from aperture.broker.fake import FakeBroker
-from aperture.calendar import NEW_YORK, MarketDay
-from aperture.data.base import FakeMarketData, ScreenerKind, ScreenerRow
+from aperture.calendar import NEW_YORK, MarketDay, ny_date_of
+from aperture.data.base import BarSpan, FakeMarketData, ScreenerKind, ScreenerRow, SessionBar
 from aperture.types import Bar, OrderRequest, OrderType, Quote, Side
 
 M1 = timedelta(minutes=1)
+REGULAR_SESSION = "RTH"  # the provider's label of a regular-session bar (the world has no other)
 CENT = Decimal("0.01")  # prices are quoted in cents
 SHARE = Decimal(1)  # volumes are whole shares
 SECONDS_PER_MINUTE = Decimal(60)
@@ -322,6 +323,27 @@ class Feed(FakeMarketData):
                  if b.start < end and b.start <= self.world.now]
         older.sort(key=lambda b: b.start)
         return older[-count:] if count > 0 else []
+
+    def history_bars(self, symbol: str, span: BarSpan, end: datetime,
+                     count: int) -> list[SessionBar]:
+        """GET /chart in the demo: the world's regular-session minutes started by now, or one
+        D bar per session day merged from them (labelled with its first minute)."""
+        self._call("history_bars", [symbol, span.value])
+        minutes = sorted((b for b in self.world.history.get(symbol, [])
+                          + self.world.today.get(symbol, [])
+                          if b.start < end and b.start <= self.world.now),
+                         key=lambda b: b.start)
+        if span is BarSpan.M1:
+            rows = [SessionBar(b, REGULAR_SESSION) for b in minutes]
+        else:
+            days: dict[date, list[Bar]] = {}
+            for b in minutes:
+                days.setdefault(ny_date_of(b.start), []).append(b)
+            rows = [SessionBar(Bar(symbol, bars[0].start, bars[0].open,
+                                   max(b.high for b in bars), min(b.low for b in bars),
+                                   bars[-1].close, sum((b.volume for b in bars), Decimal(0))),
+                               None) for bars in days.values()]
+        return rows[-count:] if count > 0 else []
 
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
         self._call("snapshot", symbols)

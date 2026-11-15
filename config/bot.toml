@@ -377,6 +377,37 @@ mac_app = "/Applications/Tickr.app"
 # bot's loop waits for it); read by runtime.alerts.
 mac_app_timeout_seconds = 2
 
+[chart]
+# Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API
+# process build its own Webull client: it then needs the app key and secret (never the account id) and uses the
+# environment's token folder next to the bot. Keep false until the chart probes C1-C5 in docs/webull-facts.md are
+# answered; false = GET /chart answers 503 unavailable (the demo serves its simulated world instead); read by the api
+# server and the request budget.
+webull_enabled = false
+# Webull bars requests the API may send per 60 s for charts, count: the chart's own request budget, never the bot's;
+# exhausted = GET /chart answers 429 rate_limited, nothing is queued or retried. With webull_enabled the bot's budget for
+# the bars route is lowered by this many, so the two processes together stay within one route limit (in case Webull
+# counts per App Key); must be below the bot's bars route limit; read by the request budget and the api server.
+requests_per_minute = 4
+# Most bars asked per chart bars request, count (SDK maximum 1200; one day with pre- and post-market is at most 960
+# minutes, so one request covers a day); read by the api server.
+bars_per_request = 1200
+# Seconds the M1 bars of a day still in progress, and the daily series while a session day is not over, are served from
+# memory before Webull is read again; closed days are kept on disk; read by the api server.
+live_ttl_seconds = 30
+# Seconds after a session's extended close (20:00 ET, 17:00 on half days) before its M1 bars count as final and are
+# written to the disk cache; until then they are served from memory and read again after live_ttl_seconds (Webull
+# returns only finalized minutes, so a read just after the close can miss the last one); a day without bars is never
+# written; read by the api server.
+closed_day_settle_seconds = 300
+# Chart cache folder relative to [run] data_dir; settled days' M1 bars go to <cache_dir>/<environment>/<symbol>/<NY
+# date>.json and are kept until deleted by hand (minute bars are unadjusted, so a settled day never changes; nothing
+# prunes this folder yet); read by the api server.
+cache_dir = "chart"
+# Most calendar days walked back to find the sessions of a 1d or 5d chart range (weekends and holidays are skipped);
+# read by the api server.
+session_lookback_days = 14
+
 [environments.sandbox]
 # May this process send trading requests in this environment; read by the trading gate.
 trading_enabled = true

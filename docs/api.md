@@ -1,8 +1,9 @@
 # Local API, version 1
 
 The bot is a headless service. Clients (the status page now, the macOS app later) talk only to this
-local API. The API process is separate from the bot and never talks to the broker: it serves the
-status and account files the bot writes and drops operator commands into an inbox the bot reads.
+local API. The API process is separate from the bot and never talks to the broker's trading or
+account routes: it serves the status and account files the bot writes and drops operator commands
+into an inbox the bot reads. Its one market-data read, `GET /chart`, is off by default (below).
 
 Run it: `python -m aperture.api --config config/bot.toml`. Settings are in `config/bot.toml` `[api]`.
 
@@ -76,6 +77,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first. |
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
+| GET | `/chart?symbol=<ticker>&interval=<1m\|5m\|30m\|1h\|1d\|1w\|1mo>&range=<1d\|5d\|1m\|3m\|1y>` | `200` `chart-v1`: candles of any US stock from market data; `400`, `429` `rate_limited`, `503` `unavailable`. |
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). |
@@ -95,7 +97,8 @@ Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
 `forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
 `unauthorized` 401 (remote request without the paired token),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
-`too_many_pending` 429, `conflict` 409 (an `Idempotency-Key` already used for another command),
+`too_many_pending` 429, `rate_limited` 429 (GET /chart: its request budget is spent; `Retry-After`),
+`conflict` 409 (an `Idempotency-Key` already used for another command),
 `internal` 500, `unavailable` 503 (history cannot be read now: database of another schema
 version, unreadable capture file).
 
@@ -274,6 +277,56 @@ A journal row it cannot read makes every field `null` with `entry_cause` = `jour
 unreadable: <error>`; in the bot it is journaled once per trade (`entry-send-failed`) and the
 step goes on. The bot reads it again on every status write while the trade is open, and keeps
 it once the trade is closed (or a row is unreadable). `/days/<date>` computes it the same way.
+
+### GET /chart (read-only, market data)
+
+Candles of any US stock for the apps' chart, read from market data by the API process itself (not
+from the bot's capture). Code: `src/aperture/api/chart.py`; settings: `[chart]` in bot.toml.
+
+- Query: exactly `symbol` (upper-case ticker, letters and digits with one optional `.` or `-`
+  class suffix, e.g. `BRK.B`), `interval` and `range`. Served pairs: `1m`, `5m`, `30m`, `1h` with
+  `1d` (the latest session) or `5d` (the latest five); `1d`, `1w`, `1mo` with `1m`, `3m`, `1y`
+  (calendar months back from today). Anything else is `400 bad_request`.
+- `chart-v1`: `{symbol, interval, range, source, cached_at, cause, bars[], api_version}`; each bar
+  `{start, open, high, low, close, volume, extended}`, oldest first. `source` names the provider
+  (`webull`, or the demo's own). `cached_at` is when the oldest data in the answer was read from it.
+  `cause` is null, or says why `bars` is empty (no data for that symbol and range).
+- Sessions: a session is the calendar's day from the pre-market open (04:00) to the extended close
+  (20:00; 17:00 on half days); a 1d/5d range counts sessions whose pre-market has begun. Pre- and
+  post-market bars are included and `extended: true`, decided by the session calendar; a bar the
+  provider labels differently from the calendar, or one outside the day's sessions, refuses the
+  answer (`503`). 5m/30m/1h candles are merged from M1, anchored at the start of each part of the
+  day (04:00, the regular open, the regular close), so no candle spans a session edge; the last
+  candle of a part can be shorter, and minutes without trades simply have no bar.
+- Daily candles: one D bar per New York date; `1w` (from Monday) and `1mo` (from the 1st) are
+  merged from them; their `start` is 00:00 New York time of the candle's first calendar day and
+  `extended` is false. The range start is moved back to the start of its week or month, so the
+  first candle is whole. Daily bars are forward-adjusted, minute bars are not (SDK docstring).
+- Merging: open of the first bar, close of the last, highest high, lowest low, summed volume,
+  exact decimals.
+- Cache: a session's M1 bars are kept on disk under `<data_dir>/<[chart] cache_dir>/
+  <environment>/<SYMBOL>/<date>.json` once `[chart] closed_day_settle_seconds` have passed after
+  its extended close, and only if the day has bars (minute bars are unadjusted, so a settled day
+  never changes). Before that, a day without bars, the session in progress, and the daily series
+  while the day's session is not over are read again after `[chart] live_ttl_seconds`; after the
+  session the daily series is kept until the next pre-market opens.
+- Known gap: nothing prunes the disk cache yet; it grows by one file per symbol and settled day
+  charted (about 100 KB each at most). Delete the folder by hand if it gets large; it is rebuilt
+  on demand.
+- Budget: the chart has its own request budget, `[chart] requests_per_minute` per 60 s, never the
+  bot's. When it is spent the answer is `429 rate_limited` with `Retry-After` (seconds); nothing is
+  queued or retried. A 1d range costs at most one request per uncached session, a daily range one.
+  With the chart on, the bot's own budget for the bars route is lowered by the same number, so the
+  two processes together never pass one route limit (docs/webull-facts.md, section C).
+- Off by default: `[chart] webull_enabled = false` answers every chart `503 unavailable` with that
+  cause. Turned on, `python -m aperture.api` builds its own Webull market-data client at start: it
+  needs the app key and secret in its environment (the launchd job and the container do not load
+  them for the API today) and uses the environment's token folder; it never reads the account id
+  and refuses any non-market-data route. If that client cannot be built, `/chart` answers `503`
+  with the cause and the rest of the API works. The open questions before turning it on are C1-C5
+  in docs/webull-facts.md. `aperture demo` serves its simulated world here (regular session only).
+- Delayed data (`delay_minutes` not 0), a failed read or a calendar refusal is `503 unavailable`
+  with the cause.
 
 ### GET /performance (read-only)
 

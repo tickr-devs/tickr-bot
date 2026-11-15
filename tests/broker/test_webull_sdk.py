@@ -265,3 +265,21 @@ def test_a_failing_hook_never_stops_token_creation(env, monkeypatch, sdk_clock, 
 
     SdkTransport(settings(env), hook)  # no exception: the token still becomes usable
     assert "token-pending alert failed (OSError)" in capsys.readouterr().err
+
+
+def test_market_data_only_transport_never_reads_the_account_and_refuses_trading(
+        env, monkeypatch):
+    """The API's chart transport: no account id variable needed, bars go out with the sessions
+    string, and a trading or account route is refused before any request."""
+    monkeypatch.delenv("T_ACCOUNT")
+    wire = install(monkeypatch, {"/market-data/stocks/bars/list": [(200, {"result": []})]})
+    transport = SdkTransport(settings(env), market_data_only=True)
+    transport.send(Route.BARS, {"symbols": ["AAA"], "category": "US_STOCK", "timespan": "M1",
+                                "count": "1200", "trading_sessions": "PRE,RTH,ATH"})
+    sent = len(wire.calls)
+    body = json.loads(wire.calls[-1].body)
+    assert body["trading_sessions"] == "PRE,RTH,ATH" and "account_id" not in body
+    for route in (Route.PLACE, Route.CANCEL, Route.REPLACE, Route.POSITIONS, Route.ACCOUNTS):
+        with pytest.raises(AdapterConfigError, match=route.name):
+            transport.send(route, {})
+    assert len(wire.calls) == sent and not transport.is_own_account("")

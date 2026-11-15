@@ -1,0 +1,172 @@
+"""Chart bars through the Webull adapter: recorded responses, request shape, and the chart's own
+request budget, which never touches the bot's."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from aperture import config
+from aperture.api.chart import place
+from aperture.broker.base import RateLimited
+from aperture.broker.budget import BudgetExhausted
+from aperture.broker.webull import (
+    AdapterConfigError,
+    MalformedResponse,
+    Route,
+    WireResponse,
+    budget_from_config,
+    chart_budget_from_config,
+    chart_market_data_from_config,
+    market_data_from_config,
+    read_history_bars,
+)
+from aperture.calendar import SessionCalendar, ny_date_of
+from aperture.data.base import BarSpan, DelayedData
+
+from .test_webull_market_data import Scripted, bar_row, ok, recorded, recorded_meta
+
+ROOT = Path(__file__).resolve().parents[2]
+BOT = ROOT / "config" / "bot.toml"
+ALL_SESSIONS = "stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json"
+BARS_PATH = Route.BARS.path
+END = datetime(2026, 11, 13, 21, 0, tzinfo=UTC)
+
+
+def enabled(cfg: config.Config | None = None, **chart: Any) -> config.Config:
+    cfg = cfg or config.load(BOT)
+    return replace(cfg, chart=replace(cfg.chart, webull_enabled=True, **chart))
+
+
+def chart_adapter(cfg: config.Config, *responses):
+    transport = Scripted(*responses)
+    budget = chart_budget_from_config(cfg, clock=lambda: 0.0)
+    return chart_market_data_from_config(cfg, transport, budget), transport, budget
+
+
+def daily_body(symbol: str, times: list[str]) -> dict[str, Any]:
+    rows = [{"time": t, "open": "10", "high": "11", "low": "9", "close": "10.5",
+             "volume": "100"} for t in times]
+    return {"result": [{"symbol": symbol, "instrument_id": "1", "delay_minutes": "0",
+                        "result": rows}]}
+
+
+def test_recorded_all_sessions_bars_keep_labels_and_match_the_calendar():
+    """Probe M4's PRE/RTH/ATH response: every recorded label is what the session calendar says
+    for that minute, so the calendar can decide `extended` and cross-check the provider."""
+    rows = read_history_bars(recorded(ALL_SESSIONS), BarSpan.M1)
+    assert len(rows) == 12
+    assert [r.bar.start for r in rows] == sorted(r.bar.start for r in rows)  # oldest first
+    assert {r.session for r in rows} == {"PRE", "RTH", "ATH"}
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+    for row in rows:
+        placed = place(calendar.day(ny_date_of(row.bar.start)), row)
+        assert placed.extended is (row.session != "RTH")
+
+
+def test_m1_request_asks_all_sessions_and_d_request_does_not():
+    cfg = enabled()
+    end_ms = recorded_meta(ALL_SESSIONS)["request"]["end_time"]
+    end = datetime.fromtimestamp(end_ms / 1000, tz=UTC)
+    md, transport, _ = chart_adapter(cfg, ok(recorded(ALL_SESSIONS)),
+                                     ok(daily_body("AAPL", ["2026-11-12T05:00:00.000+0000"])))
+    minutes = md.history_bars("AAPL", BarSpan.M1, end, 1200)
+    assert len(minutes) == 12 and all(r.bar.start < end for r in minutes)
+    days = md.history_bars("AAPL", BarSpan.D, end, 300)
+    assert [d.session for d in days] == [None]
+    (m1_route, m1), (d_route, d) = transport.sent
+    assert m1_route is d_route is Route.BARS
+    assert m1 == {"symbols": ["AAPL"], "category": "US_STOCK", "timespan": "M1",
+                  "count": "1200", "end_time": end_ms, "trading_sessions": "PRE,RTH,ATH"}
+    assert d["timespan"] == "D" and d["count"] == "300" and "trading_sessions" not in d
+
+
+def test_chart_reads_refuse_unknown_sessions_delay_and_other_symbols():
+    body = recorded(ALL_SESSIONS)
+    body["result"][0]["result"][0]["trading_session"] = "OVN"
+    with pytest.raises(MalformedResponse, match="OVN"):
+        read_history_bars(body, BarSpan.M1)
+    with pytest.raises(DelayedData):
+        read_history_bars({"result": [{"symbol": "A", "delay_minutes": "15", "result": []}]},
+                          BarSpan.M1)
+    md, _, _ = chart_adapter(enabled(), ok(daily_body("OTHER", ["2026-11-12T05:00:00.000+0000"])))
+    with pytest.raises(MalformedResponse, match="OTHER"):
+        md.history_bars("AAPL", BarSpan.D, END, 10)
+
+
+def test_chart_budget_is_refused_when_spent_and_the_bot_budget_is_untouched():
+    cfg = enabled()
+    slice_ = cfg.chart.requests_per_minute
+    bot_budget = budget_from_config(cfg, clock=lambda: 0.0)
+    bot_transport = Scripted(ok({"result": [{"symbol": "AAA", "delay_minutes": "0",
+                                             "result": [bar_row(0)]}]}))
+    bot_md = market_data_from_config(cfg, bot_transport, bot_budget)
+    md, transport, chart_budget = chart_adapter(
+        cfg, *[ok(daily_body("AAPL", [])) for _ in range(slice_)])
+    for _ in range(slice_):
+        md.history_bars("AAPL", BarSpan.D, END, 10)
+    with pytest.raises(BudgetExhausted):  # refused locally: nothing sent, nothing queued
+        md.history_bars("AAPL", BarSpan.D, END, 10)
+    assert len(transport.sent) == slice_
+    assert chart_budget.usage(BARS_PATH).remaining == 0
+    # The bot's own budget never saw a chart request and still serves its full bars slice.
+    usage = bot_budget.usage(BARS_PATH)
+    assert usage.used == 0 and usage.limit == cfg.environment.requests_per_route_per_minute - slice_
+    assert len(bot_md.bars(["AAA"], 1)) == 1
+    assert bot_budget.usage(BARS_PATH).used == 1 and len(bot_transport.sent) == 1
+
+
+def test_bot_bars_slice_is_unchanged_while_charts_are_off():
+    cfg = config.load(BOT)
+    assert not cfg.chart.webull_enabled
+    budget = budget_from_config(cfg)
+    assert budget.limit_for(BARS_PATH).max_requests == cfg.environment.requests_per_route_per_minute
+    with pytest.raises(AdapterConfigError, match="webull_enabled"):
+        chart_market_data_from_config(cfg, Scripted())
+
+
+def test_chart_slice_is_carved_from_a_route_specific_bars_limit_and_checked():
+    cfg = enabled()
+    env = cfg.environment
+    per_minute = replace(cfg, environments={**cfg.environments, cfg.environment_name: replace(
+        env, route_limits={**env.route_limits, BARS_PATH: (50, 60)})})
+    assert budget_from_config(enabled(per_minute)).limit_for(BARS_PATH).max_requests == (
+        50 - cfg.chart.requests_per_minute)
+    # Other routes keep their limits.
+    assert budget_from_config(enabled(per_minute)).limit_for(Route.SNAPSHOT.path).max_requests \
+        == env.requests_per_route_per_minute
+    other_window = replace(cfg, environments={**cfg.environments, cfg.environment_name: replace(
+        env, route_limits={BARS_PATH: (50, 30)})})
+    with pytest.raises(AdapterConfigError, match="per 60 s"):
+        budget_from_config(enabled(other_window))
+    with pytest.raises(AdapterConfigError, match="below"):
+        budget_from_config(enabled(requests_per_minute=env.requests_per_route_per_minute))
+
+
+def test_http_429_pauses_only_the_chart_budget():
+    cfg = enabled()
+    bot_budget = budget_from_config(cfg, clock=lambda: 0.0)
+    md, _, chart_budget = chart_adapter(cfg, WireResponse(429, {"error_code": "TOO_MANY"}))
+    with pytest.raises(RateLimited):
+        md.history_bars("AAPL", BarSpan.D, END, 10)
+    assert chart_budget.usage(BARS_PATH).paused_for_seconds > 0
+    assert bot_budget.usage(BARS_PATH).paused_for_seconds == 0
+
+
+def test_naive_end_is_refused():
+    md, transport, _ = chart_adapter(enabled())
+    with pytest.raises(ValueError):
+        md.history_bars("AAPL", BarSpan.M1, END.replace(tzinfo=None), 10)
+    assert transport.sent == []
+
+
+def test_only_the_api_chart_reads_chart_bars():
+    """The trading loop, discovery and history never call history_bars: chart reads cannot
+    take the bot's budget or its source."""
+    callers = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "src").rglob("*.py")
+                     if ".history_bars(" in p.read_text("utf-8"))
+    assert callers == ["src/aperture/api/chart.py"]

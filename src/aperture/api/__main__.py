@@ -4,6 +4,11 @@
 `[api] remote_port` (bearer token always required). `pair` makes a new bearer token for the phone,
 keeps only its SHA-256 under data_dir, and leaves the pairing link in a 0600 file there for the
 owner to move to the phone. The token is never printed. A new pairing replaces the old one.
+
+With `[chart] webull_enabled`, `serve` builds the chart's own Webull market-data client first
+(app key and secret from the environment, never the account id; it may wait for a token
+confirmation like the bot). If that fails, GET /chart answers 503 with the cause and everything
+else is served as usual.
 """
 
 from __future__ import annotations
@@ -14,7 +19,27 @@ import threading
 from pathlib import Path
 
 from aperture import config as config_module
-from aperture.api.server import make_remote_server, make_server, pair, settings_from_config
+from aperture.api.server import (
+    ApiServer,
+    make_remote_server,
+    make_server,
+    pair,
+    settings_from_config,
+)
+
+
+def attach_chart_source(server: ApiServer, cfg: config_module.Config) -> None:
+    """Give GET /chart its Webull source when `[chart] webull_enabled`; else leave it off."""
+    if not cfg.chart.webull_enabled:
+        return
+    from aperture.broker.base import BrokerError
+    from aperture.broker.webull import chart_market_data_from_config
+
+    try:
+        server.chart.use(chart_market_data_from_config(cfg))
+    except BrokerError as exc:  # AdapterConfigError: credentials, token, budget slice
+        server.chart.use(None, f"chart market data unavailable: {exc}")
+        print(f"aperture api: GET /chart is off: {exc}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,7 +50,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="serve the API (default) or pair a phone")
     args = parser.parse_args(argv)
     try:
-        settings = settings_from_config(config_module.load(args.config))
+        cfg = config_module.load(args.config)
+        settings = settings_from_config(cfg)
         if args.command == "pair":
             link_file = pair(settings)
     except config_module.ConfigError as exc:
@@ -39,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
               "when the phone first connects with it.")
         return 0
     server = make_server(settings)
+    attach_chart_source(server, cfg)
     print(f"aperture api on http://{settings.host}:{server.server_port}/", file=sys.stderr)
     remote = None
     if settings.remote_hosts:
