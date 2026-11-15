@@ -37,6 +37,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("config/bot.toml"))
     parser.add_argument("--research-settings", type=Path, default=Path("config/research.toml"))
     parser.add_argument("--replay-settings", type=Path, default=Path("config/replay.toml"))
+    parser.add_argument("--notes", type=Path,
+                        help="text file the model also reads, e.g. ideas already rejected")
     parser.add_argument("--strategy-folder", help="folder under strategies/ (default: active)")
     parser.add_argument("--out", type=Path, help="proposals folder (default from [advisor])")
     return parser
@@ -51,11 +53,13 @@ def main(argv: Sequence[str] | None = None, client_factory=AnthropicClient) -> i
         parser.error("--backtest-data goes with --backtest")
     try:
         cfg = config_module.load(args.config)
+        notes = args.notes.read_text("utf-8") if args.notes else ""
         if args.backtest is not None:
             replay = load_settings(args.replay_settings)
             result = run_backtest_advisor(cfg, args.backtest, args.backtest_data,
                                           client_factory(cfg.advisor), replay, datetime.now(UTC),
-                                          folder=args.strategy_folder, out_dir=args.out)
+                                          folder=args.strategy_folder, out_dir=args.out,
+                                          notes=notes)
         else:
             days = [date.fromisoformat(d) for d in args.days]
             result = run_advisor(
@@ -67,6 +71,7 @@ def main(argv: Sequence[str] | None = None, client_factory=AnthropicClient) -> i
                 datetime.now(UTC),
                 folder=args.strategy_folder,
                 out_dir=args.out,
+                notes=notes,
             )
     except (AdvisorError, ResearchError, ReplayError, ObserverError, CalendarRefused,
             config_module.ConfigError, OSError, ValueError, tomllib.TOMLDecodeError) as exc:

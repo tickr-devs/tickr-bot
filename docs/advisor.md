@@ -15,7 +15,9 @@ export ANTHROPIC_API_KEY=...         # set in your shell; never in the repo
 python -m aperture.advisor --days 2026-11-16 2026-11-17 2026-11-18 2026-11-19 2026-11-20
 ```
 
-Options: `--strategy-folder` (default: the active strategy from `bot.toml`), `--out`
+Options: `--notes <file>` (text the model also reads, sent as written, for example ideas
+already tested and rejected from docs/strategy-ledger.md; give only fitting-period results so no
+hold-out number reaches it), `--strategy-folder` (default: the active strategy from `bot.toml`), `--out`
 (default `<data_dir>/<advisor.proposals_dir>`), `--config`, `--research-settings`,
 `--replay-settings`. Exit code 0 = proposal or "no change" written, 2 = refused.
 

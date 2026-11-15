@@ -48,9 +48,12 @@ def system_prompt(max_changes: int, backtest: bool = False) -> str:
     return SYSTEM.format(max_changes=max_changes, evidence=evidence)
 
 
-def user_prompt(strategy_toml: str, evidence: dict[str, Any], source: str) -> str:
+def user_prompt(strategy_toml: str, evidence: dict[str, Any], source: str, notes: str = "") -> str:
+    owner = ("<already_tested>\nThe owner's notes on ideas already tested. Do not propose these "
+             "again unless the evidence gives a new reason.\n" + notes.strip()
+             + "\n</already_tested>\n\n") if notes.strip() else ""
     return (
-        "<strategy_toml>\n" + strategy_toml.rstrip() + "\n</strategy_toml>\n\n"
+        owner + "<strategy_toml>\n" + strategy_toml.rstrip() + "\n</strategy_toml>\n\n"
         "<strategy_source>\n" + source.rstrip() + "\n</strategy_source>\n\n"
         "<evidence>\n" + json.dumps(evidence, indent=1, sort_keys=True) + "\n</evidence>\n\n"
         "Propose the next version as JSON in the required format."

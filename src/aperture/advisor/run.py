@@ -138,6 +138,7 @@ def run_advisor(
     now: datetime,
     folder: str | None = None,
     out_dir: Path | None = None,
+    notes: str = "",
 ) -> RunResult:
     """Live mode: evidence from recorded trading days."""
     settings = config.advisor
@@ -182,7 +183,7 @@ def run_advisor(
             f"total R {simulated['total_r']}",
         ),
     )
-    return ask(config, client, base, evidence, tuning, now, out_dir)
+    return ask(config, client, base, evidence, tuning, now, out_dir, notes)
 
 
 def run_backtest_advisor(
@@ -194,6 +195,7 @@ def run_backtest_advisor(
     now: datetime,
     folder: str | None = None,
     out_dir: Path | None = None,
+    notes: str = "",
 ) -> RunResult:
     """Backtest mode: evidence from the fitting period of a backtest run; the hold-out is
     withheld and judges the proposal later (advisor.judge)."""
@@ -233,18 +235,21 @@ def run_backtest_advisor(
             "pool": run.report.get("pool"),
         },
     )
-    return ask(config, client, base, evidence, tuning, now, out_dir)
+    return ask(config, client, base, evidence, tuning, now, out_dir, notes)
 
 
 def ask(config: Config, client: AdvisorClient, base: Base, evidence: dict, tuning: Tuning,
-        now: datetime, out_dir: Path | None) -> RunResult:
-    """One request, then the checked proposal and its files. Shared by both modes."""
+        now: datetime, out_dir: Path | None, notes: str = "") -> RunResult:
+    """One request, then the checked proposal and its files. Shared by both modes.
+    `notes`: the owner's text the model should also read (for example ideas already tested
+    and rejected), sent as written; it counts against max_evidence_bytes."""
     settings = config.advisor
     name, version, folder = base.name, base.version, base.folder
     evidence_text = json.dumps(evidence, indent=1, sort_keys=True)
-    if len(evidence_text.encode("utf-8")) > settings.max_evidence_bytes:
+    size = len(evidence_text.encode("utf-8")) + len(notes.encode("utf-8"))
+    if size > settings.max_evidence_bytes:
         raise AdvisorError(
-            f"evidence is {len(evidence_text.encode('utf-8'))} bytes, "
+            f"evidence and notes are {size} bytes, "
             f"[advisor] max_evidence_bytes is {settings.max_evidence_bytes}"
         )
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
@@ -252,7 +257,7 @@ def ask(config: Config, client: AdvisorClient, base: Base, evidence: dict, tunin
     out = base_out / f"{stamp}-{name}"
     out.mkdir(parents=True, exist_ok=False)
     system = prompt.system_prompt(settings.max_changes, backtest=tuning.backtest)
-    user = prompt.user_prompt(base.text, evidence, base.source)
+    user = prompt.user_prompt(base.text, evidence, base.source, notes)
     (out / "evidence.json").write_text(evidence_text + "\n", "utf-8")
     (out / "request.txt").write_text(f"{system}\n----- user -----\n{user}\n", "utf-8")
     record = dict(tuning.record) if tuning.record is not None else None

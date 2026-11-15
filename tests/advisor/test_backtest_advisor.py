@@ -245,3 +245,20 @@ def test_reads_what_the_real_backtest_writes(tmp_path):
     evidence = json.loads((advised.folder / "evidence.json").read_text())
     fitting = sum(2 for d in days if d.isoformat() < starts)
     assert evidence["trades"]["trades"] == fitting < len(trades)
+
+
+def test_notes_reach_the_request(tmp_path):
+    make_root(tmp_path)
+    results = write_results(tmp_path / "results")
+    data = write_minutes(tmp_path / "data")
+    notes = tmp_path / "rejected.md"
+    notes.write_text("ORB 5-min: fit +1%, validation -1%. Rejected.")
+    client = FakeClient(answer(no_change="thin"))
+    code = main(["--backtest", str(results), "--backtest-data", str(data),
+                 "--config", str(tmp_path / "config" / "bot.toml"),
+                 "--replay-settings", str(ROOT / "config" / "replay.toml"),
+                 "--out", str(tmp_path / "out"), "--notes", str(notes)],
+                client_factory=lambda _: client)
+    assert code == 0
+    user = client.calls[0][1]
+    assert user.startswith("<already_tested>") and "ORB 5-min: fit +1%" in user
