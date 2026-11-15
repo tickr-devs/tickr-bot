@@ -59,6 +59,9 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    **The demo day job stays unloaded during the live session** («Во время живой сессии задача
    демо-дня `local.tickr.demo` выгружена»). It never talks to Webull, but it runs a second,
    simulated bot on this Mac and serves the apps' "Demo day"; on Monday neither is wanted.
+   Since the live loop (#427) the demo also keeps a steady CPU load (quotes and bars every few
+   seconds, all session long), which must not compete with the real bot's quote handling
+   («демо-день постоянно нагружает процессор и не должен мешать настоящему боту»).
    Unload it until after the close (16:00), then load it again if you want the demo back:
    ```sh
    launchctl bootout gui/$(id -u)/local.tickr.demo           # no output, or "No such process"
