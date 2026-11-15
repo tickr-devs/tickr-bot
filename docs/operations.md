@@ -236,10 +236,20 @@ stopped, after the close or on a non-trading day:
   a `.gz` that is unreadable or holds other bytes (look at both, remove the wrong one).
 - Chart cache (`chart/<env>/<SYMBOL>/<date>.json`, written by the API): day files older than
   `[chart] cache_max_age_days` are deleted (the dry run counts them); symbol folders stay.
+- History cache (`history/<env>/<date>/`, the bot's prior-session bars): day folders older than
+  `[market_data] history_cache_max_age_days` are deleted whole; the bot only reads today's
+  folder. A folder holding anything but cache files (`<SYMBOL>-<n>.jsonl`, `.partial`), a
+  symlink or a subfolder is kept with a printed cause.
+- Old archives: only when `[run] maintain_archive_max_age_days` is above 0 (shipped 0: never).
+  A capture or decision day folder older than that many days and outside the last
+  `maintain_keep_sessions` sessions, whose files are all `*.jsonl.gz`, is deleted, under the same guards as archiving (open trade, missing `day-end`). Captured days
+  feed replay, research and the advisor: deleting them loses that evidence for good.
+- Both delete steps are planned before anything is archived, so the dry run lists exactly what
+  `--apply` deletes, and today is never touched.
 - `--apply` also runs a SQLite WAL checkpoint; it deletes no row and never vacuums.
 - Refused (exit 3, nothing touched) while the bot holds its lock, when the calendar cannot count
   the sessions, or when the database is missing or has another schema. Exit 1 means one file
-  failed to archive: the run stopped there and that file is left as it was.
+  failed to archive or delete: the run stopped there and what is left stays for the next run.
 
 ## The Mac must be awake
 

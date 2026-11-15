@@ -68,6 +68,7 @@ class RunConfig:
     database_busy_timeout_seconds: Decimal
     backups_dir: str
     maintain_keep_sessions: int
+    maintain_archive_max_age_days: int
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,7 @@ class MarketDataConfig:
     stream_reserved_subscribe_requests: int
     candidate_retry_seconds: Decimal
     history_dir: str
+    history_cache_max_age_days: int
     stream_reconnect_delay_seconds: Decimal
     stream_max_symbols: int
     stream_reserved_symbols: int
@@ -468,7 +470,13 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         )
     if run.maintain_keep_sessions < 1:
         raise ConfigError("[run] maintain_keep_sessions must be at least 1 (today is always kept)")
+    if run.maintain_archive_max_age_days < 0:
+        raise ConfigError("[run] maintain_archive_max_age_days must be 0 (never delete archives) "
+                          "or a number of days")
     md: MarketDataConfig = built["market_data"]
+    if md.history_cache_max_age_days < 1:
+        raise ConfigError("[market_data] history_cache_max_age_days must be at least 1 (today's "
+                          "cache is in use)")
     if (md.candidate_subscriptions + md.observer_subscriptions
             > md.stream_max_symbols - md.stream_reserved_symbols):
         raise ConfigError(

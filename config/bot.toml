@@ -14,6 +14,10 @@ backups_dir = "backups"
 # Closed sessions whose capture and decision folders `tickr maintain` leaves uncompressed (today is never touched);
 # older finished days are gzipped in place; read by maintain.
 maintain_keep_sessions = 20
+# Days, counted back from today's New York date, an archived (all *.jsonl.gz) finished capture or decision day folder is
+# kept; `tickr maintain --apply` deletes older ones. 0 = never delete (shipped: retention is an open owner question,
+# docs/backlog.md); read by maintain.
+maintain_archive_max_age_days = 0
 
 [strategy]
 # Active strategy name = folder under strategies/; its decisions may reach the safety layer.
@@ -289,6 +293,9 @@ history_sessions = 5
 # Prior-session bar cache folder relative to [run] data_dir; files go to <history_dir>/<environment>/<NY date asked
 # on>/<symbol>-<sessions>.jsonl (replay bar format); read by data.history.
 history_dir = "history"
+# Days, counted back from today's New York date, a day folder of the prior-session history cache is kept; `tickr
+# maintain --apply` deletes older ones (the bot only reads today's folder); at least 1; read by maintain.
+history_cache_max_age_days = 2
 # Most discovery candidates (best first) kept on the L1 stream besides the position and the strategy's WATCH symbols, so
 # a candidate has a fresh quote the minute the strategy first says ENTER; count. At most stream_max_symbols minus
 # stream_reserved_symbols (checked when config loads); read by runtime.market.

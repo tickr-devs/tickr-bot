@@ -275,3 +275,131 @@ def test_a_chart_file_that_vanishes_is_skipped(setup, monkeypatch):
 
     monkeypatch.setattr(Path, "stat", vanishing)
     assert [f for f, _ in maintain.stale_chart_files(cfg, TODAY)] == [kept]
+
+
+def _history(cfg, day: date, names=("AAPL-5.jsonl", "BRK.B-5.partial")) -> Path:
+    folder = (cfg.root / cfg.run.data_dir / cfg.market_data.history_dir / cfg.environment_name
+              / day.isoformat())
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (folder / name).write_text("{}\n", "utf-8")
+    return folder
+
+
+def test_history_cache_days_past_the_max_age_are_deleted_whole(setup, capsys):
+    path, cfg, _, _ = setup
+    age = cfg.market_data.history_cache_max_age_days
+    today, kept = _history(cfg, TODAY), _history(cfg, TODAY - timedelta(days=age))
+    old = _history(cfg, TODAY - timedelta(days=age + 1))
+    assert main(["--config", str(path), "maintain"]) == 0
+    out = capsys.readouterr().out
+    assert f"would delete history cache {old}: 2 files, 6 bytes" in out
+    assert str(kept) not in out and str(today) not in out
+    assert old.is_dir()
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert f"delete history cache {old}" in capsys.readouterr().out
+    assert not old.exists() and today.is_dir() and kept.is_dir()
+
+
+def test_history_folder_with_a_stranger_or_symlink_is_kept(setup, tmp_path, capsys):
+    path, cfg, _, _ = setup
+    stranger = _history(cfg, date(2025, 1, 2), ("AAPL-5.jsonl", "notes.txt"))
+    linked = _history(cfg, date(2025, 1, 3), ())
+    victim = tmp_path / "victim.jsonl"
+    victim.write_text("{}\n", "utf-8")
+    (linked / "AAPL-5.jsonl").symlink_to(victim)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "AAPL-5.jsonl").write_text("{}\n", "utf-8")
+    (stranger.parent / "2025-01-04").symlink_to(outside, target_is_directory=True)
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert f"keep history cache {stranger}: notes.txt is not ours to delete" in out
+    assert f"keep history cache {linked}: AAPL-5.jsonl is not ours to delete" in out
+    assert (stranger / "AAPL-5.jsonl").exists() and victim.exists()
+    assert (outside / "AAPL-5.jsonl").exists()
+
+
+def _with_archive_age(path: Path, days: int):
+    text = path.read_text("utf-8").replace("maintain_archive_max_age_days = 0",
+                                           f"maintain_archive_max_age_days = {days}")
+    path.write_text(text, "utf-8")
+    return config.load(path)
+
+
+def test_archives_are_never_deleted_with_the_shipped_zero(setup, capsys):
+    path, cfg, _, _ = setup
+    assert cfg.run.maintain_archive_max_age_days == 0
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert "archived" not in capsys.readouterr().out
+    assert _archived(cfg, OLD) and all(f.is_dir() for f in _folders(cfg, OLD))
+
+
+def test_old_archives_are_deleted_only_after_archiving_and_with_a_day_end(setup, capsys):
+    path, cfg, store, run_id = setup
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0  # OLD, RECENT archived
+    capsys.readouterr()
+    cfg = _with_archive_age(path, (TODAY - NO_DAY_END).days - 1)  # OLD, NO_DAY_END past it
+    for folder in _folders(cfg, NO_DAY_END):  # archived by hand, but never finished
+        for file in list(folder.iterdir()):
+            compress(file)
+    assert main(["--config", str(path), "maintain"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("would delete archived") == 2  # OLD: capture and decisions
+    assert out.count("no day-end record for this day") == 2  # NO_DAY_END, both folders
+    assert all(f.is_dir() for f in _folders(cfg, OLD))
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert not any(f.exists() for f in _folders(cfg, OLD))
+    assert all(f.is_dir() for f in _folders(cfg, NO_DAY_END) + _folders(cfg, RECENT))
+
+
+def test_old_archive_with_a_plain_file_or_an_open_trade_is_kept(setup, capsys):
+    path, cfg, store, run_id = setup
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    capsys.readouterr()
+    cfg = _with_archive_age(path, 1)
+    stranger = _folders(cfg, RECENT)[0] / "notes.txt"
+    stranger.write_text("x", "utf-8")
+    assert main(["--config", str(path), "maintain"]) == 0
+    assert "notes.txt is not ours to delete" in capsys.readouterr().out
+    with store.transaction():
+        store.execute(
+            "INSERT INTO trades(trade_id, run_id, symbol, state, entry_quantity, "
+            "entry_limit_price, stop_price, planned_loss_usd, opened_at) "
+            "VALUES ('t1', ?, 'ABCD', 'open', '1', '1', '1', '1', ?)",
+            (run_id, _at(OLD).isoformat()))
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    # OLD and RECENT archives (4 folders) and NO_DAY_END, still plain (2)
+    assert capsys.readouterr().out.count("a trade opened 2026-11-05 is still open") == 6
+    assert all(f.is_dir() for f in _folders(cfg, OLD) + _folders(cfg, RECENT))
+    assert stranger.exists()
+
+
+def test_archive_and_history_ages_validated(tmp_path):
+    (tmp_path / "config").mkdir()
+    text = (ROOT / "config" / "bot.toml").read_text("utf-8")
+    path = tmp_path / "config" / "bot.toml"
+    path.write_text(text.replace("maintain_archive_max_age_days = 0",
+                                 "maintain_archive_max_age_days = -1"))
+    with pytest.raises(config.ConfigError, match="maintain_archive_max_age_days"):
+        config.load(path)
+    path.write_text(text.replace("history_cache_max_age_days = 2",
+                                 "history_cache_max_age_days = 0"))
+    with pytest.raises(config.ConfigError, match="history_cache_max_age_days"):
+        config.load(path)
+
+
+def test_archives_are_not_deleted_by_the_run_that_made_them_nor_inside_kept_sessions(setup,
+                                                                                        capsys):
+    path, cfg, _, _ = setup
+    cfg = _with_archive_age(path, 1)
+    for folder in _folders(cfg, KEPT[0]):  # gzipped by hand inside the kept sessions
+        for file in list(folder.iterdir()):
+            compress(file)
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0  # archives OLD, RECENT
+    assert "delete archived" not in capsys.readouterr().out
+    assert all(f.is_dir() for f in _folders(cfg, OLD) + _folders(cfg, KEPT[0]))
+    assert main(["--config", str(path), "maintain", "--apply"]) == 0
+    assert capsys.readouterr().out.count("delete archived") == 4  # OLD and RECENT
+    assert all(f.is_dir() for f in _folders(cfg, KEPT[0]))
