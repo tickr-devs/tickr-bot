@@ -22,6 +22,7 @@ from aperture.calendar import SessionCalendar
 from aperture.data.base import ScreenerKind
 from aperture.demo import run as demo
 from aperture.demo.scenario import DemoCommand, ScenarioError, SymbolPlan, load
+from aperture.demo.world import Texture, day_bars, textured
 
 ROOT = Path(__file__).resolve().parents[2]
 SUNDAY = date(2026, 11, 15)  # the demo day falls back to Friday 2026-11-13
@@ -36,7 +37,8 @@ def repo(tmp_path: Path) -> Path:
 
 
 def small(scenario_path: Path):
-    """The real demo.toml, cut down to one past session and two symbols today (fast)."""
+    """The real demo.toml, cut down to one past session and two symbols today (fast), on the
+    plain planned bars (no texture), so a stop-out's metrics are exact."""
     full = load(scenario_path)
     breakout = SymbolPlan("AAA", D(20), D(3000), ScreenerKind.GAINERS, (
         ("09:30", "09:45", D("24.50"), HOT), ("10:30", "10:32", D(21), HOT)))
@@ -48,6 +50,7 @@ def small(scenario_path: Path):
     late = SymbolPlan("CCC", D(40), D(3000), ScreenerKind.GAINERS, (
         ("11:05", "11:20", D("46.00"), HOT),))
     return replace(full, past=((breakout,),), today=(again, held, late), clock="11:30",
+                   texture=Texture(*(D(0),) * 6),
                    commands=(DemoCommand("10:35", api.CommandKind.ENTRY_STOP_ON, None),
                              DemoCommand("10:38", api.CommandKind.ENTRY_STOP_OFF, None)))
 
@@ -76,6 +79,37 @@ def test_unknown_key_is_refused(tmp_path):
         "[market]\n", "[market]\n# x\nsurprise = 1\n"), "utf-8")
     with pytest.raises(ScenarioError, match="surprise"):
         load(path)
+
+
+def test_bad_texture_is_refused(tmp_path):
+    path = tmp_path / "demo.toml"
+    text = (ROOT / "config" / "demo.toml").read_text("utf-8")
+    path.write_text(re.sub(r'texture_pull = "[^"]*"', 'texture_pull = "1"', text), "utf-8")
+    with pytest.raises(ScenarioError, match="texture_pull"):
+        load(path)
+
+
+def test_texture_gives_real_looking_bars_the_same_on_every_run():
+    scenario = load(ROOT / "config" / "demo.toml")
+    plan = scenario.today[0]
+    day = SessionCalendar.load(ROOT / "config" / "calendar").day(FRIDAY)
+    planned = day_bars(plan.symbol, day, plan.base, plan.volume, plan.legs, scenario.wick)
+    bars = textured(planned, scenario.texture)
+    assert bars == textured(planned, scenario.texture)
+    assert [b.start for b in bars] == [b.start for b in planned]
+    assert all(b.low <= min(b.open, b.close) <= max(b.open, b.close) <= b.high for b in bars)
+    # No gaps between minutes: each bar opens at the previous close.
+    assert all(a.close == b.open for a, b in zip(bars, bars[1:], strict=False))
+    flat = sum(b.open == b.close for b in bars)
+    assert flat < len(bars) // 4 < sum(b.open == b.close for b in planned)
+    assert len({b.volume for b in bars}) > len(bars) // 2
+    # Noise never makes a breakout where the plan holds: no close above the planned close there,
+    # and every high reaches it.
+    holding = [(b, p) for b, p in zip(bars, planned, strict=True) if p.open == p.close]
+    assert holding and all(b.close <= p.close <= b.high for b, p in holding)
+    off = Texture(*(D(0),) * 6)
+    assert [(b.close, b.volume) for b in textured(planned, off)] == [
+        (b.close, b.volume) for b in planned]
 
 
 def test_sessions_skip_weekends():

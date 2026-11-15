@@ -33,7 +33,7 @@ from aperture.api import contract as api
 from aperture.api.server import ApiServer, make_server, settings_from_config
 from aperture.calendar import CalendarRefused, SessionCalendar, ny_date_of
 from aperture.demo.scenario import DemoCommand, Scenario, SymbolPlan
-from aperture.demo.world import World, day_bars, flat_bars, ny
+from aperture.demo.world import World, day_bars, flat_bars, ny, textured
 
 MARKER = ".aperture-demo"  # marks a folder this command built and may delete
 COPIED = ("config", "strategies")
@@ -161,11 +161,10 @@ class Session:
         world = World(ny(self.day, s.bot_start), market_day, s.half_spread, s.quote_size,
                       s.provider)
         for plan in plans:
-            history = [b for d in self.history_days for b in flat_bars(
-                plan.symbol, self.calendar.day(d), plan.base, s.history_volume)]
-            world.add_symbol(plan.symbol, day_bars(plan.symbol, market_day, plan.base,
-                                                   plan.volume, plan.legs, s.wick),
-                             history, (plan.screener,))
+            history = [b for d in self.history_days for b in textured(flat_bars(
+                plan.symbol, self.calendar.day(d), plan.base, s.history_volume), s.texture)]
+            today = day_bars(plan.symbol, market_day, plan.base, plan.volume, plan.legs, s.wick)
+            world.add_symbol(plan.symbol, textured(today, s.texture), history, (plan.screener,))
         return world
 
     def run(self, world: World) -> int:

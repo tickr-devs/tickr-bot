@@ -14,15 +14,22 @@ session of the world's market day.
 
 `go_live` switches the clock from simulated to real time: from then on a bot sleep really
 sleeps and the world's time moves with the wall clock, shifted by a fixed offset.
+
+`textured` roughens a planned path for `aperture demo`, so its charts look like a real tape:
+bodies and wicks of different sizes and an uneven volume, the same on every run (seeded by
+symbol and minute). The rehearsals keep the plain planned bars.
 """
 
 from __future__ import annotations
 
+import random
 import time
+import zlib
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as wall_time
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 
 from aperture.broker.base import Acknowledgement
 from aperture.broker.fake import FakeBroker
@@ -32,6 +39,7 @@ from aperture.types import Bar, OrderRequest, OrderType, Quote, Side
 
 M1 = timedelta(minutes=1)
 CENT = Decimal("0.01")  # prices are quoted in cents
+SHARE = Decimal(1)  # volumes are whole shares
 SECONDS_PER_MINUTE = Decimal(60)
 # Screener row fields the fake feed fills in (protocol values of a US common stock row).
 SCREENER_EXCHANGE = "NSQ"
@@ -86,6 +94,65 @@ def day_bars(symbol: str, market_day: MarketDay, base: Decimal, volume: Decimal,
                         min(price, close) - wick, close, minute_volume))
         price = close
     return bars
+
+
+@dataclass(frozen=True)
+class Texture:
+    """How `textured` roughens planned bars; every field is a fraction, 0 turns that part off.
+
+    drift: spread of the random step the price's deviation from the plan takes each minute,
+    of the price. pull: share of the deviation kept into the next minute (below 1), so the price
+    wanders around the plan and comes back to it. wick: largest extra wick beyond the body, of the
+    price. move: extra spread of that step on a moving bar, of the bar's planned move, so a run-up
+    has red bars and pullbacks. move_cap: the most that extra spread can be, of the price (a
+    collapse stays a collapse). volume: largest change of a minute's volume either way, of that
+    volume (below 1)."""
+
+    drift: Decimal
+    pull: Decimal
+    wick: Decimal
+    move: Decimal
+    move_cap: Decimal
+    volume: Decimal
+
+
+def textured(bars: Sequence[Bar], texture: Texture) -> list[Bar]:
+    """`bars` with the price wandering around their closes, each bar opening at the previous
+    close, uneven wicks and volume. On a bar whose planned move is no bigger than its wick (the
+    plan holds or drifts) the close never rises above the planned close and the high reaches it,
+    so the noise never closes above the recent highs: a breakout happens only on a leg of the
+    plan. Deterministic: seeded by the first bar's symbol and minute."""
+    if not bars:
+        return []
+    first = bars[0]
+    rng = random.Random(zlib.crc32(f"{first.symbol} {first.start.isoformat()}".encode()))
+    drift, pull = float(texture.drift), float(texture.pull)
+    move, move_cap = float(texture.move), float(texture.move_cap)
+    wick, volume = float(texture.wick), float(texture.volume)
+    # Deviations from the plan, one on legs and one while it holds, so a leg's wide swings do
+    # not carry into the quiet minutes after it.
+    leg, hold = 0.0, 0.0
+    previous: Decimal | None = None
+    out = []
+    for bar in bars:
+        planned = float(abs(bar.close - bar.open) / bar.close)
+        open_ = bar.open if previous is None else previous
+        upper_wick = bar.high - max(bar.open, bar.close)
+        if abs(bar.close - bar.open) > upper_wick:  # a leg: the price may run either side
+            leg = pull * leg + rng.gauss(0.0, drift + min(move * planned, move_cap))
+            close = (bar.close * Decimal(repr(1.0 + leg))).quantize(CENT)
+            top = max(open_, close) + upper_wick
+        else:  # holding or drifting: never close above the plan, and reach it
+            leg, hold = 0.0, pull * hold + rng.gauss(0.0, drift)
+            close = (bar.close * Decimal(repr(1.0 - abs(hold)))).quantize(CENT, ROUND_FLOOR)
+            top = max(open_, bar.close) + upper_wick
+        bottom = min(open_, close) - (min(bar.open, bar.close) - bar.low)
+        high = (top + bar.close * Decimal(repr(rng.uniform(0.0, wick)))).quantize(CENT)
+        low = (bottom - bar.close * Decimal(repr(rng.uniform(0.0, wick)))).quantize(CENT)
+        shares = (bar.volume * Decimal(repr(1.0 + rng.uniform(-volume, volume)))).quantize(SHARE)
+        out.append(Bar(bar.symbol, bar.start, open_, high, max(low, CENT), close, shares))
+        previous = close
+    return out
 
 
 class World:

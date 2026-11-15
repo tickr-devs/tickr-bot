@@ -24,6 +24,12 @@ What it does:
   (planned loss, stop confirmation time, MAE/MFE) and the entry send of each position and
   trade (sent once, outcome, fill time) come from those records too, so every demo trade has
   them.
+- Draws each symbol's minute bars from its planned legs, then roughens them (`[market] texture_*`):
+  the price wanders around the plan, run-ups get red bars and pullbacks, wicks and volume vary.
+  The noise is seeded by symbol and day, so every run draws the same tape. Where the plan holds
+  or drifts, a close never sits above its planned close and every high reaches it, so noise
+  alone never closes above the recent highs: the breakouts, stop-outs and refusals stay where
+  the legs put them.
 - Plays the past sessions in `config/demo.toml` fast, then the demo day (today if it is a session,
   otherwise the latest session before it) fast up to `[demo] clock`, then in real time with the
   local API listening, until Ctrl-C. About two to three minutes before the API is up.

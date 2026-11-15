@@ -16,7 +16,7 @@ from typing import Any
 
 from aperture.api.contract import CommandKind
 from aperture.data.base import ScreenerKind
-from aperture.demo.world import Leg
+from aperture.demo.world import Leg, Texture
 
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9.]*$")
 LEG_FIELDS = 4  # from, to, price at the end, volume per minute
@@ -56,6 +56,7 @@ class Scenario:
     quote_size: Decimal
     wick: Decimal
     history_volume: Decimal
+    texture: Texture
     today: tuple[SymbolPlan, ...]
     commands: tuple[DemoCommand, ...]
     past: tuple[tuple[SymbolPlan, ...], ...]
@@ -92,6 +93,17 @@ def _positive(where: str, value: Any) -> Decimal:
         raise ScenarioError(f"{where} is not a decimal string: {value!r}") from exc
     if not number.is_finite() or number <= 0:
         raise ScenarioError(f"{where} must be above zero: {value!r}")
+    return number
+
+
+def _fraction(where: str, value: Any, below_one: bool) -> Decimal:
+    try:
+        number = Decimal(_text(where, value))
+    except InvalidOperation as exc:
+        raise ScenarioError(f"{where} is not a decimal string: {value!r}") from exc
+    if not number.is_finite() or number < 0 or (below_one and number >= 1):
+        bound = ", below 1" if below_one else ""
+        raise ScenarioError(f"{where} must be 0 or more{bound}: {value!r}")
     return number
 
 
@@ -158,7 +170,8 @@ def load(path: Path) -> Scenario:
         "root_dir", "environment", "api_port", "observers", "provider",
         "bot_start", "past_stop", "clock"})
     market = _keys("[market]", top["market"], {
-        "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume"})
+        "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume", "texture_drift",
+        "texture_pull", "texture_wick", "texture_move", "texture_move_cap", "texture_volume"})
     observers = demo["observers"]
     if not isinstance(observers, list) or not all(isinstance(o, str) for o in observers):
         raise ScenarioError("[demo] observers must be a list of strings")
@@ -180,6 +193,13 @@ def load(path: Path) -> Scenario:
         quote_size=_positive("[market] quote_size_shares", market["quote_size_shares"]),
         wick=_positive("[market] wick_usd", market["wick_usd"]),
         history_volume=_positive("[market] history_volume", market["history_volume"]),
+        texture=Texture(
+            drift=_fraction("[market] texture_drift", market["texture_drift"], False),
+            pull=_fraction("[market] texture_pull", market["texture_pull"], True),
+            wick=_fraction("[market] texture_wick", market["texture_wick"], False),
+            move=_fraction("[market] texture_move", market["texture_move"], False),
+            move_cap=_fraction("[market] texture_move_cap", market["texture_move_cap"], False),
+            volume=_fraction("[market] texture_volume", market["texture_volume"], True)),
         today=_day("today", plan["today"]),
         commands=tuple(_command(f"commands[{n}]", c) for n, c in enumerate(plan["commands"])),
         past=tuple(_day(f"past[{n}]", day) for n, day in enumerate(plan["past"])),
