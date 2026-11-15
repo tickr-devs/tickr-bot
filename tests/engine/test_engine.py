@@ -759,3 +759,55 @@ def test_a_failed_open_orders_read_does_not_skip_protection(store):
         assert not e.reconcile()
     assert [r.order_type for r in b.sent if r.order_type == OrderType.STOP_LOSS]
     assert legs(e, t, Leg.STOP)[0].quantity == D(2)
+
+
+def blind(broker):
+    """Make the positions read fail, as it would on a response the adapter cannot parse."""
+    def fail():
+        raise RateLimited("x")
+
+    broker.positions = fail
+
+
+def test_a_fill_is_protected_while_the_positions_read_fails(store):
+    b = FakeBroker()
+    e = make(store, b)
+    t = enter(e)
+    blind(b)
+    b.fill(legs(e, t, Leg.ENTRY)[0].client_order_id, D(2), D(10))
+    run(e, 3)
+    assert has(e, Fence.BROKER_READ)
+    assert working_stops(b) == D(2) and not has(e, Fence.UNPROTECTED)
+    assert e.trade(t).state is TradeState.OPEN
+    assert_single_sends(b)
+
+
+def test_nothing_is_sold_or_closed_while_the_positions_read_fails(store):
+    b, e, t = opened(store)
+    blind(b)
+    e.request_exit(t, "operator-flatten")
+    run(e, 4)
+    assert legs(e, t, Leg.EXIT) == []  # no closing order on a quantity nobody could read
+    assert working_stops(b) == D(2)
+    (stop,) = legs(e, t, Leg.STOP)
+    b.fill(stop.client_order_id, D(2), D("9.80"))
+    run(e, 3)
+    assert e.trade(t).state is not TradeState.CLOSED  # Detail says flat; positions unread
+    del b.positions
+    run(e, 2)
+    assert e.trade(t).state is TradeState.CLOSED
+    assert_single_sends(b)
+
+
+def test_an_unknown_send_is_not_declared_absent_while_the_positions_read_fails(store):
+    b = FakeBroker()
+    b.script("unknown-lost")
+    e = make(store, b)
+    t = enter(e)
+    blind(b)
+    run(e, CFG.orders.unknown_absent_reads + 2)
+    assert legs(e, t, Leg.ENTRY)[0].send_state is SendState.UNKNOWN
+    del b.positions
+    run(e, 2)
+    assert e.trade(t).state is TradeState.CLOSED
+    assert len(b.sent) == 1
