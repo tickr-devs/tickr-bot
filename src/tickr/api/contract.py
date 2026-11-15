@@ -386,6 +386,15 @@ class AccountResponseV1:
 
 
 @dataclass(frozen=True)
+class PairedV1:
+    """POST /pair on the remote port: the bearer token the phone keeps from now on. Answered
+    once per pairing code; the server keeps only the token's SHA-256."""
+
+    token: str
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
 class CommandAcceptedV1:
     """POST /commands/*: the command is queued for the bot, not yet executed."""
 
@@ -1520,6 +1529,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "command-v1": CommandV1,
     "status-response-v1": StatusResponseV1,
     "command-accepted-v1": CommandAcceptedV1,
+    "paired-v1": PairedV1,
     "pending-commands-v1": PendingCommandsV1,
     "error-v1": ErrorV1,
     "days-v1": DaysV1,

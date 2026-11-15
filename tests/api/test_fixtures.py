@@ -65,6 +65,7 @@ from tickr.api.contract import (
     ObserversV1,
     ObserverTradeV1,
     ObserverV1,
+    PairedV1,
     PendingCommandsV1,
     PriceAfterV1,
     ReconcileJobV1,
@@ -131,6 +132,8 @@ def documents() -> dict[str, object]:
         "status-response-v1.unavailable": _response(
             None, None, False, "the bot has not written a status file"),
         "command-accepted-v1": CommandAcceptedV1(command=command, warning=None),
+        # An example only: real tokens never leave the phone's Keychain and the Mac's memory.
+        "paired-v1": PairedV1(token="example-token-not-a-secret_0123456789-abcdef"),
         "command-accepted-v1.warning": CommandAcceptedV1(
             command=command, warning="the bot does not look alive; the command runs only if "
                                      "the bot reads it before it expires"),

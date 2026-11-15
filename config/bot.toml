@@ -171,10 +171,14 @@ remote_hosts = []
 remote_port = 8767
 # File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m tickr.api pair`, never the token itself; read by the api server.
 remote_token_hash_file = "remote-token.sha256"
-# Random bytes in a newly paired bearer token (URL-safe text is about 4/3 as long); read by `python -m tickr.api pair`.
+# Random bytes in a newly made bearer token and in a one-time pairing code (URL-safe text is about 4/3 as long), at least 16 (128 bits); read by `python -m tickr.api pair` and the api server (POST /pair).
 remote_token_bytes = 32
-# File where `pair` leaves the pairing link (it holds the token) for the owner to move to the phone, relative to data_dir; written 0600, never printed, deleted by the api server on the first request that presents the new token; read by `pair` and the api server.
+# File where `pair` leaves the pairing link (it holds the one-time pairing code, never the token) for the owner to move to the phone, relative to data_dir; written 0600, never printed, deleted by the api server when the phone redeems the code or the code has expired; read by `pair` and the api server.
 remote_pairing_file = "remote-pairing-link"
+# File holding the SHA-256 (hex) of the waiting one-time pairing code and when it expires, relative to data_dir; written 0600 by `pair`, deleted by the api server when the code is redeemed or found expired; read by the api server (POST /pair).
+remote_pairing_code_file = "remote-pairing-code.json"
+# Seconds a pairing code stays redeemable after `pair` made it; later the phone gets 401 and the owner runs `pair` again; read by `pair`.
+remote_pairing_code_ttl_seconds = 600
 # Status file the bot writes and the API serves, relative to data_dir; read by the bot's status writer and the api server.
 status_file = "status.json"
 # Account file the bot writes after each successful broker read of positions and open orders (reconciliation) and the API serves at GET /account, relative to data_dir; read by the bot's account writer and the api server.

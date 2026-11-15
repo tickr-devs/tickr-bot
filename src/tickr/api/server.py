@@ -6,7 +6,9 @@ browser. Remote access (the phone, through an HTTPS proxy on this Mac such as `t
 has its own loopback listener, `[api] remote_port`: every request there must carry the paired
 bearer token whatever its Host, and its Host must be one of `[api] remote_hosts`. Whether a token
 is needed is decided by the listener a request arrives on, never by a header the caller chooses.
-The server keeps only the token's SHA-256, written by `pair`.
+The one exception is POST /pair there: the phone redeems the one-time pairing code `pair` left
+in the pairing link, once and before it expires, for a new token. The server keeps only SHA-256
+digests of the code and the token.
 Commands additionally require `Content-Type: application/json`, which a cross-site form
 cannot send without a CORS preflight, and this server answers no preflight.
 
@@ -30,7 +32,7 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -46,6 +48,7 @@ from tickr.api.contract import (
     CommandKind,
     ContractError,
     ErrorV1,
+    PairedV1,
     PendingCommandsV1,
     RiskSettings,
     SessionSettings,
@@ -89,6 +92,9 @@ IDEMPOTENCY = "idempotency"  # folder under <commands_dir> holding one file per 
 _LABEL = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?"
 REMOTE_HOST = re.compile(rf"^{_LABEL}(\.{_LABEL})+(:[0-9]+)?$")
 BEARER = "Bearer "
+PAIR_ROUTE = "/pair"  # POST on the remote port only: redeem the one-time pairing code
+# Fewest random bytes in a token or pairing code: 128 bits, the usual floor for a bearer secret.
+MIN_SECRET_BYTES = 16
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,8 @@ class ApiSettings:
     token_hash_path: Path
     token_bytes: int
     pairing_path: Path
+    pairing_code_path: Path  # SHA-256 of the waiting one-time code and its expiry
+    pairing_code_ttl_seconds: int
     status_path: Path
     inbox: Path
     idempotency: Path  # <commands_dir>/idempotency: remembered Idempotency-Key answers
@@ -153,8 +161,10 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         raise ConfigError("[api] remote_port must differ from port")
     if api.request_timeout_seconds <= 0:
         raise ConfigError("[api] request_timeout_seconds must be positive")
-    if api.remote_token_bytes <= 0:
-        raise ConfigError("[api] remote_token_bytes must be positive")
+    if api.remote_token_bytes < MIN_SECRET_BYTES:
+        raise ConfigError(f"[api] remote_token_bytes must be at least {MIN_SECRET_BYTES}")
+    if api.remote_pairing_code_ttl_seconds <= 0:
+        raise ConfigError("[api] remote_pairing_code_ttl_seconds must be positive")
     if api.idempotency_key_ttl_seconds <= api.command_max_age_seconds:
         raise ConfigError("[api] idempotency_key_ttl_seconds must be above "
                           "command_max_age_seconds, so a repeat can never queue a command twice")
@@ -198,6 +208,8 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         token_hash_path=data / api.remote_token_hash_file,
         token_bytes=api.remote_token_bytes,
         pairing_path=data / api.remote_pairing_file,
+        pairing_code_path=data / api.remote_pairing_code_file,
+        pairing_code_ttl_seconds=api.remote_pairing_code_ttl_seconds,
         status_path=data / api.status_file,
         inbox=data / api.commands_dir / contract.INBOX,
         idempotency=data / api.commands_dir / IDEMPOTENCY,
@@ -272,6 +284,8 @@ class ApiServer(ThreadingHTTPServer):
         self.remote = remote
         # Shared with the other listener so both count the inbox under one lock.
         self.inbox_lock = inbox_lock or threading.Lock()
+        # One redemption at a time, so a pairing code can never yield two tokens.
+        self.pair_lock = threading.Lock()
         # Shared too, so one replay at a time whichever listener started it.
         self.lab = lab or LabReplay(settings.lab, clock)
         self.page = (STATIC_DIR / "status.html").read_bytes()
@@ -496,6 +510,8 @@ class Handler(BaseHTTPRequestHandler):
             if origin is not None and origin != f"https://{host}":
                 self._error("forbidden_origin", f"Origin {origin!r} is not allowed")
                 return False
+            if self.command == "POST" and self._path() == PAIR_ROUTE:
+                return True  # the pairing code in the body is the credential: see _redeem
             return self._authorized()
         if host in self.server.allowed_host_headers:
             if origin is not None and origin not in self.server.allowed_origins:
@@ -527,8 +543,6 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(presented, expected):
             self._error("unauthorized", "the bearer token is not the paired one", challenge)
             return False
-        # The phone has the token now: the pairing link left for the owner is no longer needed.
-        settings.pairing_path.unlink(missing_ok=True)
         return True
 
     def _path(self) -> str:
@@ -596,6 +610,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == LAB_REPLAY:
                 self._start_lab_replay()
                 return
+            if path == PAIR_ROUTE and self.server.remote:
+                self._redeem()
+                return
             if path not in COMMAND_ROUTES:
                 if path in GET_ROUTES or path.startswith(DAY_PREFIX):
                     self._error("method_not_allowed", "use GET", {"Allow": "GET"})
@@ -638,6 +655,50 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(202, result)
         except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
             self._error("internal", type(exc).__name__)
+
+    def _redeem(self) -> None:
+        """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`
+        left in the pairing link buys one new bearer token, 200 paired-v1. The code is burnt on
+        success and when found expired; a wrong code changes nothing. Neither the code nor the
+        token is ever logged or echoed in an error."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        if set(body) != {"code"} or not isinstance(body["code"], str) or not body["code"]:
+            self._error("bad_request", 'body must be exactly {"code": "<pairing code>"}')
+            return
+        settings = self.server.settings
+        with self.server.pair_lock:
+            try:
+                waiting = json.loads(settings.pairing_code_path.read_text("ascii"))
+                digest = waiting["sha256"]
+                expires_at = contract.parse_time(waiting["expires_at"])
+                if not isinstance(digest, str):
+                    raise TypeError("sha256")
+            except FileNotFoundError:
+                self._error("unauthorized", "no pairing is waiting; run `python -m tickr.api "
+                            "pair` on the Mac")
+                return
+            except (OSError, ValueError, KeyError, TypeError, ContractError) as exc:
+                self._error("unavailable",
+                            f"the pairing code file is unreadable ({type(exc).__name__})")
+                return
+            if self.server.clock() >= expires_at:
+                settings.pairing_code_path.unlink(missing_ok=True)
+                settings.pairing_path.unlink(missing_ok=True)
+                self._error("unauthorized", "the pairing code has expired; run `python -m "
+                            "tickr.api pair` on the Mac again")
+                return
+            presented = hashlib.sha256(body["code"].encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(presented, digest):
+                self._error("unauthorized", "the pairing code is not the waiting one")
+                return
+            token = secrets.token_urlsafe(settings.token_bytes)
+            _write_private(settings.token_hash_path,
+                           hashlib.sha256(token.encode("utf-8")).hexdigest() + "\n")
+            settings.pairing_code_path.unlink(missing_ok=True)
+            settings.pairing_path.unlink(missing_ok=True)
+        self._json(200, PairedV1(token=token))
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {}: start the simulated replay, 202 with its state, or 409
@@ -869,21 +930,27 @@ def _write_private(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def pairing_link(address: str, token: str) -> str:
-    return "tickr://pair?" + urlencode({"url": address, "token": token})
+def pairing_link(address: str, code: str) -> str:
+    return "tickr://pair?" + urlencode({"url": address, "code": code})
 
 
-def pair(settings: ApiSettings) -> Path:
-    """Make a new bearer token for the phone, store only its SHA-256 (replacing any earlier
-    pairing, so the old phone token stops working) and leave the pairing link in a 0600 file for
-    the owner to move to the phone. The token is never printed or logged; the API deletes the
-    link file when the phone first uses the token. Returns the link file's path.
+def pair(settings: ApiSettings, now: datetime | None = None) -> Path:
+    """Start a new pairing: revoke the current phone token (its hash file is deleted, so the
+    old phone stops working at once), make a one-time pairing code that expires after
+    `[api] remote_pairing_code_ttl_seconds`, keep only its SHA-256, and leave the pairing link
+    with the code in a 0600 file for the owner to move to the phone. The phone redeems the code
+    once at POST /pair for its token, so a copy of the link left anywhere is worthless after
+    that or after expiry. Nothing secret is printed or logged. Returns the link file's path.
     """
     if not settings.remote_hosts:
         raise ConfigError("[api] remote_hosts is empty: set the Tailscale name of this Mac first")
-    token = secrets.token_urlsafe(settings.token_bytes)
-    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    _write_private(settings.token_hash_path, digest + "\n")
+    now = now or _now()
+    settings.token_hash_path.unlink(missing_ok=True)
+    code = secrets.token_urlsafe(settings.token_bytes)
+    expires_at = now + timedelta(seconds=settings.pairing_code_ttl_seconds)
+    _write_private(settings.pairing_code_path, json.dumps({
+        "sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+        "expires_at": contract.format_time(expires_at)}) + "\n")
     address = f"https://{settings.remote_hosts[0]}"
-    _write_private(settings.pairing_path, pairing_link(address, token) + "\n")
+    _write_private(settings.pairing_path, pairing_link(address, code) + "\n")
     return settings.pairing_path

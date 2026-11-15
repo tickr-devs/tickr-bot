@@ -1,9 +1,10 @@
 """Run the local API: `python -m tickr.api [--config config/bot.toml] [serve|pair]`.
 
 `serve` opens the local port and, when `[api] remote_hosts` is set, the phone-facing
-`[api] remote_port` (bearer token always required). `pair` makes a new bearer token for the phone,
-keeps only its SHA-256 under data_dir, and leaves the pairing link in a 0600 file there for the
-owner to move to the phone. The token is never printed. A new pairing replaces the old one.
+`[api] remote_port` (bearer token always required). `pair` revokes the phone's token and leaves a
+pairing link with a one-time code in a 0600 file under data_dir for the owner to move to the
+phone; the phone redeems the code once, at POST /pair on the remote port, for its new token.
+Only SHA-256 digests are kept; nothing secret is printed.
 
 With `[chart] webull_enabled`, and once the chart probe C1 is recorded as passed for the
 environment (`python -m tickr.probes chart-client`), `serve` builds the chart's own Webull
@@ -33,6 +34,7 @@ from tickr.api.server import (
 from tickr.broker.base import BrokerError
 from tickr.data.base import MarketData
 
+SECONDS_PER_MINUTE = 60
 CHART_STARTING = "chart market data is starting: its Webull client is still being built"
 
 
@@ -110,11 +112,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
     if args.command == "pair":
-        print("Paired a new phone token; any earlier phone token no longer works.\n"
-              f"The pairing link is in {link_file} (readable by you only).\n"
-              "Move it to the iPhone by AirDrop (not Notes or Messages, which sync to iCloud) and\n"
-              "open it there, or paste it in Settings > Pair with Mac. The API deletes the file\n"
-              "when the phone first connects with it.")
+        minutes = settings.pairing_code_ttl_seconds // SECONDS_PER_MINUTE
+        print("Started a new pairing; any earlier phone token no longer works.\n"
+              f"The pairing link is in {link_file} (readable by you only). It holds a one-time\n"
+              f"code, valid for {minutes} min and for one phone only; the API must be running.\n"
+              "Move it to the iPhone by AirDrop and open it there, or paste it in Settings >\n"
+              "Pair with Mac. Once the phone has paired, the link is worthless and the API\n"
+              "deletes the file.")
         return 0
     server = make_server(settings)
     print(f"tickr api on http://{settings.host}:{server.server_port}/", file=sys.stderr)

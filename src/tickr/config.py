@@ -154,6 +154,8 @@ class ApiConfig:
     remote_token_hash_file: str
     remote_token_bytes: int
     remote_pairing_file: str
+    remote_pairing_code_file: str
+    remote_pairing_code_ttl_seconds: int
     status_file: str
     account_file: str
     account_stale_seconds: Decimal
