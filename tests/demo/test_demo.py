@@ -157,6 +157,19 @@ def test_folder_is_separate_and_only_a_demo_folder_is_replaced(tmp_path):
         demo.build_folder(root, scenario)
 
 
+def test_a_second_demo_on_the_same_folder_is_refused_before_touching_it(tmp_path):
+    root = repo(tmp_path)
+    scenario = small(root / "config" / "demo.toml")
+    folder = demo.build_folder(root, scenario).parents[1]
+    (folder / "running.txt").write_text("the first demo's files")
+    with demo.running_lock(root, scenario):  # the first demo
+        with pytest.raises(demo.DemoRefused, match="another `tickr demo` is running"):
+            demo.run_demo(root, scenario, SUNDAY, live=False, log=lambda line: None)
+        assert (folder / "running.txt").exists()  # not wiped
+    with demo.running_lock(root, scenario):  # released when the first one ends
+        pass
+
+
 def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
     root = repo(tmp_path)
     scenario = small(root / "config" / "demo.toml")

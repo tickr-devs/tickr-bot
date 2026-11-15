@@ -17,5 +17,6 @@ authorization/
 xcuserdata/
 # The `tickr demo` folder (rebuilt by the command, never real data).
 /demo/
+/demo.lock
 # SwiftPM pins Xcode writes for the root workspace; each project and package commits its own.
 /Tickr.xcworkspace/xcshareddata/swiftpm/

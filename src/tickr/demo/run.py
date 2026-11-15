@@ -16,13 +16,15 @@ Steps:
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import re
 import shutil
 import signal
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -95,10 +97,35 @@ def _open_environment(cfg: config_module.Config) -> str:
     raise DemoRefused("no environment trades without an owner authorization to copy")
 
 
+def demo_root(repo: Path, scenario: Scenario) -> Path:
+    return (repo / scenario.root_dir).resolve()
+
+
+@contextlib.contextmanager
+def running_lock(repo: Path, scenario: Scenario) -> Iterator[None]:
+    """Held for the whole demo, taken before the folder is wiped: a second `tickr demo` on
+    the same folder is refused while the first runs, and leaves its folder alone. The lock file
+    sits beside the folder (the folder itself is deleted and rebuilt); the OS drops the lock
+    when the process ends, however it ends."""
+    root = demo_root(repo, scenario)
+    path = root.with_name(root.name + ".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise DemoRefused(f"another `tickr demo` is running on {root}; "
+                              "stop it first (its folder is left as it is)") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def build_folder(repo: Path, scenario: Scenario) -> Path:
     """(Re)build the demo folder and return the path of its bot.toml."""
     base = config_module.load(repo / "config" / "bot.toml")
-    root = (repo / scenario.root_dir).resolve()
+    root = demo_root(repo, scenario)
     if root == repo.resolve() or repo.resolve().is_relative_to(root):
         raise DemoRefused(f"[demo] root_dir {scenario.root_dir!r} would replace the repo")
     if root == (base.root / base.run.data_dir).resolve():
@@ -252,7 +279,14 @@ def _demo_day(session: Session, world: World, cfg: config_module.Config,
 def run_demo(repo: Path, scenario: Scenario, today: date, *, live: bool = True,
              log: Callable[[str], None] = print) -> int:
     """Build the folder, run the past sessions, then the demo day. With `live` False the demo
-    day stops at `clock` instead of going on in real time (tests)."""
+    day stops at `clock` instead of going on in real time (tests). Refused before anything is
+    touched while another demo runs on the same folder."""
+    with running_lock(repo, scenario):
+        return _run_demo(repo, scenario, today, live=live, log=log)
+
+
+def _run_demo(repo: Path, scenario: Scenario, today: date, *, live: bool,
+              log: Callable[[str], None]) -> int:
     config_path = build_folder(repo, scenario)
     cfg = config_module.load(config_path)
     calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
