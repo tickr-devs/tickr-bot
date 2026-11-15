@@ -35,6 +35,8 @@ names. The first response of each kind and every failed one are kept in `<out>/r
    the minute-level rule below and uses no minute data. Ranking by the day's high is look-ahead,
    so the cap is set not to bind; `pool_cap.csv` records each session's candidates and drops,
    and the report states on how many sessions it bound.
+   A symbol with any non-positive daily price in the window (forward adjustment can push old
+   bars below zero) is left out of selection; `pool_refused.csv` lists it with the bar.
    `select --rule liquid` builds a pool without look-ahead instead, for research beyond
    gainers: per session the `liquid_top_count` symbols with the highest previous-session dollar
    volume whose previous close is at least `liquid_min_price_usd`. Only the previous session

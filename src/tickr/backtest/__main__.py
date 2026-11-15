@@ -20,11 +20,14 @@ from tickr.backtest.settings import BacktestSettings, load_settings
 from tickr.backtest.universe import (
     CAP_FILE,
     POOL_FILE,
+    REFUSED_FILE,
+    drop_unpriced,
     read_pool,
     select_liquid,
     select_pool,
     write_caps,
     write_pool,
+    write_refused,
 )
 from tickr.broker.base import BrokerError
 from tickr.calendar import CalendarRefused, SessionCalendar
@@ -56,7 +59,7 @@ def step_select(cfg: Config, settings: BacktestSettings, out: Path, first: date,
                 last: date, rule: str = RULE_GAINERS, daily: Path | None = None) -> Path:
     window = fetch.daily_window(_calendar(cfg), first, last,
                                 cfg.market_data.history_max_lookback_days)
-    rows = fetch.load_daily((daily or out) / fetch.DAILY_DIR)
+    rows, refused = drop_unpriced(fetch.load_daily((daily or out) / fetch.DAILY_DIR))
     sessions = [d.ny_date for d in window]
     if rule == RULE_LIQUID:
         pool, caps = select_liquid(rows, sessions, settings.liquid_top_count,
@@ -68,6 +71,9 @@ def step_select(cfg: Config, settings: BacktestSettings, out: Path, first: date,
     path = out / POOL_FILE
     write_pool(pool, path)
     write_caps(caps, out / CAP_FILE)
+    write_refused(refused, out / REFUSED_FILE)
+    if refused:
+        print(f"{len(refused)} symbols left out for non-positive daily prices -> {REFUSED_FILE}")
     bound = [c for c in caps if c.dropped]
     if bound and rule == RULE_LIQUID:
         print(f"{sum(c.dropped for c in bound)} chosen symbol-days had no bar on the day")

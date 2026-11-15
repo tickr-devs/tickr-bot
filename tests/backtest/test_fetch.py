@@ -11,7 +11,13 @@ import pytest
 from tickr.backtest import fetch
 from tickr.backtest.errors import BacktestError
 from tickr.backtest.settings import load_settings
-from tickr.backtest.universe import read_pool, select_liquid, select_pool, write_pool
+from tickr.backtest.universe import (
+    drop_unpriced,
+    read_pool,
+    select_liquid,
+    select_pool,
+    write_pool,
+)
 from tickr.broker.base import RateLimited
 from tickr.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
 from tickr.broker.webull import InstrumentPage
@@ -231,3 +237,17 @@ def test_previous_close_on_minute_scale_undoes_split_and_dividend_adjustment():
     assert abs(scaled / Decimal(101) - Decimal("99.9") / Decimal("100.8")) < Decimal("1e-12")
     with pytest.raises(BacktestError):
         dividend.previous_close_on_minute_scale(Decimal(0))
+
+
+def test_symbols_with_a_non_positive_daily_price_are_left_out():
+    def bar(symbol, day, close):
+        return {"symbol": symbol, "date": day, "open": close, "high": close, "low": close,
+                "close": close, "volume": "1000000"}
+    rows = [bar("OK", "2026-11-12", "10"), bar("OK", "2026-11-13", "11"),
+            bar("NEG", "2026-11-12", "-84.0548"), bar("NEG", "2026-11-13", "12")]
+    kept, refused = drop_unpriced(rows)
+    assert {r["symbol"] for r in kept} == {"OK"}
+    assert refused == {"NEG": "2026-11-12 open -84.0548 not positive"}
+    pool, _ = select_pool(kept, [date(2026, 11, 12), date(2026, 11, 13)], Decimal(5),
+                          Decimal(1), 10)
+    assert [e.symbol for e in pool] == ["OK"]

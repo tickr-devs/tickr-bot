@@ -72,6 +72,34 @@ class CapRecord:
         return self.candidates - self.kept
 
 
+REFUSED_FILE = "pool_refused.csv"
+
+
+def drop_unpriced(rows: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Daily rows without the symbols that have any non-positive price in the window, and the
+    cause per dropped symbol. Forward adjustment can push old bars of a symbol to zero or below
+    (seen: SCLX 2026-04-30 close -84.05); its day-to-day ratios are then meaningless too, so the
+    whole symbol is left out of selection rather than one row."""
+    rows = list(rows)
+    refused: dict[str, str] = {}
+    for row in rows:
+        if row["symbol"] in refused:
+            continue
+        for key in ("open", "high", "low", "close"):
+            if Decimal(row[key]) <= 0:
+                refused[row["symbol"]] = f"{row['date']} {key} {row[key]} not positive"
+                break
+    return [r for r in rows if r["symbol"] not in refused], refused
+
+
+def write_refused(refused: dict[str, str], path: Path) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("symbol", "cause"))
+        for symbol in sorted(refused):
+            writer.writerow((symbol, refused[symbol]))
+
+
 def select_pool(rows: Iterable[dict[str, Any]], sessions: Sequence[date],
                 change_percent: Decimal, dollar_volume_floor: Decimal,
                 max_per_day: int) -> tuple[list[PoolEntry], list[CapRecord]]:
