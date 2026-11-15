@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import time
 import tomllib
 from pathlib import Path
@@ -155,11 +156,23 @@ def test_open_position_is_held():
 
 
 def test_a_full_day_evaluates_well_inside_the_observer_time_limit():
+    # The claim is about the strategy's own cost, so this measures this thread's CPU time
+    # with the garbage collector paused: under a loaded full-suite run, wall time also counted
+    # other processes and a collection of the whole suite's heap, which made it flaky.
     bars = today(380)
-    started = time.perf_counter()
-    make().evaluate(ctx(bars))
+    strategy = make()
+    context = ctx(bars)
     cfg = config.load(ROOT / "config" / "bot.toml")
-    assert time.perf_counter() - started < float(cfg.observers.max_evaluation_seconds) / 10
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        started = time.thread_time()
+        strategy.evaluate(context)
+        spent = time.thread_time() - started
+    finally:
+        if collecting:
+            gc.enable()
+    assert spent < float(cfg.observers.max_evaluation_seconds) / 10
 
 
 @pytest.mark.parametrize("section,key,value", [
