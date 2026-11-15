@@ -31,7 +31,7 @@ LINUX = "linux"  # a server or container: no alert channel today
 def _ready(config_path: Path) -> dict[str, str]:
     """Create data and token folders; return an environment with the credential names set."""
     cfg = config_module.load(config_path)
-    (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True)
+    (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True, mode=0o700)
     env = cfg.environment
     return {env.app_key_variable: CANARY, env.app_secret_variable: CANARY,
             env.account_variable: CANARY, cfg.alerts.imessage_recipient_variable: CANARY}
@@ -122,6 +122,27 @@ def test_missing_token_dir(config_path):
     environ = _ready(config_path)
     cfg = config_module.load(config_path)
     (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).rmdir()
+    assert _run(config_path, environ).cause is PreflightCause.TOKEN_DIR_MISSING
+
+
+@pytest.mark.parametrize("mode", [0o750, 0o705, 0o755])
+def test_token_dir_open_to_other_accounts_is_refused(config_path, mode):
+    environ = _ready(config_path)
+    cfg = config_module.load(config_path)
+    token_dir = cfg.root / cfg.run.data_dir / cfg.environment.token_dir
+    token_dir.chmod(mode)
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.TOKEN_DIR_OPEN
+    (check,) = [c for c in result.checks if c.name.value == "token-dir"]
+    assert f"chmod 700 {token_dir}" in check.detail
+
+
+def test_token_dir_that_is_a_file_is_refused(config_path):
+    environ = _ready(config_path)
+    cfg = config_module.load(config_path)
+    token_dir = cfg.root / cfg.run.data_dir / cfg.environment.token_dir
+    token_dir.rmdir()
+    token_dir.write_text("")
     assert _run(config_path, environ).cause is PreflightCause.TOKEN_DIR_MISSING
 
 

@@ -8,6 +8,7 @@ placeholders; every value is XML-escaped; an unknown or unfilled placeholder is 
 from __future__ import annotations
 
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -168,6 +169,24 @@ def _calendar_xml(at: LocalTime, weekdays: tuple[int, ...]) -> str:
         for day in weekdays
     )
     return f"<array>{entries}</array>"
+
+
+# Permission bits of the group and others: a file or folder holding secrets has none of them.
+PRIVATE_MODE_MASK = stat.S_IRWXG | stat.S_IRWXO
+
+
+def check_env_file(path: Path) -> None:
+    """The credentials file the jobs source must exist and be readable by its owner only. Only
+    its metadata is looked at, never its contents."""
+    try:
+        info = path.stat()
+    except OSError as exc:
+        raise ConfigError(f"env file {path} not usable ({type(exc).__name__}); create it with "
+                          "chmod 600 (docs/operations.md, One-time setup, step 2)") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ConfigError(f"env file {path} is not a regular file")
+    if stat.S_IMODE(info.st_mode) & PRIVATE_MODE_MASK:
+        raise ConfigError(f"env file {path} is readable by other accounts (run: chmod 600 {path})")
 
 
 @dataclass(frozen=True)

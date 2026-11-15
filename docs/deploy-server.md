@@ -63,7 +63,7 @@ alert channel is an owner decision (see "Open owner decisions").
 5. Token folder in the data volume (name from `[environments.*] token_dir`), then preflight:
    ```sh
    C="docker compose -f ops/docker/compose.yaml --profile jobs"
-   $C run --rm preflight mkdir -p /app/data/webull-token-sandbox
+   $C run --rm preflight mkdir -m 700 /app/data/webull-token-sandbox
    $C run --rm preflight; echo $?      # today: 1, alert-channel-missing
    ```
 6. API: `docker compose -f ops/docker/compose.yaml up -d api`;

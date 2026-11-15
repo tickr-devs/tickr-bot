@@ -336,7 +336,7 @@ def test_no_credential_value_reaches_output_logs_files_or_the_database(
     monkeypatch.setattr(cli, "NOTIFIER", lambda alerts: None)
 
     assert cli.main(["--config", str(bot_toml), "check-config"]) == 0
-    (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True)
+    (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True, mode=0o700)
     runtime_main.main(["--config", str(bot_toml), "preflight"])
 
     # A protected trade through the real adapter, in the bot's own database.
