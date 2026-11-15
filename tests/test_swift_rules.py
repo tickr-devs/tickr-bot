@@ -81,6 +81,15 @@ def test_l10n_file_holds_only_localized_entries(tmp_path):
     assert found == [(1, "Quit"), (2, "Quit now"), (3, "Flatten every position")]
 
 
+def test_l10n_part_files_beside_an_l10n_file_hold_words_too(tmp_path):
+    source = 'static let quit = LocalizedStringResource("app.quit", defaultValue: "Quit")\n'
+    part = write(tmp_path, source, "L10n+Codes.swift")
+    # Without an L10n.swift beside it, a file named like a part is ordinary code.
+    assert load().text_violations(part) == [(1, "app.quit"), (1, "Quit")]
+    write(tmp_path, "", "L10n.swift")
+    assert load().text_violations(part) == []
+
+
 def test_words_cannot_hide_in_constants_raw_values_or_symbol_shapes(tmp_path):
     source = (
         'enum Section: String { case overview = "Overview of the day" }\n'
