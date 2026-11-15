@@ -29,8 +29,8 @@ Strategy and research:
 - **No-progress exit** as a strategy version: close when price has not moved X R in favour within N minutes; X and N were never chosen (old Q43); judge it by replay and observers first (old #083). Built as candidate `price-action-v2` with provisional X and N (docs/observers.md); not active.
 - **Trailing values to start from** when the trailing stop is built: stop = best price since entry minus 1.5 ATR, at least the fill price after +1.0 R, only tightens; provisional, never confirmed (old #153-34, Q10).
 - **Trigger confirmation**: two consecutive executable quotes through the trigger before ENTER, against one-quote flicker entries (old trading review of #153). Built in candidate `price-action-v2` (docs/observers.md); not active.
-- **Acceleration check** (price velocity, dollar volume per minute) as a strategy rule, kept only if recorded days show it helps (old #153-33, ADR 0013).
-- **Screener source and rank vs outcome**: do the list (gainers/losers/top actives) or the rank predict the move? Study on recorded days (old Q46).
+- **Acceleration check** (price velocity, dollar volume per minute) as a strategy rule, kept only if recorded days show it helps (old #153-33, ADR 0013). Studied on history 2026-11-15: it does not help (docs/strategy-ledger.md); recheck on recorded live days.
+- **Screener source and rank vs outcome**: do the list (gainers/losers/top actives) or the rank predict the move? Study on recorded days (old Q46). History study 2026-11-15 (docs/strategy-ledger.md): the top gainer ranks fade, the list source predicts nothing; recheck on recorded live days.
 
 Broker and safety features:
 - **Tradability check before entry**: instrument profile `status` (seen OC/CO/NT, ignored today) and trade-instrument `trade_policy`/`forbid_reason` (CLOSE_ONLY, DENIED, HALTED) refuse entries with a typed cause and never block exits; first probe how a halt shows in snapshot, profile and stream (old #158).
