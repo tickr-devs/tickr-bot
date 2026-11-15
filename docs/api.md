@@ -81,6 +81,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. |
+| GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/explain?symbol=<ticker>` | `200` `explain-v1`: the latest decision of the active strategy recorded today for one symbol, with every check. `404 not_found` when none is recorded today. |
 | GET | `/observers?date=<YYYY-MM-DD>` | `200` `observers-v1`: every configured observer with its recorded decisions of that date (default today), oldest first, its simulated day result and simulated trades. |
 | GET | `/decisions?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `decisions-v1`: every decision recorded for one symbol on one date (active strategy and observers, marked), oldest first, with checks. |
@@ -471,6 +472,29 @@ A journal row it cannot read makes every field `null` with `entry_cause` = `jour
 unreadable: <error>`; in the bot it is journaled once per trade (`entry-send-failed`) and the
 step goes on. The bot reads it again on every status write while the trade is open, and keeps
 it once the trade is closed (or a row is unreadable). `/days/<date>` computes it the same way.
+
+### GET /jobs (read-only)
+
+When the bot's scheduled work last ran and runs next. Code: `src/aperture/api/jobs.py`. Sources,
+none written by this request: the status file, the database opened read-only, `[runtime]`,
+`[orders] reconcile_interval_seconds`, and the session calendar with `[session]` cutoffs. The bot
+reads and writes nothing for it.
+
+- `bot_state` and `status_stale`: as in GET /status (`bot_state` null without a valid status file).
+  `bot_started_at`: when the status's run started (database `runs`), or null.
+- `reconcile`: `interval_seconds`, `last_at` (the status's `freshness.last_broker_read_at`), and
+  `next_at` = `last_at + interval_seconds` only while the bot runs (state `running`, status not
+  stale); otherwise null.
+- `backup`: the verified daily database backup, which the bot makes on its first loop pass of each
+  New York date. `last_at` is the newest `backup` journal row. `last_failed_at` and
+  `last_failed_error` (the error's type name, never its text) are set only when a `backup-failed`
+  row is newer than that. `cause` says why `last_at` is null (no database yet, no backup yet).
+- `launchd`: the preflight, bot and watchdog jobs as configured: `local_time` "HH:MM" in the Mac's
+  own time zone and launchd `weekdays` (1 = Monday ... 5 = Friday). No next time is computed: the
+  API does not guess the Mac's time zone rules, and the session calendar still decides each day.
+- `session`: today's New York date with `regular_open`, `last_entry_at`, `flatten_at` and
+  `regular_close`, or null with `session_cause` (a weekend, a closure, a half day with
+  `half_days_enabled = false`, a calendar that does not cover today).
 
 ### GET /chart (read-only, market data)
 

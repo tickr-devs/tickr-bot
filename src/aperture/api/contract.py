@@ -670,6 +670,71 @@ class SettingsV1:
     api_version: int = _const(API_VERSION)
 
 
+# ---------------------------------------------------------------- jobs (read-only)
+
+
+@dataclass(frozen=True)
+class LaunchdJobV1:
+    """One launchd job on the Mac, as configured in [runtime]: it starts at `local_time` ("HH:MM",
+    the Mac's own time zone) on `weekdays` (launchd numbering: 1 = Monday ... 5 = Friday,
+    0 and 7 = Sunday). The session calendar still decides whether the day trades."""
+
+    name: str  # preflight, bot or watchdog
+    local_time: str
+    weekdays: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ReconcileJobV1:
+    """The bot's broker reconciliation, every `interval_seconds` while it runs."""
+
+    interval_seconds: Decimal
+    last_at: datetime | None  # the bot's last successful broker read (status freshness)
+    next_at: datetime | None  # last_at + interval while the bot is running, else null
+
+
+@dataclass(frozen=True)
+class BackupJobV1:
+    """The bot's verified daily database backup, made on its first loop pass of each New York
+    date. `last_failed_*` only when a failure is newer than the last backup. `cause`: why
+    `last_at` is null."""
+
+    last_at: datetime | None
+    last_failed_at: datetime | None
+    last_failed_error: str | None  # the error's type name, never its text (it may hold paths)
+    cause: str | None
+
+
+@dataclass(frozen=True)
+class SessionTimesV1:
+    """Today's New York session and the bot's cutoffs from the calendar and [session]."""
+
+    day: date
+    regular_open: datetime
+    last_entry_at: datetime
+    flatten_at: datetime
+    regular_close: datetime
+
+
+@dataclass(frozen=True)
+class JobsV1:
+    """GET /jobs: when the bot's scheduled work last ran and runs next, for the Settings jobs
+    strip. Read-only: from the status file, the database (read-only), config and calendar.
+    `bot_state` and `bot_started_at` are null without a valid status file; `session` is null
+    with `session_cause` when today has no session the bot trades."""
+
+    served_at: datetime
+    bot_state: BotState | None
+    status_stale: bool
+    bot_started_at: datetime | None
+    reconcile: ReconcileJobV1
+    backup: BackupJobV1
+    launchd: tuple[LaunchdJobV1, ...]
+    session: SessionTimesV1 | None
+    session_cause: str | None
+    api_version: int = _const(API_VERSION)
+
+
 # ---------------------------------------------------------------- explain (read-only)
 
 
@@ -1326,6 +1391,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "bars-v1": BarsV1,
     "chart-v1": ChartV1,
     "settings-v1": SettingsV1,
+    "jobs-v1": JobsV1,
     "explain-v1": ExplainV1,
     "observers-v1": ObserversV1,
     "decisions-v1": DecisionsV1,

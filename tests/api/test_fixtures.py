@@ -20,8 +20,10 @@ from aperture.api.contract import (
     AccountPosition,
     AccountResponseV1,
     Agreement,
+    BackupJobV1,
     BarsV1,
     BarV1,
+    BotState,
     ChartBarV1,
     ChartInterval,
     ChartRange,
@@ -51,14 +53,18 @@ from aperture.api.contract import (
     FlowStopState,
     FlowStopV1,
     FlowV1,
+    JobsV1,
+    LaunchdJobV1,
     ObserverDecisionV1,
     ObserversV1,
     ObserverTradeV1,
     ObserverV1,
     PendingCommandsV1,
     PriceAfterV1,
+    ReconcileJobV1,
     RiskSettings,
     SessionSettings,
+    SessionTimesV1,
     SettingsV1,
     SkippedSignalV1,
     SkippedV1,
@@ -186,6 +192,24 @@ def documents() -> dict[str, object]:
                          Decimal("10")),
             SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL,
             Decimal("30"), Decimal("15")),
+        # 10:00 New York on a Monday: the bot runs, its last broker read was 4 s ago.
+        "jobs-v1": JobsV1(
+            T0, BotState.RUNNING, False, T0.replace(hour=13, minute=12, second=4),
+            ReconcileJobV1(Decimal("10"), T0 - timedelta(seconds=4),
+                           T0 + timedelta(seconds=6)),
+            BackupJobV1(T0.replace(hour=13, minute=12, second=9), None, None, None),
+            _LAUNCHD, SessionTimesV1(
+                DAY, datetime(2026, 11, 16, 14, 30, tzinfo=UTC),
+                datetime(2026, 11, 16, 20, 45, tzinfo=UTC),
+                datetime(2026, 11, 16, 20, 55, tzinfo=UTC),
+                datetime(2026, 11, 16, 21, 0, tzinfo=UTC)), None),
+        # A Saturday with the bot stopped: no session, the last backup failed after Friday's.
+        "jobs-v1.weekend": JobsV1(
+            T0 + timedelta(days=5), BotState.STOPPED, True, None,
+            ReconcileJobV1(Decimal("10"), T0 + timedelta(days=4, hours=6), None),
+            BackupJobV1(T0 + timedelta(days=4), T0 + timedelta(days=4, hours=7),
+                        "OperationalError", None),
+            _LAUNCHD, None, "2026-11-21 is a weekend"),
         "day-v1.empty": DayV1("sandbox", DAY - timedelta(days=3), (), Decimal("0"), ()),
         "bars-v1": BarsV1("sandbox", "ABCD", DAY, tuple(
             BarV1(T0 + timedelta(minutes=i), Decimal(o), Decimal(h), Decimal(lo), Decimal(c),
@@ -366,6 +390,11 @@ def _closed(trade_id: str, day_offset: int, result: str, planned_loss: str) -> D
                     closed_at - timedelta(minutes=1), closed_at, "strategy_exit", None,
                     Decimal(planned_loss), Decimal(result), None, None, None, NO_ENTRY,
                     NOT_READ, (), NOT_READ, None, None, NOT_READ)
+
+
+_LAUNCHD = (LaunchdJobV1("preflight", "08:30", (1, 2, 3, 4, 5)),
+            LaunchdJobV1("bot", "09:00", (1, 2, 3, 4, 5)),
+            LaunchdJobV1("watchdog", "09:05", (1, 2, 3, 4, 5)))
 
 
 def _text(document: object) -> str:

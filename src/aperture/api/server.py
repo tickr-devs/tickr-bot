@@ -53,6 +53,7 @@ from aperture.api.contract import (
     StatusResponseV1,
 )
 from aperture.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
+from aperture.api.jobs import JobsSettings, jobs_document
 from aperture.api.observer_results import ObserverResults, SimulationPaths
 from aperture.calendar import ny_date_of
 from aperture.config import Config, ConfigError
@@ -123,6 +124,7 @@ class ApiSettings:
     performance_decimal_places: int  # rounding of GET /performance quotients
     chart: ChartSettings  # GET /chart: source switch, cache and calendar
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
+    jobs: JobsSettings  # GET /jobs: schedule, database and calendar
 
 
 def settings_from_config(cfg: Config) -> ApiSettings:
@@ -200,6 +202,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         chart=ChartSettings.from_config(cfg),
         after=AfterSettings(minutes, api.after_r_decimal_places,
                             (cfg.root / cfg.session.calendar_file).parent),
+        jobs=JobsSettings.from_config(cfg),
     )
 
 
@@ -382,7 +385,7 @@ _ERROR_CODES = {
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
-              "/watching", "/performance", "/chart")
+              "/watching", "/performance", "/chart", "/jobs")
 DAY_PREFIX = "/days/"
 
 
@@ -524,6 +527,9 @@ class Handler(BaseHTTPRequestHandler):
                                  for name, cls in contract.SCHEMA_TYPES.items()})
             elif path == "/settings":
                 self._json(200, self.server.settings.shown)
+            elif path == "/jobs":
+                self._json(200, jobs_document(self.server.settings.jobs,
+                                              self.server.status_response()))
             elif path == "/explain":
                 self._explain()
             elif path in ("/observers", "/decisions", "/skipped", "/flow", "/watching"):

@@ -1,0 +1,55 @@
+{
+  "served_at": "2026-11-21T15:00:00.123Z",
+  "bot_state": "stopped",
+  "status_stale": true,
+  "bot_started_at": null,
+  "reconcile": {
+    "interval_seconds": "10",
+    "last_at": "2026-11-20T21:00:00.123Z",
+    "next_at": null
+  },
+  "backup": {
+    "last_at": "2026-11-20T15:00:00.123Z",
+    "last_failed_at": "2026-11-20T22:00:00.123Z",
+    "last_failed_error": "OperationalError",
+    "cause": null
+  },
+  "launchd": [
+    {
+      "name": "preflight",
+      "local_time": "08:30",
+      "weekdays": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "name": "bot",
+      "local_time": "09:00",
+      "weekdays": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "name": "watchdog",
+      "local_time": "09:05",
+      "weekdays": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    }
+  ],
+  "session": null,
+  "session_cause": "2026-11-21 is a weekend",
+  "api_version": 1
+}
