@@ -338,7 +338,8 @@ def test_read_only(api, cfg, path):
 def _entries_day(tmp_path):
     """Entries filled (read at 10:00:30 New York); only `seen` has its stop read working.
     `before` opened 23:59:59 New York the evening before, `after` the next morning."""
-    paths = HistoryPaths("sandbox", tmp_path / "db.sqlite3", tmp_path / "capture")
+    paths = HistoryPaths("sandbox", tmp_path / "db.sqlite3", tmp_path / "capture",
+                         tmp_path / "calendar", Decimal(900))
     store, clock = _timed_store(paths)
     run = _run(store)
     for trade_id, closed in (("seen", None), ("open", None),

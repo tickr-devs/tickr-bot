@@ -150,7 +150,7 @@ def test_readers_read_archived_days(setup):
     assert load_records([decisions_day / FILE_NAME]) == (_record(OLD),)
     history = History(HistoryPaths.from_config(cfg))
     assert [b.start for b in history.bars("ABCD", OLD, TODAY).bars] == [_at(OLD)]
-    assert {d.day: d.has_bars for d in history.days().days}[OLD] is True
+    assert {d.day: d.has_bars for d in history.days(TODAY).days}[OLD] is True
     assert DecisionLog.from_config(cfg).latest_active(OLD, "ABCD") == _record(OLD)
 
 

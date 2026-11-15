@@ -389,6 +389,43 @@ class DayTrade:
     entry_cause: str | None
 
 
+class CleanVerdict(StrEnum):
+    """Did the broker and the bot's records agree all that New York day (docs/api.md)."""
+
+    CLEAN = "clean"
+    NOT_CLEAN = "not_clean"  # `causes` says why, each with its journal rows
+    UNKNOWN = "unknown"  # `cause` says why: not recorded, day not over, no day-end record...
+
+
+class CleanCauseKind(StrEnum):
+    RECONCILE_MISMATCH = "reconcile_mismatch"  # a reconcile pass or a fence: records differ
+    UNKNOWN_ORDER_OUTCOME = "unknown_order_outcome"  # still unresolved at the day's end
+    UNPROTECTED_POSITION = "unprotected_position"  # stop rejected, or no verified stop too long
+    SAFETY_EXIT = "safety_exit"  # an exit forced by a safety fault, or an emergency command
+    DAY_END_NOT_CLEAN = "day_end_not_clean"  # the day-end check: not flat, or not agreeing
+
+
+@dataclass(frozen=True)
+class CleanCause:
+    kind: CleanCauseKind
+    text: str  # plain words, from the rows
+    journal_seqs: tuple[int, ...]  # the journal rows (seq) that prove it, oldest first
+
+
+@dataclass(frozen=True)
+class CleanDay:
+    """The clean-day verdict of one New York date, from the journal only (docs/api.md,
+    "Clean day"). Never a guess: what the journal does not prove is `unknown`."""
+
+    verdict: CleanVerdict
+    cause: str | None  # why `unknown`; null otherwise
+    causes: tuple[CleanCause, ...]  # `not_clean`: one per kind of fault; empty otherwise
+    reconcile_rows: int  # `reconcile-checked` rows that date
+    first_reconcile_at: datetime | None  # the first and last of them
+    last_reconcile_at: datetime | None
+    day_end_seq: int | None  # the date's `day-end` row, if any
+
+
 @dataclass(frozen=True)
 class DaySummary:
     """One New York date with records: closed trades, a bot run, or captured market data."""
@@ -399,6 +436,7 @@ class DaySummary:
     losses: int
     result_gross_usd: Decimal
     has_bars: bool
+    clean: CleanDay
 
 
 @dataclass(frozen=True)

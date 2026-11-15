@@ -74,7 +74,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/status` | `200` `status-response-v1`, always this shape. |
 | GET | `/commands/pending` | `200` `pending-commands-v1`: commands written but not yet consumed. |
 | GET | `/schema` | `200` all schemas by name. |
-| GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first. |
+| GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first, each with its clean-day verdict (`clean`). |
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date and the symbols with captured M1 bars. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
 | GET | `/chart?symbol=<ticker>&interval=<1m\|5m\|30m\|1h\|1d\|1w\|1mo>&range=<1d\|5d\|1m\|3m\|1y>` | `200` `chart-v1`: candles of any US stock from market data; `400`, `429` `rate_limited`, `503` `unavailable`. |
@@ -175,6 +175,64 @@ fill-weighted averages, `stop_price` is the first protective stop sent (null if 
 received when the provider revised one. On today's file a last line still being written is not
 read yet. Only M1 is served; clients aggregate M5/M15 and compute indicators themselves.
 Query strings take exactly the documented parameters, each once; anything else is `bad_request`.
+
+#### Clean day
+
+Every `days-v1` entry has `clean`: did the broker and the bot's records agree all that New York
+date? Built only from the bot's journal (`src/aperture/api/cleanday.py`), rows of runs of the
+configured environment, bucketed by the New York date of their journal time. Display only.
+
+```json
+"clean": {
+  "verdict": "not_clean",
+  "cause": null,
+  "causes": [{"kind": "safety_exit", "text": "exit stream-lost for trade t7", "journal_seqs": [8502]}],
+  "reconcile_rows": 82,
+  "first_reconcile_at": "2026-11-12T14:20:01.000Z",
+  "last_reconcile_at": "2026-11-12T21:05:00.000Z",
+  "day_end_seq": 8890
+}
+```
+
+- The record: after every successful reconciliation (positions and open orders read) the bot
+  journals `reconcile-checked` `{matches_records, mismatch}` (the same test and text as
+  account-v1) when the answer differs from the last such row, and otherwise at most once per
+  `[orders] reconcile_proof_seconds` (300). A failed read writes none. Dates before this row
+  existed have none. A disagreement is recorded only once confirmed: a mismatch fence is set,
+  or the records disagree on two successful reconciliations in a row (a failed read in between
+  starts the count again). One pass alone can disagree for a moment: reconcile reads open
+  orders, then its step places the stop for a fill it just saw, so the stop is live in the
+  records but not in that read; such a pass writes no row.
+- `not_clean` when any of these rows exists; `causes` has one entry per kind, `journal_seqs`
+  the rows (`journal.seq`) that prove it:
+  - `reconcile_mismatch`: a `reconcile-checked` row with `matches_records` false that date (a
+    reconciliation that saw an unknown order outcome counts too: account-v1 calls that a
+    mismatch), or a `fence-set` row that date of `foreign-position`, `foreign-order`,
+    `quantity-mismatch`, `resurrected`, `order-missing` or `over-protected`;
+  - `unknown_order_outcome`: an `unknown-order`, `status-unknown`, `cancel-unknown` or
+    `replace-unresolved` fence set before the end of the date and not cleared by then (also
+    when it was set on an earlier date); its `fence-set` row;
+  - `unprotected_position`: a `fence-set` row of `unprotected-timeout` or `stop-rejected`, or an
+    `unprotected-position` alert, that date (the short `unprotected` fence while a fresh fill's
+    stop is being verified is not a fault);
+  - `safety_exit`: an `exit-requested` row that date with cause `stop-rejected`,
+    `unprotected-too-long` or `stream-lost`, or an `emergency` command row (any outcome). A
+    session flatten or an operator flatten is not a fault;
+  - `day_end_not_clean`: the date's `day-end` row has `day_clean` false (not flat, records not
+    agreeing, or a trade still open).
+- Otherwise `unknown` with one `cause`, checked in this order: the date is today or later
+  (`the day is not over`, even with faults already recorded), no `reconcile-checked` row that
+  date (`not recorded: ...`), no `day-end` row (the bot was not running after the flatten
+  time), the day-end row has `day_clean` null (no broker reads), the session calendar cannot be
+  read or has no session that date (`calendar: ...`), or a gap in the regular session longer
+  than `[orders] reconcile_max_gap_seconds` (900; the bot down, or hours of failed reads):
+  `no reconcile-checked row from <time> to <time> (...)`. The gaps measured are between the last
+  row at or before the regular open (else the open itself), every row inside the session, and
+  the first row at or after the regular close (else the close; the early close on a half day).
+  A journal row of these kinds that cannot be read makes every date `unknown` with `journal
+  unreadable: ...`.
+- Otherwise `clean`. `reconcile_rows`, `first_reconcile_at`, `last_reconcile_at` and
+  `day_end_seq` are the evidence, shown for every verdict.
 
 #### Per-trade metrics
 
@@ -660,7 +718,8 @@ again).
 - Status: after each loop step that changes what `/status` shows, the bot calls
   `contract.write_status(path, StatusV1(...))` (temp file + fsync + rename).
 - Account: after each successful reconciliation the bot calls
-  `contract.write_account(path, AccountV1(...))` (`runtime/account.py`), the same way.
+  `contract.write_account(path, AccountV1(...))` (`runtime/account.py`), the same way. Before
+  that it journals `reconcile-checked` when due (`record_reconcile`, see "Clean day").
 - Commands: the bot calls `contract.read_commands(inbox, now, command_max_age_seconds)`. Each item
   is a command or a refusal (unreadable file, expired, dated in the future). For each item the bot
   journals it in one transaction, acts if it is a command, then calls `contract.retire_command`

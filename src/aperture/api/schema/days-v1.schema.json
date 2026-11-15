@@ -31,6 +31,107 @@
           },
           "has_bars": {
             "type": "boolean"
+          },
+          "clean": {
+            "type": "object",
+            "properties": {
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "clean",
+                  "not_clean",
+                  "unknown"
+                ]
+              },
+              "cause": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "causes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "reconcile_mismatch",
+                        "unknown_order_outcome",
+                        "unprotected_position",
+                        "safety_exit",
+                        "day_end_not_clean"
+                      ]
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "journal_seqs": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "text",
+                    "journal_seqs"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "reconcile_rows": {
+                "type": "integer"
+              },
+              "first_reconcile_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "last_reconcile_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "day_end_seq": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "verdict",
+              "cause",
+              "causes",
+              "reconcile_rows",
+              "first_reconcile_at",
+              "last_reconcile_at",
+              "day_end_seq"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -39,7 +140,8 @@
           "wins",
           "losses",
           "result_gross_usd",
-          "has_bars"
+          "has_bars",
+          "clean"
         ],
         "additionalProperties": false
       }

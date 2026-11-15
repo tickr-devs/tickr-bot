@@ -27,6 +27,10 @@ from aperture.api.contract import (
     ChartRange,
     ChartV1,
     CheckV1,
+    CleanCause,
+    CleanCauseKind,
+    CleanDay,
+    CleanVerdict,
     CommandAcceptedV1,
     CommandKind,
     CommandV1,
@@ -120,8 +124,26 @@ def documents() -> dict[str, object]:
         "pending-commands-v1.empty": PendingCommandsV1(commands=()),
         "error-v1": ErrorV1("forbidden_host", "Host 'evil.example:8766' is not allowed"),
         "days-v1": DaysV1("sandbox", (
-            DaySummary(DAY, 2, 1, 1, Decimal("2.50"), True),
-            DaySummary(DAY - timedelta(days=3), 0, 0, 0, Decimal("0"), False))),
+            DaySummary(DAY, 2, 1, 1, Decimal("2.50"), True, CleanDay(
+                CleanVerdict.UNKNOWN, "the day is not over", (), 41, T0 - timedelta(hours=6),
+                T0 + timedelta(minutes=5), None)),
+            DaySummary(DAY - timedelta(days=3), 0, 0, 0, Decimal("0"), False, CleanDay(
+                CleanVerdict.CLEAN, None, (), 80, T0 - timedelta(days=3, hours=6),
+                T0 - timedelta(days=3) + timedelta(hours=1), 9120)),
+            DaySummary(DAY - timedelta(days=4), 1, 0, 1, Decimal("-1.60"), True, CleanDay(
+                CleanVerdict.NOT_CLEAN, None, (
+                    CleanCause(CleanCauseKind.RECONCILE_MISMATCH,
+                               "foreign-order:manual-1: open order not in our records; "
+                               "reconcile: foreign-order:manual-1: open order not in our records",
+                               (8410, 8411)),
+                    CleanCause(CleanCauseKind.SAFETY_EXIT, "exit stream-lost for trade t-0007",
+                               (8502,))),
+                82, T0 - timedelta(days=4, hours=6), T0 - timedelta(days=4) + timedelta(hours=1),
+                8890)),
+            DaySummary(DAY - timedelta(days=5), 0, 0, 0, Decimal("0"), True, CleanDay(
+                CleanVerdict.UNKNOWN, "not recorded: no reconcile-checked row that date (the "
+                "bot records them since [orders] reconcile_proof_seconds was added)", (), 0,
+                None, None, 7001)))),
         "days-v1.empty": DaysV1("sandbox", ()),
         "day-v1": DayV1("sandbox", DAY, (
             DayTrade("t-0001", "WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0,

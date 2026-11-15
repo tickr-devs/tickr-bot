@@ -108,6 +108,16 @@ unknown_absent_reads = 3
 # the order's last such proof (never an extra broker read); read by the engine, and the rows by
 # api.history (the MAE/MFE window).
 stop_held_proof_seconds = 60
+# Least seconds between two `reconcile-checked` journal rows that say the same thing: after a
+# successful reconciliation the bot journals whether the broker agreed with its records when the
+# answer changed or the last such row is at least this old (no extra broker read); read by the
+# runtime, and the rows by api.cleanday (the clean-day verdict of GET /days).
+reconcile_proof_seconds = 300
+# Largest gap in seconds between two `reconcile-checked` rows (the last one before the regular open
+# and the first one after the regular close count as its edges) that a date can have and still be
+# clean: a longer stretch without a recorded reconciliation (bot down, hours of failed reads) makes
+# the date unknown. Must be above reconcile_proof_seconds; read by api.cleanday (GET /days).
+reconcile_max_gap_seconds = 900
 
 [probe]
 # Shares per probe order (owner 2026-11-14); read by the probe command.

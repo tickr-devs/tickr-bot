@@ -172,9 +172,16 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
         assert room is not None and room < cfg.risk.max_daily_loss_usd
         assert [c.kind for c in status.recent_commands] == [
             api.CommandKind.ENTRY_STOP_OFF, api.CommandKind.ENTRY_STOP_ON]
-        days = server.history.days()
+        days = server.history.days(FRIDAY)
         assert [d.day for d in days.days][:2] == [FRIDAY, date(2026, 11, 12)]
         assert all(d.trades == 1 for d in days.days[:2])
+        # Clean-day marker: the past session's reconcile rows agreed and its day end was clean;
+        # the demo day is not over.
+        demo_day, past_day = (d.clean for d in days.days[:2])
+        assert (demo_day.verdict, demo_day.cause) == (api.CleanVerdict.UNKNOWN, "the day is "
+                                                      "not over")
+        assert (past_day.verdict, past_day.causes) == (api.CleanVerdict.CLEAN, ())
+        assert past_day.reconcile_rows > 1 and past_day.day_end_seq is not None
         assert server.history.bars("BBB", FRIDAY, FRIDAY).bars
         account = server.account_response()
         assert isinstance(account, api.AccountResponseV1)

@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +28,7 @@ from .test_server import api, doc, request, schema, settings  # noqa: F401 - pyt
 DAY = date(2026, 11, 16)
 OPEN = datetime(2026, 11, 16, 15, 0, tzinfo=UTC)  # 10:00 New York
 PREVIOUS = date(2026, 11, 13)
+CALENDAR_DIR = Path(__file__).resolve().parents[2] / "config" / "calendar"
 
 
 def _store(paths: HistoryPaths) -> Store:
@@ -85,7 +87,8 @@ def _bar(symbol: str, minute: int, close: str = "12.40", end: str = "\n") -> str
 
 @pytest.fixture
 def paths(tmp_path) -> HistoryPaths:
-    return HistoryPaths("sandbox", tmp_path / "aperture.sqlite3", tmp_path / "capture" / "sandbox")
+    return HistoryPaths("sandbox", tmp_path / "aperture.sqlite3",
+                        tmp_path / "capture" / "sandbox", CALENDAR_DIR, Decimal(900))
 
 
 # ---------------------------------------------------------------- closed trades
@@ -498,7 +501,7 @@ def test_days_join_trades_runs_and_capture_newest_first(paths):
     _trade(store, run, "loss", OPEN + timedelta(minutes=50), exit_="12.00")
     store.close()
     _bars_file(paths, PREVIOUS, [_bar("ABCD", 0)])
-    days = History(paths).days()
+    days = History(paths).days(DAY)
     assert [d.day for d in days.days] == [DAY, PREVIOUS]
     today, previous = days.days
     assert (today.trades, today.wins, today.losses) == (2, 1, 1)
@@ -508,7 +511,7 @@ def test_days_join_trades_runs_and_capture_newest_first(paths):
 
 def test_no_database_and_no_capture_is_an_empty_history(paths):
     history = History(paths)
-    assert history.days().days == ()
+    assert history.days(DAY).days == ()
     day = history.day(DAY, DAY)
     assert day.trades == () and day.bar_symbols == () and day.result_gross_usd == 0
 
@@ -530,13 +533,13 @@ def test_database_of_another_schema_version_is_refused(paths):
     db.commit()
     db.close()
     with pytest.raises(HistoryUnavailable, match="schema v1"):
-        History(paths).days()
+        History(paths).days(DAY)
 
 
 def test_history_never_writes_the_database(paths):
     _store(paths).close()
     before = paths.database.read_bytes()
-    History(paths).days()
+    History(paths).days(DAY)
     assert paths.database.read_bytes() == before
 
 

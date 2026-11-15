@@ -580,7 +580,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/days":
                 _query(query, frozenset())
-                document: Any = history.days()
+                document: Any = history.days(today)
             elif path == "/bars":
                 params = _query(query, frozenset({"symbol", "date"}))
                 if not SYMBOL_PATTERN.match(params["symbol"]):
