@@ -104,10 +104,10 @@ limit of 30 requests per 60 s per route that the bot uses.
 - **Chart C1** (a second Webull client next to the running bot): needs
   `[chart] webull_enabled = true` in `config/bot.toml` from before the bot started, so the
   bot has left the chart its slice of the bars limit. If you want C1 on Monday, set it on
-  Sunday evening and do not touch the config after the bot starts. With that setting the API
-  job also builds its own Webull client the next time it starts (loading the jobs again, a
-  restart of the Mac): that is the same experiment without the probe's checks, so do not
-  restart the API job on Monday before the probe has passed. Then, any time the bot
+  Sunday evening and do not touch the config after the bot starts. The API does
+  not become a second Webull client by that setting: it builds no chart client until this
+  probe is recorded as passed (GET /chart answers 503 and says so), and the launchd API job
+  is not given the Webull keys anyway. Then, any time the bot
   runs: `python -m aperture.probes chart-client SYM`. It reads one bar every 30 s for 10
   minutes, watches that the bot keeps reading the broker and that the token folder does not
   change, and prints `passed` or `failed`. Do not open charts in the apps while it runs: they

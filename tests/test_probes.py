@@ -284,6 +284,75 @@ def test_chart_client_passes_when_the_bot_keeps_reading(tmp_path):
                                "broker_read_failed": False}
 
 
+def summary_file(cfg: config.Config, day: str, run: str, **fields) -> Path:
+    folder = cfg.root / cfg.run.data_dir / cfg.probe.evidence_dir / day / run
+    folder.mkdir(parents=True)
+    path = folder / probes.SUMMARY_FILE
+    path.write_text(json.dumps({"environment": cfg.environment_name, **fields}))
+    return path
+
+
+def test_the_chart_gate_opens_only_on_a_newest_run_that_passed(tmp_path):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    assert "is not recorded for sandbox" in probes.chart_client_gate(cfg)
+    summary_file(cfg, "2026-11-16", "chart-client-150000", verdict=probes.PASSED,
+                 started_at="2026-11-16T15:00:00+00:00")
+    assert probes.chart_client_gate(cfg) is None
+    # Another probe's summary and another environment's run say nothing about this one.
+    summary_file(cfg, "2026-11-16", "chart-limit-160000", verdict=probes.SHARED,
+                 started_at="2026-11-16T16:00:00+00:00")
+    other = summary_file(cfg, "2026-11-17", "chart-client-150000", verdict=probes.FAILED,
+                         started_at="2026-11-17T15:00:00+00:00")
+    other.write_text(other.read_text().replace(cfg.environment_name, "production"))
+    assert probes.chart_client_gate(cfg) is None
+    assert "last ended 'failed' for production" in probes.chart_client_gate(
+        replace(cfg, run=replace(cfg.run, environment="production")))
+    # A later run that failed closes it again, wherever its folder sorts.
+    summary_file(cfg, "2026-11-16", "chart-client-140000", verdict=probes.FAILED,
+                 started_at="2026-11-16T19:00:00+00:00")
+    assert "last ended 'failed' for sandbox" in probes.chart_client_gate(cfg)
+
+
+def test_the_chart_gate_shuts_on_a_newer_run_that_left_no_summary(tmp_path):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    passed_at = datetime(2026, 11, 16, 15, 0, tzinfo=UTC)
+    summary_file(cfg, "2026-11-16", "chart-client-150000", verdict=probes.PASSED,
+                 started_at=passed_at.isoformat())
+    crashed = summary_file(cfg, "2026-11-16", "chart-client-140000").parent
+    (crashed / probes.SUMMARY_FILE).unlink()
+    reads = crashed / "reads.jsonl"
+    reads.write_text("{}\n")
+
+    def touch(at: datetime) -> None:
+        for path in (reads, crashed):
+            os.utime(path, (at.timestamp(), at.timestamp()))
+
+    touch(passed_at - timedelta(hours=1))  # it crashed before the run that passed
+    assert probes.chart_client_gate(cfg) is None
+    touch(passed_at + timedelta(hours=1))  # it crashed after it, or is still running
+    assert "last ended 'unfinished' for sandbox" in probes.chart_client_gate(cfg)
+    summary_file(cfg, "2026-11-16", "chart-client-170000", verdict=probes.PASSED,
+                 started_at=(passed_at + timedelta(hours=2)).isoformat())
+    assert probes.chart_client_gate(cfg) is None
+
+
+@pytest.mark.parametrize("text", ["{", "[]", '{"environment": "sandbox"}',
+                                  '{"environment": "sandbox", "verdict": "passed", '
+                                  '"started_at": "2026-11-16T15:00:00"}'])
+def test_the_chart_gate_stays_shut_on_a_summary_it_cannot_read(tmp_path, text):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    summary_file(cfg, "2026-11-16", "chart-client-150000", verdict=probes.PASSED,
+                 started_at="2026-11-16T15:00:00+00:00")
+    summary_file(cfg, "2026-11-17", "chart-client-150000").write_text(text)
+    assert "summary.json cannot be read" in probes.chart_client_gate(cfg)
+
+
+def test_a_passed_chart_client_run_opens_the_chart_gate(tmp_path):
+    verdict, _, _, _ = client_run(tmp_path)
+    assert verdict == probes.PASSED
+    assert probes.chart_client_gate(cfg_in(tmp_path, chart_on=True)) is None
+
+
 def test_chart_client_fails_when_the_bot_stops_reading_the_broker(tmp_path):
     verdict, summary, _, _ = client_run(tmp_path, reads_broker=False)
     assert verdict == probes.FAILED

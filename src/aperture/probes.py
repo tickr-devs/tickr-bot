@@ -70,6 +70,7 @@ SHARED = "shared"
 NOT_SHARED = "not-shared"
 INCONCLUSIVE = "inconclusive"
 PASSED = "passed"
+UNFINISHED = "unfinished"
 FAILED = "failed"
 
 SUMMARY_FILE = "summary.json"
@@ -363,6 +364,50 @@ def chart_client(cfg: Config, config_path: Path, symbol: str, *, now: Clock, sle
         "problems": problems, "verdict": verdict,
     }, indent=1, sort_keys=True) + "\n", "utf-8")
     return verdict, folder
+
+
+def chart_client_gate(cfg: Config) -> str | None:
+    """Why the API may not build its own Webull chart client yet, or None once it may: the
+    newest `chart-client` run recorded for this environment must have passed. With
+    `[chart] webull_enabled` the API process is itself a second Webull client next to the bot
+    (C1), so it waits for the probe, which runs that experiment with the bot flat and watched.
+    A summary that cannot be read counts as a run that did not pass. A run folder without a
+    summary (the probe crashed or is still running) is a run of unknown environment that did
+    not pass, as new as the newest file in it."""
+    how = ("run `python -m aperture.probes chart-client SYMBOL` next to the running bot, then "
+           "start the API again")
+    root = cfg.root / cfg.run.data_dir / cfg.probe.evidence_dir
+    newest: tuple[datetime, str] | None = None
+    for folder in sorted(root.glob("*/chart-client-*")):
+        path = folder / SUMMARY_FILE
+        if not path.exists():
+            try:
+                changed = max(item.stat().st_mtime for item in (folder, *folder.iterdir()))
+            except OSError as exc:
+                return (f"chart probe C1: {folder.name} cannot be read "
+                        f"({type(exc).__name__}); {how}")
+            run = (datetime.fromtimestamp(changed, UTC), UNFINISHED)
+            if newest is None or run[0] > newest[0]:
+                newest = run
+            continue
+        try:
+            summary = json.loads(path.read_text("utf-8"))
+            if summary["environment"] != cfg.environment_name:
+                continue
+            run = (datetime.fromisoformat(summary["started_at"]), str(summary["verdict"]))
+            if run[0].tzinfo is None:
+                raise ValueError("started_at has no time zone")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return (f"chart probe C1: {path.parent.name}/{SUMMARY_FILE} cannot be read "
+                    f"({type(exc).__name__}); {how}")
+        if newest is None or run[0] > newest[0]:
+            newest = run
+    if newest is None:
+        return f"chart probe C1 is not recorded for {cfg.environment_name}; {how}"
+    if newest[1] != PASSED:
+        return (f"chart probe C1 last ended {newest[1]!r} for {cfg.environment_name} "
+                f"({newest[0].isoformat()}); {how}")
+    return None
 
 
 # --------------------------------------------------------------------------------------------

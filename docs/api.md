@@ -444,7 +444,11 @@ from the bot's capture). Code: `src/aperture/api/chart.py`; settings: `[chart]` 
   With the chart on, the bot's own budget for the bars route is lowered by the same number, so the
   two processes together never pass one route limit (docs/webull-facts.md, section C).
 - Off by default: `[chart] webull_enabled = false` answers every chart `503 unavailable` with that
-  cause. Turned on, `python -m aperture.api` builds its own Webull market-data client in a
+  cause. Turned on, the API first looks for the chart probe C1: until the newest
+  `python -m aperture.probes chart-client` run recorded for the environment (`summary.json`
+  under `<data_dir>/<[probe] evidence_dir>/`) says `passed`, it builds no Webull client and every
+  chart is `503 unavailable` with that cause; it looks once, when it starts. After that,
+  `python -m aperture.api` builds its own Webull market-data client in a
   background thread once it serves (status and commands never wait for it, even while the token
   awaits confirmation): it needs the app key and secret in its environment (the launchd job and
   the container do not load them for the API today) and uses the environment's token folder; it

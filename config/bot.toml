@@ -432,7 +432,8 @@ mac_app_timeout_seconds = 2
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API
 # process build its own Webull client in the background (it then needs the app key and secret, never the account id,
-# and uses the environment's token folder next to the bot; until it is built GET /chart answers 503). Gate, per
+# and uses the environment's token folder next to the bot; until it is built GET /chart answers 503), and only once the
+# newest `python -m aperture.probes chart-client` run recorded for the environment has passed (C1). Gate, per
 # docs/webull-facts.md section C: C1 and C2 must pass first, and C1 in the environment being enabled (a Sandbox pass
 # does not prove Production); C3 must pass before daily ranges (1m/3m/1y) are trusted, C4 before the newest minute and
 # half days are; C5 is optional. false = GET /chart answers 503 unavailable (the demo serves its simulated world
