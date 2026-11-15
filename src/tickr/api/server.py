@@ -44,6 +44,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from tickr.api import contract, flow
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
+from tickr.api.configview import config_document
 from tickr.api.contract import (
     AccountResponseV1,
     CommandAcceptedV1,
@@ -143,6 +144,9 @@ class ApiSettings:
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
     lab: LabReplaySettings  # GET and POST /lab/replay: the Lab's simulated replay
+    config_file: Path | None  # the bot.toml this API loaded, shown at GET /config
+    config_root: Path  # GET /config shows the file's path relative to this
+    config_digest: str  # sha256 of the file when this API loaded it
 
 
 def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSettings:
@@ -245,6 +249,9 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
         lab=LabReplaySettings.from_config(cfg, config_path),
+        config_file=config_path,
+        config_root=cfg.root,
+        config_digest=cfg.digest,
     )
 
 
@@ -435,7 +442,7 @@ _ERROR_CODES = {
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
-              "/watching", "/performance", "/chart", "/jobs", "/journal")
+              "/watching", "/performance", "/chart", "/jobs", "/journal", "/config")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 LAB_REPLAY = "/lab/replay"  # GET reads, POST starts: outside the command inbox
 DAY_PREFIX = "/days/"
@@ -585,6 +592,8 @@ class Handler(BaseHTTPRequestHandler):
                                  for name, cls in contract.SCHEMA_TYPES.items()})
             elif path == "/settings":
                 self._json(200, self.server.settings.shown)
+            elif path == "/config":
+                self._config()
             elif path == "/jobs":
                 self._json(200, jobs_document(self.server.settings.jobs,
                                               self.server.status_response()))
@@ -756,6 +765,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         except HistoryUnavailable as exc:
             self._error("unavailable", str(exc))
+            return
+        self._json(200, document)
+
+    def _config(self) -> None:
+        """GET /config: the configuration file now, or 503 with why it cannot be shown."""
+        settings = self.server.settings
+        if settings.config_file is None:
+            self._error("unavailable", "this API was started without a config file path")
+            return
+        try:
+            document = config_document(settings.config_file, settings.config_root,
+                                       settings.config_digest)
+        except OSError as exc:
+            self._error("unavailable", f"config file unreadable ({type(exc).__name__})")
             return
         self._json(200, document)
 

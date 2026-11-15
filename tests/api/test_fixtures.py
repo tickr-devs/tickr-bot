@@ -36,6 +36,9 @@ from tickr.api.contract import (
     CommandAcceptedV1,
     CommandKind,
     CommandV1,
+    ConfigKeyV1,
+    ConfigSectionV1,
+    ConfigV1,
     DaySummary,
     DaysV1,
     DayTrade,
@@ -198,6 +201,26 @@ def documents() -> dict[str, object]:
                      None, None, None,
                      "the bars end at 2026-11-16T15:49:00.000Z, before 2026-11-16T16:48:00.000Z")),
             Decimal("2.50"), ("ABCD", "WXYZ")),
+        # Settings > Configuration: the file as on disk, loads, same as the running processes.
+        "config-v1": ConfigV1("config/bot.toml", "9" * 64, False, True, None, (
+            ConfigSectionV1("run", (
+                ConfigKeyV1("environment", '"sandbox"', "Active environment; must be a table "
+                            "under [environments]; read by config.load and the trading gate."),
+                ConfigKeyV1("maintain_keep_sessions", "20", "Closed sessions whose capture and "
+                            "decision folders `tickr maintain` leaves uncompressed; read by "
+                            "maintain."))),
+            ConfigSectionV1("environments.sandbox", (
+                ConfigKeyV1("app_key_variable", '"WEBULL_SANDBOX_APP_KEY"', "Name of the "
+                            "variable holding the app key (never the value)."),
+                ConfigKeyV1("route_limits", "{}", "Route-specific limits; empty = every route "
+                            "uses requests_per_route_per_minute."))))),
+        # An edit that no longer loads: shown with its error, differs from what runs.
+        "config-v1.invalid": ConfigV1("config/bot.toml", "a" * 64, True, False,
+                                      "[run] maintain_keep_sessions must be at least 1 (today "
+                                      "is always kept)", (
+            ConfigSectionV1("run", (
+                ConfigKeyV1("maintain_keep_sessions", "0", "Closed sessions kept "
+                            "uncompressed."),)),)),
         "settings-v1": SettingsV1(
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
             RiskSettings(Decimal("50"), Decimal("2500"), Decimal("300"), 1, Decimal("5"),

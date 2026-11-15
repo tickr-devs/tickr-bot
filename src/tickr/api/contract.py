@@ -665,6 +665,40 @@ class SessionSettings:
 
 
 @dataclass(frozen=True)
+class ConfigKeyV1:
+    """One key of the configuration file: its value as written (TOML text) and its comment."""
+
+    key: str
+    value: str
+    comment: str
+
+
+@dataclass(frozen=True)
+class ConfigSectionV1:
+    """One table of the configuration file, keys in file order. `name` is the table's dotted
+    path as its header is written (`environments.<name>`); "" holds keys before the first
+    header. Values are TOML text as tomllib read them; a sub-table is its own section."""
+
+    name: str
+    keys: tuple[ConfigKeyV1, ...]
+
+
+@dataclass(frozen=True)
+class ConfigV1:
+    """GET /config: the bot's configuration file as it is on disk, read-only (api/configview.py).
+    `valid`/`error`: whether it loads now, as the next start would. `changed_since_start`: the
+    file is not the one this API loaded (running processes use the old one until restarted)."""
+
+    file: str
+    digest: str
+    changed_since_start: bool
+    valid: bool
+    error: str | None
+    sections: tuple[ConfigSectionV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
 class SettingsV1:
     """GET /settings: the numbers from config/bot.toml that clients show (limits, session
     times). Read-only, as the API process loaded them at its start; changing them means editing
@@ -1557,6 +1591,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "bars-v1": BarsV1,
     "chart-v1": ChartV1,
     "settings-v1": SettingsV1,
+    "config-v1": ConfigV1,
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
     "lab-replay-v1": LabReplayV1,

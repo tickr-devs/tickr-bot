@@ -25,7 +25,7 @@ import signal
 import sys
 import threading
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -295,7 +295,8 @@ def _run_demo(repo: Path, scenario: Scenario, today: date, *, live: bool,
     server = None
     if live:  # bound now, so a busy port is refused before any session runs
         try:
-            server = make_server(settings_from_config(cfg))
+            # GET /config shows the demo's copy; the Lab replay stays off as before.
+            server = make_server(replace(settings_from_config(cfg), config_file=config_path))
         except OSError as exc:
             raise DemoRefused(f"cannot listen on port {scenario.api_port}: {exc}") from exc
     try:
