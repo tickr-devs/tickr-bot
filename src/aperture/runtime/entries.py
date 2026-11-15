@@ -128,6 +128,29 @@ def last_loss_at(engine: Engine, symbol: str, now: datetime) -> datetime | None:
     return max(closes, default=None)
 
 
+def own_exposure(engine: Engine) -> tuple[int, int]:
+    """Our own open positions and our own working orders other than stops, as admission
+    counts them. The status document reads the same counts."""
+    own_positions = 0
+    working = 0
+    for trade in engine.trades():
+        orders = engine.orders(trade.trade_id)
+        if engine.expected_quantity(orders) > 0:
+            own_positions += 1
+        working += sum(1 for o in orders if o.live and o.leg is not Leg.STOP)
+    return own_positions, working
+
+
+def session_at(calendar: SessionCalendar | None, now: datetime) -> MarketDay | CalendarRefused:
+    """The calendar's answer for `now`, or its refusal, in the form admission takes."""
+    if calendar is None:
+        return CalendarRefused(CalendarCause.CALENDAR_INVALID, "no calendar loaded")
+    try:
+        return calendar.day_at(now)
+    except CalendarRefused as exc:
+        return exc
+
+
 class EntryDesk:
     def __init__(self, engine: Engine, config: Config, *, calendar: SessionCalendar | None,
                  last_broker_read_at: Callable[[], datetime | None],
@@ -149,23 +172,9 @@ class EntryDesk:
     def _inputs(self, decision: Decision, quote: Quote | None, now: datetime) -> AdmissionInputs:
         engine = self.engine
         fences = [name.split(":", 1)[0] for name in engine.fences()]
-        trades = engine.trades()
-        own_positions = 0
-        working = 0
-        for trade in trades:
-            orders = engine.orders(trade.trade_id)
-            if engine.expected_quantity(orders) > 0:
-                own_positions += 1
-            working += sum(1 for o in orders if o.live and o.leg is not Leg.STOP)
+        own_positions, working = own_exposure(engine)
         foreign_positions = sum(1 for f in fences if f == Fence.FOREIGN_POSITION)
-        session: MarketDay | CalendarRefused
-        if self.calendar is None:
-            session = CalendarRefused(CalendarCause.CALENDAR_INVALID, "no calendar loaded")
-        else:
-            try:
-                session = self.calendar.day_at(now)
-            except CalendarRefused as exc:
-                session = exc
+        session = session_at(self.calendar, now)
         limit = None if decision.entry_high is None else round_to_tick(decision.entry_high)
         stop = None if decision.stop is None else round_to_tick(decision.stop)
         last_read = self.last_broker_read_at()

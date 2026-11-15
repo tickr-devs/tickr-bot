@@ -164,27 +164,32 @@ def _check_reconciliation(i: AdmissionInputs, lim: AdmissionLimits) -> Admission
 
 
 def _check_session(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
-    day = i.session
+    return session_refusal(i.session, i.now, lim)
+
+
+def session_refusal(day: object, now: datetime, lim: AdmissionLimits) -> Admission | None:
+    """Check 3 on its own: whether the session admits an entry at `now`. The status document
+    asks the same question to say why entries are refused, so it cannot drift from admission."""
     if isinstance(day, CalendarRefused):
         return _refuse(C.CALENDAR_UNKNOWN, f"{day.cause}: {day.detail}")
     if not isinstance(day, MarketDay):
         return _refuse(C.CALENDAR_UNKNOWN, f"no calendar answer: {day!r}")
-    today = ny_date_of(i.now)
+    today = ny_date_of(now)
     if day.ny_date != today:
         return _refuse(C.CALENDAR_DAY_MISMATCH,
                        f"calendar day {day.ny_date} is not today {today} in New York")
     if day.half_day and not lim.half_days_enabled:
         return _refuse(C.HALF_DAY, f"{day.ny_date} is a half day; half days disabled")
-    if not day.in_regular_session(i.now):
+    if not day.in_regular_session(now):
         return _refuse(C.OUTSIDE_REGULAR_SESSION,
-                       f"{i.now.isoformat()} is outside {day.regular_open.time()}-"
+                       f"{now.isoformat()} is outside {day.regular_open.time()}-"
                        f"{day.regular_close.time()} New York")
     try:
         times = deadlines(day, lim.last_entry_minutes_before_close,
                           lim.flatten_minutes_before_close)
     except CalendarRefused as exc:
         return _refuse(C.SESSION_TIMES_INVALID, f"{exc.cause}: {exc.detail}")
-    if i.now >= times.last_entry:
+    if now >= times.last_entry:
         return _refuse(C.AFTER_LAST_ENTRY, f"last entry was {times.last_entry.isoformat()}")
     return None
 

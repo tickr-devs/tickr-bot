@@ -920,6 +920,20 @@ def test_status_says_calmly_that_the_position_limit_is_used(tmp_path):
     assert block is not None and (block.cause, block.attention) == ("own_trade_open", False)
 
 
+def test_one_own_trade_blocks_entries_whatever_the_position_limit(tmp_path):
+    """Admission refuses on any position or working order of our own before it looks at the
+    limit, so the status says so even when the limit would leave room."""
+    from dataclasses import replace
+
+    bot = Bot(tmp_path, broker=FakeBroker())
+    bot.service.config = replace(CFG, risk=replace(CFG.risk, max_open_positions=2))
+    bot.engine.recover()
+    assert bot.service._ordinary_block() is None
+    bot.engine.open_trade("ABC", D(2), D("10.00"), D("9.80"), D(1))  # entry working, no fill
+    block = bot.service._ordinary_block()
+    assert block is not None and (block.cause, block.attention) == ("own_trade_open", False)
+
+
 def test_a_missing_calendar_is_a_real_block(tmp_path):
     bot = Bot(tmp_path)
     bot.service.calendar = None
