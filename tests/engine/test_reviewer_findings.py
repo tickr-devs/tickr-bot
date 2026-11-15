@@ -16,7 +16,7 @@ import pytest
 
 from tickr.broker.base import BrokerError, OrderNotFound, OutcomeUnknown
 from tickr.broker.fake import FakeBroker
-from tickr.engine.core import Engine, Fence
+from tickr.engine.core import Engine, Fence, SendState
 from tickr.store import Store
 from tickr.types import OrderState, OrderType, Side
 
@@ -217,8 +217,6 @@ class UnlistedRefusal(FakeBroker):
         return FakeBroker.place(self, request)
 
 
-@pytest.mark.xfail(strict=True, reason="bug D: a stop resolved ABSENT after an unknown outcome "
-                   "is not counted in stop_failures, so it is sent again without bound")
 def test_bug_d_stops_that_never_existed_count_against_the_retry_limit(store):
     broker = UnlistedRefusal()
     engine = make(store, broker)
@@ -228,6 +226,69 @@ def test_bug_d_stops_that_never_existed_count_against_the_retry_limit(store):
     # Spec 9: "A rejected stop: retry per config, then exit and block entries, alert."
     assert sent(broker, OrderType.STOP_LOSS) <= 1 + CFG.orders.stop_retry_attempts
     assert f"{Fence.STOP_REJECTED}:{trade}" in engine.fences()
+
+
+
+def test_a_stop_proved_never_created_counts_once_then_is_placed_again(store):
+    """The entry is acknowledged, the first stop is lost on the way. Resolved ABSENT, it
+    counts one stop failure; later rechecks of the ABSENT row add nothing more."""
+    broker = FakeBroker()
+    broker.script("ack", "unknown-lost")
+    engine = make(store, broker)
+    trade = enter(engine, "2")
+    fill_entry(broker, engine, trade)
+    loop(engine, 20)
+    stops = legs(engine, trade, Leg.STOP)
+    assert [s.send_state for s in stops] == [SendState.ABSENT, SendState.ACKNOWLEDGED]
+    assert engine.trade(trade).stop_failures == 1
+    assert sent(broker, OrderType.STOP_LOSS) == 2
+    assert working_stops(broker) == D(2)
+    assert f"{Fence.STOP_REJECTED}:{trade}" not in engine.fences()
+
+
+def test_a_stop_rejected_by_detail_then_gone_counts_once(store):
+    """Detail REJECTED counts the failure; the row is then acknowledged, so the broker later
+    not knowing it is a conflict fence, never a second count as ABSENT."""
+    broker = FakeBroker()
+    engine = make(store, broker)
+    trade = enter(engine, "2")
+    fill_entry(broker, engine, trade)
+    engine.clock.now += 3
+    engine.step()
+    stop = legs(engine, trade, Leg.STOP)[0].client_order_id
+    broker.orders[stop] = replace(broker.orders[stop], state=OrderState.REJECTED,
+                                  raw_status="REJECTED")
+    engine.clock.now += 3
+    engine.step()
+    assert engine.trade(trade).stop_failures == 1
+    del broker.orders[stop]
+    loop(engine, 20)
+    assert engine.order(stop).send_state is SendState.ACKNOWLEDGED
+    assert engine.trade(trade).stop_failures == 1
+
+
+def test_a_stop_counted_absent_that_reappears_is_resurrected_and_protects(store):
+    """The lost stop counted as a failure shows up at the broker after all: it is tracked
+    again and fenced; the counted failure stays (the conservative side of the limit)."""
+    broker = FakeBroker()
+    broker.script("ack", "unknown")
+    engine = make(store, broker)
+    trade = enter(engine, "2")
+    fill_entry(broker, engine, trade)
+    engine.clock.now += 3
+    engine.step()
+    stop = legs(engine, trade, Leg.STOP)[0].client_order_id
+    hidden = broker.orders.pop(stop)
+    loop(engine, 20)
+    assert engine.order(stop).send_state is SendState.ABSENT
+    assert engine.trade(trade).stop_failures == 1
+    broker.orders[stop] = hidden
+    engine.reconcile()
+    assert engine.order(stop).send_state is SendState.ACKNOWLEDGED
+    assert f"{Fence.RESURRECTED}:{stop}" in engine.fences()
+    assert engine.trade(trade).stop_failures == 1
+    loop(engine, 6)
+    assert f"{Fence.STOP_REJECTED}:{trade}" not in engine.fences()
 
 
 # --- after the close ---------------------------------------------------------------------------

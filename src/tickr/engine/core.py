@@ -537,12 +537,14 @@ class Engine:
             self._set_send_state(cid, SendState.ACKNOWLEDGED, {},
                                  broker_order_id=ack.broker_order_id)
 
-    def _count_rejection(self, row: OrderRow) -> None:
-        """Inside a transaction: the broker refused or rejected a stop or a closing order."""
+    def _count_rejection(self, row: OrderRow, *, spaced: bool = True) -> None:
+        """Inside a transaction: the broker refused or rejected a stop or a closing order.
+        `spaced=False` counts a stop failure without restarting the retry spacing."""
         if row.leg is Leg.STOP:
             self.store.execute(
                 "UPDATE trades SET stop_failures = stop_failures + 1, "
-                "last_stop_failure_at = ? WHERE trade_id = ?", (self.clock(), row.trade_id))
+                "last_stop_failure_at = COALESCE(?, last_stop_failure_at) WHERE trade_id = ?",
+                (self.clock() if spaced else None, row.trade_id))
         elif row.leg is Leg.EXIT:
             self.store.execute(
                 "UPDATE trades SET state = ?, exit_requested = NULL WHERE trade_id = ?",
@@ -784,8 +786,13 @@ class Engine:
             return
         with self.store.transaction():
             self._set_send_state(cid, SendState.ABSENT, {"reads": reads})
-            if row.leg is Leg.EXIT:
-                self._count_rejection(row)
+            if row.leg in (Leg.STOP, Leg.EXIT):
+                # Proved never created: a failed attempt like a refusal (spec 9), so a stop
+                # counts against `stop_retry_attempts`. Counted once: only an UNKNOWN row gets
+                # here, and an ABSENT row is rechecked, never resolved again. The spacing is
+                # not restarted: proving absence took `unknown_absent_reads` reads already,
+                # and the position is unprotected meanwhile.
+                self._count_rejection(row, spaced=False)
         self._clear_fence(Fence.UNKNOWN_ORDER, cid)
         # A cancel answered "not found" for an order now proven absent (Detail, open orders,
         # no unexplained position) has nothing left to resolve; Detail never reads it again.
