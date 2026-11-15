@@ -71,13 +71,37 @@ limit of 30 requests per 60 s per route that the bot uses.
 
 - **Quotes real time or delayed** (right after 09:30): manual-trade.md, "Step 0"
   (`aperture check-quote SYM`).
-- **Quotes for all subscribed symbols** (stream, webull-facts.md M3, second half): while the bot
-  runs, note in the apps whether the stream is healthy and whether quote ages stay low for the
-  symbols being watched. A stream that reconnects or goes silent is the finding.
-- **Chart C1** (the API as a second Webull client next to the bot) and **C2** (is the bars limit
-  shared between processes): webull-facts.md, section C. `[chart] webull_enabled` stays `false`
-  until both are recorded. C2 runs with the bot idle, so do it before 09:00 Mac time or after
-  the bot has stopped.
+- **Quotes for all subscribed symbols** (stream, webull-facts.md M3, second half): no extra
+  reads. While the bot runs, note in the apps whether the stream is healthy and whether quote
+  ages stay low for the symbols being watched; a stream that reconnects or goes silent is the
+  finding. After the close, count the day's captured quotes per symbol and the stream's drop
+  counters (research.md, "latency"):
+  ```sh
+  python -m aperture.research latency \
+    --quotes data/capture/sandbox/2026-11-16/quotes.jsonl \
+    --notices data/capture/sandbox/2026-11-16/notices.jsonl \
+    --settings config/research.toml --out out/latency
+  ```
+  The bot does not record which symbols it subscribed, so a symbol missing from the report
+  was either never subscribed or silent: compare with the symbols the apps showed as watched.
+- **Chart C2** (is the bars limit shared between processes): with the bot stopped, at the
+  latest 10 minutes before its 09:00 Mac time start, or after it has stopped:
+  `python -m aperture.probes chart-limit SYM`. It takes about 90 s, starts two processes that
+  send 20 bars requests each, and prints `shared`, `not-shared` or `inconclusive`. It refuses
+  while a bot process is recorded in the lock. A `shared` answer means Webull answered 429
+  once; the bars route then stays refused for a minute or so.
+- **Chart C1** (a second Webull client next to the running bot): needs
+  `[chart] webull_enabled = true` in `config/bot.toml` from before the bot started, so the
+  bot has left the chart its slice of the bars limit. If you want C1 on Monday, set it on
+  Sunday evening and do not touch the config after the bot starts. Then, any time the bot
+  runs: `python -m aperture.probes chart-client SYM`. It reads one bar every 30 s for 10
+  minutes, watches that the bot keeps reading the broker and that the token folder does not
+  change, and prints `passed` or `failed`. Do not open charts in the apps while it runs: they
+  share the same four requests a minute. It refuses without a running bot, with the chart off,
+  or when the config changed after the bot started.
+- Both write their evidence to `data/probes/<date>/`: paste `summary.json` into the project
+  chat. Until both are recorded for an environment, `[chart] webull_enabled` goes back to
+  `false` there after the probe.
 - **Order probes F1 to F6** (two 1-share trades, replace of a stop): manual-trade.md, "Probe
   day". Not while the bot runs.
 

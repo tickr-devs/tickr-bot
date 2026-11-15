@@ -140,6 +140,18 @@ hold_seconds = 60
 replace_max_move_usd = 0.50
 # Seconds Detail of the stop is polled after a probe-replace-stop request, one read per detail_poll_seconds; read by the probe-replace-stop command.
 replace_observe_seconds = 15
+# Folder for the evidence of `python -m aperture.probes` (one sub-folder per New York date and run), relative to [run] data_dir; read by the probes.
+evidence_dir = "probes"
+# Processes `probes chart-limit` starts at once, count; each has its own Webull client and its own request budget; read by the probes.
+chart_limit_processes = 2
+# Bars requests each chart-limit process sends inside one bars route window, count; must be within the route limit, and all processes together must pass it (docs/webull-facts.md C2: 20 each against a limit of 30); read by the probes.
+chart_limit_requests = 20
+# Seconds between starting the chart-limit processes and their first request, so every process has built its Webull client by then; read by the probes.
+chart_limit_start_delay_seconds = 20
+# Bars reads `probes chart-client` makes next to the running bot, count; with chart_client_interval_seconds this is how long the bot is watched (20 x 30 s = 10 minutes, docs/webull-facts.md C1); read by the probes.
+chart_client_reads = 20
+# Seconds between two chart-client reads; keep 60 / this at or below half of [chart] requests_per_minute, so the API's own charts still fit in the chart's slice; read by the probes.
+chart_client_interval_seconds = 30
 
 [api]
 # Local API bind address; loopback only; read by the api server.

@@ -1,0 +1,329 @@
+"""`python -m aperture.probes`: the chart probes C1 and C2 against fakes. No Webull, no SDK."""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from aperture import config, probes
+from aperture.api import contract as api
+from aperture.broker.base import RateLimited
+from aperture.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
+from aperture.broker.webull import BrokerReadFailed, Route
+from aperture.cli import data_paths
+from aperture.data.base import FakeMarketData
+
+ROOT = Path(__file__).resolve().parents[1]
+CFG = config.load(ROOT / "config" / "bot.toml")
+EXAMPLE = ROOT / "tests" / "api" / "fixtures" / "status-v1.example.json"
+T0 = datetime(2026, 11, 16, 13, 0, tzinfo=UTC)  # 08:00 New York
+
+
+class Clock:
+    """A clock that only moves when the probe sleeps."""
+
+    def __init__(self) -> None:
+        self.at = T0
+        self.slept: list[float] = []
+
+    def now(self) -> datetime:
+        return self.at
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.at += timedelta(seconds=seconds)
+
+
+def cfg_in(tmp_path: Path, *, chart_on: bool = False) -> config.Config:
+    return replace(CFG, root=tmp_path, chart=replace(CFG.chart, webull_enabled=chart_on))
+
+
+def live_bot(cfg: config.Config) -> Path:
+    """A lock that records a live process: this test's own."""
+    _, lock = data_paths(cfg)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(str(os.getpid()))
+    return lock
+
+
+def config_file(tmp_path: Path, *, after: Path | None = None) -> Path:
+    path = tmp_path / "bot.toml"
+    path.write_text("")
+    if after is not None:
+        later = after.stat().st_mtime_ns + 10**9
+        os.utime(path, ns=(later, later))
+    return path
+
+
+class Raises(FakeMarketData):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    def history_bars(self, symbol, span, end, count):  # noqa: ANN001, ANN201
+        raise self.error
+
+
+@pytest.mark.parametrize("error, expected", [
+    (BudgetExhausted("bars", RequestBudget.CAUSE_WINDOW_FULL, 1.0),
+     {"outcome": probes.NOT_SENT, "cause": RequestBudget.CAUSE_WINDOW_FULL}),
+    (RateLimited("BARS: HTTP 429"), {"outcome": probes.HTTP_429}),
+    (BrokerReadFailed("BARS", 500, "INTERNAL"),
+     {"outcome": probes.READ_FAILED, "http_status": 500, "code": "INTERNAL"}),
+])
+def test_read_once_names_what_came_back_and_never_raises(error, expected):
+    assert probes.read_once(Raises(error), "ABC", T0) == expected
+
+
+def test_read_once_tells_our_own_budget_from_a_429():
+    """Only a 429 from Webull answers C2; a request our budget refused was never sent."""
+    assert probes.read_once(FakeMarketData(), "ABC", T0) == {"outcome": probes.OK, "bars": 0}
+    assert issubclass(BudgetExhausted, RateLimited)
+
+
+def test_the_limit_worker_spreads_its_requests_over_one_window(tmp_path):
+    clock, market, out = Clock(), FakeMarketData(), tmp_path / "worker.jsonl"
+    start = T0 + timedelta(seconds=20)
+    probes.run_limit_worker(market, "ABC", 20, 60.0, start, out, now=clock.now,
+                            sleep=clock.sleep)
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [row["seq"] for row in rows] == list(range(20))
+    assert {row["outcome"] for row in rows} == {probes.OK}
+    sent = [datetime.fromisoformat(row["sent_at"]) for row in rows]
+    assert sent[0] == start and sent[-1] == start + timedelta(seconds=57)
+    assert len(market.calls) == 20  # one request each, never repeated
+
+
+def test_the_limit_worker_records_a_429_and_goes_on_without_repeating(tmp_path):
+    clock, market, out = Clock(), FakeMarketData(), tmp_path / "worker.jsonl"
+    market.limit("history_bars", 3)
+    probes.run_limit_worker(market, "ABC", 5, 60.0, T0, out, now=clock.now, sleep=clock.sleep)
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [row["outcome"] for row in rows] == [probes.OK] * 3 + [probes.HTTP_429] * 2
+    assert len(market.calls) == 3
+
+
+def rows(*outcomes: str) -> list[dict]:
+    return [{"seq": seq, "outcome": outcome} for seq, outcome in enumerate(outcomes)]
+
+
+def test_the_limit_verdict():
+    full = rows(*[probes.OK] * 20)
+    assert probes.limit_verdict([full, full], 20) == probes.NOT_SHARED
+    assert probes.limit_verdict([full, rows(*[probes.OK] * 12, probes.HTTP_429)], 20) \
+        == probes.SHARED
+    # A process that did not finish, or a read that failed for another reason, proves nothing.
+    assert probes.limit_verdict([full, rows(*[probes.OK] * 12)], 20) == probes.INCONCLUSIVE
+    assert probes.limit_verdict([full, rows(*[probes.OK] * 19, probes.READ_FAILED)], 20) \
+        == probes.INCONCLUSIVE
+    assert probes.limit_verdict([full, []], 20) == probes.INCONCLUSIVE
+
+
+def test_chart_limit_refuses_next_to_a_bot(tmp_path):
+    cfg = cfg_in(tmp_path)
+    live_bot(cfg)
+    launched: list[list[list[str]]] = []
+    with pytest.raises(probes.ProbeRefused, match="recorded in the lock"):
+        probes.chart_limit(cfg, config_file(tmp_path), "ABC", now=Clock().now,
+                           launch=lambda commands: launched.append(commands) or [])
+    assert launched == [] and not (tmp_path / CFG.run.data_dir / CFG.probe.evidence_dir).exists()
+
+
+@pytest.mark.parametrize("processes, requests, cause", [
+    (2, 31, "above the bars route limit"),       # a process would pass its own limit
+    (1, 20, "would prove nothing"),              # together they would not pass the limit
+])
+def test_chart_limit_refuses_numbers_that_cannot_answer(tmp_path, processes, requests, cause):
+    cfg = cfg_in(tmp_path)
+    cfg = replace(cfg, probe=replace(cfg.probe, chart_limit_processes=processes,
+                                     chart_limit_requests=requests))
+    assert probes.budget_from_config(cfg).limit_for(Route.BARS.path) == RouteLimit(
+        30, 60.0, float(cfg.environment.rate_limit_cooldown_seconds))
+    with pytest.raises(probes.ProbeRefused, match=cause):
+        probes.chart_limit(cfg, config_file(tmp_path), "ABC", now=Clock().now,
+                           launch=lambda commands: [])
+
+
+def test_chart_limit_starts_its_processes_and_writes_the_answer(tmp_path):
+    cfg, clock = cfg_in(tmp_path), Clock()
+    path = config_file(tmp_path)
+
+    def launch(commands: list[list[str]]) -> list[int]:
+        assert len(commands) == cfg.probe.chart_limit_processes
+        for index, command in enumerate(commands):
+            assert command[1:6] == ["-m", "aperture.probes", "--config", str(path),
+                                    "chart-limit-worker"]
+            out, start = Path(command[command.index("--out") + 1]), command[-1]
+            assert datetime.fromisoformat(start) == T0 + timedelta(
+                seconds=cfg.probe.chart_limit_start_delay_seconds)
+            market = FakeMarketData()
+            if index:
+                market.limit("history_bars", 11)  # Webull refuses the 31st request overall
+            probes.run_limit_worker(market, "ABC", cfg.probe.chart_limit_requests, 60.0,
+                                    datetime.fromisoformat(start), out,
+                                    now=clock.now, sleep=lambda seconds: None)
+        return [0] * len(commands)
+
+    verdict, folder = probes.chart_limit(cfg, path, "ABC", now=clock.now, launch=launch)
+    assert verdict == probes.SHARED
+    assert folder == tmp_path / cfg.run.data_dir / "probes" / "2026-11-16" / "chart-limit-130000"
+    summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
+    assert summary["verdict"] == probes.SHARED and summary["route_limit"] == 30
+    assert summary["workers"] == [
+        {"exit_code": 0, "outcomes": {probes.OK: 20}},
+        {"exit_code": 0, "outcomes": {probes.OK: 11, probes.HTTP_429: 9}}]
+
+
+def test_a_symbol_that_is_not_a_ticker_is_refused(tmp_path):
+    with pytest.raises(probes.ProbeRefused, match="not a ticker"):
+        probes.chart_limit(cfg_in(tmp_path), config_file(tmp_path), "abc; rm", now=Clock().now)
+
+
+# --- chart-client ------------------------------------------------------------------------------
+
+
+class Bot:
+    """Writes the status file the way a running bot does: a fresh one before every probe read."""
+
+    def __init__(self, cfg: config.Config, clock: Clock, *, reads_broker: bool = True,
+                 fence: str | None = None) -> None:
+        self.cfg, self.clock, self.reads_broker, self.fence = cfg, clock, reads_broker, fence
+        self.path = cfg.root / cfg.run.data_dir / cfg.api.status_file
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.example = api.loads(api.StatusV1, EXAMPLE.read_bytes())
+
+    def write(self) -> None:
+        at = self.clock.now()
+        read_at = at if self.reads_broker else T0 - timedelta(minutes=5)
+        fences = () if self.fence is None else (api.Fence(self.fence, at, "x"),)
+        api.write_status(self.path, replace(
+            self.example, written_at=at, fences=fences,
+            freshness=replace(self.example.freshness, last_broker_read_at=read_at)))
+
+
+class Watched(FakeMarketData):
+    def __init__(self, bot: Bot) -> None:
+        super().__init__()
+        self.bot = bot
+
+    def history_bars(self, symbol, span, end, count):  # noqa: ANN001, ANN201
+        self.bot.write()
+        return super().history_bars(symbol, span, end, count)
+
+
+def client_run(tmp_path: Path, **bot_options) -> tuple[str, dict, list[dict], Watched]:
+    cfg, clock = cfg_in(tmp_path, chart_on=True), Clock()
+    path = config_file(tmp_path)
+    live_bot(cfg)
+    market = Watched(Bot(cfg, clock, **bot_options))
+    verdict, folder = probes.chart_client(cfg, path, "ABC", now=clock.now, sleep=clock.sleep,
+                                          market=lambda _: market)
+    summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
+    reads = [json.loads(line) for line in (folder / "reads.jsonl").read_text().splitlines()]
+    assert clock.slept == [CFG.probe.chart_client_interval_seconds] * (len(reads) - 1)
+    return verdict, summary, reads, market
+
+
+def test_chart_client_passes_when_the_bot_keeps_reading(tmp_path):
+    verdict, summary, reads, market = client_run(tmp_path)
+    assert verdict == probes.PASSED and summary["problems"] == []
+    assert len(reads) == len(market.calls) == CFG.probe.chart_client_reads
+    assert summary["outcomes"] == {probes.OK: CFG.probe.chart_client_reads}
+    assert reads[0]["bot"] == {"readable": True, "status_age_seconds": 0,
+                               "last_broker_read_at": T0.isoformat(),
+                               "broker_read_failed": False}
+
+
+def test_chart_client_fails_when_the_bot_stops_reading_the_broker(tmp_path):
+    verdict, summary, _, _ = client_run(tmp_path, reads_broker=False)
+    assert verdict == probes.FAILED
+    assert summary["problems"] == ["the bot's last broker read did not move during the run"]
+
+
+def test_chart_client_fails_on_a_broker_read_fence(tmp_path):
+    verdict, summary, _, _ = client_run(tmp_path, fence="broker-read-failed:open-orders")
+    assert verdict == probes.FAILED
+    assert "read 0: the bot reports failing broker reads" in summary["problems"]
+
+
+def test_chart_client_problems_name_refused_reads_and_a_changed_token():
+    bot = {"readable": True, "status_age_seconds": 1, "broker_read_failed": False}
+    sample = [{"seq": 0, "outcome": probes.OK,
+               "bot": {**bot, "last_broker_read_at": T0.isoformat()}},
+              {"seq": 1, "outcome": probes.HTTP_429,
+               "bot": {**bot, "status_age_seconds": 40,
+                       "last_broker_read_at": (T0 + timedelta(seconds=30)).isoformat()}},
+              {"seq": 2, "outcome": probes.OK, "bot": {"readable": False, "type": "OSError"}}]
+    assert probes.client_problems(sample, True, CFG.api.status_stale_seconds) == [
+        "probe reads not answered: [1]",
+        "the token folder changed during the run",
+        "read 1: the bot's status was 40 s old",
+        "read 2: the bot's status file was unreadable",
+        "the bot's last broker read did not move during the run"]
+
+
+def test_the_token_fingerprint_sees_a_rewrite_and_never_a_name(tmp_path):
+    folder = tmp_path / "token"
+    assert probes.token_fingerprint(folder) == []
+    folder.mkdir()
+    (folder / "secret-name.txt").write_text("abc")
+    before = probes.token_fingerprint(folder)
+    assert before == [(3, (folder / "secret-name.txt").stat().st_mtime_ns)]
+    (folder / "secret-name.txt").write_text("abcd")
+    assert probes.token_fingerprint(folder) != before
+
+
+def refused_client(tmp_path: Path, cfg: config.Config, path: Path) -> str:
+    built: list[object] = []
+    with pytest.raises(probes.ProbeRefused) as refused:
+        probes.chart_client(cfg, path, "ABC", now=Clock().now, sleep=lambda seconds: None,
+                            market=lambda _: built.append(1) or FakeMarketData())
+    assert built == []  # no client was built, so nothing was sent
+    return str(refused.value)
+
+
+def test_chart_client_refuses_without_a_running_bot(tmp_path):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    assert "no bot process" in refused_client(tmp_path, cfg, config_file(tmp_path))
+
+
+def test_chart_client_refuses_outside_the_chart_slice(tmp_path):
+    cfg = cfg_in(tmp_path, chart_on=False)
+    path = config_file(tmp_path)
+    live_bot(cfg)
+    assert "would not be inside any budget" in refused_client(tmp_path, cfg, path)
+
+
+def test_chart_client_refuses_a_config_changed_after_the_bot_started(tmp_path):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    lock = live_bot(cfg)
+    path = config_file(tmp_path, after=lock)
+    assert "changed after the bot started" in refused_client(tmp_path, cfg, path)
+
+
+# --- command line ------------------------------------------------------------------------------
+
+
+def test_main_refuses_with_exit_3_and_sends_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(probes.config_module, "load", lambda path: cfg_in(tmp_path))
+    monkeypatch.setattr(probes, "CLIENT_MARKET", lambda cfg: pytest.fail("built a client"))
+    assert probes.main(["--config", str(config_file(tmp_path)), "chart-client", "ABC"]) \
+        == probes.EXIT_REFUSED
+    assert "refused: no bot process" in capsys.readouterr().err
+
+
+def test_main_runs_one_worker_process(tmp_path, monkeypatch):
+    clock, market, out = Clock(), FakeMarketData(), tmp_path / "w.jsonl"
+    monkeypatch.setattr(probes.config_module, "load", lambda path: cfg_in(tmp_path))
+    monkeypatch.setattr(probes, "LIMIT_MARKET", lambda cfg: market)
+    monkeypatch.setattr(probes, "NOW", clock.now)
+    monkeypatch.setattr(probes, "SLEEP", clock.sleep)
+    assert probes.main(["chart-limit-worker", "ABC", "--out", str(out),
+                        "--start-at", T0.isoformat()]) == probes.EXIT_ANSWERED
+    assert len(out.read_text().splitlines()) == CFG.probe.chart_limit_requests
+    assert len(market.calls) == CFG.probe.chart_limit_requests

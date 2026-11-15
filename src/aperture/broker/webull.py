@@ -2072,6 +2072,15 @@ def chart_market_data_from_config(
     )
 
 
+def chart_probe_market_data_from_config(config: Config) -> WebullMarketData:
+    """Market data for `python -m aperture.probes chart-limit` (docs/webull-facts.md C2): its
+    own market-data-only SDK transport (no account id) and the environment's own route limits,
+    as one more process of the same App Key would have. The probe refuses while a bot runs."""
+    return market_data_from_config(
+        config, SdkTransport(settings_from_config(config), market_data_only=True),
+        budget_from_config(config))
+
+
 def check_token(config: Config, on_token_pending: Callable[[], None]) -> None:
     """Preflight: make the active environment's Webull token usable (may wait for the owner's
     confirmation in the app). Raises AdapterConfigError with the cause when it is not."""

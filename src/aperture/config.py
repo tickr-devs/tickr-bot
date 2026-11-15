@@ -102,6 +102,12 @@ class ProbeConfig:
     hold_seconds: int
     replace_max_move_usd: Decimal
     replace_observe_seconds: int
+    evidence_dir: str
+    chart_limit_processes: int
+    chart_limit_requests: int
+    chart_limit_start_delay_seconds: int
+    chart_client_reads: int
+    chart_client_interval_seconds: int
 
 
 @dataclass(frozen=True)
