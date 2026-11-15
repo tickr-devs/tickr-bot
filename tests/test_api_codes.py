@@ -14,6 +14,7 @@ from pathlib import Path
 from aperture.api import reasons
 from aperture.api.contract import OWN_TRADE_OPEN, BotState
 from aperture.engine.core import Fence
+from aperture.risk.causes import AdmissionCause
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "apps" / "scripts" / "kit_api_strings.py"
@@ -75,40 +76,64 @@ def load_reasons():
     return module
 
 
-def shape_params(shapes) -> dict[str, set[str]]:
-    """Each code of `reasons` shapes with the values its pattern can capture."""
-    found: dict[str, set[str]] = {}
+def shape_params(shapes) -> dict[str, list[set[str]]]:
+    """Each code of `reasons` shapes with, per shape, the values its pattern can capture."""
+    found: dict[str, list[set[str]]] = {}
     for code, pattern in shapes:
-        found.setdefault(code, set()).update(pattern.groupindex)
+        found.setdefault(code, []).append(set(pattern.groupindex))
     return found
+
+
+def assert_sentences_fit_shapes(sent, sentences) -> None:
+    """Every shape the bot writes a code in has a sentence naming only values that shape sends
+    (so no shape falls back to English), and every sentence fits some shape."""
+    assert set(sentences) == set(sent)
+    for code, shapes in sent.items():
+        for shape in shapes:
+            assert any(names <= shape for names in sentences[code]), (code, shape)
+        for names in sentences[code]:
+            assert any(names <= shape for shape in shapes), (code, names)
 
 
 def test_reason_sentences_match_the_generator():
     assert load_reasons().check() == []
 
 
-def test_every_gate_and_fence_reason_has_a_sentence_naming_only_values_the_bot_sends():
+def test_every_gate_and_fence_shape_has_a_sentence_naming_only_values_the_bot_sends():
     module = load_reasons()
-    gate = shape_params(reasons._GATE)
-    fence = {
-        code: names
-        for shapes in reasons._FENCE.values()
-        for code, names in shape_params(shapes).items()
+    fence: dict[str, list[set[str]]] = {}
+    for shapes in reasons._FENCE.values():
+        for code, found in shape_params(shapes).items():
+            fence.setdefault(code, []).extend(found)
+    assert_sentences_fit_shapes(shape_params(reasons._GATE), module.codes("GateReason"))
+    assert_sentences_fit_shapes(fence, module.codes("FenceReason"))
+
+
+# Refusal details with values but no sentence: their values are English words or text
+# (a calendar's own code, the names of missing amounts), so the app shows the bot's words.
+REFUSALS_IN_BOT_WORDS = {"CALENDAR_UNKNOWN", "DAILY_MONEY_UNKNOWN"}
+# Values reasons.refusal_params adds beyond the recorded detail's shape.
+REFUSAL_EXTRA_PARAMS = {"AFTER_LAST_ENTRY": {"time"}, "SYMBOL_COOLDOWN": {"until"}}
+
+
+def test_every_refusal_shape_has_a_sentence_naming_only_values_the_bot_sends():
+    sentences = load_reasons().codes("RefusalReason")
+    sent = {
+        code: [shape | REFUSAL_EXTRA_PARAMS.get(code, set()) for shape in shape_params(shapes)[""]]
+        for code, shapes in reasons._REFUSAL.items()
+        if code not in REFUSALS_IN_BOT_WORDS
     }
-    for sent, sentences in (
-        (gate, module.codes("GateReason")),
-        (fence, module.codes("FenceReason")),
-    ):
-        assert set(sentences) == set(sent)
-        for code, names in sentences.items():
-            assert names <= sent[code], code
+    for code, extra in REFUSAL_EXTRA_PARAMS.items():
+        sent.setdefault(code, [extra])
+    assert all(code in AdmissionCause.__members__ for code in sentences)
+    assert_sentences_fit_shapes(sent, sentences)
 
 
 def test_every_translation_names_the_same_values_as_the_english():
     strings = json.loads(KIT_CATALOG.read_text(encoding="utf-8"))["strings"]
     token = re.compile(r"\{\w+\}")
     for key, entry in strings.items():
-        if not key.startswith(("kit.gate.", "kit.fenceReason.")):
+        if not key.startswith(("kit.gate.", "kit.fenceReason.", "kit.refusal.")):
             continue
         units = {lang: entry["localizations"][lang]["stringUnit"]["value"] for lang in ("en", "ru")}
         assert set(token.findall(units["en"])) == set(token.findall(units["ru"])), key
