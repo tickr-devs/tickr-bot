@@ -48,6 +48,7 @@ All are long unless marked short. Values are mean net return per trade.
 | Regime filter (market proxy level and 30-min trend at entry) | gainers at the gate and 5-bar breakout, losers at the gate; hold 30 / 60 / 90 min / EOD | No regime is positive in both fit and validation | No edge |
 | Holding period 30 / 60 / 90 min instead of stop / target | same families | Same sign as the EOD result | No edge |
 | Literature set on an "actives" proxy (every fetched symbol-day with at least 20M USD of dollar volume and a previous close of at least 10 USD; pre-registered, fixed parameters) | L1 late-day momentum (15:25, up at least 3%); L2 noise-band momentum (Zarattini-Aziz-Barbon style); L3 afternoon HOD break after a 60-min base; L4 early volume shock (5-bar volume at least 5x normal, day +1 to +3%); L5 first pullback after a 2% opening drive; L6 lunch dip | L1 -0.32%, L3 -0.23%, L6 -0.28%, L5 -0.03%. L4 (+0.11%) is positive in every period and L2 (+0.04%) in validation and test only, but that is look-ahead: on days that became gainers they earn +0.5..+1.3%, on the other days -0.35..-0.6% | No edge for L1, L3, L5, L6. L2 and L4 cannot be judged on this data; they need an actives universe chosen without look-ahead |
+| Symbol hold-out of C, A and B (pre-registered 2026-11-15: the T-Z gainer days, 415 symbols and 1634 days that no earlier test used, all dates, rules unchanged) | entry on or after the gate bar (as pre-registered) / only strictly after it | C as pre-registered: +0.62% [+0.08,+1.21], n=374, and +0.30% [-0.23,+0.89] at 0.30% per side, so it passes the written criterion. Strictly after the gate bar: +0.36% [-0.19,+0.96]. On A-S strictly after: +0.16% [-0.15,+0.49]. A / B: n=37, +0.07% / +0.97% with intervals wide across 0 | No edge shown. The pass comes from entries on the gate bar itself (55% of them): the fill happens inside the bar whose close makes the stock a 5% gainer, which is look-ahead. The pool is ranked by the day's high change, which is look-ahead as well. This needs the liquid universe to decide |
 
 Break-even cost per side, meaning the gross mean divided by two: about 0 or negative for every
 gainer and loser family above; on the biased actives proxy, L2 0.17%, L4 0.21%, L5 0.13% and
@@ -67,7 +68,7 @@ session without its 09:30 bar is refused all day.
 
 The research scripts are offline and are not part of the bot. They live in the project's shared
 folder `aperture/edge-research/`: `prep.py` (gainer cache), `prep2.py` (loser days and market
-proxy), `prep3.py` (actives proxy), `lib.py`, `sim.py` (fixed: explicit entry price), and one script per family. The
+proxy), `prep3.py` (actives proxy), `lib.py`, `sim.py` (fixed: explicit entry price), `prep_tz.py` and `tz_check.py` (symbol hold-out), and one script per family. The
 pre-registrations are in `preregistered.txt`.
 
 ## Not tested yet, and why
