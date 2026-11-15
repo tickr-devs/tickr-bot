@@ -345,6 +345,13 @@ def test_candidates_must_leave_the_reserved_stream_slots(tmp_path):
         config.load(path)
 
 
+def test_observer_watching_seconds_must_be_positive(tmp_path):
+    text = BOT.read_text("utf-8").replace("watching_seconds = 180", "watching_seconds = 0")
+    path = _copy(tmp_path, text)
+    with pytest.raises(config.ConfigError, match="watching_seconds"):
+        config.load(path)
+
+
 def _copy_in(tmp_path: Path, name: str, text: str) -> Path:
     (tmp_path / name).mkdir()
     return _copy(tmp_path / name, text)

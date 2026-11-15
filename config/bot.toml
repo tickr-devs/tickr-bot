@@ -276,9 +276,9 @@ observer_subscriptions = 20
 # candidates need its slots), so observers cost at most one subscribe and one unsubscribe request per period on routes
 # shared with the active strategy's subscribes; read by runtime.market.
 observer_resync_seconds = 60
-# Subscribe (and unsubscribe) requests per budget window an observer-tier request must leave free for the position,
-# WATCH symbols and candidates, count; below the route limit (requests_per_route_per_minute, route_limits) the observer
-# tier waits. Read by runtime.market for broker.webull StreamSession.subscribe_optional.
+# Subscribe (and unsubscribe) requests per budget window a candidate or observer request must leave free for the
+# position, entry and WATCH symbols, count; below the route limit (requests_per_route_per_minute, route_limits) those
+# tiers wait. Read by runtime.market for broker.webull StreamSession.subscribe_optional.
 stream_reserved_subscribe_requests = 10
 # Seconds candidates, or observer symbols, stay off the stream after their subscribe was refused (the position and
 # WATCH symbols are never affected); read by runtime.market.

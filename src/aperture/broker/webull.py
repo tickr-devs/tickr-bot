@@ -1457,6 +1457,7 @@ class StreamSession:
                 self._send(True, pending)
                 with self._lock:
                     self._sent.update(pending)
+                    self._maybe_held.difference_update(pending)  # held for sure now
 
     # -- calls from the bot
     def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
@@ -1466,6 +1467,11 @@ class StreamSession:
             added = set(symbols) - self._symbols
             if len(self._symbols) + len(added) > self._max_symbols:
                 raise SubscriptionLimit(added, self._max_symbols, by_provider=False)
+            if len(self._symbols | added | self._maybe_held) > self._max_symbols:
+                # Maybe-held leftovers would push the provider past its cap (a 417 and a
+                # reconnect): this sync unsubscribes them first, as stale.
+                self._sent.update(self._maybe_held - self._symbols - added)
+                self._maybe_held.clear()
             first = self._listener is None
             self._listener = listener
             self._symbols.update(added)

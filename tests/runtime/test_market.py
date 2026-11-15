@@ -517,7 +517,8 @@ def test_the_observer_tier_leaves_the_subscribe_budget_reserve_free(tmp_path):
     rig.market.observer_watch = {"OB1"}
     rig.advance(RESYNC)
     rig.market.tick(discover=False)
-    assert sent == {"AAA"} and session.up and reconnects == []
+    # candidates and observer symbols both wait for the reserve; the stream stays up
+    assert sent == set() and session.up and reconnects == []
 
 
 def test_observer_symbols_are_unsubscribed_without_a_reconnect(tmp_path):
@@ -539,7 +540,7 @@ def test_observer_symbols_are_unsubscribed_without_a_reconnect(tmp_path):
     assert session.up and reconnects == []
 
 
-def test_a_dropped_candidate_leaves_by_its_own_path_before_the_observer_tier_takes_it(tmp_path):
+def test_a_dropped_candidate_an_observer_watches_stays_on_the_optional_path(tmp_path):
     from aperture.runtime.market import DiscoveryState
 
     rig = tiered(tmp_path, candidate_subscriptions=1, observer_subscriptions=2)
@@ -548,14 +549,26 @@ def test_a_dropped_candidate_leaves_by_its_own_path_before_the_observer_tier_tak
     rig.market.observer_watch = {"AAA"}
     rig.advance(RESYNC)
     rig.market.tick()
-    assert rig.source.subscribed == {"AAA"} and rig.market._optional == set()  # candidate
+    assert rig.source.subscribed == {"AAA"} and rig.market._optional == {"AAA"}  # candidate
     rig.market.discovery = DiscoveryState(rig.now, "x", ())  # type: ignore[arg-type]
     rig.advance(RESYNC)
-    rig.market.tick()  # unsubscribed as a candidate, not kept by the observer tier
-    assert rig.source.subscribed == set()
-    rig.advance(RESYNC)
-    rig.market.tick()  # then taken by the observer tier, through the optional path
+    rig.market.tick()  # no longer a candidate: the observer tier keeps it, no churn
     assert rig.source.subscribed == {"AAA"} and rig.market._optional == {"AAA"}
+
+
+def test_a_failed_candidate_subscribe_never_reconnects_or_exits_a_position(tmp_path):
+    def send_subscribe(symbols):
+        if "AAA" in symbols:
+            raise RuntimeError("provider refused")
+
+    rig, session, sent, reconnects = stream_rig(
+        tmp_path, send_subscribe, candidate_subscriptions=1, observer_subscriptions=0)
+    t = rig.position()
+    rig.market.tick(discover=False)
+    assert rig.market.subscribed == {"ABC"} and session.up and reconnects == []
+    rig.advance(LOST_AFTER.total_seconds() * 2)
+    rig.market.tick(discover=False)
+    assert rig.engine.trade(t).exit_requested is None and session.up and reconnects == []
 
 
 def test_no_observer_symbol_is_added_while_trading_even_after_a_failed_pass(tmp_path):
@@ -579,3 +592,31 @@ def test_no_observer_symbol_is_added_while_trading_even_after_a_failed_pass(tmp_
     rig.position()
     rig.market.tick(discover=False)
     assert "OB1" not in rig.source.subscribed
+
+
+def test_no_unsubscribe_failure_reconnects_with_a_position_open(tmp_path):
+    from aperture.runtime.market import DiscoveryState
+
+    rig, session, sent, reconnects = stream_rig(
+        tmp_path, lambda symbols: None, candidate_subscriptions=1, observer_subscriptions=0)
+    t = rig.position()
+    rig.market.watch = {"WAT"}
+    rig.market.tick(discover=False)
+    assert rig.market.subscribed == {"ABC", "AAA", "WAT"}
+
+    def refuse(symbols):
+        raise RuntimeError("HTTP 429")
+
+    session._send_unsubscribe = refuse
+    # a candidate rotates out
+    rig.market.discovery = DiscoveryState(rig.now, "x", candidates("WAT"))  # type: ignore[arg-type]
+    rig.market.tick(discover=False)
+    # WATCH -> still a candidate -> dropped
+    rig.market.watch = set()
+    rig.market.tick(discover=False)
+    rig.market.discovery = DiscoveryState(rig.now, "x", ())  # type: ignore[arg-type]
+    rig.market.tick(discover=False)
+    assert rig.market.subscribed == {"ABC"} and session.up and reconnects == []
+    rig.advance(LOST_AFTER.total_seconds() * 2)
+    rig.market.tick(discover=False)
+    assert rig.engine.trade(t).exit_requested is None and reconnects == []

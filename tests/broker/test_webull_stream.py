@@ -616,3 +616,39 @@ def test_a_refused_optional_unsubscribe_stays_counted_until_removed():
     assert ("unsub", ["OBS"]) not in sent and s.symbols == {"AAA"}
     with pytest.raises(MarketDataError):  # the cleanup is refused for the reserve too
         s.subscribe_optional(["OB2"], rec, 5)
+
+
+def test_a_required_subscribe_clears_maybe_held_symbols_that_would_pass_the_cap():
+    s, sent, _, _ = session(max_symbols=2)
+    rec = Recorder()
+    s.subscribe(["AAA"], rec)
+    s.on_connected()
+
+    def lost(symbols):
+        raise RuntimeError("timeout: answer lost")
+
+    good, s._send_subscribe = s._send_subscribe, lost
+    with pytest.raises(MarketDataError):
+        s.subscribe_optional(["OBS"], rec, 0)
+    s._send_subscribe = good
+    s.subscribe(["BBB"], rec)  # AAA + BBB + maybe-held OBS > 2: OBS is unsubscribed first
+    assert sent[-2:] == [("unsub", ["OBS"]), ("sub", ["BBB"])] and s.up
+
+
+def test_a_maybe_held_symbol_sent_by_a_required_subscribe_is_no_longer_maybe_held():
+    s, sent, _, _ = session()
+    rec = Recorder()
+    s.subscribe(["AAA"], rec)
+    s.on_connected()
+
+    def lost(symbols):
+        raise RuntimeError("timeout: answer lost")
+
+    good, s._send_subscribe = s._send_subscribe, lost
+    with pytest.raises(MarketDataError):
+        s.subscribe_optional(["OBS"], rec, 0)
+    s._send_subscribe = good
+    s.subscribe(["OBS"], rec)  # the position now needs it
+    s.unsubscribe(["OBS"])
+    s.subscribe_optional(["OB2"], rec, 0)  # no redundant cleanup of OBS
+    assert sent[-1] == ("sub", ["OB2"]) and sent.count(("unsub", ["OBS"])) == 1

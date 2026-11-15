@@ -427,6 +427,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
             "[market_data] candidate_subscriptions plus observer_subscriptions must leave "
             "stream_reserved_symbols free within stream_max_symbols"
         )
+    if built["observers"].watching_seconds <= 0:
+        raise ConfigError("[observers] watching_seconds must be above 0")
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "

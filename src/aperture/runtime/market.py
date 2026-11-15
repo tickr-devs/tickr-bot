@@ -214,9 +214,12 @@ class MarketRuntime:
         strategy's symbols. Candidates and observer symbols are kept only while the transport
         is up, and each tier goes in its own request after the one above it; lower tiers give
         their slots back first. A refused tier stays off for `candidate_retry_seconds`.
-        Observer symbols go through `subscribe_optional` / `unsubscribe_optional`: they never
-        take the active strategy's subscribe budget reserve, and a failure never reconnects
-        the stream (a reconnect would cut the position's quotes)."""
+        Candidates and observer symbols go through `subscribe_optional` /
+        `unsubscribe_optional`: no position or entry depends on them, so they never take the
+        subscribe budget reserve, and their failure never reconnects the stream (a reconnect
+        cuts the position's quotes and can end in the stream-loss exit). Only subscribing the
+        position, entry and WATCH symbols uses the required path; every unsubscribe is
+        optional."""
         trading = self._position_symbols() | self._entry_symbols()
         essential = trading | self.watch
         md = self.config.market_data
@@ -228,19 +231,15 @@ class MarketRuntime:
         desired = essential | candidates | observed
         removed = self.subscribed - desired
         if removed:
-            reserve = md.stream_reserved_subscribe_requests
-            optional, required = removed & self._optional, removed - self._optional
-            if optional:
-                try:
-                    self.source.unsubscribe_optional(sorted(optional), reserve)
-                except Exception as exc:  # noqa: BLE001 - never ends the loop, no reconnect
-                    self.inbox.on_error("unsubscribe-observers", exc)
-                self._optional -= optional
-            if required:
-                try:
-                    self.source.unsubscribe(sorted(required))
-                except Exception as exc:  # noqa: BLE001 - a stream problem never ends the loop
-                    self.inbox.on_error("unsubscribe", exc)
+            # Every removal goes the optional way, whatever tier subscribed the symbol: no
+            # quote anyone needs is lost by it, and its failure must never reconnect the
+            # stream (the leftovers are counted as maybe-held instead).
+            try:
+                self.source.unsubscribe_optional(sorted(removed),
+                                                 md.stream_reserved_subscribe_requests)
+            except Exception as exc:  # noqa: BLE001 - never ends the loop, no reconnect
+                self.inbox.on_error("unsubscribe", exc)
+            self._optional -= removed
             self.health.untrack(removed)
             for symbol in removed:
                 self.inbox.forget(symbol)
@@ -248,7 +247,8 @@ class MarketRuntime:
         if not self._subscribe(essential - self.subscribed, "subscribe"):
             return
         retry = float(self.config.market_data.candidate_retry_seconds)
-        if not self._subscribe(candidates - self.subscribed, "subscribe-candidates"):
+        if not self._subscribe(candidates - self.subscribed, "subscribe-candidates",
+                               optional=True):
             self._candidates_retry_at = self.monotonic() + retry
             return
         if not self._subscribe(observed - self.subscribed, "subscribe-observers",
