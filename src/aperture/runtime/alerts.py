@@ -1,5 +1,8 @@
 """Owner alerts (spec section 11): a macOS notification and an iMessage to the owner's phone.
 
+The Mac notification is shown by the Tickr app (`[alerts] mac_app`), so it carries the app's
+icon; when the app is missing, not allowed to notify or fails, osascript shows it instead.
+
 `Alerter.alert(kind, text)` never raises and never retries. It returns an `AlertOutcome` that the
 caller always writes to its journal, whether the notification was shown, suppressed as a repeat,
 or could not be delivered. Repeats of the same kind and text inside the configured window are
@@ -14,6 +17,7 @@ AppleScript reads the value itself (`system attribute`), so it is never in Pytho
 from __future__ import annotations
 
 import os
+import plistlib
 import queue
 import subprocess
 import sys
@@ -47,6 +51,12 @@ _IMESSAGE_SCRIPT = (
     "end tell",
     "end run",
 )
+# The Tickr app's command line (apps/macos AlertCommand): `<executable> --notify-alert TITLE TEXT`
+# exits 0 once the notification is handed to Notification Center.
+APP_ALERT_FLAG = "--notify-alert"
+APP_INFO_PLIST = ("Contents", "Info.plist")
+APP_EXECUTABLES = ("Contents", "MacOS")
+APP_EXECUTABLE_KEY = "CFBundleExecutable"
 DARWIN = "darwin"
 MACOS = "macos"
 IMESSAGE = "imessage"
@@ -144,6 +154,67 @@ class MacNotifier:
 
     def notify(self, title: str, text: str) -> None:
         _osascript(self._runner, self._timeout, _APPLESCRIPT, [title, text])
+
+
+class AppNotifier:
+    """macOS notification shown by the Tickr app, with its icon. The app runs once per alert in
+    its notify mode; title and text go in argv. Raises NotifyError when the app is missing, not
+    allowed to notify (System Settings > Notifications), times out or fails."""
+
+    def __init__(self, app: str, timeout_seconds: Decimal,
+                 runner: Runner = subprocess.run) -> None:
+        self._app = app
+        self._timeout = float(timeout_seconds)
+        self._runner = runner
+
+    def _executable(self) -> str:
+        info = os.path.join(self._app, *APP_INFO_PLIST)
+        try:
+            with open(info, "rb") as handle:
+                name = plistlib.load(handle).get(APP_EXECUTABLE_KEY)
+        except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+            raise NotifyError(f"app-missing: {type(exc).__name__}") from exc
+        if not isinstance(name, str) or not name:
+            raise NotifyError("app-missing: no executable in Info.plist")
+        return os.path.join(self._app, *APP_EXECUTABLES, name)
+
+    def notify(self, title: str, text: str) -> None:
+        argv = [self._executable(), APP_ALERT_FLAG, title, text]
+        try:
+            result = self._runner(argv, capture_output=True, timeout=self._timeout, check=False)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise NotifyError(f"app did not run: {type(exc).__name__}") from exc
+        if result.returncode != 0:
+            raise NotifyError(f"app exited with code {result.returncode}")
+
+
+class FirstOf:
+    """One notification through the first channel that delivers it: the next is tried only
+    when the one before raised. Raises NotifyError naming every failure when none delivered.
+    A channel that timed out may still have shown it, so a repeat is possible; a loss is not."""
+
+    def __init__(self, channels: tuple[Notifier, ...]) -> None:
+        self._channels = channels
+
+    def notify(self, title: str, text: str) -> None:
+        errors = []
+        for channel in self._channels:
+            try:
+                channel.notify(title, text)
+            except NotifyError as exc:
+                errors.append(str(exc))
+            else:
+                return
+        raise NotifyError("; ".join(errors))
+
+
+def mac_notifier(config: AlertsConfig, runner: Runner = subprocess.run) -> Notifier:
+    """The Tickr app when configured, osascript after it (or alone)."""
+    script = MacNotifier(config.notification_timeout_seconds, runner)
+    if not config.mac_app:
+        return script
+    app = AppNotifier(config.mac_app, config.mac_app_timeout_seconds, runner)
+    return FirstOf((app, script))
 
 
 def recipient_missing(config: AlertsConfig, environ: Mapping[str, str]) -> str | None:
@@ -249,7 +320,7 @@ def default_notifier(config: AlertsConfig, platform: str = sys.platform,
     """The channels for this machine (Mac notification now, iMessage in the background), or
     None where there are none (CI, Linux)."""
     if platform == DARWIN:
-        return Channels(((MACOS, MacNotifier(config.notification_timeout_seconds)),),
+        return Channels(((MACOS, mac_notifier(config)),),
                         ((IMESSAGE, IMessageNotifier(config, environ)),))
     return None
 

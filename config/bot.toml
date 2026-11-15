@@ -370,6 +370,12 @@ fence_alert_after_seconds = 30
 # NAME of the environment variable holding the owner's iMessage address (phone number or Apple ID email); the value is
 # personal data, set only in the owner's env file, never here; presence checked by preflight; read by runtime.alerts.
 imessage_recipient_variable = "APERTURE_IMESSAGE_TO"
+# The Tickr Mac app that shows the Mac notification with its own icon (path to the .app; empty = none). When it is
+# missing, not allowed to notify or fails, the notification goes through osascript instead; read by runtime.alerts.
+mac_app = "/Applications/Tickr.app"
+# Seconds to wait for the Tickr app to hand the notification over before osascript shows it instead (kept short: the
+# bot's loop waits for it); read by runtime.alerts.
+mac_app_timeout_seconds = 2
 
 [environments.sandbox]
 # May this process send trading requests in this environment; read by the trading gate.

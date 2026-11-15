@@ -133,9 +133,13 @@ All checks are reported; the first failure is the recorded cause.
 4. Alerts: sign in to iMessage in the Messages app on this Mac (Messages > Settings > iMessage)
    with an Apple ID, then, after loading the env file as above, run
    `.venv/bin/python -m aperture.runtime alert preflight-failed "test"` once. You should get a
-   notification on the Mac and an iMessage on the phone. macOS shows notifications from
-   `osascript` under "Script Editor"; allow them in System Settings > Notifications if nothing
-   appears. The first iMessage send asks to let Terminal control Messages: allow it. This only
+   notification on the Mac and an iMessage on the phone. The Mac notification comes from the
+   Tickr app, with its icon, when the app is at `[alerts] mac_app` (default
+   `/Applications/Tickr.app`: in Xcode, Product > Archive, then Distribute App > Copy App, and
+   put it there under that name). Open it once and allow notifications when it asks. When the
+   app is missing, notifications for it are off, or it fails, the same notification comes from
+   `osascript` instead, under "Script Editor" (allow those in System Settings > Notifications
+   too), so an alert is never lost; a slow app can at worst show it twice. The bot waits at most `[alerts] mac_app_timeout_seconds` for the app. The first iMessage send asks to let Terminal control Messages: allow it. This only
    covers Terminal; the launchd jobs need their own permission (see "Alerts from launchd"
    below). The first JSON line is the Mac notification (`"delivery": "shown"`,
    `"pending": ["imessage"]`); a second line with `"channel": "imessage"` follows with the

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import plistlib
 import subprocess
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -9,23 +11,28 @@ import pytest
 
 from aperture.config import AlertsConfig
 from aperture.runtime.alerts import (
+    APP_ALERT_FLAG,
     IMESSAGE,
     MACOS,
     OSASCRIPT,
     Alerter,
     AlertKind,
+    AppNotifier,
     Channels,
     Delivery,
+    FirstOf,
     IMessageNotifier,
     MacNotifier,
     NotifyError,
     default_notifier,
+    mac_notifier,
     recipient_missing,
 )
 
 CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_seconds=Decimal(5),
                       fence_alert_after_seconds=Decimal(30),
-                      imessage_recipient_variable="APERTURE_TEST_TO")
+                      imessage_recipient_variable="APERTURE_TEST_TO", mac_app="",
+                      mac_app_timeout_seconds=Decimal(2))
 T0 = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
 
 
@@ -227,3 +234,94 @@ def test_mac_failing_still_sends_imessage_and_its_success_holds_dedupe():
     assert done.delivery is Delivery.SHOWN and len(phone) == 1
     clock.now += timedelta(seconds=60)
     assert alerter.alert(AlertKind.BOT_CRASHED, "x").delivery is Delivery.SUPPRESSED_REPEAT
+
+
+def _app(tmp_path, executable="Tickr"):
+    app = tmp_path / "Tickr.app"
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    with open(app / "Contents" / "Info.plist", "wb") as handle:
+        plistlib.dump({"CFBundleExecutable": executable}, handle)
+    return app
+
+
+def test_app_notifier_runs_the_bundle_executable_with_title_and_text_as_argv(tmp_path):
+    app = _app(tmp_path)
+    calls, runner = _capture()
+    text = 'stop "rejected"; do shell script "x"'
+    AppNotifier(str(app), Decimal(5), runner).notify("Title", text)
+    assert calls == [[str(app / "Contents" / "MacOS" / "Tickr"), APP_ALERT_FLAG, "Title", text]]
+
+
+def test_app_notifier_refuses_a_missing_app_without_running_anything(tmp_path):
+    calls, runner = _capture()
+    with pytest.raises(NotifyError, match="app-missing"):
+        AppNotifier(str(tmp_path / "Nowhere.app"), Decimal(5), runner).notify("t", "x")
+    assert calls == []
+
+
+@pytest.mark.parametrize("effect", [
+    subprocess.CompletedProcess([], 2, b"", b""),
+    subprocess.TimeoutExpired("app", 5),
+    OSError("exec format"),
+])
+def test_app_notifier_failures_become_notify_error(tmp_path, effect):
+    def runner(argv, **kwargs):
+        if isinstance(effect, Exception):
+            raise effect
+        return effect
+    with pytest.raises(NotifyError):
+        AppNotifier(str(_app(tmp_path)), Decimal(5), runner).notify("t", "x")
+
+
+class Channel:
+    def __init__(self, error: str | None) -> None:
+        self.error = error
+        self.calls = 0
+
+    def notify(self, title: str, text: str) -> None:
+        self.calls += 1
+        if self.error is not None:
+            raise NotifyError(self.error)
+
+
+def test_first_of_stops_at_the_first_channel_that_delivers():
+    app, script = Channel(None), Channel(None)
+    FirstOf((app, script)).notify("t", "x")
+    assert (app.calls, script.calls) == (1, 0)
+
+
+def test_first_of_falls_back_when_the_app_fails_so_no_alert_is_lost():
+    app, script = Channel("app exited with code 2"), Channel(None)
+    FirstOf((app, script)).notify("t", "x")
+    assert (app.calls, script.calls) == (1, 1)
+
+
+def test_first_of_names_every_failure_when_none_delivered():
+    with pytest.raises(NotifyError, match="app-missing: x; osascript exited with code 1"):
+        channels = (Channel("app-missing: x"), Channel("osascript exited with code 1"))
+        FirstOf(channels).notify("t", "x")
+
+
+def test_mac_notifier_is_the_app_then_osascript_or_osascript_alone(tmp_path):
+    assert isinstance(mac_notifier(CONFIG), MacNotifier)
+    chained = mac_notifier(replace(CONFIG, mac_app=str(tmp_path / "Tickr.app")))
+    assert isinstance(chained, FirstOf)
+
+
+def test_the_app_gets_its_own_short_timeout_and_osascript_keeps_its_own(tmp_path):
+    timeouts = []
+
+    def runner(argv, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        if len(timeouts) == 1:
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return subprocess.CompletedProcess(argv, 0)
+
+    mac_notifier(replace(CONFIG, mac_app=str(_app(tmp_path))), runner).notify("t", "x")
+    assert timeouts == [2.0, 5.0]
+
+
+def test_missing_app_falls_back_to_osascript_end_to_end(tmp_path):
+    calls, runner = _capture()
+    mac_notifier(replace(CONFIG, mac_app=str(tmp_path / "Missing.app")), runner).notify("t", "x")
+    assert [argv[0] for argv in calls] == [OSASCRIPT]

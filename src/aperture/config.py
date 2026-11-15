@@ -209,6 +209,8 @@ class AlertsConfig:
     notification_timeout_seconds: Decimal
     fence_alert_after_seconds: Decimal
     imessage_recipient_variable: str
+    mac_app: str
+    mac_app_timeout_seconds: Decimal
 
 
 @dataclass(frozen=True)
