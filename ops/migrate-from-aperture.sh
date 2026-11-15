@@ -89,16 +89,21 @@ fi
 
 # 2. The venv first: if the install fails, the old jobs are still loaded and nothing changed.
 #    A venv made by uv has no pip: uv installs into it instead.
+#    uv takes --python after the subcommand (`uv pip install --python X`), never before it.
 if [ -x .venv/bin/pip ]; then
-  PIP=".venv/bin/pip"
+  run .venv/bin/pip install -q -e ".[webull]"
+  uninstall() { run .venv/bin/pip uninstall -y -q aperture; }
 elif command -v uv >/dev/null 2>&1; then
-  PIP="uv pip --python .venv/bin/python"
+  # Read-only probe, also in a dry run: proves this uv accepts the form used below.
+  uv pip list --python .venv/bin/python >/dev/null 2>&1 \
+    || refuse "uv cannot read .venv (uv pip list --python .venv/bin/python failed)"
+  run uv pip install --python .venv/bin/python -q -e ".[webull]"
+  uninstall() { run uv pip uninstall --python .venv/bin/python -q aperture; }
 else
   refuse ".venv has no pip and uv is not installed; cannot reinstall the package"
 fi
-run $PIP install -q -e ".[webull]"
 if "$PY" -c 'import importlib.metadata as m; m.version("aperture")' >/dev/null 2>&1; then
-  if [ -x .venv/bin/pip ]; then run $PIP uninstall -y -q aperture; else run $PIP uninstall -q aperture; fi
+  uninstall
 fi
 
 # 3. Unload the old launchd jobs and keep their plists aside.
