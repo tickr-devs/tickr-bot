@@ -111,7 +111,7 @@ Order sequence:
 - Session flatten: working entries cancelled at last-entry time; position closed by the flatten time (market in regular session). No closing MARKET order is sent outside the regular session (from `[session] close_order_cutoff_seconds` before the calendar's close, early close on a half day, until the next open): a bot started after the close keeps the broker stop, sets the operator fence `market-closed:<trade>` and alerts `flatten-after-close`; the operator flatten and emergency are refused then too.
 - A trade is closed only when the broker is flat, the stop is CANCELLED or FILLED, and no own open order remains.
 
-Reconciliation: positions and open orders every `reconcile_interval_seconds`; startup always reconciles first. Foreign exposure blocks entries and is never touched. Quantity mismatch: broker wins, entries blocked until explained, the stop is made to cover the broker quantity.
+Reconciliation: positions and open orders every `reconcile_interval_seconds`; startup always reconciles first. Foreign exposure blocks entries and is never touched. Quantity mismatch: broker wins, entries blocked until explained (fence and alert); stops stay sized on the Detail quantity. When the broker holds more than Detail explains (foreign shares, e.g. bought by hand), an exit or the session flatten sells exactly the bot's own Detail quantity and never the extra shares, and not while an entry in that symbol is still working; when it holds fewer, nothing is sold and the Detail quantity stays protected.
 
 ## 10. Persistence
 

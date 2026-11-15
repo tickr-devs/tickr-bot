@@ -4,6 +4,7 @@ Newest first. Only decisions that are in force. Each line: date, decision, where
 
 | Date | Decision | Applies to |
 |---|---|---|
+| 2026-11-15 | Broker holds more shares of the bot's symbol than Detail explains (foreign shares, e.g. bought by hand): an exit or the session flatten sells exactly the bot's own Detail quantity and never touches the extra shares; the quantity-mismatch fence and alert stay; stops stay sized on Detail only ("the stop is made to cover the broker quantity" is not adopted). Broker holds fewer than Detail: nothing is sold, protection stays. | engine/core.py `_exit_step`, spec-v1 section 9 |
 | 2026-11-15 | The product is called Tickr (formerly Aperture): package, CLI, config paths, env variable prefix, launchd labels, apps, bundle ids and docs. A Mac set up under the old name moves with `ops/migrate-from-aperture.sh`; the bot refuses to start beside the old database file until then. (rename-keep) | everything |
 | 2026-11-14 | The ~15k-line product-code ceiling for v1 is lifted: work continues past it. Size stays a warning sign, reported in PRs, not a stop. | CLAUDE.md |
 | 2026-11-14 | Phone alert channel: iMessage to the owner himself, sent by Messages.app on the bot's Mac. Every alert goes to both the Mac notification and iMessage. The address is personal data: only the name of its environment variable is in config. | runtime.alerts, config `alerts` |

@@ -1053,9 +1053,10 @@ class Engine:
             # close until the operator has looked; keep what is held under a stop meanwhile.
             self._protect(trade, stops, max(expected, ZERO))
             return
-        if held != expected or expected <= 0:
-            # Positions and Detail disagree: never sell on that; keep the Detail quantity
-            # protected until they agree (the mismatch fence is already set).
+        if not self._may_close(trade, held, expected):
+            # Positions and Detail disagree in a way a sale could get wrong: never sell on
+            # that; keep the Detail quantity protected until they agree (the mismatch fence
+            # is already set).
             self._protect(trade, stops, max(expected, ZERO))
             return
         if not self._has_fence(Fence.MARKET_CLOSED, trade.trade_id):
@@ -1084,6 +1085,23 @@ class Engine:
             cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
                                      OrderType.MARKET, uncovered)
         self._send(cid)
+
+    def _may_close(self, trade: TradeRow, held: Decimal | None, expected: Decimal) -> bool:
+        """Whether a close of this trade's own Detail quantity may be sent (owner decision
+        2026-11-15). Agreement allows it. The broker holding MORE than all open trades in the
+        symbol account for (shares bought by hand, say) allows it too: only `expected` is
+        sold, which is never more than held, and the extra shares are never touched; the
+        quantity-mismatch fence stays. Not while an entry in the symbol is still working: the
+        extra may be its fill that Detail does not show yet. The broker holding fewer refuses:
+        never sell shares that may not be there."""
+        if held is None or expected <= 0:
+            return False
+        if held == expected:
+            return True
+        if held < self._expected_in(trade.symbol):
+            return False
+        return not any(o.live for o in self.orders()
+                       if o.symbol == trade.symbol and o.leg is Leg.ENTRY)
 
     def _watch_exit(self, trade: TradeRow, live_exits: list[OrderRow]) -> None:
         """A closing order not filled `max_exit_seconds` after its send attempt (store clock,

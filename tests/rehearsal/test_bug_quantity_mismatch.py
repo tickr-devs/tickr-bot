@@ -1,19 +1,9 @@
-"""Suspected bug (spec conflict, needs an owner decision): foreign shares in the symbol the bot
-holds.
+"""Foreign shares in the symbol the bot holds (owner decision 2026-11-15, docs/decisions.md).
 
-Spec 9, Reconciliation: "Quantity mismatch: broker wins, entries blocked until explained, the
-stop is made to cover the broker quantity." Spec 9, Session flatten: "position closed by the
-flatten time"; spec 1: the bot "ends every day flat".
-
-The engine (src/tickr/engine/core.py, `_advance` sets QUANTITY_MISMATCH, `_protect` sizes
-on Detail only, `_exit_step` sends no close while `held != expected`) keeps the stop at the
-Detail quantity and, at the flatten time, sends no closing order at all while the broker holds
-more than Detail explains. So after someone buys 10 AAA by hand while the bot holds 26, the
-bot's own 26 shares are not sold at 15:55 and stay overnight after the DAY stop expires (only
-the quantity-mismatch and not-flat alerts fire). The engine follows the other sentence of spec
-9 ("a positions read alone never sizes a stop or a sell"), hence a conflict to decide.
-
-These tests state what spec 9 says and fail today.
+Someone buys 10 AAA by hand while the bot holds 26. The broker then holds more than Detail
+explains. Decided: the stop stays sized on Detail (26; a positions read never sizes a stop or a
+sell), the quantity-mismatch fence blocks entries and alerts, and at the flatten time the bot
+sells exactly its own 26 and never touches the 10 foreign shares.
 """
 
 from __future__ import annotations
@@ -23,8 +13,8 @@ from decimal import Decimal as D
 import pytest
 
 from rehearsal.harness import Rehearsal
-from rehearsal.kit import add, breakout, scripted, without_fsync
-from tickr.types import OrderType
+from rehearsal.kit import add, breakout, fence_names, scripted, without_fsync
+from tickr.types import OrderType, Side
 
 
 @pytest.fixture(autouse=True)
@@ -40,24 +30,42 @@ def held_with_foreign_shares(tmp_path, monkeypatch) -> Rehearsal:
     return r
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "spec 9 conflict, owner decision pending: broker quantity vs Detail-only sizing"))
-def test_the_stop_is_made_to_cover_the_broker_quantity(tmp_path, monkeypatch):
+def test_the_stop_stays_on_the_detail_quantity_and_the_mismatch_is_fenced(tmp_path, monkeypatch):
     r = held_with_foreign_shares(tmp_path, monkeypatch)
     assert r.run_until("09:53") == 0
     ex = r.world.exchange
     assert ex.holdings["AAA"].quantity == D(36)
     covered = sum(o.quantity - o.filled_quantity for o in ex.open_orders()
                   if o.order_type is OrderType.STOP_LOSS)
-    assert covered == D(36)  # today: 26
+    assert covered == D(26)  # the bot's own shares only, never the broker quantity
+    assert not [o for o in ex.sent if o.side is Side.SELL and o.order_type is not
+                OrderType.STOP_LOSS]  # nothing of the foreign shares is sold
+    assert "quantity-mismatch:t1" in fence_names(r)  # entries blocked, operator alerted
+    texts = [row.body["text"] for row in r.journal("alert")]
+    assert "quantity-mismatch:t1: broker holds 36, Detail says 26" in texts
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "spec 9 conflict, owner decision pending: broker quantity vs Detail-only sizing"))
 def test_the_bots_own_shares_are_closed_by_the_flatten_time(tmp_path, monkeypatch):
     r = held_with_foreign_shares(tmp_path, monkeypatch)
     assert r.run_until("09:53") == 0
     r.bot_down_until("15:50")
-    assert r.run_until("15:58") == 0
-    sold = sum(o.quantity for o in r.world.exchange.of("AAA", OrderType.MARKET))
-    assert sold == D(26)  # today: nothing is sold; 36 AAA are held into the close
+    assert r.run_until("16:00") == 0
+    ex = r.world.exchange
+    sold = sum(o.quantity for o in ex.of("AAA", OrderType.MARKET))
+    assert sold == D(26)  # exactly the bot's own shares
+    assert ex.holdings["AAA"].quantity == D(10)  # the foreign shares are never touched
+    assert ex.short == []
+    # End state at 16:00: the trade stays open (exiting) while the broker is not flat, so
+    # entries stay blocked until the operator sells or explains the 10 shares.
+    (trade,) = r.trades()
+    assert trade["state"] == "exiting" and trade["closed_at"] is None
+    store = r.store()
+    try:
+        fences = {row["name"]: row["cause"] for row in store.query("SELECT * FROM fences")}
+    finally:
+        store.close()
+    # The fence keeps the cause it was set with; it is not rewritten as the quantities change.
+    assert fences["quantity-mismatch:t1"] == "broker holds 36, Detail says 26"
+    not_flat = [row.body["text"] for row in r.journal("alert")
+                if row.body["kind"] == "not-flat-after-flatten"]
+    assert not_flat and all("position AAA 10." in text for text in not_flat)

@@ -314,6 +314,13 @@ than the bot's orders explain: it may have filled. If the alert stays, look in t
 If the shares were sold there by hand and the bot's order never arrived, the bot keeps waiting
 for it and the rest of the position may have no stop: close it in the Webull app.
 
+### `quantity-mismatch`
+
+When the account holds more of the bot's symbol than its orders explain (shares bought by hand),
+an exit or the flatten sells only the bot's own shares; the trade then stays `exiting` until the
+foreign shares are gone, so entries stay blocked, `stop-bot` is refused and the protection busy
+cause says "exit in progress": sell or explain the extra shares in the Webull app.
+
 ### `refused: the database holds runs of environment ...`
 
 One database belongs to one environment (spec section 10). After changing `[run] environment`,
