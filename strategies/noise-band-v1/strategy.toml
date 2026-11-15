@@ -1,0 +1,39 @@
+# Strategy "noise-band-v1": a move beyond the stock's usual move for the time of day
+# (docs/strategy-ledger.md, L2). An observer candidate for live forward testing; not the
+# active strategy. Values are the ones pre-registered for the history test, except that the
+# band averages the 5 prior sessions the platform fetches (the history test averaged up to 14
+# prior active days). Changing any value means a new `version`.
+
+[strategy]
+# Strategy name; must equal this folder name; recorded with every decision.
+name = "noise-band-v1"
+# Strategy version; bump on any value change; recorded with every decision and trade.
+version = "1"
+
+[signal]
+# The close must exceed session open x (1 + this x band); band = mean |close / 09:30 open - 1| at the same minute of prior sessions. Read by noise_band_v1.
+band_multiple = 1.0
+# Prior sessions the band averages; all must hold the 09:30 bar and the same minute (at most config/bot.toml [market_data] history_sessions). Read by noise_band_v1.
+prior_sessions = 5
+# Earliest signal bar, minutes after the 09:30 open (30 = the 10:00 bar). Read by noise_band_v1.
+earliest_minutes_after_open = 30
+# Latest signal bar, minutes after the 09:30 open (330 = the 15:00 bar). Read by noise_band_v1.
+latest_minutes_after_open = 330
+
+[entry]
+# Entry window around the signal close, percent each way; the ask must be inside it. Read by strategy.simple.
+entry_window_percent = 0.5
+# Minimum stop distance below the entry window's floor, percent; a higher band/VWAP stop is replaced by it. Read by strategy.simple.
+minimum_stop_percent = 0.5
+
+[liquidity]
+# Regular session: maximum (ask - bid) / mid. Read by strategy.simple.
+max_spread_ratio = 0.015
+# Minimum previous session close, USD (the history test's universe floor). Read by noise_band_v1.
+min_previous_close_usd = 10
+
+[sizing]
+# Planned loss per trade the quantity is sized for, USD; must not exceed config/bot.toml [risk]. Read by strategy.simple.
+planned_loss_usd = 50
+# Maximum position notional, USD (quantity x top of entry window); must not exceed config/bot.toml [risk]. Read by strategy.simple.
+max_position_notional_usd = 2500

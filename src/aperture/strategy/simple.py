@@ -1,4 +1,4 @@
-"""Shared pieces for simple bar-signal strategies (volume-shock-v1).
+"""Shared pieces for simple bar-signal strategies (volume-shock-v1, noise-band-v1).
 
 A simple strategy decides on the last completed M1 bar whether its signal fires for the first
 time this session, and then turns it into an ENTER with one stop through `enter`. Exits are

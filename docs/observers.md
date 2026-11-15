@@ -77,6 +77,19 @@ so it runs as an observer to test the idea where nothing can look ahead. `simple
 sets stops, so a strategy built on it needs the trading-core review before it becomes active.
 Enable: `observers = ["volume-shock-v1"]`.
 
+## Candidate: noise-band-v1
+
+`strategies/noise-band-v1/` with `src/aperture/strategy/noise_band_v1.py` (entry and sizing in
+`strategy/simple.py`). It is family L2 of `docs/strategy-ledger.md`: the first close between
+10:00 and 15:00 that is further above the session open than the stock's usual move at that
+minute over the prior sessions; the docstring and the strategy.toml hold the rules and values.
+One signal bar per symbol and session; the stop is the lower of the band level (or VWAP when
+it is higher and below the close) and the minimum distance below the entry window's floor.
+Since the first crossing closes barely above the band, the fixed minimum distance is almost
+always the stop used, so forward results do not test a band stop. The session flatten is the
+exit. Like volume-shock-v1 it was positive on history only through look-ahead, so it runs
+as an observer. Enable: `observers = ["noise-band-v1"]`.
+
 ## Engine wiring (to do in the engine, not here)
 
 ```python
