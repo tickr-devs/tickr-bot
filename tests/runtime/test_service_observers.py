@@ -59,6 +59,7 @@ class Evaluator:
 
 class Market:
     watch: set[str] = set()
+    observer_watch: set[str] = set()
     discovery = None
 
     def tick(self, *, discover: bool = True) -> None:
@@ -128,3 +129,18 @@ def test_an_error_in_the_hook_switches_observers_off_and_the_loop_goes_on(tmp_pa
     assert stopped.body["error"] == "RuntimeError"
     assert [a.body["kind"] for a in bot.store.journal(ALERT)] == [
         AlertKind.OBSERVERS_STOPPED.value]
+
+
+def test_observer_watch_symbols_reach_the_market_and_go_when_observers_stop(tmp_path):
+    bot, observers = wire(tmp_path, Observer(), ["ABC"])
+    bot.service._evaluate()
+    assert observers.wait_idle(5)
+    bot.service._evaluate()
+    assert bot.service.market.observer_watch == {"ABC"}
+
+    def broken(context, at):
+        raise RuntimeError("hook bug")
+
+    observers.on_evaluation = broken  # type: ignore[method-assign]
+    bot.service._evaluate()
+    assert bot.service.observers is None and bot.service.market.observer_watch == set()

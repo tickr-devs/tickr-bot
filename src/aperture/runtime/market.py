@@ -113,8 +113,14 @@ class MarketRuntime:
         self.settings = DiscoverySettings.from_config(config)
         self.subscribed: set[str] = set()
         self.watch: set[str] = set()  # the strategy's WATCH symbols, set by the service
+        # Observers' WATCH and ENTER symbols, set by the service; lowest priority on the stream
+        self.observer_watch: set[str] = set()
         self.discovery: DiscoveryState | None = None
         self._candidates_retry_at = monotonic()  # candidates off until then after a refusal
+        self._observers_retry_at = monotonic()  # observer symbols off until then after one
+        self._observers_next_sync = monotonic()  # observer tier changes at most once until then
+        self._observers_applied: set[str] = set()  # the observer tier as last chosen
+        self._optional: set[str] = set()  # subscribed through subscribe_optional
         self._next_discovery = monotonic()
         self._started = now()
 
@@ -166,42 +172,105 @@ class MarketRuntime:
         best = self.discovery.candidates[:self.config.market_data.candidate_subscriptions]
         return {c.instrument.symbol for c in best}
 
+    def _trim(self, symbols: set[str], room: int) -> set[str]:
+        """At most `room` of `symbols`, those already subscribed first, then by name."""
+        ordered = sorted(symbols, key=lambda s: (s not in self.subscribed, s))
+        return set(ordered[:max(room, 0)])
+
+    def _observer_symbols(self, taken: set[str], trading: bool) -> set[str]:
+        """The observer tier: symbols the observers watch that the higher tiers (`taken`) do
+        not, at most `observer_subscriptions` and never more than the slots left free after
+        the higher tiers and `stream_reserved_symbols`, so it shrinks at once when they need
+        room. Otherwise it changes at most once per `observer_resync_seconds`, so it costs at
+        most one subscribe and one unsubscribe request per period; symbols already subscribed
+        keep their slot. While `trading` (a position or a working entry) it is not changed
+        except to give slots back: any failed (un)subscribe reconnects the whole stream,
+        which must not happen to a position's quotes for an observer. Same live-transport
+        rule as candidates."""
+        now = self.monotonic()
+        if not self.health.transport.up or now < self._observers_retry_at:
+            self._observers_applied = set()
+            return set()
+        md = self.config.market_data
+        free = md.stream_max_symbols - md.stream_reserved_symbols - len(taken)
+        cap = max(min(md.observer_subscriptions, free), 0)
+        if now >= self._observers_next_sync and not trading:
+            self._observers_next_sync = now + float(md.observer_resync_seconds)
+            wanted = self.observer_watch - taken
+            ordered = sorted(wanted, key=lambda s: (s not in self.subscribed, s))
+            self._observers_applied = set(ordered[:cap])
+        else:
+            kept = sorted(self._observers_applied - taken)
+            self._observers_applied = set(kept[:cap])
+        return set(self._observers_applied)
+
     def _sync_subscriptions(self) -> None:
         """L1 for the open position and the strategy's WATCH symbols (spec 6), then the best
-        discovery candidates, so a quote is there the first minute the strategy says ENTER.
-        Candidates are kept only while the transport is up, and go in their own request: a
-        refusal (the per-connection symbol limit is unproven) never touches the position's
-        subscription, and candidates then stay off for `candidate_retry_seconds`."""
-        essential = self._position_symbols() | self._entry_symbols() | self.watch
-        candidates = self._candidate_symbols() - essential
-        desired = essential | candidates
+        discovery candidates, so a quote is there the first minute the strategy says ENTER,
+        then the observers' WATCH symbols so their results are not limited to the active
+        strategy's symbols. Candidates and observer symbols are kept only while the transport
+        is up, and each tier goes in its own request after the one above it; lower tiers give
+        their slots back first. A refused tier stays off for `candidate_retry_seconds`.
+        Observer symbols go through `subscribe_optional` / `unsubscribe_optional`: they never
+        take the active strategy's subscribe budget reserve, and a failure never reconnects
+        the stream (a reconnect would cut the position's quotes)."""
+        trading = self._position_symbols() | self._entry_symbols()
+        essential = trading | self.watch
+        md = self.config.market_data
+        # Lower tiers give their slots back first, so the essential request fits whenever it
+        # fits the connection at all.
+        candidates = self._trim(self._candidate_symbols() - essential,
+                                md.stream_max_symbols - len(essential))
+        observed = self._observer_symbols(essential | candidates, bool(trading))
+        desired = essential | candidates | observed
         removed = self.subscribed - desired
         if removed:
-            try:
-                self.source.unsubscribe(sorted(removed))
-            except Exception as exc:  # noqa: BLE001 - a stream problem never ends the loop
-                self.inbox.on_error("unsubscribe", exc)
+            reserve = md.stream_reserved_subscribe_requests
+            optional, required = removed & self._optional, removed - self._optional
+            if optional:
+                try:
+                    self.source.unsubscribe_optional(sorted(optional), reserve)
+                except Exception as exc:  # noqa: BLE001 - never ends the loop, no reconnect
+                    self.inbox.on_error("unsubscribe-observers", exc)
+                self._optional -= optional
+            if required:
+                try:
+                    self.source.unsubscribe(sorted(required))
+                except Exception as exc:  # noqa: BLE001 - a stream problem never ends the loop
+                    self.inbox.on_error("unsubscribe", exc)
             self.health.untrack(removed)
             for symbol in removed:
                 self.inbox.forget(symbol)
             self.subscribed -= removed
         if not self._subscribe(essential - self.subscribed, "subscribe"):
             return
+        retry = float(self.config.market_data.candidate_retry_seconds)
         if not self._subscribe(candidates - self.subscribed, "subscribe-candidates"):
-            self._candidates_retry_at = (
-                self.monotonic() + float(self.config.market_data.candidate_retry_seconds))
+            self._candidates_retry_at = self.monotonic() + retry
+            return
+        if not self._subscribe(observed - self.subscribed, "subscribe-observers",
+                               optional=True):
+            self._observers_retry_at = self.monotonic() + retry
+            self._observers_applied = set()
 
-    def _subscribe(self, added: set[str], where: str) -> bool:
+    def _subscribe(self, added: set[str], where: str, optional: bool = False) -> bool:
         if not added:
             return True
         self.health.track(added)
         try:
-            self.source.subscribe(sorted(added), self.listener)
+            if optional:
+                self.source.subscribe_optional(
+                    sorted(added), self.listener,
+                    self.config.market_data.stream_reserved_subscribe_requests)
+            else:
+                self.source.subscribe(sorted(added), self.listener)
         except Exception as exc:  # noqa: BLE001 - a stream problem never ends the loop
             self.inbox.on_error(where, exc)
             self.health.untrack(added)
             return False
         self.subscribed |= added
+        if optional:
+            self._optional |= added
         return True
 
     def _in_regular_session(self, now: datetime) -> tuple[bool, datetime | None]:

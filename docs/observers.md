@@ -107,9 +107,18 @@ Notes for both candidates (from the trading-core review of `strategy/simple.py`)
   while `[market_data] bars_per_symbol` covers the whole session.
 - The previous close is the last bar of the latest fetched prior session, not the official
   close.
-- Quotes are subscribed for the active strategy's WATCH set only (`runtime/service.py`
-  `_evaluate`), so an observer shows ENTER only on a symbol the active strategy also watches;
-  the rest show WATCH, which the daily report should count as missed for no quote.
+- Observers' WATCH and ENTER symbols get L1 quotes as the lowest stream tier
+  (`ObserverSet.watching`, `runtime/market._sync_subscriptions`): after the position, the
+  active strategy's WATCH symbols and the discovery candidates, up to
+  `[market_data] observer_subscriptions` and never more than the slots the higher tiers leave
+  free above `stream_reserved_symbols` (it shrinks at once when they need room). It changes at
+  most once per `observer_resync_seconds` and not at all while a position or a working entry
+  exists, except to give slots back. Its requests go through `subscribe_optional` /
+  `unsubscribe_optional` (broker/webull.py StreamSession): they wait while fewer than
+  `stream_reserved_subscribe_requests` would stay free in the route budget, and a failure is
+  journaled without a reconnect, so it never cuts the position's quotes. The quote arrives after the signal bar, so the first
+  ENTER usually comes a minute or more after it, inside `signal_valid_minutes`. A symbol left
+  at WATCH (no slot, refused, or quote too late) counts as missed for no quote.
 - A valid signal can log ENTER on each of its up to `signal_valid_minutes`: count one
   entry per signal, not one per record. The daily observer report simulates at most one
   trade per signal (`skipped_same_signal`); the `outcomes` research command still measures

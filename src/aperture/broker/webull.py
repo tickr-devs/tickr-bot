@@ -1073,6 +1073,17 @@ class WebullMarketData:
         except Exception as exc:  # noqa: BLE001 - see subscribe
             raise MarketDataError(f"unsubscribe failed ({type(exc).__name__})") from None
 
+    def subscribe_optional(self, symbols: Iterable[str], listener: QuoteListener,
+                           budget_reserve: int) -> None:
+        if self._stream is None:
+            raise MarketDataError("no L1 stream configured for this adapter")
+        self._stream.subscribe_optional(symbols, listener, budget_reserve)
+
+    def unsubscribe_optional(self, symbols: Iterable[str], budget_reserve: int) -> None:
+        if self._stream is None:
+            raise MarketDataError("no L1 stream configured for this adapter")
+        self._stream.unsubscribe_optional(symbols, budget_reserve)
+
 
 # --------------------------------------------------------------------------------------------
 # L1 quote stream (MQTT). Session logic is SDK-free and tested; SdkQuoteStream binds it to the SDK.
@@ -1299,6 +1310,11 @@ class QuoteStream(Protocol):
 
     def unsubscribe(self, symbols: Iterable[str]) -> None: ...
 
+    def subscribe_optional(self, symbols: Iterable[str], listener: QuoteListener,
+                           budget_reserve: int) -> None: ...
+
+    def unsubscribe_optional(self, symbols: Iterable[str], budget_reserve: int) -> None: ...
+
 
 def quote_from_stream(result: Any, receipt_time: datetime) -> Quote | None:
     """SDK `QuoteResult` (basic{symbol, timestamp ms}, bids[], asks[] of {price, size}) -> Quote.
@@ -1378,6 +1394,7 @@ class StreamSession:
         self._send_subscribe: Callable[[list[str]], None] | None = None
         self._send_unsubscribe: Callable[[list[str]], None] | None = None
         self._reconnect: Callable[[], None] | None = None
+        self._generation = 0  # counts connects and disconnects: an optional send checks it
         self._connected = False
         self._up = False
 
@@ -1471,6 +1488,58 @@ class StreamSession:
         if up:
             self._sync_or_reconnect(raise_error=True)
 
+    def subscribe_optional(self, symbols: Iterable[str], listener: QuoteListener,
+                           budget_reserve: int) -> None:
+        """Subscribe symbols nobody trades on (observers) without ever disturbing the
+        connection: only while up and in sync, only within `max_symbols`, and only while at
+        least `budget_reserve` subscribe requests stay free for the required symbols. A
+        failed send is reported to `on_error` and raised as MarketDataError; the symbols are
+        not added and there is no reconnect. The provider may still have taken them (its
+        answer was lost); they then hold slots we do not count until the next connection,
+        and a provider 417 for the required symbols falls back to the reconnect."""
+        with self._sync_lock:  # no _sync runs between the checks and the send
+            with self._lock:
+                if self._listener is not listener:
+                    raise MarketDataError("optional subscribe needs the bound stream listener")
+                if not self._up:
+                    raise MarketDataError("optional subscribe needs a live stream in sync")
+                added = set(symbols) - self._symbols
+                if not added:
+                    return
+                if len(self._symbols) + len(added) > self._max_symbols:
+                    raise SubscriptionLimit(added, self._max_symbols, by_provider=False)
+                generation = self._generation
+            self._send_optional(True, sorted(added), budget_reserve)
+            with self._lock:
+                if self._generation != generation:  # reconnected meanwhile: not on this one
+                    raise MarketDataError("optional subscribe raced a reconnect: dropped")
+                self._symbols.update(added)
+                self._sent.update(added)
+
+    def unsubscribe_optional(self, symbols: Iterable[str], budget_reserve: int) -> None:
+        """Drop symbols added by `subscribe_optional`, with the same guarantees. They leave
+        the desired set whatever happens; on a failed send the provider may keep streaming
+        them until the next connection (their quotes are ignored)."""
+        with self._sync_lock:
+            with self._lock:
+                gone = sorted(set(symbols) & self._symbols)
+                self._symbols.difference_update(gone)
+                sent = sorted(set(gone) & self._sent)
+                self._sent.difference_update(sent)
+                up = self._up
+            if sent and up:
+                self._send_optional(False, sent, budget_reserve)
+
+    def _send_optional(self, subscribe: bool, symbols: list[str], budget_reserve: int) -> None:
+        route = STREAM_SUBSCRIBE_PATH if subscribe else STREAM_UNSUBSCRIBE_PATH
+        if not self._budget.can_take(route, budget_reserve + 1):
+            raise MarketDataError(f"optional {route}: request budget kept for required symbols")
+        try:
+            self._send(subscribe, symbols)
+        except Exception as exc:  # noqa: BLE001 - budget, HTTP or SDK: never a reconnect here
+            self._on_error("subscribe-optional" if subscribe else "unsubscribe-optional", exc)
+            raise MarketDataError(f"optional {route} failed ({type(exc).__name__})") from None
+
     def _sync_or_reconnect(self, raise_error: bool,
                            rollback: Iterable[str] = ()) -> bool:
         """Sync; on failure drop `rollback` from the desired set, mark the transport down
@@ -1500,6 +1569,7 @@ class StreamSession:
     def on_connected(self) -> None:
         with self._lock:
             self._connected, self._up, self._sent = True, False, set()
+            self._generation += 1
         if not self._sync_or_reconnect(raise_error=False):
             return
         with self._lock:
@@ -1511,6 +1581,7 @@ class StreamSession:
             was = self._connected or self._up
             self._connected = self._up = False
             self._sent = set()
+            self._generation += 1
         if was or detail:
             self._notify(False, detail)
 
@@ -1615,6 +1686,13 @@ class SdkQuoteStream:
 
     def unsubscribe(self, symbols: Iterable[str]) -> None:
         self._session.unsubscribe(symbols)
+
+    def subscribe_optional(self, symbols: Iterable[str], listener: QuoteListener,
+                           budget_reserve: int) -> None:
+        self._session.subscribe_optional(symbols, listener, budget_reserve)
+
+    def unsubscribe_optional(self, symbols: Iterable[str], budget_reserve: int) -> None:
+        self._session.unsubscribe_optional(symbols, budget_reserve)
 
     def _run(self) -> None:
         """Connect and loop until stop(). Whenever the SDK loop ends (our deliberate

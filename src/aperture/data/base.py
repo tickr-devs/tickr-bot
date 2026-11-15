@@ -152,6 +152,17 @@ class MarketData(Protocol):
 
     def unsubscribe(self, symbols: Iterable[str]) -> None: ...
 
+    def subscribe_optional(self, symbols: Iterable[str], listener: QuoteListener,
+                           budget_reserve: int) -> None:
+        """Like `subscribe`, but for symbols nobody trades on (observers): only on a live
+        stream, only while at least `budget_reserve` subscribe requests would stay free, and a
+        failure is raised without disturbing the connection (no reconnect)."""
+        ...
+
+    def unsubscribe_optional(self, symbols: Iterable[str], budget_reserve: int) -> None:
+        """Drop symbols added by `subscribe_optional`, with the same guarantees."""
+        ...
+
 
 class FakeMarketData:
     """In-memory `MarketData` for tests: scripted rows, bars and quotes; a call budget per method.
@@ -247,3 +258,10 @@ class FakeMarketData:
 
     def unsubscribe(self, symbols: Iterable[str]) -> None:
         self.subscribed.difference_update(symbols)
+
+    def subscribe_optional(self, symbols: Iterable[str], listener: QuoteListener,
+                           budget_reserve: int) -> None:
+        self.subscribe(symbols, listener)
+
+    def unsubscribe_optional(self, symbols: Iterable[str], budget_reserve: int) -> None:
+        self.unsubscribe(symbols)

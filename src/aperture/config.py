@@ -153,6 +153,9 @@ class MarketDataConfig:
     history_max_lookback_days: int
     history_sessions: int
     candidate_subscriptions: int
+    observer_subscriptions: int
+    observer_resync_seconds: Decimal
+    stream_reserved_subscribe_requests: int
     candidate_retry_seconds: Decimal
     history_dir: str
     stream_reconnect_delay_seconds: Decimal
@@ -409,10 +412,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if run.maintain_keep_sessions < 1:
         raise ConfigError("[run] maintain_keep_sessions must be at least 1 (today is always kept)")
     md: MarketDataConfig = built["market_data"]
-    if md.candidate_subscriptions > md.stream_max_symbols - md.stream_reserved_symbols:
+    if (md.candidate_subscriptions + md.observer_subscriptions
+            > md.stream_max_symbols - md.stream_reserved_symbols):
         raise ConfigError(
-            "[market_data] candidate_subscriptions must leave stream_reserved_symbols free "
-            "within stream_max_symbols"
+            "[market_data] candidate_subscriptions plus observer_subscriptions must leave "
+            "stream_reserved_symbols free within stream_max_symbols"
         )
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:

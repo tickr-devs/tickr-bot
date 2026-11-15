@@ -39,6 +39,9 @@ from aperture.types import Quote
 
 ALL_OBSERVERS = "all observers"
 _STOP = object()
+# A WATCH counts while its bar started within this many minutes: the completed bar (1), the
+# one before it while the worker is mid-bar (2), plus one for the pass timing. Structural.
+WATCHING_BARS = 3
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,8 @@ class ObserverSet:
         self._enabled = list(observers)
         self._lock = threading.Lock()
         self._failures: list[ObserverFailure] = []
+        # observer folder -> symbol -> bar of its latest WATCH/ENTER
+        self._watching: dict[str, dict[str, datetime]] = {}
         self._queue: queue.Queue[object] = queue.Queue(maxsize=queue_size)
         self._idle = threading.Condition()
         self._pending = 0
@@ -162,6 +167,19 @@ class ObserverSet:
             taken = tuple(self._failures)
             self._failures.clear()
         return taken
+
+    def watching(self, now: datetime) -> frozenset[str]:
+        """Symbols whose latest decision by an enabled observer was WATCH or ENTER on a bar
+        that started at most WATCHING_BARS minutes before `now` (the latest completed bar or
+        the one before, while the worker is mid-bar): the observers' own quote wishes, so the
+        platform can subscribe them below the active strategy's. A symbol no longer evaluated,
+        or every symbol once evaluation stops (after the close), drops out."""
+        since = now - WATCHING_BARS * M1
+        with self._lock:
+            enabled = {o.folder for o in self._enabled}
+            return frozenset(s for folder, symbols in self._watching.items()
+                             if folder in enabled
+                             for s, bar in symbols.items() if bar >= since)
 
     def wait_idle(self, timeout: float) -> bool:
         """True once every queued evaluation is done (tests, orderly shutdown)."""
@@ -220,6 +238,12 @@ class ObserverSet:
                 continue
             assert isinstance(decision, Decision)
             enter = decision.verdict is Verdict.ENTER
+            with self._lock:
+                symbols = self._watching.setdefault(observer.folder, {})
+                if enter or decision.verdict is Verdict.WATCH:
+                    symbols[context.symbol] = bar_start
+                else:
+                    symbols.pop(context.symbol, None)
             record = DecisionRecord(
                 time=at,
                 bar_start=bar_start,

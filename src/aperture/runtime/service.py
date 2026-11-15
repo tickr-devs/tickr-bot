@@ -424,7 +424,7 @@ class Service:
 
     def _evaluate(self) -> None:
         """The active strategy on the latest completed minute; its WATCH set feeds the L1
-        subscriptions (spec 6)."""
+        subscriptions (spec 6), and the observers' WATCH symbols a lower tier of them."""
         if self.evaluator is None or self.market is None:
             return
         found = self.market.discovery
@@ -438,6 +438,9 @@ class Service:
                                          run_id=self.engine.run_id)
         self.market.watch = set(self.evaluator.watch)
         self._feed_observers()
+        observers = self.observers
+        self.market.observer_watch = (set() if observers is None
+                                      else set(observers.watching(self.now())))
 
     def _feed_observers(self) -> None:
         """The contexts the active strategy just saw go to the observers, after all broker

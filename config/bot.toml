@@ -245,8 +245,21 @@ history_dir = "history"
 # a candidate has a fresh quote the minute the strategy first says ENTER; count. At most stream_max_symbols minus
 # stream_reserved_symbols (checked when config loads); read by runtime.market.
 candidate_subscriptions = 5
-# Seconds candidates stay off the stream after their subscribe was refused (the position and WATCH symbols are never
-# affected); read by runtime.market.
+# Most observer WATCH/ENTER symbols kept on the L1 stream after the position, the strategy's WATCH symbols and the
+# candidates, so observers can reach ENTER on their own symbols, and never more than the slots those leave free above
+# stream_reserved_symbols; count. candidate_subscriptions plus this is at most
+# stream_max_symbols minus stream_reserved_symbols (checked when config loads); read by runtime.market.
+observer_subscriptions = 20
+# Seconds between changes of the observer tier of the L1 stream (it shrinks at once when the position, WATCH symbols or
+# candidates need its slots), so observers cost at most one subscribe and one unsubscribe request per period on routes
+# shared with the active strategy's subscribes; read by runtime.market.
+observer_resync_seconds = 60
+# Subscribe (and unsubscribe) requests per budget window an observer-tier request must leave free for the position,
+# WATCH symbols and candidates, count; below the route limit (requests_per_route_per_minute, route_limits) the observer
+# tier waits. Read by runtime.market for broker.webull StreamSession.subscribe_optional.
+stream_reserved_subscribe_requests = 10
+# Seconds candidates, or observer symbols, stay off the stream after their subscribe was refused (the position and
+# WATCH symbols are never affected); read by runtime.market.
 candidate_retry_seconds = 300
 # Seconds before the L1 stream connects again after its loop ended (failed resubscribe or SDK gave up); read by broker.webull stream.
 stream_reconnect_delay_seconds = 10
@@ -254,9 +267,10 @@ stream_reconnect_delay_seconds = 10
 # subscribe past it is refused with HTTP 417 TOO_MANY_SYMBOLS_SUBSCRIPTION); never set above 100. A subscribe that would
 # pass it is refused before sending (SubscriptionLimit); read by broker.webull stream.
 stream_max_symbols = 100
-# Stream slots never used by discovery candidates, kept for open positions and the strategy's WATCH symbols, count
+# Stream slots never used by discovery candidates or observer symbols, kept for open positions and the strategy's WATCH
+# symbols, count
 # (position and WATCH symbols beyond stream_max_symbols get the same SubscriptionLimit refusal);
-# read by config (checks candidate_subscriptions <= stream_max_symbols - stream_reserved_symbols).
+# read by config (checks candidate_subscriptions + observer_subscriptions <= stream_max_symbols - stream_reserved_symbols).
 stream_reserved_symbols = 20
 # Seconds without a received quote, transport up, after which a subscribed symbol is quiet; read by data.health.
 quiet_after_seconds = 5
