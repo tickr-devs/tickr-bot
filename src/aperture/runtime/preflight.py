@@ -16,6 +16,8 @@ Checks, all reported, the first failure is the single cause:
 5. broker token folder present;
 5b. no operator stop marker (runtime/stopmarker.py): after a stop-bot command the bot stays
    stopped, and this check fails every morning, until the owner runs `aperture clear-stop`;
+5c. the database, when it exists, holds runs of this environment only (spec 10: one database
+   per environment); otherwise the bot would refuse at its start, hours later;
 6. active strategy builds from its file and `[market_data] history_sessions` covers the prior
    sessions it needs. A failure here is reported but does not stop the bot from starting: the
    bot then protects positions with entries off (`blocks_start`);
@@ -29,6 +31,7 @@ Exit codes: 0 ready, 1 failed, 2 config invalid, 3 no session today.
 from __future__ import annotations
 
 import shutil
+import sqlite3
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -43,6 +46,7 @@ from aperture.observers.loader import load_active
 from aperture.runtime import stopmarker
 from aperture.runtime.alerts import default_notifier, recipient_missing
 from aperture.runtime.launchd import check_timings
+from aperture.store import DATABASE_FILE, EnvironmentMismatch, Store
 
 STRATEGY_FILE = "strategy.toml"
 STRATEGIES_DIR = "strategies"
@@ -70,6 +74,8 @@ class PreflightCause(StrEnum):
     TOKEN_UNUSABLE = "token-unusable"
     STRATEGY_REFUSED = "strategy-refused"
     STOPPED_BY_OPERATOR = "stopped-by-operator"
+    DATABASE_OTHER_ENVIRONMENT = "database-other-environment"
+    DATABASE_UNREADABLE = "database-unreadable"
 
 
 class CheckName(StrEnum):
@@ -83,6 +89,7 @@ class CheckName(StrEnum):
     TOKEN = "token"
     STRATEGY = "strategy"
     STOP_MARKER = "stop-marker"
+    DATABASE = "database"
 
 
 @dataclass(frozen=True)
@@ -252,6 +259,26 @@ def _check_stop_marker(cfg: config_module.Config) -> Check:
     return Check(CheckName.STOP_MARKER, True, "none")
 
 
+def _check_database(cfg: config_module.Config) -> Check:
+    """Read-only: never creates, migrates or writes the bot's database."""
+    database = cfg.root / cfg.run.data_dir / DATABASE_FILE
+    if not database.exists():
+        return Check(CheckName.DATABASE, True, "not created yet")
+    try:
+        store = Store.open_readonly(database)
+        try:
+            store.require_environment(cfg.environment_name)
+        finally:
+            store.close()
+    except EnvironmentMismatch as exc:
+        return Check(CheckName.DATABASE, False, str(exc),
+                     PreflightCause.DATABASE_OTHER_ENVIRONMENT)
+    except sqlite3.Error as exc:
+        return Check(CheckName.DATABASE, False, f"cannot read {database}: {exc}",
+                     PreflightCause.DATABASE_UNREADABLE)
+    return Check(CheckName.DATABASE, True, f"runs of {cfg.environment_name} only")
+
+
 def _check_strategy(cfg: config_module.Config) -> Check:
     try:
         loaded = load_active(cfg)
@@ -280,7 +307,8 @@ def run_preflight(
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, disk, calendar, _check_credentials(cfg, environ),
               _check_alert_channel(cfg, platform, environ), _check_alert_recipient(cfg, environ),
-              _check_token_dir(cfg), _check_stop_marker(cfg), _check_strategy(cfg))
+              _check_token_dir(cfg), _check_stop_marker(cfg), _check_database(cfg),
+              _check_strategy(cfg))
     blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED
                    for c in checks)
     if token_probe is not None and session_today and not blocking:

@@ -14,6 +14,7 @@ from aperture.runtime.preflight import (
     PreflightCause,
     run_preflight,
 )
+from aperture.store import DATABASE_FILE, Store
 
 MONDAY = datetime(2026, 11, 16, 13, 30, tzinfo=UTC)  # 08:30 ET, a normal trading day
 SATURDAY = datetime(2026, 11, 14, 13, 30, tzinfo=UTC)
@@ -269,3 +270,38 @@ def test_operator_stop_marker_blocks_the_start_until_cleared(config_path):
     assert "clear-stop" in result.summary()
     assert stopmarker.clear(cfg)
     assert _run(config_path, environ).exit_code is ExitCode.READY
+
+
+def _database(config_path: Path, environment: str) -> Path:
+    cfg = config_module.load(config_path)
+    path = cfg.root / cfg.run.data_dir / DATABASE_FILE
+    store = Store.open(path, busy_timeout_seconds=0)
+    store.start_run(environment=environment, config_digest="d", strategy="s",
+                    strategy_version="1", code_version="x")
+    store.close()
+    return path
+
+
+def test_a_database_of_this_environment_passes_and_is_not_written(config_path):
+    environ = _ready(config_path)
+    path = _database(config_path, config_module.load(config_path).environment_name)
+    before = path.read_bytes()
+    result = _run(config_path, environ)
+    assert result.exit_code is ExitCode.READY
+    assert path.read_bytes() == before
+
+
+def test_a_database_of_another_environment_blocks_the_start_with_its_own_cause(config_path):
+    environ = _ready(config_path)
+    _database(config_path, "another")
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.DATABASE_OTHER_ENVIRONMENT and result.blocks_start
+    assert "move the database aside" in result.summary()
+
+
+def test_an_unreadable_database_blocks_the_start(config_path):
+    environ = _ready(config_path)
+    path = _database(config_path, "another")
+    path.write_bytes(b"not a database")
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.DATABASE_UNREADABLE and result.blocks_start

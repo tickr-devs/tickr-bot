@@ -91,6 +91,10 @@ Every run prints JSON lines (`"record": "preflight" | "alert" | "bot-exit"`) to 
 7. Broker token folder `<data_dir>/<token_dir>` exists.
 7b. No operator stop marker (cause `stopped-by-operator`): a stop-bot command from the apps
    left `<data_dir>/<[runtime] stop_marker_file>`; `aperture clear-stop` removes it.
+7c. The database, when it exists, holds runs of this environment only (cause
+   `database-other-environment`; `database-unreadable` when it cannot be opened). After
+   changing `[run] environment`, move `data/aperture.sqlite3` aside and keep it: the apps then
+   no longer show the other environment's days.
 8. The active strategy builds and `[market_data] history_sessions` covers its history need. A
    failure is reported, but the bot still starts with entries off so it can protect positions.
 9. Broker token usable (only when no earlier check blocks the start and today has a session):
