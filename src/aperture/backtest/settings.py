@@ -29,6 +29,8 @@ KEYS = frozenset({
     "split_tolerance_percent",
     "holdout_percent",
     "instrument_statuses",
+    "liquid_top_count",
+    "liquid_min_price_usd",
 })
 
 
@@ -47,6 +49,8 @@ class BacktestSettings:
     split_tolerance_percent: Decimal
     holdout_percent: Decimal
     instrument_statuses: tuple[str, ...]
+    liquid_top_count: int
+    liquid_min_price_usd: Decimal
 
 
 def _count(key: str, raw: Any, minimum: int) -> int:
@@ -90,6 +94,8 @@ def settings_from_mapping(data: dict[str, Any]) -> BacktestSettings:
                                         table["split_tolerance_percent"]),
         holdout_percent=_percent("holdout_percent", table["holdout_percent"]),
         instrument_statuses=_texts("instrument_statuses", table["instrument_statuses"]),
+        liquid_top_count=_count("liquid_top_count", table["liquid_top_count"], 1),
+        liquid_min_price_usd=_number("liquid_min_price_usd", table["liquid_min_price_usd"]),
     )
 
 

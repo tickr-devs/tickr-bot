@@ -66,13 +66,7 @@ def select_pool(rows: Iterable[dict[str, Any]], sessions: Sequence[date],
                 max_per_day: int) -> tuple[list[PoolEntry], list[CapRecord]]:
     """`sessions` are the window's session dates oldest first; the first one only supplies the
     previous close of the second."""
-    by_symbol: dict[str, dict[date, dict[str, Any]]] = {}
-    for row in rows:
-        day = date.fromisoformat(row["date"])
-        own = by_symbol.setdefault(row["symbol"], {})
-        if day in own:
-            raise BacktestError(f"two daily rows for {row['symbol']} on {day}")
-        own[day] = row
+    by_symbol = _by_symbol(rows)
     pool: list[PoolEntry] = []
     caps: list[CapRecord] = []
     for previous, day in zip(sessions, sessions[1:], strict=False):
@@ -84,9 +78,9 @@ def select_pool(rows: Iterable[dict[str, Any]], sessions: Sequence[date],
             previous_close = Decimal(before["close"])
             if previous_close <= 0:
                 raise BacktestError(f"{symbol} {previous}: close {previous_close} not positive")
-            high, low, close = (Decimal(today[k]) for k in ("high", "low", "close"))
+            high, close = Decimal(today["high"]), Decimal(today["close"])
             change = (high / previous_close - 1) * PERCENT
-            dollar_volume = (high + low + close) / THREE * Decimal(today["volume"])
+            dollar_volume = _dollar_volume(today)
             if change >= change_percent and dollar_volume >= dollar_volume_floor:
                 candidates.append((change, symbol, previous_close, close, dollar_volume))
         candidates.sort(key=lambda c: (-c[0], c[1]))
@@ -97,6 +91,55 @@ def select_pool(rows: Iterable[dict[str, Any]], sessions: Sequence[date],
             pool.append(PoolEntry(day, rank, symbol, previous_close, close, change,
                                   dollar_volume))
     return pool, caps
+
+
+def select_liquid(rows: Iterable[dict[str, Any]], sessions: Sequence[date], top_count: int,
+                  min_price: Decimal) -> tuple[list[PoolEntry], list[CapRecord]]:
+    """A universe without look-ahead: for each session, the `top_count` symbols with the highest
+    PREVIOUS-session dollar volume (typical price x volume) among those whose previous close is
+    at least `min_price`. Only the previous session decides; the day itself is read for the
+    informational columns, so a symbol with no bar on the day (halted, delisted) is left out and
+    counted in pool_cap.csv as dropped."""
+    by_symbol = _by_symbol(rows)
+    pool: list[PoolEntry] = []
+    caps: list[CapRecord] = []
+    for previous, day in zip(sessions, sessions[1:], strict=False):
+        ranked: list[tuple[Decimal, str]] = []
+        for symbol, days in by_symbol.items():
+            before = days.get(previous)
+            if before is None or Decimal(before["close"]) < min_price:
+                continue
+            ranked.append((_dollar_volume(before), symbol))
+        ranked.sort(key=lambda c: (-c[0], c[1]))
+        chosen = ranked[:top_count]
+        kept = 0
+        for rank, (_, symbol) in enumerate(chosen, start=1):
+            today = by_symbol[symbol].get(day)
+            if today is None:
+                continue
+            previous_close = Decimal(by_symbol[symbol][previous]["close"])
+            high, close = Decimal(today["high"]), Decimal(today["close"])
+            kept += 1
+            pool.append(PoolEntry(day, rank, symbol, previous_close, close,
+                                  (high / previous_close - 1) * PERCENT, _dollar_volume(today)))
+        caps.append(CapRecord(day, len(chosen), kept))
+    return pool, caps
+
+
+def _dollar_volume(row: dict[str, Any]) -> Decimal:
+    high, low, close = (Decimal(row[k]) for k in ("high", "low", "close"))
+    return (high + low + close) / THREE * Decimal(row["volume"])
+
+
+def _by_symbol(rows: Iterable[dict[str, Any]]) -> dict[str, dict[date, dict[str, Any]]]:
+    by_symbol: dict[str, dict[date, dict[str, Any]]] = {}
+    for row in rows:
+        day = date.fromisoformat(row["date"])
+        own = by_symbol.setdefault(row["symbol"], {})
+        if day in own:
+            raise BacktestError(f"two daily rows for {row['symbol']} on {day}")
+        own[day] = row
+    return by_symbol
 
 
 def write_caps(caps: Sequence[CapRecord], path: Path) -> None:

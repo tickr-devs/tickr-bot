@@ -21,6 +21,7 @@ from aperture.backtest.universe import (
     CAP_FILE,
     POOL_FILE,
     read_pool,
+    select_liquid,
     select_pool,
     write_caps,
     write_pool,
@@ -43,18 +44,30 @@ def _history(cfg: Config, out: Path) -> fetch.HistorySource:
     return history_from_config(cfg, raw_dir=out / "raw")
 
 
+RULE_GAINERS = "gainers"
+RULE_LIQUID = "liquid"
+
+
 def step_select(cfg: Config, settings: BacktestSettings, out: Path, first: date,
-                last: date) -> Path:
+                last: date, rule: str = RULE_GAINERS, daily: Path | None = None) -> Path:
     window = fetch.daily_window(_calendar(cfg), first, last,
                                 cfg.market_data.history_max_lookback_days)
-    rows = fetch.load_daily(out / fetch.DAILY_DIR)
-    pool, caps = select_pool(rows, [d.ny_date for d in window], settings.gainer_change_percent,
-                       cfg.market_data.min_session_dollar_volume_usd, settings.max_pool_per_day)
+    rows = fetch.load_daily((daily or out) / fetch.DAILY_DIR)
+    sessions = [d.ny_date for d in window]
+    if rule == RULE_LIQUID:
+        pool, caps = select_liquid(rows, sessions, settings.liquid_top_count,
+                                   settings.liquid_min_price_usd)
+    else:
+        pool, caps = select_pool(rows, sessions, settings.gainer_change_percent,
+                                 cfg.market_data.min_session_dollar_volume_usd,
+                                 settings.max_pool_per_day)
     path = out / POOL_FILE
     write_pool(pool, path)
     write_caps(caps, out / CAP_FILE)
     bound = [c for c in caps if c.dropped]
-    if bound:
+    if bound and rule == RULE_LIQUID:
+        print(f"{sum(c.dropped for c in bound)} chosen symbol-days had no bar on the day")
+    elif bound:
         print(f"pool cap {settings.max_pool_per_day} bound on {len(bound)} sessions, "
               f"{sum(c.dropped for c in bound)} symbol-days dropped (look-ahead: raise the cap)")
     days = len({e.session_date for e in pool})
@@ -94,6 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
         if needs_window:
             step.add_argument("--first", type=date.fromisoformat, required=True)
             step.add_argument("--last", type=date.fromisoformat, required=True)
+        if name == "select":
+            step.add_argument("--rule", choices=(RULE_GAINERS, RULE_LIQUID), default=RULE_GAINERS,
+                              help="gainers (default) or liquid: top previous-day dollar volume")
+            step.add_argument("--daily", type=Path,
+                              help="data directory whose daily/ to read (default: --out)")
     run = sub.add_parser("run")
     run.add_argument("--out", type=Path, required=True, help="data directory (fetched)")
     run.add_argument("--results", type=Path, required=True, help="output directory")
@@ -116,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                          args.values)
             return 0
         if args.step == "select":
-            step_select(cfg, settings, out, args.first, args.last)
+            step_select(cfg, settings, out, args.first, args.last, args.rule, args.daily)
             return 0
         source = _history(cfg, out)
         if args.step in ("fetch-universe", "fetch-all"):

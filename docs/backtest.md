@@ -35,6 +35,14 @@ names. The first response of each kind and every failed one are kept in `<out>/r
    the minute-level rule below and uses no minute data. Ranking by the day's high is look-ahead,
    so the cap is set not to bind; `pool_cap.csv` records each session's candidates and drops,
    and the report states on how many sessions it bound.
+   `select --rule liquid` builds a pool without look-ahead instead, for research beyond
+   gainers: per session the `liquid_top_count` symbols with the highest previous-session dollar
+   volume whose previous close is at least `liquid_min_price_usd`. Only the previous session
+   decides; a chosen symbol with no bar on the day is left out and counted as dropped in
+   `pool_cap.csv`. `--daily <dir>` reads daily bars already fetched elsewhere, so the liquid pool
+   gets its own data folder:
+   `select --rule liquid --out data/liquid --daily data/backtest --first ... --last ...`, then
+   `fetch-minutes --out data/liquid`. The `run` step's gainer gate still applies to such a pool.
 4. **Minute bars** (`minutes/<SYMBOL>.jsonl`, replay bar format; `minutes_status.jsonl`): each
    pool day plus replay.toml `history_sessions` sessions before it, merged into contiguous runs
    and paged back with `end_time` (probe M4). Symbols that page from the same end share a request.

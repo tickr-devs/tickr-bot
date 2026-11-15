@@ -11,7 +11,7 @@ import pytest
 from aperture.backtest import fetch
 from aperture.backtest.errors import BacktestError
 from aperture.backtest.settings import load_settings
-from aperture.backtest.universe import read_pool, select_pool, write_pool
+from aperture.backtest.universe import read_pool, select_liquid, select_pool, write_pool
 from aperture.broker.base import RateLimited
 from aperture.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
 from aperture.broker.webull import InstrumentPage
@@ -173,6 +173,27 @@ def test_pool_cap_records_dropped_candidates():
     pool, caps = select_pool(rows, [date(2026, 11, 12), date(2026, 11, 13)], Decimal(5),
                              Decimal(1), 2)
     assert [e.symbol for e in pool] == ["A", "B"]
+    assert (caps[0].candidates, caps[0].kept, caps[0].dropped) == (3, 2, 1)
+
+
+def test_liquid_ranks_by_previous_day_only():
+    def bar(symbol, day, close, volume, high=None):
+        return {"symbol": symbol, "date": day, "open": close, "high": high or close,
+                "low": close, "close": close, "volume": volume}
+    rows = [
+        bar("A", "2026-11-12", "20", "1000"),            # 20k: rank 2
+        bar("A", "2026-11-13", "20", "1", high="30"),
+        bar("B", "2026-11-12", "50", "1000"),            # 50k: rank 1
+        bar("B", "2026-11-13", "50", "1"),
+        bar("C", "2026-11-12", "9", "100000"),           # below the price floor
+        bar("C", "2026-11-13", "9", "100000"),
+        bar("D", "2026-11-12", "11", "100"),             # 1.1k: outside top 2
+        bar("D", "2026-11-13", "11", "9999999"),         # the day's own volume must not count
+        bar("E", "2026-11-12", "10", "1500"),            # 15k: rank 3, no bar on the day
+    ]
+    pool, caps = select_liquid(rows, [date(2026, 11, 12), date(2026, 11, 13)], 3, Decimal(10))
+    assert [(e.rank, e.symbol) for e in pool] == [(1, "B"), (2, "A")]
+    assert pool[1].day_high_change_percent == Decimal(50)
     assert (caps[0].candidates, caps[0].kept, caps[0].dropped) == (3, 2, 1)
 
 

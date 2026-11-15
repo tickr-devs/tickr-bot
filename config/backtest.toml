@@ -43,3 +43,8 @@ holdout_percent = 33
 # every OC symbol had daily bars, 314 of 397 NT symbols were refused by the bars route as INVALID_SYMBOL and most of
 # the rest had no bars, CO was mixed; read by backtest/fetch.py.
 instrument_statuses = ["OC", "CO"]
+# Rule "liquid" of `select` (a universe without look-ahead, for research beyond gainers): per session, this many
+# symbols with the highest previous-session dollar volume; count; read by backtest/universe.py.
+liquid_top_count = 300
+# Rule "liquid": lowest previous-session close a symbol may have to be ranked, USD; read by backtest/universe.py.
+liquid_min_price_usd = 10
