@@ -689,15 +689,18 @@ class Engine:
                                "WHERE client_order_id = ?", (reads, self.clock(), cid))
         if reads < self.config.orders.unknown_absent_reads or held is None:
             return  # too early, or the positions read failed: absence cannot be decided
-        # Detail alone is not enough: also require absence from open orders, and for an
-        # entry no unexplained position in the symbol.
+        # Detail alone is not enough: also require absence from open orders, and no change
+        # of the position that this order would explain: more shares than Detail accounts
+        # for (an entry) or fewer (a sell). Giving up on a sell that filled would put a new
+        # stop on shares no longer held.
         try:
             open_ids = {o.client_order_id for o in self.broker.open_orders()}
         except BrokerError:
             return
         if cid in open_ids:
             return  # it exists; Detail will catch up
-        if row.leg is Leg.ENTRY and held.get(row.symbol, ZERO) > self._expected_in(row.symbol):
+        unexplained = held.get(row.symbol, ZERO) - self._expected_in(row.symbol)
+        if unexplained > 0 if row.side is Side.BUY else unexplained < 0:
             return
         with self.store.transaction():
             self._set_send_state(cid, SendState.ABSENT, {"reads": reads})
@@ -798,12 +801,20 @@ class Engine:
         self._clear_fence(Fence.DETAIL_BUDGET)
 
     def _lost_fill_suspects(self, held: dict[str, Decimal]) -> list[OrderRow]:
+        """Orders we gave up on whose fill would explain the position: any in a symbol
+        holding more than Detail accounts for, and an open trade's sells where it holds
+        less."""
         suspects: list[OrderRow] = []
         for symbol, quantity in held.items():
             if quantity <= self._expected_in(symbol):
                 continue
             suspects += [o for o in self.orders()
                          if o.symbol == symbol and o.send_state is SendState.ABSENT]
+        for trade in self.trades():
+            orders = self.orders(trade.trade_id)
+            if held.get(trade.symbol, ZERO) < self._expected_in(trade.symbol):
+                suspects += [o for o in orders
+                             if o.side is Side.SELL and o.send_state is SendState.ABSENT]
         return suspects
 
     def _recheck_absent(self, row: OrderRow) -> None:

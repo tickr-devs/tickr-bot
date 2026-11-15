@@ -811,3 +811,45 @@ def test_an_unknown_send_is_not_declared_absent_while_the_positions_read_fails(s
     run(e, 2)
     assert e.trade(t).state is TradeState.CLOSED
     assert len(b.sent) == 1
+
+
+def _exit_with_unknown_outcome(store):
+    """An open, protected trade whose closing order reached the broker with the reply lost."""
+    b, e, t = opened(store)
+    e.request_exit(t, "operator-flatten")
+    b.script("unknown")
+    while not legs(e, t, Leg.EXIT):
+        run(e)
+    (exit_,) = legs(e, t, Leg.EXIT)
+    assert exit_.send_state is SendState.UNKNOWN
+    return b, e, t, exit_.client_order_id
+
+
+def test_a_sell_whose_shares_are_gone_is_not_declared_absent(store):
+    b, e, t, cid = _exit_with_unknown_outcome(store)
+    b.fill(cid, D(2), D("10.10"))  # it filled: the shares are gone
+    hidden = b.orders.pop(cid)     # but Detail does not show the order yet
+    stops_sent = sum(1 for r in b.sent if r.order_type == OrderType.STOP_LOSS)
+    run(e, CFG.orders.unknown_absent_reads + 3)
+    assert legs(e, t, Leg.EXIT)[0].send_state is SendState.UNKNOWN
+    assert has(e, Fence.UNKNOWN_ORDER)
+    # No stop for shares no longer held: its trigger would sell short.
+    assert sum(1 for r in b.sent if r.order_type == OrderType.STOP_LOSS) == stops_sent
+    b.orders[cid] = hidden
+    run(e, 3)
+    assert e.trade(t).state is TradeState.CLOSED
+    assert_single_sends(b)
+
+
+def test_a_sell_given_up_on_is_asked_about_again_when_the_shares_go(store):
+    b, e, t, cid = _exit_with_unknown_outcome(store)
+    hidden = b.orders.pop(cid)  # neither Detail nor the position shows it yet
+    run(e, CFG.orders.unknown_absent_reads + 2)
+    assert legs(e, t, Leg.EXIT)[0].send_state is SendState.ABSENT
+    assert working_stops(b) == D(2)  # protection restored, as for a refused close
+    b.orders[cid] = hidden
+    b.fill(cid, D(2), D("10.10"))  # the close existed after all, and filled
+    run(e, 5)
+    assert has(e, Fence.RESURRECTED)
+    assert legs(e, t, Leg.EXIT)[0].filled_quantity == D(2)
+    assert working_stops(b) == D(0)  # the stop for shares no longer held is cancelled
