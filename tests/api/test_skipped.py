@@ -22,7 +22,7 @@ from aperture.replay.clock import calendar_clock
 from aperture.replay.settings import load_settings
 from aperture.research import observer_report
 from aperture.research.records import Admission, DecisionRecord
-from aperture.strategy.base import Decision, Role, Verdict
+from aperture.strategy.base import Check, Decision, Role, Verdict
 
 from .schema_check import errors
 from .test_decisions import (
@@ -506,3 +506,20 @@ def test_settings_carry_the_simulation_inputs(cfg):
     paths = replace(settings_from_config(cfg), port=0).simulation
     assert paths.replay_settings == cfg.root / "config" / "replay.toml"
     assert paths.replay_settings.is_file() and paths.calendar.is_dir()
+
+
+def test_skipped_rounds_every_check_keeping_its_verdict(api, cfg):
+    """/skipped rounds check values like /decisions ([api] check_decimal_places)."""
+    assert cfg.api.check_decimal_places == 4  # the expectation below assumes it
+    checks = (Check("relative_volume", Decimal("3.33780269384"), ">=", Decimal("1.5"), True),
+              Check("spread_ratio", Decimal("0.0020001"), "<=", Decimal("0.002"), False))
+    decision = Decision(*ACTIVE, "ABCD", Verdict.ENTER, checks, entry_low=Decimal("12.00"),
+                        entry_high=Decimal("12.10"), stop=Decimal("11.80"), quantity=Decimal(10))
+    record = DecisionRecord(BAR + M1, BAR, Role.ACTIVE, decision, Admission.REFUSED,
+                            "QUOTE_MISSING: no quote")
+    DecisionLog.from_config(cfg).append(record)
+    resp, payload = request(api, "GET", f"/skipped?date={DAY.isoformat()}")
+    assert resp.status == 200, payload
+    body = doc(payload)
+    assert [(c["measured"], c["threshold"]) for c in body["signals"][0]["checks"]] == [
+        ("3.3379", "1.5"), ("0.0021", "0.002")]

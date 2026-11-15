@@ -117,7 +117,7 @@ class ApiSettings:
     universe: DiscoverySettings  # the universe filter GET /flow applies to captured passes
     watching_max_rows: int
     closeness_places: int  # decimal places of GET /watching closeness
-    check_places: int  # decimal places of GET /watching decisive check values
+    check_places: int  # decimal places of check values in every document that shows checks
     change_pct_places: int  # decimal places of GET /flow change_pct
     performance_max_range_days: int  # longest GET /performance range, both ends counted
     performance_decimal_places: int  # rounding of GET /performance quotients
@@ -153,7 +153,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
     if api.watching_max_rows <= 0:
         raise ConfigError("[api] watching_max_rows must be positive")
     if min(api.watching_closeness_decimal_places, api.flow_change_pct_decimal_places,
-           api.watching_check_decimal_places) < 0:
+           api.check_decimal_places) < 0:
         raise ConfigError("[api] decimal places must not be negative")
     if api.performance_max_range_days <= 0:
         raise ConfigError("[api] performance_max_range_days must be positive")
@@ -193,7 +193,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         universe=DiscoverySettings.from_config(cfg),
         watching_max_rows=api.watching_max_rows,
         closeness_places=api.watching_closeness_decimal_places,
-        check_places=api.watching_check_decimal_places,
+        check_places=api.check_decimal_places,
         change_pct_places=api.flow_change_pct_decimal_places,
         performance_max_range_days=api.performance_max_range_days,
         performance_decimal_places=api.performance_decimal_places,
@@ -247,7 +247,8 @@ class ApiServer(ThreadingHTTPServer):
         self.history = History(settings.history, settings.after)
         self.observer_results = ObserverResults(settings.simulation,
                                                 settings.observer_trades_max_rows)
-        self.skipped = SkippedAfter(settings.simulation, settings.after.minutes)
+        self.skipped = SkippedAfter(settings.simulation, settings.after.minutes,
+                                    settings.check_places)
         # No source until one is attached (python -m aperture.api, or the demo's world).
         self.chart = Chart(settings.chart)
         port = settings.remote_port if remote else settings.port
@@ -673,7 +674,8 @@ class Handler(BaseHTTPRequestHandler):
         if record is None:
             self._error("not_found", f"no decision recorded for {symbol} on {day.isoformat()}")
             return
-        self._json(200, contract.explain(self.server.settings.history.environment, day, record))
+        self._json(200, contract.explain(self.server.settings.history.environment, day, record,
+                                            self.server.settings.check_places))
 
     def _recorded_decisions(self, path: str) -> None:
         """GET /observers?date=, /skipped?date=, /watching?date=, /flow?date= and
@@ -717,7 +719,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 symbol = params["symbol"]
                 document = contract.decisions_document(symbol, day,
-                                                       log.records(day, symbol=symbol))
+                                                       log.records(day, symbol=symbol),
+                                                       settings.check_places)
         except ObserverError as exc:
             self._error("unavailable", f"observer strategy unreadable: {exc}")
             return

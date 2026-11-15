@@ -690,10 +690,12 @@ order evaluated, the same as explain-v1 `first_failed_check`; `null` when every 
 passed, as for a `WATCH` made without a quote), `closeness`, `closeness_cause`,
 `quote_age_seconds` and `quote_age_cause`.
 
-The decisive check's `measured` and `threshold` are rounded to `[api]
-watching_check_decimal_places`, each away from passing (for `>` `>=` measured down and threshold
-up, for `<` `<=` the reverse), so the shown pair still fails; a value with no more decimals than
-that is shown as recorded. `closeness` uses the recorded values.
+Check values are rounded the same way in every document that shows checks (`/watching`,
+`/explain`, `/decisions`, `/skipped`): `measured` and `threshold` go to `[api]
+check_decimal_places` so the shown pair keeps the recorded verdict. A failed check rounds each
+away from passing (for `>` `>=` measured down and threshold up, for `<` `<=` the reverse), a
+passed one toward passing (the opposite); a value with no more decimals than that is shown as
+recorded, and yes/no checks keep their nulls. `closeness` uses the recorded values.
 
 `closeness` (0..1, rounded down to `[api] watching_closeness_decimal_places`) says how near the
 decisive check is to passing:

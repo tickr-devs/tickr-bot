@@ -154,8 +154,8 @@ def test_watching_decisive_check_rounds_away_from_passing(measured, operator, th
     assert row.closeness == unrounded.closeness  # computed from the recorded values
 
 
-def test_watching_check_decimal_places_is_configured(cfg):
-    assert cfg.api.watching_check_decimal_places >= 0
+def test_check_decimal_places_is_configured(cfg):
+    assert cfg.api.check_decimal_places >= 0
 
 
 def test_watching_past_day_is_the_state_at_the_close_and_empty_day(api, cfg):

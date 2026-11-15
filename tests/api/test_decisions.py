@@ -218,6 +218,26 @@ def test_decisions_of_a_symbol(api, cfg):
     assert body["decisions"][1]["strategy"] == {"name": "price-action-v1", "version": "1"}
 
 
+def test_decisions_and_explain_round_every_check_keeping_its_verdict(api, cfg):
+    """Passed checks round toward passing, failed ones away from it ([api]
+    check_decimal_places); short values are shown as recorded."""
+    places = cfg.api.check_decimal_places
+    assert places == 4  # the expectations below assume the shipped value
+    passed_rise = Check("relative_volume", Decimal("3.33780269384"), ">=", Decimal("1.5"), True)
+    passed_fall = Check("spread_ratio", Decimal("0.00069156"), "<=", Decimal("0.0020001"), True)
+    edge = Check("fast_ema_above_slow_ema", Decimal("1.50001"), ">", Decimal("1.5"), True)
+    failed = Check("spread_ratio", Decimal("0.0020001"), "<=", Decimal("0.002"), False)
+    _write(DecisionLog.from_config(cfg),
+           _record(minute=1, checks=(passed_rise, passed_fall, edge, failed, FLAG)))
+    want = [("3.3379", "1.5"), ("0.0006", "0.0021"), ("1.5001", "1.5"), ("0.0021", "0.002"),
+            (None, None)]
+    body = _get(api, "/decisions?symbol=ABCD&date=2026-11-16", "decisions-v1")
+    got = [(c["measured"], c["threshold"]) for c in body["decisions"][0]["checks"]]
+    assert got == want
+    explained = _get(api, "/explain?symbol=ABCD", "explain-v1")
+    assert [(c["measured"], c["threshold"]) for c in explained["checks"]] == want
+
+
 def test_decisions_archived_day_and_empty_day(api, cfg):
     log = DecisionLog.from_config(cfg)
     past = DAY - timedelta(days=1)

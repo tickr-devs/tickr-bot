@@ -659,13 +659,18 @@ def check_v1(c: Check) -> CheckV1:
     return CheckV1(c.rule, c.measured, c.operator, c.threshold, c.passed, c.note)
 
 
-def checks_of(decision: Decision) -> tuple[CheckV1, ...]:
-    return tuple(check_v1(c) for c in decision.checks)
+def checks_of(decision: Decision, places: int | None = None) -> tuple[CheckV1, ...]:
+    """Every check of `decision`; with `places`, each rounded by `shown_check` (the API);
+    without, as recorded (the CLI's explain)."""
+    if places is None:
+        return tuple(check_v1(c) for c in decision.checks)
+    return tuple(shown_check(c, places) for c in decision.checks)
 
 
-def explain(environment: str, day: date, record: DecisionRecord) -> ExplainV1:
+def explain(environment: str, day: date, record: DecisionRecord,
+            places: int | None = None) -> ExplainV1:
     d = record.decision
-    checks = checks_of(d)
+    checks = checks_of(d, places)
     return ExplainV1(
         environment=environment, day=day, symbol=d.symbol, decided_at=record.time,
         bar_start=record.bar_start, strategy=d.strategy, version=d.version, verdict=d.verdict,
@@ -918,8 +923,8 @@ def _what_if(price: Decimal | None) -> Decimal | None:
     return None if price is None else round_to_tick(price)
 
 
-def decisions_document(symbol: str, day: date,
-                       records: tuple[DecisionRecord, ...]) -> DecisionsV1:
+def decisions_document(symbol: str, day: date, records: tuple[DecisionRecord, ...],
+                       places: int | None = None) -> DecisionsV1:
     out = []
     for r in _oldest_first(records):
         d = r.decision
@@ -927,7 +932,7 @@ def decisions_document(symbol: str, day: date,
         out.append(DecisionV1(
             at=r.bar_start, action=d.verdict,
             strategy=StrategyId(d.strategy, d.version), observer=r.role is Role.OBSERVER,
-            checks=checks_of(d), entry_price=_what_if(d.entry_high) if skipped else None,
+            checks=checks_of(d, places), entry_price=_what_if(d.entry_high) if skipped else None,
             stop_price=_what_if(d.stop) if skipped else None, admission=r.admission,
             refusal_cause=r.refusal_cause, refusal=refusal_of(r.refusal_cause)))
     return DecisionsV1(symbol=symbol, day=day, decisions=tuple(out))
@@ -975,7 +980,8 @@ def skipped_records(records: tuple[DecisionRecord, ...]) -> list[DecisionRecord]
             if r.decision.verdict is Verdict.ENTER and r.admission in _SKIPPED]
 
 
-def skipped_document(day: date, records: tuple[DecisionRecord, ...]) -> SkippedV1:
+def skipped_document(day: date, records: tuple[DecisionRecord, ...],
+                     places: int | None = None) -> SkippedV1:
     """`records`: active-strategy records of `day`; keeps the ENTERs admission did not take,
     without prices after or what-if (api/after.py adds them)."""
     return SkippedV1(day=day, signals=tuple(
@@ -985,7 +991,7 @@ def skipped_document(day: date, records: tuple[DecisionRecord, ...]) -> SkippedV
             admission=r.admission, refusal_cause=r.refusal_cause,
             refusal=refusal_of(r.refusal_cause), entry_price=_what_if(r.decision.entry_high),
             stop_price=_what_if(r.decision.stop),
-            checks=checks_of(r.decision), prices_after=(), prices_after_cause=NOT_COMPUTED,
+            checks=checks_of(r.decision, places), prices_after=(), prices_after_cause=NOT_COMPUTED,
             what_if=NO_WHAT_IF)
         for r in skipped_records(records)))
 
@@ -1137,17 +1143,19 @@ def closeness(check: Check | None, places: int) -> tuple[Decimal | None, str | N
 
 
 def shown_check(check: Check, places: int) -> CheckV1:
-    """The decisive (failed) check with measured and threshold rounded to `places`, each away
-    from passing: for `>` `>=` measured down and threshold up, for `<` `<=` the reverse. The
-    shown pair therefore still fails, and closeness is computed from the recorded values. A
-    value with no more than `places` decimals is shown as recorded.
-    Other operators keep the recorded values."""
+    """`check` with measured and threshold rounded to `places` so the shown pair keeps the
+    recorded verdict: a failed check rounds each away from passing (for `>` `>=` measured down
+    and threshold up, for `<` `<=` the reverse), a passed one toward passing (the opposite).
+    Closeness is computed from the recorded values. A value with no more than `places`
+    decimals is shown as recorded. Other operators keep the recorded values."""
     if check.operator in _RISE:
         measured_way, threshold_way = ROUND_FLOOR, ROUND_CEILING
     elif check.operator in _FALL:
         measured_way, threshold_way = ROUND_CEILING, ROUND_FLOOR
     else:
         return check_v1(check)
+    if check.passed:
+        measured_way, threshold_way = threshold_way, measured_way
     step = Decimal(1).scaleb(-places)
 
     def shown(value: Decimal | None, way: str) -> Decimal | None:

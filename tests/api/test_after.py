@@ -181,7 +181,7 @@ def test_skipped_rows_carry_prices_after_and_the_whatif_simulation(cfg):  # noqa
                      cause="POSITION_LIMIT_REACHED: 1 open position, limit 1")
     _write(log, refused)
     path = _capture(cfg)
-    skipped = SkippedAfter(SimulationPaths.from_config(cfg), (1, 5, 60))
+    skipped = SkippedAfter(SimulationPaths.from_config(cfg), (1, 5, 60), 4)
     records = log.records(DAY, role=Role.ACTIVE)
     document = skipped.document(DAY, DAY + timedelta(days=1), records, log.path(DAY))
     (signal,) = document.signals
@@ -210,7 +210,7 @@ def test_a_signal_that_cannot_be_simulated_says_why(cfg):  # noqa: F811
     _write(log, _enter(ACTIVE, Role.ACTIVE, minute=5, admission=Admission.REFUSED,
                        cause="POSITION_LIMIT_REACHED: x", quantity=None))
     _capture(cfg)
-    skipped = SkippedAfter(SimulationPaths.from_config(cfg), (1,))
+    skipped = SkippedAfter(SimulationPaths.from_config(cfg), (1,), 4)
     (signal,) = skipped.document(DAY, DAY + timedelta(days=1), log.records(DAY, role=Role.ACTIVE),
                                  log.path(DAY)).signals
     assert signal.what_if == contract.WhatIfV1(
@@ -224,7 +224,7 @@ def test_an_unreadable_calendar_is_a_cause_and_not_remembered(cfg):  # noqa: F81
                        cause="POSITION_LIMIT_REACHED: x"))
     _capture(cfg)
     paths = SimulationPaths.from_config(cfg)
-    skipped = SkippedAfter(replace(paths, calendar=paths.calendar.parent / "missing"), (1,))
+    skipped = SkippedAfter(replace(paths, calendar=paths.calendar.parent / "missing"), (1,), 4)
     records = log.records(DAY, role=Role.ACTIVE)
     first = skipped.document(DAY, DAY, records, log.path(DAY))
     (signal,) = first.signals

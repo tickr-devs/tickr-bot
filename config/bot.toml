@@ -205,9 +205,9 @@ observer_trades_max_rows = 100
 watching_max_rows = 8
 # Decimal places of GET /watching `closeness` (0..1, rounded down); read by the api server.
 watching_closeness_decimal_places = 4
-# Decimal places of the decisive check's measured and threshold values in GET /watching, each rounded
-# away from passing so a failed check never reads as met; read by the api server.
-watching_check_decimal_places = 4
+# Decimal places of check measured and threshold values in /watching, /explain, /decisions and
+# /skipped, each rounded so the shown pair keeps the recorded verdict; read by the api server.
+check_decimal_places = 4
 # Decimal places of GET /flow screener chips' `change_pct` (percent, rounded half-even); read by the api server.
 flow_change_pct_decimal_places = 2
 # Longest date range GET /performance accepts, in New York calendar days counting both ends; longer = 400 bad_request; read by the api server.

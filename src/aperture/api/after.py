@@ -220,9 +220,11 @@ class SkippedAfter:
     client polling the same day simulates again only after a new bar or record. An answer a
     transient failure decided (an OSError, an unreadable calendar) is not kept."""
 
-    def __init__(self, paths: SimulationPaths, minutes: tuple[int, ...]) -> None:
+    def __init__(self, paths: SimulationPaths, minutes: tuple[int, ...],
+                 check_places: int) -> None:
         self.paths = paths
         self.minutes = minutes
+        self.check_places = check_places
         self.closes = Closes(paths.calendar)
         self._lock = threading.Lock()
         self._key: tuple[object, ...] | None = None
@@ -234,7 +236,7 @@ class SkippedAfter:
         with self._lock:
             if key == self._key and self._value is not None:
                 return self._value
-        base = api.skipped_document(day, records)
+        base = api.skipped_document(day, records, self.check_places)
         transient = False
         bars: Mapping[str, tuple[Bar, ...]] | str = {}
         replay: tuple[ReplaySettings, ClockFor] | str = ""
