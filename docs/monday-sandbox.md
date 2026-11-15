@@ -101,7 +101,8 @@ limit of 30 requests per 60 s per route that the bot uses.
   share the same four requests a minute. It refuses without a running bot, with the chart off,
   when the config changed after the bot started, and while the bot has a position or a working
   order (run it while the bot is flat: if the second client breaks the bot's broker access,
-  nothing is then open).
+  nothing is then open). That check is made once, at the start, so the best time is outside
+  the entry window: before 09:30 or after the last entry at 15:45.
 - Both write their evidence to `data/probes/<date>/`: paste `summary.json` into the project
   chat. Until both are recorded for an environment, `[chart] webull_enabled` goes back to
   `false` there after the probe.
