@@ -47,6 +47,12 @@ All are long unless marked short. Values are mean net return per trade.
 | Losers: buy at the gate, VWAP reclaim, VWAP reclaim after -10%, 15-bar high after a -10% flush | price >= 5 / 20; hold 60 / 90 min or EOD with a stop at the day low | All -0.3% to -1.0%, even on the biased sample | No edge. Losers keep falling intraday |
 | Regime filter (market proxy level and 30-min trend at entry) | gainers at the gate and 5-bar breakout, losers at the gate; hold 30 / 60 / 90 min / EOD | No regime is positive in both fit and validation | No edge |
 | Holding period 30 / 60 / 90 min instead of stop / target | same families | Same sign as the EOD result | No edge |
+| Literature set on an "actives" proxy (every fetched symbol-day with at least 20M USD of dollar volume and a previous close of at least 10 USD; pre-registered, fixed parameters) | L1 late-day momentum (15:25, up at least 3%); L2 noise-band momentum (Zarattini-Aziz-Barbon style); L3 afternoon HOD break after a 60-min base; L4 early volume shock (5-bar volume at least 5x normal, day +1 to +3%); L5 first pullback after a 2% opening drive; L6 lunch dip | L1 -0.32%, L3 -0.23%, L6 -0.28%, L5 -0.03%. L4 (+0.11%) is positive in every period and L2 (+0.04%) in validation and test only, but that is look-ahead: on days that became gainers they earn +0.5..+1.3%, on the other days -0.35..-0.6% | No edge for L1, L3, L5, L6. L2 and L4 cannot be judged on this data; they need an actives universe chosen without look-ahead |
+
+Break-even cost per side, meaning the gross mean divided by two: about 0 or negative for every
+gainer and loser family above; on the biased actives proxy, L2 0.17%, L4 0.21%, L5 0.13% and
+L3 0.035%. Only L2 and L4 clear the assumed 0.15% per side, and only on the look-ahead sample.
+At realistic wider spreads nothing does.
 
 The backtest thread's own results for price-action-v1 are in `docs/backtest-results.md`.
 
@@ -54,13 +60,14 @@ The backtest thread's own results for price-action-v1 are in `docs/backtest-resu
 
 The research scripts are offline and are not part of the bot. They live in the project's shared
 folder `aperture/edge-research/`: `prep.py` (gainer cache), `prep2.py` (loser days and market
-proxy), `lib.py`, `sim.py` (fixed: explicit entry price), and one script per family. The
+proxy), `prep3.py` (actives proxy), `lib.py`, `sim.py` (fixed: explicit entry price), and one script per family. The
 pre-registrations are in `preregistered.txt`.
 
 ## Not tested yet, and why
 
-- **Top-actives continuation:** there is no screener history. It needs a universe fetched by
-  dollar volume rather than by change.
+- **Actives (continuation, volume shock, noise band):** the fetched minutes cover only days
+  near a gainer day, so any actives proxy built from them has look-ahead (see L2 and L4). This
+  needs minute bars for each session's top symbols by the previous session's dollar volume.
 - **Days after a gainer (day 2):** not in the fetched sessions.
 - **Halt-resume plays:** halts show only as missing minutes. This needs a reliable halt flag.
 - **Sub-minute entries:** the bot evaluates on completed M1 bars. A buy-stop entry needs a
