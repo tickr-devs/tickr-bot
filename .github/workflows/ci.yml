@@ -12,6 +12,9 @@ on:
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+# The workflow only reads the repository: its token can change nothing.
+permissions:
+  contents: read
 jobs:
   changes:
     # Says whether this change touches anything the Python suite or the image depends on.
