@@ -161,6 +161,7 @@ class ApiConfig:
     broker_read_warn_seconds: Decimal
     poll_seconds: Decimal
     max_request_body_bytes: int
+    request_timeout_seconds: Decimal
     max_pending_commands: int
     command_max_age_seconds: Decimal
     status_recent_commands: int

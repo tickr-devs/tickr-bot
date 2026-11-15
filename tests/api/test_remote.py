@@ -8,6 +8,7 @@ import stat
 import threading
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -243,3 +244,19 @@ def test_idempotency_key_does_not_replace_the_token(remote_api, remote_settings)
                          headers=headers)
     assert resp.status == 202 and again == first
     assert contract.count_inbox(remote_settings.inbox) == 1
+
+
+def test_idle_connection_on_the_remote_port_is_closed_before_any_token(remote_settings):
+    """Anyone on the tailnet can open a connection before presenting a token: an idle one is
+    dropped after [api] request_timeout_seconds instead of holding a thread forever."""
+    import socket
+
+    local = make_server(replace(remote_settings, request_timeout_seconds=Decimal("0.2")))
+    server = _serve(make_remote_server(local))
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as sock:
+            assert sock.recv(1) == b""
+    finally:
+        server.shutdown()
+        server.server_close()
+        local.server_close()

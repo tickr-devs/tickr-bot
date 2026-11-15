@@ -189,6 +189,8 @@ broker_read_warn_seconds = 15
 poll_seconds = 3
 # Largest accepted command request body in bytes; larger = refused; read by the api server.
 max_request_body_bytes = 1024
+# Seconds either API port waits for a client's next bytes (request line, headers, body) before closing the connection, so an idle or slow connection cannot hold a server thread forever; read by the api server.
+request_timeout_seconds = 10
 # Maximum unconsumed commands waiting in the inbox; more = new commands refused; read by the api server.
 max_pending_commands = 20
 # A command older than this many seconds when the bot reads it is refused as expired, never executed late; read by the bot via read_commands.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import socket
 import threading
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -439,3 +440,51 @@ def test_key_lifetime_must_outlast_the_command_age(tmp_path):
         cfg.api.command_max_age_seconds)))
     with pytest.raises(config.ConfigError, match="idempotency_key_ttl_seconds"):
         settings_from_config(bad)
+
+
+# ---------------------------------------------------------------- slow clients
+
+
+def _short_timeout_api(settings):
+    server = make_server(replace(settings, request_timeout_seconds=Decimal("0.2")),
+                         Clock(T0 + timedelta(seconds=2)))
+    threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True).start()
+    return server
+
+
+def test_settings_refuse_non_positive_request_timeout(tmp_path):
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    for value in (Decimal(0), Decimal(-1)):
+        bad = replace(cfg, api=replace(cfg.api, request_timeout_seconds=value))
+        with pytest.raises(config.ConfigError, match="request_timeout_seconds"):
+            settings_from_config(bad)
+
+
+def test_idle_connection_is_closed_after_the_request_timeout(settings):
+    """A client that connects and sends nothing must not hold a server thread forever."""
+    server = _short_timeout_api(settings)
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as sock:
+            assert sock.recv(1) == b""  # the server closed it; the 5 s guard never fires
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_body_shorter_than_its_length_is_dropped_and_queues_nothing(settings):
+    server = _short_timeout_api(settings)
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as sock:
+            sock.sendall(f"POST /commands/flatten HTTP/1.1\r\nHost: 127.0.0.1:{server.server_port}"
+                         "\r\nContent-Type: application/json\r\nContent-Length: 10\r\n\r\n{"
+                         .encode())
+            received = b""
+            while chunk := sock.recv(4096):
+                received += chunk
+        assert b" 202 " not in received
+        assert contract.count_inbox(settings.inbox) == 0
+        # The server still answers others.
+        assert request(server, "GET", "/status")[0].status == 200
+    finally:
+        server.shutdown()
+        server.server_close()

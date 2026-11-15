@@ -108,6 +108,7 @@ class ApiSettings:
     status_stale_seconds: Decimal
     poll_seconds: Decimal
     max_request_body_bytes: int
+    request_timeout_seconds: Decimal  # per socket read or write, both listeners
     max_pending_commands: int
     history: HistoryPaths
     decisions: Path  # <decisions_dir>/<environment>, read by GET /explain
@@ -150,6 +151,8 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
             raise ConfigError(f"[api] remote_hosts entry {name!r} is also a local allowed host")
     if api.remote_port == api.port:
         raise ConfigError("[api] remote_port must differ from port")
+    if api.request_timeout_seconds <= 0:
+        raise ConfigError("[api] request_timeout_seconds must be positive")
     if api.remote_token_bytes <= 0:
         raise ConfigError("[api] remote_token_bytes must be positive")
     if api.idempotency_key_ttl_seconds <= api.command_max_age_seconds:
@@ -202,6 +205,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         status_stale_seconds=api.status_stale_seconds,
         poll_seconds=api.poll_seconds,
         max_request_body_bytes=api.max_request_body_bytes,
+        request_timeout_seconds=api.request_timeout_seconds,
         max_pending_commands=api.max_pending_commands,
         history=HistoryPaths.from_config(cfg),
         decisions=DecisionLog.from_config(cfg).directory,
@@ -455,6 +459,12 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""
 
     # ------------------------------------------------------------ plumbing
+
+    def setup(self) -> None:
+        # Before the stdlib applies it to the socket: a client that stops sending (no request
+        # line, headers or body) is dropped after this long instead of holding a thread forever.
+        self.timeout = float(self.server.settings.request_timeout_seconds)
+        super().setup()
 
     def _send(self, code: int, body: bytes, content_type: str, extra: dict[str, str]) -> None:
         self.send_response(code)
