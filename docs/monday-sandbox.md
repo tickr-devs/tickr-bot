@@ -20,12 +20,14 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    If `git status --short` lists `config/bot.toml` (you changed a setting), the pull stops with
    "local changes would be overwritten". Then: `git stash`, `git pull`, `git stash pop`, and
    step 3 tells you whether the merged file is valid.
-   The API job runs all the time and keeps the old code until it is started again: after a
-   pull, `launchctl kickstart -k gui/$(id -u)/local.tickr.api`.
-   If the pull brought `ops/migrate-from-tickr.sh` (the rename to Tickr), stop here and run
-   that script in the same sitting (dry run first, then `--apply`): after such a pull the old
-   launchd jobs no longer start and nothing alerts. Every command below then says `tickr`
-   where this page says `tickr`.
+   If the Mac still runs the old name (jobs `local.aperture.*`, `~/.config/aperture`), the
+   pull brings the rename to Tickr: stop here and run `sh ops/migrate-from-aperture.sh` in the
+   same sitting (dry run first, then `--apply`). After such a pull the old launchd jobs no
+   longer start and nothing alerts. The repository folder may keep its old name.
+   The API job runs all the time and keeps the old code until it is started again. Restart it
+   after every pull, before the bot runs: an API on old code cannot read the status of a bot
+   on new code (the status now names the strategy of each trade).
+   `launchctl kickstart -k gui/$(id -u)/local.tickr.api`.
 2. Load the environment in the Terminal you will use: `source .venv/bin/activate`, then
    `set -a; . ~/.config/tickr/env; set +a`.
 3. `tickr check-config`: the environment is `sandbox`, the gate is as you expect.
@@ -34,11 +36,14 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    saying `no session ...: WEEKEND`; that is correct, and the Webull token is then not checked
    (it is checked by the 08:30 run on Monday). Exit code 1 names its cause; a
    `database-other-environment` or `stopped-by-operator` cause: see operations.md before
-   anything else.
+   anything else. Cause `token-dir-open`: the broker token folder is readable by other
+   accounts; `chmod 700 data/webull-token-sandbox` once and run preflight again.
 5. If `ops/launchd/` changed in the pull, render and load the jobs again (operations.md,
    "Install the jobs"). Then send yourself a test alert:
    `launchctl kickstart gui/$(id -u)/local.tickr.test-alert`. The Mac notification and the
-   iMessage must both arrive.
+   iMessage must both arrive. In `~/Library/Logs/Tickr/test-alert.log` the first JSON line
+   only says the alert is on its way (`"delivery": "sending"`, both channels pending); one
+   line per channel follows, and both must say `"delivery": "shown"`.
 6. The Mac stays on power, awake and logged in all day. Messages is signed in.
 7. Keep the bot job from starting by itself at 09:00 (manual-trade.md, "Before the open",
    step 1). Leave the watchdog job alone.
@@ -79,7 +84,12 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
     launchctl kickstart gui/$(id -u)/local.tickr.bot
     ```
     `tickr status` shows `bot: pid ... recorded`. `tail -f ~/Library/Logs/Tickr/bot.log`.
+    If the API job was not restarted after the pull (step 1), restart it now, together with
+    the bot: `launchctl kickstart -k gui/$(id -u)/local.tickr.api`.
     The job stays enabled: from Tuesday the bot starts by itself at 09:00 Mac time.
+    If the apps have a Start button for the bot, do not press it on Monday: it clears the
+    operator stop and kickstarts the bot job, which must wait for the go in step 11. While the
+    bot job is disabled for the probes it does nothing useful either. Start the bot as above.
 
 ## What to watch
 
@@ -90,11 +100,18 @@ In the apps (they read the bot's local API):
   reason.
 - The last broker read is seconds old and keeps moving. If it stops, or a
   `broker-read-failed` fence appears, the bot refuses entries by itself; look at the log.
-- Any other fence (`foreign-position`, `unknown-order`, `quantity-mismatch`, `unprotected`):
-  open the Webull app and compare positions and working orders before doing anything.
+- Any other fence (`foreign-position`, `unknown-order`, `quantity-mismatch`, `unprotected`,
+  `detail-unreadable`): open the Webull app and compare positions and working orders before
+  doing anything. `detail-unreadable` means an order's details stayed unreadable for 30 s;
+  while it lasts the bot keeps the stop and sends no close, so an exit of that trade waits for
+  you (close it in the Webull app and cancel its SELL stop there).
 - After 09:30: candidates and one decision a minute per watched symbol appear, with the reason
   for every entry not taken. Sandbox quotes may be rare or delayed; many "quote too old"
-  refusals are a finding to write down, not a fault to fix on the day.
+  refusals are a finding to write down, not a fault to fix on the day. Symbols left out for a
+  wide spread or a small dollar volume show cause `STRATEGY_LIQUIDITY` with the strategy's
+  own check (`spread_ratio`, `dollar_volume_usd`): those limits are the strategy's now.
+  If the strategy did not load, the bot still protects and exits but discovers nothing and
+  enters nothing; the status shows entries off with the cause.
 - When a trade opens: within `[orders] max_unprotected_seconds` (30 s) the position shows a
   verified stop, and the Webull app shows the position and one working SELL stop. An
   `unprotected-position` alert means: check the app now.
@@ -104,8 +121,10 @@ In the apps (they read the bot's local API):
 In the Webull app, a few times in the day: positions and working orders match what the apps show.
 
 **Never buy or sell by hand a symbol the bot holds.** If foreign shares turn up in the bot's
-symbol, the bot does not close its own position at the 15:55 flatten either: close it by hand
-in the Webull app and confirm no position and no working order is left.
+symbol, the bot raises `quantity-mismatch`, and at its exit or the 15:55 flatten it sells
+exactly its own quantity and never touches the extra shares. The trade then stays open in the
+apps until the account is flat in that symbol: close the extra shares by hand in the Webull
+app and confirm no position and no working order is left.
 
 ## Probes (read-only unless said)
 
@@ -128,8 +147,9 @@ limit of 30 requests per 60 s per route that the bot uses.
   ```
   If `notices.jsonl` does not exist (the stream sent no notice), leave the `--notices` line
   out: the command refuses a file that is missing.
-  The bot does not record which symbols it subscribed, so a symbol missing from the report
-  was either never subscribed or silent: compare with the symbols the apps showed as watched.
+  The bot journals each change of its subscribed set (a `stream-subscriptions` event with
+  `added`, `removed` and the whole `subscribed` set), so a symbol missing from the report
+  can be checked against what was subscribed and when.
 - **Chart C2** (is the bars limit shared between processes): with the bot stopped and outside
   the regular session; on Monday the bot is off in the morning, so before 09:30:
   `python -m tickr.probes chart-limit SYM`. It takes about 90 s, starts two processes that
