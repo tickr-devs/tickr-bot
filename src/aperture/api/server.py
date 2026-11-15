@@ -115,6 +115,7 @@ class ApiSettings:
     universe: DiscoverySettings  # the universe filter GET /flow applies to captured passes
     watching_max_rows: int
     closeness_places: int  # decimal places of GET /watching closeness
+    check_places: int  # decimal places of GET /watching decisive check values
     change_pct_places: int  # decimal places of GET /flow change_pct
     performance_max_range_days: int  # longest GET /performance range, both ends counted
     performance_decimal_places: int  # rounding of GET /performance quotients
@@ -146,7 +147,8 @@ def settings_from_config(cfg: Config) -> ApiSettings:
                           "command_max_age_seconds, so a repeat can never queue a command twice")
     if api.watching_max_rows <= 0:
         raise ConfigError("[api] watching_max_rows must be positive")
-    if api.watching_closeness_decimal_places < 0 or api.flow_change_pct_decimal_places < 0:
+    if min(api.watching_closeness_decimal_places, api.flow_change_pct_decimal_places,
+           api.watching_check_decimal_places) < 0:
         raise ConfigError("[api] decimal places must not be negative")
     if api.performance_max_range_days <= 0:
         raise ConfigError("[api] performance_max_range_days must be positive")
@@ -180,6 +182,7 @@ def settings_from_config(cfg: Config) -> ApiSettings:
         universe=DiscoverySettings.from_config(cfg),
         watching_max_rows=api.watching_max_rows,
         closeness_places=api.watching_closeness_decimal_places,
+        check_places=api.watching_check_decimal_places,
         change_pct_places=api.flow_change_pct_decimal_places,
         performance_max_range_days=api.performance_max_range_days,
         performance_decimal_places=api.performance_decimal_places,
@@ -690,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/watching":
                 document = contract.watching_document(
                     day, log.records(day, role=Role.ACTIVE), settings.watching_max_rows,
-                    settings.closeness_places)
+                    settings.closeness_places, settings.check_places)
             elif path == "/flow":
                 document = self._flow(day, today, log.records(day, role=Role.ACTIVE))
             else:

@@ -119,6 +119,7 @@ class ApiConfig:
     replay_settings_file: str
     watching_max_rows: int
     watching_closeness_decimal_places: int
+    watching_check_decimal_places: int
     flow_change_pct_decimal_places: int
     performance_max_range_days: int
     performance_decimal_places: int

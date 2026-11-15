@@ -25,7 +25,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
-from decimal import ROUND_DOWN, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
@@ -985,8 +985,31 @@ def closeness(check: Check | None, places: int) -> tuple[Decimal | None, str | N
     return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_DOWN), None
 
 
+def shown_check(check: Check, places: int) -> CheckV1:
+    """The decisive (failed) check with measured and threshold rounded to `places`, each away
+    from passing: for `>` `>=` measured down and threshold up, for `<` `<=` the reverse. The
+    shown pair therefore still fails, and closeness is computed from the recorded values. A
+    value with no more than `places` decimals is shown as recorded.
+    Other operators keep the recorded values."""
+    if check.operator in _RISE:
+        measured_way, threshold_way = ROUND_FLOOR, ROUND_CEILING
+    elif check.operator in _FALL:
+        measured_way, threshold_way = ROUND_CEILING, ROUND_FLOOR
+    else:
+        return check_v1(check)
+    step = Decimal(1).scaleb(-places)
+
+    def shown(value: Decimal | None, way: str) -> Decimal | None:
+        if value is None or value.as_tuple().exponent >= -places:
+            return value  # already short enough: shown as recorded, no padding zeros
+        return value.quantize(step, rounding=way)
+
+    return CheckV1(check.rule, shown(check.measured, measured_way), check.operator,
+                   shown(check.threshold, threshold_way), check.passed, check.note)
+
+
 def watching_document(day: date, records: tuple[DecisionRecord, ...], max_rows: int,
-                      places: int) -> WatchingV1:
+                      places: int, check_places: int) -> WatchingV1:
     """`records`: active-strategy records of `day`. The latest decision per symbol unless it is
     ENTER, HOLD or EXIT (entering or in a position); closest first, then by symbol."""
     latest = {r.symbol: r for r in _oldest_first(records)}
@@ -999,7 +1022,8 @@ def watching_document(day: date, records: tuple[DecisionRecord, ...], max_rows: 
         value, cause = closeness(decisive, places)
         rows.append(WatchingRowV1(
             symbol=r.symbol, at=r.bar_start, strategy=StrategyId(d.strategy, d.version),
-            verdict=d.verdict, decisive_check=None if decisive is None else check_v1(decisive),
+            verdict=d.verdict,
+            decisive_check=None if decisive is None else shown_check(decisive, check_places),
             closeness=value, closeness_cause=cause, quote_age_seconds=None,
             quote_age_cause=QUOTE_AGE_NOT_RECORDED))
     rows.sort(key=lambda w: (w.closeness is None, -(w.closeness or 0), w.symbol))

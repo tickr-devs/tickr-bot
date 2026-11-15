@@ -537,6 +537,11 @@ order evaluated, the same as explain-v1 `first_failed_check`; `null` when every 
 passed, as for a `WATCH` made without a quote), `closeness`, `closeness_cause`,
 `quote_age_seconds` and `quote_age_cause`.
 
+The decisive check's `measured` and `threshold` are rounded to `[api]
+watching_check_decimal_places`, each away from passing (for `>` `>=` measured down and threshold
+up, for `<` `<=` the reverse), so the shown pair still fails; a value with no more decimals than
+that is shown as recorded. `closeness` uses the recorded values.
+
 `closeness` (0..1, rounded down to `[api] watching_closeness_decimal_places`) says how near the
 decisive check is to passing:
 - operator `>` or `>=` (passes once measured rises to the threshold): `measured / threshold`,

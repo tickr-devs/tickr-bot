@@ -132,10 +132,30 @@ def test_watching_latest_per_symbol_closest_first_without_enters_or_observers(ap
 
 def test_watching_is_capped_by_config_and_ties_go_by_symbol(cfg):
     records = tuple(_watch(s, i, check("1", ">=", "2")) for i, s in enumerate("EDCBA"))
-    document = contract.watching_document(DAY, records, 3, 4)
+    document = contract.watching_document(DAY, records, 3, 4, 4)
     assert document.total == 5
     assert [r.symbol for r in document.rows] == ["A", "B", "C"]
     assert cfg.api.watching_max_rows > 0
+
+
+@pytest.mark.parametrize(("measured", "operator", "threshold", "shown"), [
+    ("32.32228491", ">=", "40", ("32.3222", "40")),    # measured rounded down, away from passing
+    ("1.49999", ">=", "1.5", ("1.4999", "1.5")),       # half-up would read 1.5 >= 1.5
+    ("2.4", ">", "2.400001", ("2.4", "2.4001")),       # threshold rounded up
+    ("0.0050001", "<=", "0.005", ("0.0051", "0.005")),  # measured rounded up for a falling check
+    ("0.01", "<", "0.0099999", ("0.01", "0.0099")),    # threshold rounded down
+])
+def test_watching_decisive_check_rounds_away_from_passing(measured, operator, threshold, shown):
+    records = (_watch("ABCD", 0, check(measured, operator, threshold, "rule")),)
+    document = contract.watching_document(DAY, records, 3, 4, 4)
+    row = document.rows[0]
+    assert (str(row.decisive_check.measured), str(row.decisive_check.threshold)) == shown
+    unrounded = contract.watching_document(DAY, records, 3, 4, 12).rows[0]
+    assert row.closeness == unrounded.closeness  # computed from the recorded values
+
+
+def test_watching_check_decimal_places_is_configured(cfg):
+    assert cfg.api.watching_check_decimal_places >= 0
 
 
 def test_watching_past_day_is_the_state_at_the_close_and_empty_day(api, cfg):
