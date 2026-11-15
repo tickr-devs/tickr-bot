@@ -50,6 +50,17 @@ texture_move = "1.3"
 texture_move_cap = "0.012"
 # Largest change of a minute's volume either way, of that volume (below 1).
 texture_volume = "0.45"
+# Chart-only daily history, so the apps' D charts (1M, 3M, 1Y) and indicators such as RSI 14 have
+# data: this many weekdays before the minute history ([market_data] history_sessions sessions)
+# each get one D bar, a seeded random walk ending at the symbol's `base`. Holidays are not
+# skipped. The feed serves them on D charts only; the bot never reads them. Count of days.
+chart_days = 250
+# Spread of a chart day's close against its open, of the price (below 1).
+chart_daily_move = "0.025"
+# Spread of a chart day's open against the previous close, of the price (below 1).
+chart_daily_gap = "0.008"
+# Largest high above and low below a chart day's body, of the price (below 1).
+chart_daily_wick = "0.015"
 
 [scenario]
 # Symbols of the demo day (today if it is a trading session, else the latest session before it).

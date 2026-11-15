@@ -33,7 +33,16 @@ from aperture.api import contract as api
 from aperture.api.server import ApiServer, make_server, settings_from_config
 from aperture.calendar import CalendarRefused, SessionCalendar, ny_date_of
 from aperture.demo.scenario import DemoCommand, Scenario, SymbolPlan
-from aperture.demo.world import World, day_bars, flat_bars, ny, textured
+from aperture.demo.world import (
+    World,
+    daily_history,
+    day_bars,
+    flat_bars,
+    ny,
+    session_minutes,
+    textured,
+    weekdays_before,
+)
 
 MARKER = ".aperture-demo"  # marks a folder this command built and may delete
 COPIED = ("config", "strategies")
@@ -154,6 +163,7 @@ class Session:
     calendar: SessionCalendar
     day: date
     history_days: list[date]
+    chart: bool = False  # the demo day: D charts get [market] chart_days older days
 
     def world(self, plans: tuple[SymbolPlan, ...]) -> World:
         s = self.scenario
@@ -164,7 +174,14 @@ class Session:
             history = [b for d in self.history_days for b in textured(flat_bars(
                 plan.symbol, self.calendar.day(d), plan.base, s.history_volume), s.texture)]
             today = day_bars(plan.symbol, market_day, plan.base, plan.volume, plan.legs, s.wick)
-            world.add_symbol(plan.symbol, textured(today, s.texture), history, (plan.screener,))
+            daily = []
+            if self.chart:
+                first = self.history_days[0] if self.history_days else self.day
+                daily = daily_history(plan.symbol, weekdays_before(first, s.chart_days),
+                                      plan.base, s.history_volume * session_minutes(market_day),
+                                      s.chart_walk)
+            world.add_symbol(plan.symbol, textured(today, s.texture), history, (plan.screener,),
+                             daily)
         return world
 
     def run(self, world: World) -> int:
@@ -251,7 +268,7 @@ def run_demo(repo: Path, scenario: Scenario, today: date, *, live: bool = True,
         for n, plans in enumerate((*scenario.past, scenario.today)):
             index = history_count + n
             session = Session(config_path, scenario, calendar, days[index],
-                              days[index - history_count:index])
+                              days[index - history_count:index], n == len(scenario.past))
             world = session.world(plans)
             if n == len(scenario.past):
                 return _demo_day(session, world, cfg, server, log)

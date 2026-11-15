@@ -19,7 +19,7 @@ from aperture import config
 from aperture.api import contract as api
 from aperture.api.server import make_server, settings_from_config
 from aperture.calendar import SessionCalendar
-from aperture.data.base import ScreenerKind
+from aperture.data.base import BarSpan, ScreenerKind
 from aperture.demo import run as demo
 from aperture.demo.scenario import (
     STOP_UNVERIFIED,
@@ -29,7 +29,16 @@ from aperture.demo.scenario import (
     SymbolPlan,
     load,
 )
-from aperture.demo.world import UNVERIFIED_STOP_STATUS, Texture, World, day_bars, ny, textured
+from aperture.demo.world import (
+    UNVERIFIED_STOP_STATUS,
+    Texture,
+    World,
+    daily_history,
+    day_bars,
+    ny,
+    textured,
+    weekdays_before,
+)
 from aperture.types import (
     OrderRequest,
     OrderState,
@@ -361,3 +370,29 @@ def test_demo_fault_shows_the_open_position_unprotected(tmp_path):
         assert status.entry_block is not None
     finally:
         server.server_close()
+
+
+def test_chart_days_give_the_d_chart_a_long_history_the_bot_never_reads():
+    scenario = load(ROOT / "config" / "demo.toml")
+    assert scenario.chart_days >= 30  # 1M, 3M and 1Y show real candles, RSI 14 has data
+    days = weekdays_before(date(2026, 11, 9), 3)  # a Monday: the Wednesday to Friday before it
+    assert days == [date(2026, 11, 4), date(2026, 11, 5), date(2026, 11, 6)]
+    walk = scenario.chart_walk
+    bars = daily_history("AAA", weekdays_before(FRIDAY, 60), D(20), D(1000), walk)
+    assert bars == daily_history("AAA", weekdays_before(FRIDAY, 60), D(20), D(1000), walk)
+    assert len(bars) == 60 and len({b.close for b in bars}) > 30  # the price moves
+    assert all(b.low <= min(b.open, b.close) <= max(b.open, b.close) <= b.high for b in bars)
+    assert bars[-1].start == ny(date(2026, 11, 12), "09:30")
+    assert abs(bars[-1].close - D(20)) / D(20) < 10 * walk.gap  # the walk ends near `base`
+
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+    market_day = calendar.day(FRIDAY)
+    world = World(ny(FRIDAY, "12:00"), market_day, D("0.01"), D(500), "demo")
+    world.add_symbol("AAA", day_bars("AAA", market_day, D(20), D(3000), (), D("0.05")), [],
+                     daily=bars)
+    d_rows = world.feed.history_bars("AAA", BarSpan.D, world.now, 1000)
+    assert [r.bar for r in d_rows[:-1]] == bars and len(d_rows) == 61  # 60 days and today
+    minutes = world.feed.history_bars("AAA", BarSpan.M1, world.now, 100000)
+    assert minutes and all(r.bar.start >= market_day.regular_open for r in minutes)
+    assert all(b.start >= market_day.regular_open
+               for b in world.feed.bars_before("AAA", world.now, 100000))

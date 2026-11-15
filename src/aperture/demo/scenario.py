@@ -16,7 +16,7 @@ from typing import Any
 
 from aperture.api.contract import CommandKind
 from aperture.data.base import ScreenerKind
-from aperture.demo.world import Leg, Texture
+from aperture.demo.world import DailyWalk, Leg, Texture
 
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9.]*$")
 LEG_FIELDS = 4  # from, to, price at the end, volume per minute
@@ -67,6 +67,8 @@ class Scenario:
     wick: Decimal
     history_volume: Decimal
     texture: Texture
+    chart_days: int
+    chart_walk: DailyWalk
     today: tuple[SymbolPlan, ...]
     commands: tuple[DemoCommand, ...]
     past: tuple[tuple[SymbolPlan, ...], ...]
@@ -192,7 +194,8 @@ def load(path: Path) -> Scenario:
         "bot_start", "past_stop", "clock"})
     market = _keys("[market]", top["market"], {
         "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume", "texture_drift",
-        "texture_pull", "texture_wick", "texture_move", "texture_move_cap", "texture_volume"})
+        "texture_pull", "texture_wick", "texture_move", "texture_move_cap", "texture_volume",
+        "chart_days", "chart_daily_move", "chart_daily_gap", "chart_daily_wick"})
     observers = demo["observers"]
     if not isinstance(observers, list) or not all(isinstance(o, str) for o in observers):
         raise ScenarioError("[demo] observers must be a list of strings")
@@ -222,6 +225,11 @@ def load(path: Path) -> Scenario:
             move=_fraction("[market] texture_move", market["texture_move"], False),
             move_cap=_fraction("[market] texture_move_cap", market["texture_move_cap"], False),
             volume=_fraction("[market] texture_volume", market["texture_volume"], True)),
+        chart_days=_count("[market] chart_days", market["chart_days"]),
+        chart_walk=DailyWalk(
+            move=_fraction("[market] chart_daily_move", market["chart_daily_move"], True),
+            gap=_fraction("[market] chart_daily_gap", market["chart_daily_gap"], True),
+            wick=_fraction("[market] chart_daily_wick", market["chart_daily_wick"], True)),
         today=today,
         commands=tuple(_command(f"commands[{n}]", c) for n, c in enumerate(plan["commands"])),
         past=tuple(_day(f"past[{n}]", day) for n, day in enumerate(plan["past"])),

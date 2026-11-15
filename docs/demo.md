@@ -30,6 +30,10 @@ What it does:
   or drifts, a close never sits above its planned close and every high reaches it, so noise
   alone never closes above the recent highs: the breakouts, stop-outs and refusals stay where
   the legs put them.
+- Gives each symbol `[market] chart_days` older days (250) of chart-only D bars before its minute
+  history, a seeded random walk ending at its `base`, so the 1M, 3M and 1Y charts and RSI 14
+  have data. They are weekdays (holidays are not skipped) and are served on D charts only. The
+  bot never reads them: its history reads are minute bars.
 - Plays the past sessions in `config/demo.toml` fast, then the demo day (today if it is a session,
   otherwise the latest session before it) fast up to `[demo] clock`, then in real time with the
   local API listening, until Ctrl-C. About two to three minutes before the API is up.
@@ -59,7 +63,7 @@ never fill. The real bot reacts as it would live:
 - the `unprotected` and `status-unknown` fences are set and new entries are blocked;
 - the unprotected-position alert goes to the terminal.
 
-After `[orders] max_unprotected_seconds` (30 s), the bot cancels the stop and closes the
+After `[orders] max_unprotected_seconds`, the bot cancels the stop and closes the
 position (`unprotected-too-long`), so the apps then show that exit and its fence. Put `at`
-inside the live part of the day (after `[demo] clock`), so the 30 s happen in real time. Only
+inside the live part of the day (after `[demo] clock`), so that wait happens in real time. Only
 the demo's exchange changes: `broker/fake.py` and the live path are untouched.
