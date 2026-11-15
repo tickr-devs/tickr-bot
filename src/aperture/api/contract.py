@@ -605,6 +605,11 @@ class SettingsV1:
     session: SessionSettings
     status_stale_seconds: Decimal
     poll_seconds: Decimal
+    # Age of the last broker read past which entries are blocked ([orders]
+    # broker_read_max_age_seconds) and past which clients show a warning ([api]
+    # broker_read_warn_seconds, always below the block age).
+    broker_read_max_age_seconds: Decimal
+    broker_read_warn_seconds: Decimal
     api_version: int = _const(API_VERSION)
 
 

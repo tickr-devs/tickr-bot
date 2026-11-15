@@ -180,6 +180,10 @@ account_stale_seconds = 30
 commands_dir = "commands"
 # Status older than this many seconds is shown as stale (bot may be down); read by the api server.
 status_stale_seconds = 15
+# Last broker read older than this many seconds is shown as a warning (entries are blocked only past [orders]
+# broker_read_max_age_seconds); keep it above [orders] reconcile_interval_seconds and below broker_read_max_age_seconds;
+# read by the api server and returned to clients at GET /settings.
+broker_read_warn_seconds = 15
 # Seconds between refreshes of the status page, also returned to clients as a polling hint; read by the api server and the status page.
 poll_seconds = 3
 # Largest accepted command request body in bytes; larger = refused; read by the api server.

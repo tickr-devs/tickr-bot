@@ -184,7 +184,8 @@ def documents() -> dict[str, object]:
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
             RiskSettings(Decimal("50"), Decimal("2500"), Decimal("300"), 1, Decimal("5"),
                          Decimal("10")),
-            SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL),
+            SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL,
+            Decimal("30"), Decimal("15")),
         "day-v1.empty": DayV1("sandbox", DAY - timedelta(days=3), (), Decimal("0"), ()),
         "bars-v1": BarsV1("sandbox", "ABCD", DAY, tuple(
             BarV1(T0 + timedelta(minutes=i), Decimal(o), Decimal(h), Decimal(lo), Decimal(c),

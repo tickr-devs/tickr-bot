@@ -224,6 +224,8 @@ def shown_settings(cfg: Config) -> SettingsV1:
             half_days_enabled=session.half_days_enabled),
         status_stale_seconds=cfg.api.status_stale_seconds,
         poll_seconds=cfg.api.poll_seconds,
+        broker_read_max_age_seconds=cfg.orders.broker_read_max_age_seconds,
+        broker_read_warn_seconds=cfg.api.broker_read_warn_seconds,
     )
 
 
