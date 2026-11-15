@@ -60,7 +60,10 @@ names. The first response of each kind and every failed one are kept in `<out>/r
   sessions before it, or its run is incomplete: live, the bot refuses a symbol with incomplete
   history. Also skipped when the daily (forward-adjusted) to M1 (unadjusted) price scale differs
   between the previous session and the day by more than `split_tolerance_percent`: a split
-  between them would make the gate's change meaningless.
+  between them would make the gate's change meaningless. When the replay engine refuses a
+  symbol (a bad bar, e.g. a 0.01 USD print whose synthetic bid is not positive), the symbol is
+  replayed again one pool day at a time on that day's bars only, and the days still refused are
+  skipped as `REPLAY_REFUSED` with the engine's message; the run never stops for one bar.
 - The strategy sits behind a gate (`backtest/gate.py`): it is asked only from the first completed
   bar at which close >= previous session's last close x (1 + `gainer_change_percent` / 100) and the
   session's dollar volume so far reached the discovery floor; then for the rest of the day. Before
@@ -94,6 +97,7 @@ names. The first response of each kind and every failed one are kept in `<out>/r
 - The rank on the 200-row gainers list is not reconstructed; the change threshold is a proxy.
 - The spread floor and quote-dependent strategy checks see the replay's synthetic quote, not real
   quotes; real spreads of fast gainers are often wider, so results are likely optimistic there.
-- Survivorship: the instrument list is today's, so symbols delisted since the window are missing.
+- Survivorship: the instrument list is today's, so symbols delisted since the window are missing
+  (this applies to the gainer pool and to the liquid pool alike).
 - Each symbol is replayed independently; the bot view applies the one-position and daily-loss
   limits afterwards, first come first served.

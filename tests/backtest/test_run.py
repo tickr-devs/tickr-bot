@@ -180,6 +180,38 @@ def test_last_sessions_cuts_the_pool_to_the_latest_calendar_sessions():
             raise AssertionError("a count below 1 must be refused")
 
 
+def test_a_bar_the_engine_refuses_skips_only_its_day(tmp_path):
+    out, results = tmp_path / "data", tmp_path / "results"
+    first = PRIOR[-1]  # BAD is a pool symbol on two days; only TODAY has the bad print
+    history = [date(2026, 11, 5), *PRIOR]
+    for symbol in ("ABCD", "BAD"):
+        prior = [b for d in history[:-1] for b in flat_bars(symbol, d, "20", "3000")]
+        earlier = [replace(b, start=minute(first, i)) for i, b in
+                   enumerate(rising(symbol, "20", "0.30", 30, "300000"))]
+        today = rising(symbol, "20", "0.30", 30, "300000")
+        if symbol == "BAD":  # one 0.01 USD print: its synthetic bid is not positive
+            cent = Decimal("0.01")
+            today[10] = Bar(symbol, today[10].start, cent, cent, cent, cent, Decimal(100))
+        write_symbol(out, symbol, prior + earlier + today)
+    write_pool([PoolEntry(first, 1, "BAD", Decimal(20), Decimal(29), Decimal(50), Decimal(10**8)),
+                PoolEntry(TODAY, 1, "ABCD", Decimal(29), Decimal(29), Decimal(50), Decimal(10**8)),
+                PoolEntry(TODAY, 2, "BAD", Decimal(29), Decimal(29), Decimal(50), Decimal(10**8))],
+               out / "pool.csv")
+    write_caps([CapRecord(first, 1, 1), CapRecord(TODAY, 2, 2)], out / "pool_cap.csv")
+    run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
+                 "tickr.strategy.price_action_v1",
+                 ROOT / "strategies" / "price-action-v1" / "strategy.toml")
+    with open(results / "skipped.csv") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(r["symbol"], r["session_date"]) for r in rows] == [("BAD", TODAY.isoformat())]
+    assert rows[0]["cause"].startswith("REPLAY_REFUSED") and "synthetic bid" in rows[0]["cause"]
+    with open(results / "trades.csv") as handle:
+        traded = {(t["symbol"], t["session_date"]) for t in csv.DictReader(handle)}
+    assert ("BAD", first.isoformat()) in traded and ("BAD", TODAY.isoformat()) not in traded
+    summary = json.loads((results / "summary.json").read_text())
+    assert summary["sessions"] == 2 * (len(history) + 1)  # each file once: history + TODAY
+
+
 def test_run_last_sessions_reports_its_window(tmp_path):
     out, results = tmp_path / "data", tmp_path / "results"
     prior = [b for d in PRIOR for b in flat_bars("ABCD", d, "20", "3000")]
