@@ -68,8 +68,9 @@ owner decision (`[strategy] active`), not something this candidate does.
 `strategies/volume-shock-v1/` with `src/aperture/strategy/volume_shock_v1.py` (shared entry and
 sizing in `strategy/simple.py`). It is family L4 of `docs/strategy-ledger.md`: a volume shock in
 a stock trading a little above its previous close; the module docstring and the strategy.toml
-hold the rules and values. One signal bar per symbol and session; the stop is at least
-`minimum_stop_percent` below the entry window's floor (the bar's low only when lower), so
+hold the rules and values. The first signal of the session stays valid for `signal_valid_minutes` unless a later bar
+trades below its low; the stop is at least `minimum_stop_percent` below the entry window's
+floor and the bid (the bar's low only when lower), so
 results are not directly comparable with the history test, which used the bar's low. The
 session flatten is the exit. A half day among the prior sessions refuses afternoon bars
 (`prior_window_complete`) until it leaves the window. On history it was positive only on days that later became gainers, which is look-ahead,
@@ -83,12 +84,36 @@ Enable: `observers = ["volume-shock-v1"]`.
 `strategy/simple.py`). It is family L2 of `docs/strategy-ledger.md`: the first close between
 10:00 and 15:00 that is further above the session open than the stock's usual move at that
 minute over the prior sessions; the docstring and the strategy.toml hold the rules and values.
-One signal bar per symbol and session; the stop is the lower of the band level (or VWAP when
-it is higher and below the close) and the minimum distance below the entry window's floor.
+The first signal of the session stays valid for `signal_valid_minutes` unless a later bar
+trades below its stop level; the stop is the lower of the band level (or VWAP when it is
+higher and below the close) and the minimum distance below the entry window's floor and the
+bid.
 Since the first crossing closes barely above the band, the fixed minimum distance is almost
 always the stop used, so forward results do not test a band stop. The session flatten is the
 exit. Like volume-shock-v1 it was positive on history only through look-ahead, so it runs
 as an observer. Enable: `observers = ["noise-band-v1"]`.
+
+Notes for both candidates (from the trading-core review of `strategy/simple.py`):
+
+- An observer gets no daily loss budget (it sizes as if it traded alone) and no quote whose
+  times entry admission would refuse: older than `[risk] max_quote_age_seconds`, more than
+  `max_clock_skew_seconds` ahead, received after the evaluation, or naive
+  (`observers/runner.freeze`).
+- The stop is at least `minimum_stop_percent` below both the window floor and the bid.
+- With the shipped values the notional cap usually sets the quantity, so the planned loss is
+  about 37 to 50 USD, not a constant 50: compare results in R or per share. The platform's
+  tick rounding of the stop can refuse an entry whose loss-based size binds (fails closed).
+- Both refuse a session whose bars do not start at 09:30 (`session_from_open`), which holds
+  while `[market_data] bars_per_symbol` covers the whole session.
+- The previous close is the last bar of the latest fetched prior session, not the official
+  close.
+- Quotes are subscribed for the active strategy's WATCH set only (`runtime/service.py`
+  `_evaluate`), so an observer shows ENTER only on a symbol the active strategy also watches;
+  the rest show WATCH, which the daily report should count as missed for no quote.
+- A valid signal can log ENTER on each of its up to `signal_valid_minutes`: count one
+  entry per signal, not one per record. The daily observer report simulates at most one
+  trade per signal (`skipped_same_signal`); the `outcomes` research command still measures
+  every ENTER record.
 
 ## Engine wiring (to do in the engine, not here)
 
@@ -99,7 +124,8 @@ from aperture.observers.runner import ObserverSet
 
 settings = config.observers
 observers = ObserverSet(load_observers(config), DecisionLog.from_config(config),
-                        settings.max_evaluation_seconds, settings.queue_size)
+                        settings.max_evaluation_seconds, settings.queue_size,
+                        config.risk.max_quote_age_seconds, config.risk.max_clock_skew_seconds)
 
 # per evaluation, right after the active strategy decided on `context` at time `now`:
 for failure in observers.on_evaluation(context, now):   # only "queue full: dropped"
@@ -140,7 +166,8 @@ python -m aperture.research observers \
 Per identity (active first): decisions by verdict, ENTERs (taken / refused for the active),
 every ENTER simulated like `whatif` (taken or not, so every version is measured the same way;
 an ENTER while an earlier simulated trade of the same identity in that symbol is open is
-`skipped_overlap`), trades, wins, losses, total and average R, gross USD for ENTERs with a
+`skipped_overlap`, and an observer's ENTER repeating a signal, same day, symbol, setup and
+trigger, that already made a simulated trade is `skipped_same_signal`), trades, wins, losses, total and average R, gross USD for ENTERs with a
 recorded quantity; for observers the bar-by-bar diff against the active decisions and the
 number of ENTER bars shared with it. Outputs `observers.csv` and `observers.json`, labelled
 `simulated`. The local API serves each observer's gross USD from this same simulation at

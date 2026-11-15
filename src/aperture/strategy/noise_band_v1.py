@@ -14,10 +14,10 @@ Values come from `strategies/noise-band-v1/strategy.toml`. On the last completed
 4. This is the first bar of the session where 1-3 hold. An earlier bar whose band is unknown
    (a prior session lacks that minute) counts as not fired.
 
-That is one signal bar per symbol and session: if the quote does not allow an entry during
-that minute, the session is spent. Then ENTER with the stop at the higher of the band level
-and the session VWAP (VWAP only while it is below the close), or lower, at the minimum stop
-distance below the entry window, and the
+The first signal stays valid for `signal_valid_minutes` ([entry]) while no later bar
+trades below its stop level; after that the session is spent. Then ENTER with
+the stop at the higher of the band level and the session VWAP (VWAP only while it is below
+the close), or lower, at the minimum stop distance below the entry window and the bid, and the
 exit left to the platform's session flatten. A half day among the prior sessions has no bar
 after its early close, so later minutes get no band and no signal until it leaves the window.
 The history test (L2) is positive only on days that later became gainers, which is
@@ -28,7 +28,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import time
 from decimal import Decimal
 from typing import Any
 
@@ -40,7 +39,7 @@ from aperture.types import Bar
 
 NAME = "noise-band-v1"
 SETUP = "noise_band"
-REGULAR_OPEN = time(9, 30)
+REGULAR_OPEN = simple.REGULAR_OPEN
 MINUTES_PER_HOUR = 60
 REGULAR_SESSION_MINUTES = 390  # 09:30 to 16:00, minute bars 0..389
 
@@ -104,8 +103,7 @@ class NoiseBandV1:
         if not checks[-1].passed:
             return ignore()
         session = ind.current_session(context.bars)
-        checks.append(v1._flag("session_open_bar", _minutes_after_open(session[0]) == 0,
-                               "the session's first bar is the 09:30 bar"))
+        checks.append(simple.session_from_open(session))
         if not checks[-1].passed:
             return ignore()
         session_open = session[0].open
@@ -132,20 +130,25 @@ class NoiseBandV1:
             return b is not None and session[i].close > session_open * (
                 simple.ONE + s.band_multiple * b)
 
-        if in_hours(minutes[-1]) and band(minutes[-1]) is None:
+        if in_hours(minutes[-1]) and band(minutes[-1]) is None and not any(
+                fires(i) for i in range(len(session) - 1)):
             checks.append(v1._flag("prior_band_complete", False,
                                    "a prior session lacks its 09:30 bar or this minute"))
             return ignore()
-        checks.append(simple.first_signal(session, fires))
-        if not checks[-1].passed:
+        check, first = simple.first_signal(session, fires, c.signal_valid_minutes)
+        checks.append(check)
+        if first is None:
             return ignore()
-        last = session[-1]
-        last_band = band(minutes[-1])
+        last = session[first]
+        last_band = band(minutes[first])
         assert last_band is not None  # the signal fired on this bar
         level = session_open * (simple.ONE + s.band_multiple * last_band)
-        vwap = ind.vwap_series(session)[-1]
+        vwap = ind.vwap_series(session[:first + 1])[-1]
         # VWAP raises the stop only while it is below the close; above it, it is no support.
         stop_level = level if vwap is None or vwap >= last.close else max(level, vwap)
+        checks.append(simple.not_invalidated(session, first, stop_level))
+        if not checks[-1].passed:
+            return ignore()
         return simple.enter(self, c, context, checks, SETUP, last.close, stop_level)
 
 

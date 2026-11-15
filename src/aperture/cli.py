@@ -427,7 +427,8 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
         observers_refused(str(exc))
         shadows = ()
     observers = ObserverSet(shadows, log, cfg.observers.max_evaluation_seconds,
-                            cfg.observers.queue_size)
+                            cfg.observers.queue_size, cfg.risk.max_quote_age_seconds,
+                            cfg.risk.max_clock_skew_seconds)
     return evaluator, observers
 
 

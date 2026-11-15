@@ -41,7 +41,8 @@ def today(count, jump_at=None, open_=20.0):
     bars = []
     for i in range(count):
         c = open_ * 1.02 if jump_at is not None and i >= jump_at else open_
-        bars.append(bar(TODAY, i, open_, round(c + 0.05, 2), open_ - 0.05, round(c, 2), 5_000))
+        low = open_ - 0.05 if c == open_ else round(c - 0.05, 2)  # never back under the band
+        bars.append(bar(TODAY, i, open_, round(c + 0.05, 2), low, round(c, 2), 5_000))
     return bars
 
 
@@ -101,15 +102,19 @@ def test_before_the_earliest_minute_is_no_signal():
     assert rules(make().evaluate(ctx(today(20, jump_at=19))))[-1] == ("signal", False)
 
 
-def test_only_the_first_signal_of_the_session_counts():
-    decision = make().evaluate(ctx(today(45, jump_at=40)))
-    assert rules(decision)[-1] == ("first_signal_of_session", False)
+def test_the_first_signal_stays_valid_for_signal_valid_minutes_then_expires():
+    still = make().evaluate(ctx(today(45, jump_at=40)))  # signal bar 40, last bar 44
+    assert still.verdict is Verdict.WATCH and still.trigger == d("20.4")
+    expired = make().evaluate(ctx(today(46, jump_at=40)))
+    assert expired.verdict is Verdict.IGNORE
+    assert rules(expired)[-1] == ("signal_age_minutes", False)
 
 
 def test_no_look_ahead_over_every_prefix():
     bars = today(50, jump_at=42)
     verdicts = [make().evaluate(ctx(bars[:k])).verdict for k in range(1, len(bars) + 1)]
-    assert verdicts.index(Verdict.WATCH) == 42 and verdicts.count(Verdict.WATCH) == 1
+    # WATCH from the signal bar 42 for signal_valid_minutes = 5 bars, never before
+    assert [k for k, v in enumerate(verdicts) if v is Verdict.WATCH] == [42, 43, 44, 45, 46]
     altered = bars[:43] + [bar(TODAY, i, 30, 31, 29, 30, 9_000) for i in range(43, 50)]
     assert make().evaluate(ctx(altered[:43])) == make().evaluate(ctx(bars[:43]))
 
@@ -134,7 +139,7 @@ def test_a_prior_half_day_silences_the_afternoon_only():
 
 def test_today_without_the_0930_bar_is_refused():
     decision = make().evaluate(ctx(today(41, jump_at=40)[1:]))
-    assert rules(decision)[-1] == ("session_open_bar", False)
+    assert rules(decision)[-1] == ("session_from_open", False)
 
 
 def test_missing_prior_session_and_cheap_stock_are_refused():
@@ -176,3 +181,11 @@ def test_loads_as_an_observer_from_the_repo_config():
     loaded = load_strategy(ROOT, "noise-band-v1", modules)
     assert (loaded.strategy.name, loaded.strategy.version) == ("noise-band-v1", "1")
     check_history(loaded, cfg.market_data.history_sessions)
+
+
+def test_a_signal_whose_band_level_was_broken_is_not_entered():
+    bars = today(42, jump_at=40)
+    bars[41] = bar(TODAY, 41, 20.4, 20.45, 20.1, 20.4, 5_000)
+    decision = make().evaluate(ctx(bars, quote("20.39", "20.41")))
+    assert decision.verdict is Verdict.IGNORE
+    assert rules(decision)[-1] == ("signal_not_invalidated", False)

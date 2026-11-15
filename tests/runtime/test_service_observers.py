@@ -73,7 +73,8 @@ def wire(tmp_path: Path, observer: Observer, symbols: list[str], queue_size: int
     bot = Bot(tmp_path)
     observers = ObserverSet([LoadedStrategy("obs", observer)],
                             DecisionLog(tmp_path / "decisions"),
-                            CFG.observers.max_evaluation_seconds, queue_size)
+                            CFG.observers.max_evaluation_seconds, queue_size,
+                            CFG.risk.max_quote_age_seconds, CFG.risk.max_clock_skew_seconds)
     bot.service.market = Market()  # type: ignore[assignment]
     bot.service.evaluator = Evaluator(bot, symbols)  # type: ignore[assignment]
     bot.service.observers = observers

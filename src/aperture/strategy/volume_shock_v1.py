@@ -12,22 +12,23 @@ Values come from `strategies/volume-shock-v1/strategy.toml`. On the last complet
    halt, data gap) means no signal on that bar, and on the last bar a failed
    `prior_window_complete` check. Today's window must be consecutive minutes too.
 3. The bar closes in the top of its range: (close - low) / (high - low) >= `close_location_min`.
-4. This is the first bar of the session where 1-3 hold. That is one signal bar per symbol and
-   session: if the quote does not allow an entry during that minute, the session is spent.
+4. This is the first bar of the session where 1-3 hold, it started at most
+   `signal_valid_minutes` - 1 minutes ago ([entry]), and no later bar traded below its low.
+   After that the session is spent.
 
 There is no time-of-day limit (the history test had none); the platform's last-entry time
 applies. Then ENTER with the stop at the signal bar's low (or lower, at the minimum stop
-distance below the entry window) and
-the exit left to the platform's session flatten. The history test (L4) is positive only on days
-that later became gainers, which is look-ahead; this module exists to test it live, where the
-universe is the bot's own and nothing can look ahead.
+distance below the entry window's floor and the bid) and the exit left to the platform's
+session flatten. The history test (L4) is positive only on days that later became gainers,
+which is look-ahead; this module exists to test it live, where the universe is the bot's own
+and nothing can look ahead.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import time, timedelta
+from datetime import time
 from decimal import Decimal
 from statistics import median
 from typing import Any
@@ -40,7 +41,7 @@ from aperture.types import Bar
 
 NAME = "volume-shock-v1"
 SETUP = "volume_shock"
-M1 = timedelta(minutes=1)
+M1 = simple.M1
 
 _SIGNAL: simple.Schema = {
     "signal": {
@@ -97,6 +98,9 @@ class VolumeShockV1:
         if not checks[-1].passed:
             return ignore()
         session = ind.current_session(context.bars)
+        checks.append(simple.session_from_open(session))
+        if not checks[-1].passed:
+            return ignore()
         low = previous * (simple.ONE + s.change_min_percent / simple.PERCENT)
         high = previous * (simple.ONE + s.change_max_percent / simple.PERCENT)
 
@@ -132,14 +136,19 @@ class VolumeShockV1:
             return mine >= s.volume_shock_multiple * usual
 
         last_index = len(session) - 1
-        if last_index + 1 >= window and normal(last_index) is None:
+        if last_index + 1 >= window and normal(last_index) is None and not any(
+                fires(i) for i in range(last_index)):
             checks.append(v1._flag("prior_window_complete", False,
                                    "a prior session lacks a minute of the volume window"))
             return ignore()
-        checks.append(simple.first_signal(session, fires))
+        check, first = simple.first_signal(session, fires, c.signal_valid_minutes)
+        checks.append(check)
+        if first is None:
+            return ignore()
+        bar = session[first]
+        checks.append(simple.not_invalidated(session, first, bar.low))
         if not checks[-1].passed:
             return ignore()
-        bar = session[-1]
         return simple.enter(self, c, context, checks, SETUP, bar.close, bar.low)
 
 

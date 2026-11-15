@@ -56,6 +56,13 @@ At realistic wider spreads nothing does.
 
 The backtest thread's own results for price-action-v1 are in `docs/backtest-results.md`.
 
+L2 and L4 now run live as observers (`noise-band-v1`, `volume-shock-v1`, docs/observers.md).
+Their live rules differ from the history test, so forward numbers are not directly comparable:
+the stop is at least `minimum_stop_percent` below the entry window's floor and the bid; the
+entry is any quote inside the window up to `signal_valid_minutes` after the signal bar,
+not the next bar's open; a signal whose stop level trades before the entry is dropped; and a
+session without its 09:30 bar is refused all day.
+
 ## Reproducing
 
 The research scripts are offline and are not part of the bot. They live in the project's shared

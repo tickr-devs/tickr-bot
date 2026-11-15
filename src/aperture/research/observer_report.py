@@ -8,8 +8,12 @@ Per strategy identity (name + version + role):
 - every ENTER simulated through the replay engine exactly like `whatif` (docs/research.md),
   taken or not, so all identities are measured the same way. Per symbol, an ENTER that arrives
   while an earlier simulated trade of the same identity is still open is `skipped_overlap`
-  (one position per symbol, as live). R per trade; USD only for ENTERs with a recorded whole
-  quantity (gross: slippage in, commissions out);
+  (one position per symbol, as live). For an observer, an ENTER repeating a signal (same New
+  York day, symbol, setup and trigger) that already made a simulated trade is
+  `skipped_same_signal`: an observer holds no position, so it answers ENTER on every bar its
+  signal stays valid, where live the symbol pause or the open position would stop a second
+  entry. The active strategy's ENTERs are not deduplicated. R per trade; USD only for ENTERs with a
+  recorded whole quantity (gross: slippage in, commissions out);
 - for observers, a bar-by-bar diff against the active decisions (aperture.research.compare)
   and how many ENTER bars it shares with the active strategy.
 """
@@ -18,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -74,13 +78,25 @@ def _simulate(
     bars_by_symbol: Mapping[str, Sequence[Bar]],
     settings: ReplaySettings,
     clock_for: ClockFor,
+    dedupe_signals: bool,
 ) -> None:
-    outcomes = {o.value: 0 for o in WhatIfOutcome} | {"skipped_overlap": 0}
+    outcomes = {o.value: 0 for o in WhatIfOutcome} | {"skipped_overlap": 0,
+                                                      "skipped_same_signal": 0}
     busy_until: dict[str, datetime] = {}
+    traded: set[tuple[date, str, str | None, Decimal]] = set()
+    zone = ZoneInfo(TIMEZONE_NAME)
     r_values: list[Decimal] = []
     for record in sorted(enters, key=lambda r: (r.symbol, r.bar_start)):
         if record.bar_start < busy_until.get(record.symbol, record.bar_start):
             outcomes["skipped_overlap"] += 1
+            continue
+        trigger = record.decision.trigger
+        signal = None
+        if dedupe_signals and trigger is not None:
+            signal = (record.bar_start.astimezone(zone).date(), record.symbol,
+                      record.decision.setup, trigger)
+        if signal in traded:
+            outcomes["skipped_same_signal"] += 1
             continue
         bars = bars_by_symbol.get(record.symbol)
         if not bars:
@@ -94,6 +110,8 @@ def _simulate(
         if trade is None:
             continue
         busy_until[record.symbol] = trade.exit_time
+        if signal is not None:
+            traded.add(signal)
         r_values.append(trade.r_multiple)
         if has_usd and result.result_usd is not None:
             row.total_usd += result.result_usd
@@ -135,7 +153,8 @@ def report(
         row.enters = len(enters)
         row.enters_taken = sum(1 for r in enters if r.admission is Admission.TAKEN)
         row.enters_refused = sum(1 for r in enters if r.admission is Admission.REFUSED)
-        _simulate(row, enters, bars_by_symbol, settings, clock_for)
+        _simulate(row, enters, bars_by_symbol, settings, clock_for,
+                  dedupe_signals=key[2] == Role.OBSERVER.value)
         if active_key is not None and key != active_key:
             active = groups[active_key]
             row.vs_active = dict(diff(active, group, zone).counts)

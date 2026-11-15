@@ -23,8 +23,10 @@ latest_minutes_after_open = 330
 [entry]
 # Entry window around the signal close, percent each way; the ask must be inside it. Read by strategy.simple.
 entry_window_percent = 0.5
-# Minimum stop distance below the entry window's floor, percent; a higher band/VWAP stop is replaced by it. Read by strategy.simple.
+# Minimum stop distance below both the entry window's floor and the bid, percent; a higher signal stop level is replaced by it. Read by strategy.simple.
 minimum_stop_percent = 0.5
+# Minutes the first signal stays valid, counting the signal bar's minute (5 = that minute and the next 4), while no later bar trades below its stop level; gives a quote arriving a little late a chance, and the window above keeps the entry from chasing. Read by strategy.simple.
+signal_valid_minutes = 5
 
 [liquidity]
 # Regular session: maximum (ask - bid) / mid. Read by strategy.simple.

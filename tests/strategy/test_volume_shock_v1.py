@@ -92,10 +92,10 @@ def test_loss_budget_sizes_down():
     assert ("daily_loss_budget_usd", True) in rules(small)
 
 
-def test_only_the_first_signal_of_the_session_counts():
+def test_a_signal_older_than_signal_valid_minutes_minutes_expires():
     decision = make().evaluate(ctx(shock(count=11, at=5)))
     assert decision.verdict is Verdict.IGNORE
-    assert rules(decision)[-1] == ("first_signal_of_session", False)
+    assert rules(decision)[-1] == ("signal_age_minutes", False)
 
 
 @pytest.mark.parametrize("close", [20.1, 20.7])
@@ -140,10 +140,10 @@ def test_open_position_is_held():
 def test_no_look_ahead_the_signal_fires_only_on_its_bar_and_later_bars_change_nothing():
     bars = shock(count=14, at=8)
     verdicts = [make().evaluate(ctx(bars[:k])).verdict for k in range(1, len(bars) + 1)]
-    assert verdicts.index(Verdict.WATCH) == 8 and verdicts.count(Verdict.WATCH) == 1
+    assert [k for k, v in enumerate(verdicts) if v is Verdict.WATCH] == [8, 9, 10, 11, 12]
     altered = bars[:9] + [bar(TODAY, i, 30, 31, 29, 30, 500_000) for i in range(9, 14)]
     assert make().evaluate(ctx(altered[:9])) == make().evaluate(ctx(bars[:9]))
-    assert rules(make().evaluate(ctx(altered)))[-1] == ("first_signal_of_session", False)
+    assert make().evaluate(ctx(altered[:12])).trigger == make().evaluate(ctx(bars[:9])).trigger
 
 
 def test_a_minute_missing_in_a_prior_session_is_refused_not_zero():
@@ -173,3 +173,60 @@ def test_loads_as_an_observer_from_the_repo_config():
     loaded = load_strategy(ROOT, "volume-shock-v1", modules)
     assert (loaded.strategy.name, loaded.strategy.version) == ("volume-shock-v1", "1")
     check_history(loaded, cfg.market_data.history_sessions)
+
+
+def test_the_stop_keeps_the_minimum_distance_below_the_bid():
+    # ask inside the window, bid below its floor: the bid rule sets the stop
+    decision = make().evaluate(ctx(shock(), quote("20.25", "20.30")))
+    assert decision.verdict is Verdict.ENTER
+    assert decision.stop == d("20.25") * d("0.995") < decision.entry_low * d("0.995")
+
+
+@pytest.mark.parametrize("key,value",
+                         [("entry_window_percent", 100), ("minimum_stop_percent", 150)])
+def test_percent_bounds_are_refused(key, value):
+    vals = copy.deepcopy(VALUES)
+    vals["entry"][key] = value
+    with pytest.raises(ValueError):
+        vs.create(vals)
+
+
+def test_today_not_starting_at_the_open_is_refused():
+    decision = make().evaluate(ctx(shock()[1:]))
+    assert rules(decision)[-1] == ("session_from_open", False)
+
+
+def test_a_signal_whose_low_was_broken_is_not_entered():
+    bars = shock(count=11, at=9)
+    bars[10] = bar(TODAY, 10, 20.4, 20.4, 20.2, 20.31, 3_000)
+    decision = make().evaluate(ctx(bars, quote("20.30", "20.31")))
+    assert decision.verdict is Verdict.IGNORE
+    assert rules(decision)[-1] == ("signal_not_invalidated", False)
+
+
+def test_signal_age_counts_minutes_across_a_gap():
+    bars = shock(count=10, at=9) + [bar(TODAY, 30, 20.4, 20.4, 20.4, 20.4, 3_000)]
+    decision = make().evaluate(ctx(bars))
+    assert decision.verdict is Verdict.IGNORE
+    assert rules(decision)[-1] == ("signal_age_minutes", False)
+
+
+def test_a_later_signal_after_the_first_expired_is_ignored():
+    bars = shock(count=20, at=5)
+    bars[19] = bar(TODAY, 19, 20.3, 20.4, 20.3, 20.4, 80_000)  # a second genuine shock
+    decision = make().evaluate(ctx(bars))
+    assert rules(decision)[-1] == ("signal_age_minutes", False)
+
+
+@pytest.mark.parametrize("value", ["nan", "inf"])
+def test_non_finite_values_are_refused(value):
+    vals = copy.deepcopy(VALUES)
+    vals["sizing"]["planned_loss_usd"] = float(value)
+    with pytest.raises(ValueError):
+        vs.create(vals)
+
+
+def test_a_later_low_equal_to_the_signal_low_invalidates():
+    bars = shock(count=11, at=9)
+    bars[10] = bar(TODAY, 10, 20.4, 20.4, 20.3, 20.35, 3_000)
+    assert rules(make().evaluate(ctx(bars)))[-1] == ("signal_not_invalidated", False)
