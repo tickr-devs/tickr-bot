@@ -88,7 +88,8 @@ limit of 30 requests per 60 s per route that the bot uses.
   latest 10 minutes before its 09:00 Mac time start, or after it has stopped:
   `python -m aperture.probes chart-limit SYM`. It takes about 90 s, starts two processes that
   send 20 bars requests each, and prints `shared`, `not-shared` or `inconclusive`. It refuses
-  while a bot process is recorded in the lock. A `shared` answer means Webull answered 429
+  while a bot process is recorded in the lock, and during the regular session (09:30 to 16:00)
+  even with the bot stopped. A `shared` answer means Webull answered 429
   once; the bars route then stays refused for a minute or so.
 - **Chart C1** (a second Webull client next to the running bot): needs
   `[chart] webull_enabled = true` in `config/bot.toml` from before the bot started, so the
@@ -98,7 +99,9 @@ limit of 30 requests per 60 s per route that the bot uses.
   minutes, watches that the bot keeps reading the broker and that the token folder does not
   change, and prints `passed` or `failed`. Do not open charts in the apps while it runs: they
   share the same four requests a minute. It refuses without a running bot, with the chart off,
-  or when the config changed after the bot started.
+  when the config changed after the bot started, and while the bot has a position or a working
+  order (run it while the bot is flat: if the second client breaks the bot's broker access,
+  nothing is then open).
 - Both write their evidence to `data/probes/<date>/`: paste `summary.json` into the project
   chat. Until both are recorded for an environment, `[chart] webull_enabled` goes back to
   `false` there after the probe.

@@ -537,7 +537,7 @@ class Service:
         if refused is not None:
             return self._session_block(day, refused)
         if any(entries.own_exposure(self.engine)):
-            return api.EntryBlock("own_trade_open", "The bot already has a trade open.",
+            return api.EntryBlock(api.OWN_TRADE_OPEN, "The bot already has a trade open.",
                                   attention=False)
         return None
 

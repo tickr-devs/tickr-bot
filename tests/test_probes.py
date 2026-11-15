@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +21,7 @@ from aperture.data.base import FakeMarketData
 
 ROOT = Path(__file__).resolve().parents[1]
 CFG = config.load(ROOT / "config" / "bot.toml")
+ACCOUNT = ROOT / "tests" / "api" / "fixtures" / "account-v1.json"
 EXAMPLE = ROOT / "tests" / "api" / "fixtures" / "status-v1.example.json"
 T0 = datetime(2026, 11, 16, 13, 0, tzinfo=UTC)  # 08:00 New York
 
@@ -40,6 +42,9 @@ class Clock:
 
 
 def cfg_in(tmp_path: Path, *, chart_on: bool = False) -> config.Config:
+    calendar = Path(CFG.session.calendar_file).parent
+    if not (tmp_path / calendar).exists():
+        shutil.copytree(ROOT / calendar, tmp_path / calendar)
     return replace(CFG, root=tmp_path, chart=replace(CFG.chart, webull_enabled=chart_on))
 
 
@@ -134,6 +139,30 @@ def test_chart_limit_refuses_next_to_a_bot(tmp_path):
     assert launched == [] and not (tmp_path / CFG.run.data_dir / CFG.probe.evidence_dir).exists()
 
 
+@pytest.mark.parametrize("at, refused", [
+    (datetime(2026, 11, 16, 14, 29, 59, tzinfo=UTC), None),          # 09:29:59 New York
+    (datetime(2026, 11, 16, 14, 30, tzinfo=UTC), "regular session is on"),
+    (datetime(2026, 11, 16, 20, 59, 59, tzinfo=UTC), "regular session is on"),
+    (datetime(2026, 11, 16, 21, 0, tzinfo=UTC), None),                # the close
+    (datetime(2026, 11, 15, 17, 0, tzinfo=UTC), None),                # a Sunday at noon
+    (datetime(2031, 1, 6, 17, 0, tzinfo=UTC), "calendar cannot say"),  # no calendar file
+])
+def test_chart_limit_runs_only_outside_the_regular_session(tmp_path, at, refused):
+    cfg, launched = cfg_in(tmp_path), []
+
+    def run() -> None:
+        probes.chart_limit(cfg, config_file(tmp_path), "ABC", now=lambda: at,
+                           launch=lambda commands: launched.append(commands) or [0, 0])
+
+    if refused is None:
+        run()
+        assert len(launched) == 1
+    else:
+        with pytest.raises(probes.ProbeRefused, match=refused):
+            run()
+        assert launched == []
+
+
 @pytest.mark.parametrize("processes, requests, cause", [
     (2, 31, "above the bars route limit"),       # a process would pass its own limit
     (1, 20, "would prove nothing"),              # together they would not pass the limit
@@ -191,18 +220,33 @@ class Bot:
     """Writes the status file the way a running bot does: a fresh one before every probe read."""
 
     def __init__(self, cfg: config.Config, clock: Clock, *, reads_broker: bool = True,
-                 fence: str | None = None) -> None:
+                 fence: str | None = None, exposed: str | None = None) -> None:
         self.cfg, self.clock, self.reads_broker, self.fence = cfg, clock, reads_broker, fence
+        self.exposed = exposed
         self.path = cfg.root / cfg.run.data_dir / cfg.api.status_file
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.example = api.loads(api.StatusV1, EXAMPLE.read_bytes())
+        self.account = api.loads(api.AccountV1, ACCOUNT.read_bytes())
 
     def write(self) -> None:
         at = self.clock.now()
         read_at = at if self.reads_broker else T0 - timedelta(minutes=5)
         fences = () if self.fence is None else (api.Fence(self.fence, at, "x"),)
+        flat = replace(self.example, position=None, positions=(), entry_block=None)
+        seen = replace(self.account, read_at=at, positions=(), orders=())
+        order = self.account.orders[0]
+        if self.exposed == "broker-position":
+            seen = replace(seen, positions=self.account.positions[:1])
+        elif self.exposed == "broker-order":
+            seen = replace(seen, orders=(replace(order, ours=True),))
+        elif self.exposed == "foreign-order":
+            seen = replace(seen, orders=(replace(order, ours=False),))
+        api.write_account(self.path.parent / self.cfg.api.account_file, seen)
+        shown = {None: flat, "position": replace(flat, positions=self.example.positions),
+                 "first-position": replace(flat, position=self.example.position),
+                 "working-order": replace(flat, entry_block=self.example.entry_block)}
         api.write_status(self.path, replace(
-            self.example, written_at=at, fences=fences,
+            shown.get(self.exposed, flat), written_at=at, fences=fences,
             freshness=replace(self.example.freshness, last_broker_read_at=read_at)))
 
 
@@ -221,6 +265,7 @@ def client_run(tmp_path: Path, **bot_options) -> tuple[str, dict, list[dict], Wa
     path = config_file(tmp_path)
     live_bot(cfg)
     market = Watched(Bot(cfg, clock, **bot_options))
+    market.bot.write()
     verdict, folder = probes.chart_client(cfg, path, "ABC", now=clock.now, sleep=clock.sleep,
                                           market=lambda _: market)
     summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
@@ -304,6 +349,46 @@ def test_chart_client_refuses_a_config_changed_after_the_bot_started(tmp_path):
     lock = live_bot(cfg)
     path = config_file(tmp_path, after=lock)
     assert "changed after the bot started" in refused_client(tmp_path, cfg, path)
+
+
+@pytest.mark.parametrize("exposed", ["position", "first-position", "working-order",
+                                     "broker-position", "broker-order"])
+def test_chart_client_refuses_while_the_bot_has_a_trade_open(tmp_path, exposed):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    path = config_file(tmp_path)
+    live_bot(cfg)
+    Bot(cfg, Clock(), exposed=exposed).write()
+    assert "run this probe while it is flat" in refused_client(tmp_path, cfg, path)
+
+
+def test_chart_client_runs_next_to_an_order_that_is_not_the_bots(tmp_path):
+    verdict, _, _, _ = client_run(tmp_path, exposed="foreign-order")
+    assert verdict == probes.PASSED
+
+
+def test_chart_client_refuses_when_the_bots_last_broker_read_cannot_say(tmp_path):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    path = config_file(tmp_path)
+    live_bot(cfg)
+    bot = Bot(cfg, Clock())
+    bot.write()
+    account = bot.path.parent / cfg.api.account_file
+    api.write_account(account, replace(bot.account, positions=(), orders=(), read_at=T0 - timedelta(
+        seconds=float(CFG.api.account_stale_seconds) + 1)))
+    assert "last broker read is 31 s old" in refused_client(tmp_path, cfg, path)
+    account.unlink()
+    assert "account file cannot be read" in refused_client(tmp_path, cfg, path)
+
+
+def test_chart_client_refuses_when_the_bots_status_cannot_say(tmp_path):
+    cfg = cfg_in(tmp_path, chart_on=True)
+    path = config_file(tmp_path)
+    live_bot(cfg)
+    assert "cannot be read" in refused_client(tmp_path, cfg, path)
+    earlier = Clock()
+    earlier.at = T0 - timedelta(seconds=float(CFG.api.status_stale_seconds) + 1)
+    Bot(cfg, earlier).write()
+    assert "it is unknown whether a trade is open" in refused_client(tmp_path, cfg, path)
 
 
 # --- command line ------------------------------------------------------------------------------

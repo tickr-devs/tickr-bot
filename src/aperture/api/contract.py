@@ -140,6 +140,10 @@ class StrategyId:
     version: str
 
 
+# EntryBlock cause while a position or a working order of the bot's own exists.
+OWN_TRADE_OPEN = "own_trade_open"
+
+
 @dataclass(frozen=True)
 class EntryBlock:
     """The single reason entries are blocked: a stable cause code plus plain words for people.

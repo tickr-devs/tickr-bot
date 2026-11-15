@@ -7,13 +7,17 @@ account route, no order, the account id is never read):
   `[probe] chart_limit_processes` processes that each send `chart_limit_requests` bars requests
   inside one route window. Each process stays within the route limit on its own; together they
   pass it. An HTTP 429 in any of them says the limit is shared. This is deliberately more than
-  one process may send, so it REFUSES while a bot process is recorded in the lock: it has no
-  place in the bot's budget.
+  one process may send, so it REFUSES while a bot process is recorded in the lock (it has no
+  place in the bot's budget) and during the regular session, when the watchdog may start a bot
+  at any moment and a paused bars route would cost it evaluations.
 - `chart-client` (C1): can a second Webull client read next to the running bot? It reads bars
   from its own market-data-only client while the bot runs, and after each read notes whether the
   bot still reads the broker and whether the token folder changed. It runs only inside the
   chart's own slice of the bars limit: `[chart] webull_enabled` must be true, and the config
   file must not have changed since the bot started (the bot gave up that slice when it started).
+  If the experiment fails the bot may lose its broker reads, so it REFUSES to start while the
+  bot's status or its last broker read shows a position or a working order of its own, or
+  either cannot be read or is stale.
 
 Every request is sent once and never repeated. Evidence goes to
 `<data_dir>/<[probe] evidence_dir>/<NY date>/<probe>-<UTC time>/`: one JSON line per request and
@@ -46,7 +50,7 @@ from aperture.broker.webull import (
     chart_market_data_from_config,
     chart_probe_market_data_from_config,
 )
-from aperture.calendar import ny_date_of
+from aperture.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from aperture.cli import data_paths
 from aperture.config import Config, ConfigError
 from aperture.data.base import BarSpan, MarketData, MarketDataError
@@ -131,6 +135,22 @@ def _require_symbol(symbol: str) -> None:
 # chart-limit (C2)
 # --------------------------------------------------------------------------------------------
 
+NO_SESSION_CAUSES = frozenset({CalendarCause.WEEKEND, CalendarCause.HOLIDAY})
+
+
+def _refuse_in_regular_session(cfg: Config, at: datetime) -> None:
+    """Outside the regular session only. A calendar that cannot answer is a refusal too."""
+    try:
+        day = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent).day_at(at)
+    except CalendarRefused as exc:
+        if exc.cause in NO_SESSION_CAUSES:
+            return
+        raise ProbeRefused(f"the calendar cannot say whether the regular session is on: "
+                           f"{exc.cause}: {exc.detail}") from exc
+    if day.in_regular_session(at):
+        raise ProbeRefused("the regular session is on: the watchdog may start a bot at any "
+                           "moment, and this probe can pause the bars route it needs")
+
 
 def run_limit_worker(market: MarketData, symbol: str, requests: int, window_seconds: float,
                      start_at: datetime, out: Path, *, now: Clock, sleep: Sleep) -> None:
@@ -178,6 +198,7 @@ def chart_limit(cfg: Config, config_path: Path, symbol: str, *, now: Clock,
     if pid is not None:
         raise ProbeRefused(f"a bot process (pid {pid}) is recorded in the lock; this probe "
                            "sends more than one process may and has no place in its budget")
+    _refuse_in_regular_session(cfg, now())
     probe = cfg.probe
     limit = budget_from_config(cfg).limit_for(Route.BARS.path)
     if probe.chart_limit_requests > limit.max_requests:
@@ -238,6 +259,40 @@ def bot_health(cfg: Config, at: datetime) -> dict[str, Any]:
     }
 
 
+def _refuse_while_exposed(cfg: Config, at: datetime) -> None:
+    """Only next to a bot whose fresh status shows no position and no working order of its own:
+    if the second client costs the bot its broker reads, nothing of ours is then at stake."""
+    path = cfg.root / cfg.run.data_dir / cfg.api.status_file
+    try:
+        status = api.read_status(path)
+    except (OSError, api.ContractError) as exc:
+        raise ProbeRefused(f"the bot's status file cannot be read ({type(exc).__name__}), so "
+                           "it is unknown whether a trade is open") from exc
+    age = (at - status.written_at).total_seconds()
+    if age > cfg.api.status_stale_seconds:
+        raise ProbeRefused(f"the bot's status is {round(age)} s old, so it is unknown whether "
+                           "a trade is open")
+    block = status.entry_block
+    if status.positions or status.position is not None or (
+            block is not None and block.cause == api.OWN_TRADE_OPEN):
+        raise ProbeRefused("the bot has an open position or a working order of its own; run "
+                           "this probe while it is flat")
+    # The status hides a working entry behind an earlier entry block (after the last-entry
+    # time, say), so the bot's last broker read has to agree.
+    try:
+        account = api.read_account(cfg.root / cfg.run.data_dir / cfg.api.account_file)
+    except (OSError, api.ContractError) as exc:
+        raise ProbeRefused(f"the bot's account file cannot be read ({type(exc).__name__}), so "
+                           "it is unknown whether a trade is open") from exc
+    age = (at - account.read_at).total_seconds()
+    if age > cfg.api.account_stale_seconds:
+        raise ProbeRefused(f"the bot's last broker read is {round(age)} s old, so it is "
+                           "unknown whether a trade is open")
+    if account.positions or any(order.ours for order in account.orders):
+        raise ProbeRefused("the broker shows a position or a working order of the bot's; run "
+                           "this probe while it is flat")
+
+
 def client_problems(rows: Sequence[dict[str, Any]], token_changed: bool,
                     status_stale_seconds: Decimal) -> list[str]:
     """Every reason the run does not show a second client living next to the bot."""
@@ -277,6 +332,7 @@ def chart_client(cfg: Config, config_path: Path, symbol: str, *, now: Clock, sle
     if config_path.stat().st_mtime_ns > lock_path.stat().st_mtime_ns:
         raise ProbeRefused(f"{config_path} changed after the bot started; the running bot may "
                            "not have given up the chart's slice of the bars limit")
+    _refuse_while_exposed(cfg, now())
     probe = cfg.probe
     if probe.chart_client_reads <= 1:
         raise ProbeRefused("[probe] chart_client_reads must be above 1")
