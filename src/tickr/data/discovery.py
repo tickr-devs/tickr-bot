@@ -223,12 +223,18 @@ class CaptureSink(Protocol):
     def screener(self, rows: Sequence[ScreenerRow], provider: str, receipt_time: datetime) -> None:
         ...
 
+    def screener_skipped(self, kinds: Sequence[ScreenerKind], cause: str, source: str,
+                         receipt_time: datetime) -> None:
+        ...
+
     def bars(self, bars: Sequence[Bar], provider: str, receipt_time: datetime) -> None: ...
 
     def quotes(self, quotes: Sequence[Quote], provider: str, source: str) -> None: ...
 
 
 SNAPSHOT_SOURCE = "snapshot"
+DISCOVERY_SOURCE = "discovery"  # the `source` of a screener-skipped event written by discovery
+SKIPPED_BUDGET = "budget"  # its `cause` when our request budget was spent
 
 
 def _chunks(items: Sequence[str], size: int) -> list[Sequence[str]]:
@@ -418,12 +424,21 @@ def discover(
     read: list[ScreenerKind] = []
     stopped: Stopped | None = None
 
-    for kind in ScreenerKind:
+    kinds = list(ScreenerKind)
+    for number, kind in enumerate(kinds):
         try:
             got = source.screener(kind)
         except RateLimited as exc:
+            if capture is not None:
+                capture.screener_skipped(kinds[number:], SKIPPED_BUDGET, DISCOVERY_SOURCE,
+                                         clock())
             stopped = Stopped(Stage.SCREENER, StopCause.BUDGET, str(exc))
             break
+        except Exception as exc:
+            if capture is not None:  # the pass fails; the lists it did not get are marked
+                capture.screener_skipped(kinds[number:], type(exc).__name__,
+                                         DISCOVERY_SOURCE, clock())
+            raise
         if capture is not None:
             capture.screener(got, provider, clock())
         rows.extend(got)

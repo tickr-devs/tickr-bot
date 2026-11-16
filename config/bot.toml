@@ -318,6 +318,12 @@ allowed_security_types = ["COMMON_STOCK"]
 profile_symbols_per_request = 100
 # Webull gainers/losers `rank_type` during the regular session (DAY_1 = today's change); read by broker.webull market data.
 gainers_losers_rank_type = "DAY_1"
+# Webull gainers/losers `rank_type` the screener recorder reads in the pre-market (PRE_MARKET = the pre-market's change,
+# 200 rows in tests/fixtures/webull/market_data/screener_gainers_losers_keys.json); read by broker.webull market data.
+premarket_gainers_losers_rank_type = "PRE_MARKET"
+# Webull gainers/losers `rank_type` the screener recorder reads in the post-market (AFTER_MARKET = the post-market's
+# change, 200 rows in the same probe); read by broker.webull market data.
+postmarket_gainers_losers_rank_type = "AFTER_MARKET"
 # Webull top-actives `rank_type` (RELATIVE_VOLUME_10D, as in the 2026-11-10 probe); read by broker.webull market data.
 top_actives_rank_type = "RELATIVE_VOLUME_10D"
 # Symbols per snapshot request (Webull docs: at most 100); read by data.discovery.
@@ -356,9 +362,10 @@ history_cache_max_age_days = 2
 # (universe-filtered), so candidates have it at the open (9:00 ET on a normal day, owner 2026-11-16); 0 = no preload;
 # read by runtime.preload.
 history_preload_minutes_before_open = 30
-# Seconds between two screener reads of the pre-open preload (each adds the symbols not seen yet to its queue); read by
-# runtime.preload.
-history_preload_screener_seconds = 300
+# Seconds between two rounds of the screener recorder (gainers, losers, top actives) in the pre-market and post-market,
+# captured to screener-recorded.jsonl for research; the pre-open preload takes its symbols from these rounds (3 screener
+# requests per round, well inside the route's 30 per minute); read by runtime.screeners.
+screener_record_seconds = 60
 # Seconds the pre-open preload pauses after a budget refusal or a failed read before its next batch; read by
 # runtime.preload.
 history_preload_retry_seconds = 60
@@ -473,16 +480,20 @@ supervisor_poll_seconds = 0.5
 bot_exit_timeout_seconds = 120
 # Seconds after a forwarded SIGTERM before the supervisor alerts "bot did not stop" (must be below bot_exit_timeout_seconds); read by runtime.supervisor.
 stop_alert_after_seconds = 90
-# Preflight job start, Mac local time HH:MM, weekdays below; read by runtime.launchd when rendering plists.
-preflight_start_local = "08:30"
-# Bot job start, Mac local time HH:MM (must be before the 09:30 ET open), weekdays below; read by runtime.launchd.
-bot_start_local = "09:00"
+# Preflight job start, Mac local time HH:MM, before bot_start_local, weekdays below; read by runtime.launchd when rendering plists.
+preflight_start_local = "03:30"
+# Bot job start, Mac local time HH:MM, weekdays below: at the 04:00 ET pre-market open, so the screener lists are recorded
+# from then on (runtime/screeners.py); before the regular open it only reads, it never enters (admission refuses outside
+# the regular session); read by runtime.launchd.
+bot_start_local = "04:00"
 # launchd weekdays for the preflight and bot jobs (1 = Monday ... 5 = Friday); the calendar still decides; read by runtime.launchd.
 launch_weekdays = [1, 2, 3, 4, 5]
 # Watchdog job start, Mac local time HH:MM, same weekdays; it then waits for its calendar-derived checks; read by runtime.launchd.
 watchdog_start_local = "09:05"
 # Nightly backtest-data refresh job start (`python -m tickr.backtest nightly`), Mac local time HH:MM, same weekdays: after the
-# close, so it never shares the market-data budget with the bot; it stops itself before the next open
+# close. Until 20:00 ET it overlaps the bot's post-market screener recording: the screener routes are the bot's alone, but
+# both use the instrument-profile route (the bot only for instruments new that day; a read refused there is a
+# screener-skipped event, never a resend); it stops itself before the next open
 # (config/backtest.toml); read by runtime.launchd.
 nightly_fetch_start_local = "19:00"
 # Rolling folder the nightly job keeps (current/ is what the Lab replays: [api] lab_replay_data_dir must point at it),

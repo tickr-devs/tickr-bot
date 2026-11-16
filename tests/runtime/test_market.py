@@ -11,7 +11,7 @@ from tickr.broker.fake import FakeBroker
 from tickr.broker.webull import MalformedResponse
 from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.config import GateResult
-from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow
+from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow, ScreenerSession
 from tickr.data.capture import DISCOVERY_FILE, CaptureWriter
 from tickr.data.discovery import NoStrategy
 from tickr.data.health import StreamHealth
@@ -256,11 +256,11 @@ def test_discovery_never_runs_outside_the_session(tmp_path):
 class Malformed(FakeMarketData):
     failures = 1
 
-    def screener(self, kind):
+    def screener(self, kind, session=ScreenerSession.REGULAR):
         if self.failures:
             self.failures -= 1
             raise MalformedResponse("screener: missing field")
-        return super().screener(kind)
+        return super().screener(kind, session)
 
 
 def test_discovery_failure_is_journaled_and_retried_next_interval(tmp_path):
@@ -274,7 +274,7 @@ def test_discovery_failure_is_journaled_and_retried_next_interval(tmp_path):
 
 
 class Wordy(FakeMarketData):
-    def screener(self, kind):
+    def screener(self, kind, session=ScreenerSession.REGULAR):
         raise MalformedResponse("screener: " + "x" * 5000)
 
 
@@ -832,3 +832,25 @@ def test_a_truncated_archived_discovery_record_never_stops_the_start(tmp_path):
     (row,) = rig.store.journal(REFUSED_SYMBOLS_UNREAD)
     assert row.body["detail"]
     assert rig.market._refused_symbols.remembered() == ()
+
+
+def test_a_recorder_capture_not_written_is_journaled_and_the_round_not_used(tmp_path):
+    from tickr.data.capture import CaptureError, CaptureWriter
+    from tickr.runtime.market import CAPTURE_FAILED
+
+    class Broken(CaptureWriter):
+        def screener(self, *args, **kwargs):
+            raise CaptureError("screener-recorded.jsonl: disk full")
+
+        def screener_skipped(self, *args, **kwargs):
+            raise CaptureError("events.jsonl: disk full")
+
+    source = FakeMarketData()
+    rig = Rig(tmp_path, source=source, capture=Broken(tmp_path / "capture", source.provider))
+    source.set_screener(ScreenerKind.GAINERS, [
+        ScreenerRow(ScreenerKind.GAINERS, 1, "id-1", "AAA", "NSQ", "USD", None, {})])
+    day = CALENDAR.day(MONDAY_11.date())
+    assert rig.market.record_screeners(day, day.regular_close) is None
+    (row,) = rig.store.journal(CAPTURE_FAILED)
+    assert row.body == {"what": "screener-recorder", "error": "CaptureError",
+                        "detail": "screener-recorded.jsonl: disk full"}

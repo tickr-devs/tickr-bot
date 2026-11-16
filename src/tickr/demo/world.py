@@ -44,7 +44,14 @@ from decimal import ROUND_FLOOR, Decimal
 from tickr.broker.base import Acknowledgement
 from tickr.broker.fake import FakeBroker
 from tickr.calendar import NEW_YORK, MarketDay, ny_date_of
-from tickr.data.base import BarSpan, FakeMarketData, ScreenerKind, ScreenerRow, SessionBar
+from tickr.data.base import (
+    BarSpan,
+    FakeMarketData,
+    ScreenerKind,
+    ScreenerRow,
+    ScreenerSession,
+    SessionBar,
+)
 from tickr.types import Bar, OrderRequest, OrderState, OrderType, Quote, Side
 
 M1 = timedelta(minutes=1)
@@ -388,7 +395,8 @@ class Feed(FakeMarketData):
             if symbol in self.world.today:
                 self.push_quote(self.world.quote(symbol))
 
-    def screener(self, kind: ScreenerKind) -> list[ScreenerRow]:
+    def screener(self, kind: ScreenerKind,
+                 session: ScreenerSession = ScreenerSession.REGULAR) -> list[ScreenerRow]:
         self._call("screener", [kind.value])
         # Ranked like a gainers list: by today's change, best first (losers: worst first).
         listed = [s for s in self.world.screeners[kind]

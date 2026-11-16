@@ -228,8 +228,8 @@ def test_other_failures_and_no_session_block_start(config_path):
 
 
 def test_bad_schedule_is_invalid_config(config_path):
-    text = config_path.read_text("utf-8").replace('bot_start_local = "09:00"',
-                                                  'bot_start_local = "08:00"')
+    text = config_path.read_text("utf-8").replace('bot_start_local = "04:00"',
+                                                  'bot_start_local = "03:00"')
     config_path.write_text(text, "utf-8")
     result = _run(config_path, {})
     assert result.cause is PreflightCause.CONFIG_INVALID

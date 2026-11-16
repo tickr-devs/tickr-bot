@@ -33,6 +33,15 @@ class ScreenerKind(StrEnum):
     TOP_ACTIVES = "TOP_ACTIVES"
 
 
+class ScreenerSession(StrEnum):
+    """Which session's change the gainers and losers rank by: the regular session's (also
+    discovery's), the pre-market's or the post-market's. The top actives have one ranking."""
+
+    REGULAR = "REGULAR"
+    PRE = "PRE"
+    POST = "POST"
+
+
 @dataclass(frozen=True)
 class ScreenerRow:
     """One screener row. `rank` counts from 1 in provider order.
@@ -154,7 +163,8 @@ class MarketData(Protocol):
         """Provider name recorded with every captured record (for example "webull")."""
         ...
 
-    def screener(self, kind: ScreenerKind) -> list[ScreenerRow]: ...
+    def screener(self, kind: ScreenerKind,
+                 session: ScreenerSession = ScreenerSession.REGULAR) -> list[ScreenerRow]: ...
 
     def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
         """Up to `count` most recent M1 bars per symbol, oldest first per symbol.
@@ -262,8 +272,10 @@ class FakeMarketData:
             raise RateLimited(f"fake {method} budget")
         self.calls.append((method, tuple(args)))
 
-    def screener(self, kind: ScreenerKind) -> list[ScreenerRow]:
-        self._call("screener", [kind.value])
+    def screener(self, kind: ScreenerKind,
+                 session: ScreenerSession = ScreenerSession.REGULAR) -> list[ScreenerRow]:
+        self._call("screener", [kind.value] if session is ScreenerSession.REGULAR
+                   else [kind.value, session.value])
         return list(self._rows.get(kind, []))
 
     def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:

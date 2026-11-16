@@ -36,9 +36,13 @@ class Sink:
         self.screener_rows: list = []
         self.bars_seen: list = []
         self.quotes_seen: list = []
+        self.skipped: list = []
 
     def screener(self, rows, provider, receipt_time):
         self.screener_rows.extend(rows)
+
+    def screener_skipped(self, kinds, cause, source, receipt_time):
+        self.skipped.extend((kind, cause, source) for kind in kinds)
 
     def bars(self, bars, provider, receipt_time):
         self.bars_seen.extend(bars)
@@ -209,9 +213,11 @@ def test_screener_budget_reports_partial_screeners():
     md = FakeMarketData()
     md.set_screener(G, [row(G, 1, "A1")])
     md.limit("screener", 1)
-    result = run(md)
+    sink = Sink()
+    result = run(md, sink)
     assert result.screeners_read == (G,)
     assert result.summary() == "evaluated 0 of 1 (screeners 1 of 3): screener budget"
+    assert sink.skipped == [(L, "budget", "discovery"), (A, "budget", "discovery")]
 
 
 def test_delayed_bars_stop_the_pass():

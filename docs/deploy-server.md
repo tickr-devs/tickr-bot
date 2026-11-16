@@ -80,7 +80,7 @@ alert channel is an owner decision (see "Open owner decisions").
 
 ### systemd timers (example)
 
-One service and one timer per job. Times are the `[runtime]` values (08:30, 09:00, 09:05 on
+One service and one timer per job. Times are the `[runtime]` values (03:30, 04:00, 09:05 on
 `launch_weekdays` 1-5), written with an explicit zone. `Persistent=false`: a start missed while
 the server was down is not caught up; start it by hand after reading the log.
 
@@ -100,14 +100,14 @@ ExecStart=/usr/bin/docker compose -f ops/docker/compose.yaml --profile jobs up -
 
 # /etc/systemd/system/tickr-bot.timer
 [Timer]
-OnCalendar=Mon..Fri 09:00 America/New_York
+OnCalendar=Mon..Fri 04:00 America/New_York
 Persistent=false
 
 [Install]
 WantedBy=timers.target
 ```
 
-`tickr-preflight` uses `run --rm preflight` at 08:30 and `tickr-watchdog` uses
+`tickr-preflight` uses `run --rm preflight` at 03:30 and `tickr-watchdog` uses
 `up -d watchdog` at 09:05, otherwise the same. The `User` must be in the `docker` group.
 
 ## Before real money

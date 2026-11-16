@@ -21,7 +21,9 @@ Times in `[runtime]` are the **Mac's local time**. The calendar decides whether 
 session: on weekends, market closures and half days (unless `half_days_enabled`) preflight reports
 "no session today" and the bot job exits without starting the bot. If the Mac is not on New York
 time, check the start times around daylight-saving changes (US and other countries switch on
-different dates); the bot must start before 09:30 ET.
+different dates). The bot starts at the 04:00 ET pre-market open and runs through the
+post-market to the 20:00 ET extended close: outside the regular session it only records the
+screener lists (see "Screener lists outside the regular session") and never enters.
 
 The bot job runs `python -m tickr.runtime run-bot`, which runs preflight again, then starts the
 bot as a child process. launchd stops the job with SIGTERM; the supervisor forwards one SIGTERM to
@@ -138,7 +140,7 @@ All checks are reported; the first failure is the recorded cause.
    put it in the repo or in a plist. To test by hand in Terminal:
    `set -a; . ~/.config/tickr/env; set +a` first.
    **Deadline:** `TICKR_IMESSAGE_TO` must be in this file before the first preflight run
-   (08:30 Mac time on Monday with the default `[runtime] preflight_start_local`). Without it
+   (03:30 Mac time on Monday with the default `[runtime] preflight_start_local`). Without it
    preflight fails with `alert-recipient-missing` and the bot job does not start the bot.
 3. Data and token folders: `mkdir -p data && mkdir -m 700 data/webull-token-sandbox`
    (`[environments.sandbox] token_dir`; `data/webull-token-production` before Production). A folder
@@ -251,7 +253,7 @@ release, the links and the jobs exactly as they were (exit 1, `refused: ...`):
 3. Prepares `<sha>/` (worktree, data link, `uv sync`) and runs its own preflight exactly as the
    preflight job does (the env file sourced by `sh`); refuses unless it passes or says no session
    today, with code version `<sha>`, the release's config and the shared data folder. On a
-   trading day this preflight checks the Webull token like the 08:30 run. On failure only the
+   trading day this preflight checks the Webull token like the scheduled preflight run. On failure only the
    exit code of that step is printed, never the shell's error text (it could quote the
    credentials file).
    **Stop marker:** while the bot is stopped by the operator (`stopped-by-operator`), preflight
@@ -444,8 +446,10 @@ stopped, after the close or on a non-trading day:
 ## The Mac must be awake
 
 launchd runs a calendar job missed during sleep when the Mac wakes, which may be after the open.
-Schedule a wake before the preflight time, for example
-`sudo pmset repeat wakeorpoweron MTWRF 08:20:00` (Mac local time).
+Schedule a wake before the preflight time (`[runtime] preflight_start_local`, 03:30), once:
+`sudo pmset repeat wakeorpoweron MTWRF 03:20:00` (Mac local time). It replaces the earlier
+08:20 wake: `pmset -g sched` shows the one schedule in force. Without it the bot starts only when
+the Mac wakes, and the pre-market screener lists before that are not recorded.
 
 While the bot job and the watchdog job run, each starts `/usr/bin/caffeinate -i -s -w <its own
 pid>` beside itself (in the plist's shell line, before `exec`): a no-sleep assertion that ends
@@ -521,11 +525,25 @@ minute ends first, an `evaluation-stopped` row with stage `candidates-late` and 
 next request and is waited for at most `[runtime] discovery_stop_seconds`.
 
 Before the open (from `[market_data] history_preload_minutes_before_open`, 9:00 ET) the bot
-reads the screeners and loads the prior-session history of their symbols, one batch of up to 20
-symbols per loop pass. Each batch that settled symbols writes a `history-preload` row
-(`symbols`, `loaded`, `refused`, `requests`, `queued`); a failed screener or history read writes
-one with `error` and the preload pauses `history_preload_retry_seconds` (a budget refusal
-pauses silently). History refusals of the strategy's symbols are `history-refused` rows, once a
+loads the prior-session history of the screener recorder's symbols (below), one batch of up to
+20 symbols per loop pass. Each batch that settled symbols writes a `history-preload` row
+(`symbols`, `loaded`, `refused`, `requests`, `queued`); a failed history read writes one with
+`error` and the preload pauses `history_preload_retry_seconds` (a budget refusal pauses
+silently).
+
+### Screener lists outside the regular session
+
+From the pre-market open to the regular open, and from the regular close to the extended close
+(the calendar's hours), the bot reads the gainers, losers and top actives every `[market_data]
+screener_record_seconds`, on the first loop pass of a minute, and appends them as they came to
+`<capture>/<date>/screener-recorded.jsonl` (discovery's own reads in the regular session stay in
+`screener.jsonl`). There the gainers and losers rank by the pre-market's or the post-market's
+change (`[market_data] premarket_gainers_losers_rank_type`, `postmarket_gainers_losers_rank_type`),
+and each record says which in `session`. A list not read, because the request budget was spent or the read failed, is
+written to `events.jsonl` in the same folder as one `screener-skipped` row per list (`kind`,
+`cause` (`budget` or the error's type) and `source` (`recorder` or `discovery`). The same file
+has a `bot-start` and a `bot-stop` row for each run (`run_id`, `code_version`, the stop's
+`cause`), so a gap in the lists can be told apart from a bot that was not running. History refusals of the strategy's symbols are `history-refused` rows, once a
 symbol a day.
 
 When a decision sends an entry (or asks an exit) in the middle of a minute, the symbols left in

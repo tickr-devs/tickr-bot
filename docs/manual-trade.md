@@ -111,9 +111,10 @@ ALL outside the regular session, does a CORE stop placed then get accepted, does
 session ALL fill, and does a SELL stop trigger there. Details: `src/tickr/engine/session_probe.py`.
 
 When: in the pre-market or the post-market (16:00-20:00 ET), at least
-`[probe] extended_end_margin_minutes` before that session ends; it refuses at any other time. In
-the pre-market, finish before 08:30 ET: the pre-start check runs then and launchd starts the bot
-at 09:00, and a probe still holding the lock makes that start fail. The post-market is simpler.
+`[probe] extended_end_margin_minutes` before that session ends; it refuses at any other time. The
+bot job runs from 04:00 ET (`[runtime] bot_start_local`) through the post-market, recording the
+screener lists, so either session needs it stopped and kept from restarting (step 1); afterwards
+restart it the same day, or the rest of that day's lists are not recorded.
 
 It never sends a SELL while an earlier order of the run is not proven finished, and takes every
 SELL quantity from the broker's positions. If an order stays working after its cancel or Detail
@@ -122,8 +123,11 @@ a sleeping Mac sends no close either: keep the Mac awake and watch the run. The 
 not the bot's trades, so on that day the broker's Day P&L differs from the bot's realized result
 by the probe's result (a few cents).
 
-1. Stop the bot (it must not hold the lock; the probe holds it for its whole run, so launchd
-   cannot start the bot next to it). The account must be flat: no position, no open order.
+1. Stop the bot and keep its job from starting (it must not hold the lock; the probe holds it
+   for its whole run): "Stopping the bot safely" in operations.md, then
+   `launchctl disable gui/$(id -u)/local.tickr.bot`. The account must be flat: no position, no
+   open order. After step 5: `launchctl enable gui/$(id -u)/local.tickr.bot` and
+   `launchctl kickstart gui/$(id -u)/local.tickr.bot`.
 2. Pick a liquid common stock priced under `[probe] max_price_usd` that trades in this session
    (a top pre-market gainer or a large name), and check its quote: `tickr check-quote SYM`.
    A STALE answer means snapshot quotes are not live in this session; that is a finding too.
@@ -145,7 +149,7 @@ chat at the end; an agent then writes webull-facts.md and the fixtures from them
 
 1. The manual commands and the bot service share one lock and one database: `tickr trade`
    refuses while `tickr run` holds the lock. If the launchd jobs are installed, keep the
-   bot job from starting today, before its `[runtime] bot_start_local` (09:00 Mac local time):
+   bot job from starting today, before its `[runtime] bot_start_local` (04:00 Mac local time):
 
    ```
    launchctl disable gui/$(id -u)/local.tickr.bot

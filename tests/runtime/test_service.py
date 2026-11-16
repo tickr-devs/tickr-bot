@@ -346,6 +346,52 @@ def test_cli_run_stops_on_sigterm(tmp_path, monkeypatch):
     store.close()
 
 
+def test_cli_run_marks_its_start_and_stop_in_the_capture(tmp_path, monkeypatch):
+    from tickr.data.capture import EVENTS_FILE, CaptureWriter
+    bot_toml = copy_config(tmp_path)
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    cfg = config.load(bot_toml)
+    capture = CaptureWriter.from_config(cfg, FakeMarketData().provider)
+    path = capture.path(MONDAY_11.astimezone(NEW_YORK).date(), EVENTS_FILE)
+    events = [json.loads(x) for x in path.read_text("utf-8").splitlines()]
+    assert [e["event"] for e in events] == ["bot-start", "bot-stop"]
+    assert events[0]["run_id"] == events[1]["run_id"]
+    assert events[1]["cause"] == "stopped (SIGTERM)"
+
+
+def test_a_bot_start_marker_not_written_never_keeps_the_bot_from_running(tmp_path,
+                                                                         monkeypatch):
+    from tickr.data.capture import CaptureError, CaptureWriter
+    from tickr.runtime.market import CAPTURE_FAILED
+    bot_toml = copy_config(tmp_path)
+    monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
+        FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    passes = []
+
+    def sleep(seconds):
+        passes.append(seconds)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    def refuse(self, name, at, **fields):
+        raise CaptureError(f"events.jsonl: disk full ({name})")
+
+    monkeypatch.setattr(cli, "SLEEP", sleep)
+    monkeypatch.setattr(CaptureWriter, "event", refuse)
+    assert cli.main(["--config", str(bot_toml), "run"]) == 0
+    assert passes  # the loop ran
+    database, _ = cli.data_paths(config.load(bot_toml))
+    store = Store.open(database, busy_timeout_seconds=0)
+    (row,) = store.journal(CAPTURE_FAILED)
+    assert row.body["what"] == "bot-start" and row.body["error"] == "CaptureError"
+    assert store.last_run()["end_cause"] == "stopped (SIGTERM)"
+    store.close()
+
+
 def test_cli_run_without_a_loadable_strategy_protects_but_never_enters(tmp_path, monkeypatch):
     bot_toml = copy_config(tmp_path)
     strategy_toml = tmp_path / "strategies" / CFG.strategy.active / "strategy.toml"
@@ -987,7 +1033,7 @@ def test_a_missing_calendar_is_a_real_block(tmp_path):
 def test_positions_and_watch_are_evaluated_before_discovery_starts(tmp_path):
     """The real market runtime and evaluator in the service loop: the WATCH symbol's decision
     comes before discovery's first screener read of the minute."""
-    from tickr.data.base import ScreenerKind
+    from tickr.data.base import ScreenerKind, ScreenerSession
     from tickr.data.health import StreamHealth
     from tickr.data.history import HistoryReader, HistorySettings
     from tickr.data.todaybars import TodayBars
@@ -1001,9 +1047,9 @@ def test_positions_and_watch_are_evaluated_before_discovery_starts(tmp_path):
     events: list[str] = []
 
     class Source(FakeMarketData):
-        def screener(self, kind: ScreenerKind):
+        def screener(self, kind: ScreenerKind, session=ScreenerSession.REGULAR):
             events.append(f"screener {kind}")
-            return super().screener(kind)
+            return super().screener(kind, session)
 
     class Watching:
         name, version = CFG.strategy.active, "1"

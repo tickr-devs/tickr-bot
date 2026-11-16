@@ -11,7 +11,16 @@ are strings (never floats); times are ISO-8601 UTC. Every record carries `provid
   whose values changed is written again (a provider revision is evidence, not noise).
   `export_replay_bars` turns a captured file into a file the replay tool loads.
 - quotes.jsonl: Quote fields plus `provider` and `source` ("snapshot" or "stream").
-- screener.jsonl: kind, rank, typed identity fields and the complete provider row `fields`.
+- screener.jsonl: kind, rank, typed identity fields and the complete provider row `fields`,
+  as discovery read them (the api splits this file into discovery passes).
+- screener-recorded.jsonl: the same records plus `session` (PRE or POST: the change the
+  gainers and losers rank by) for the screener reads outside discovery: the recorder's reads
+  in the pre-market (the pre-open preload uses them) and the post-market (runtime.screeners).
+  Together the two files hold every screener list the bot received.
+- events.jsonl: what the screener files cannot show by themselves: `screener-skipped` (a kind
+  not read: `kind`, `cause` such as "budget" or the error type, `source`), `bot-start` and
+  `bot-stop` (with the run's end `cause`), so a gap in the lists is either marked or is a time
+  the bot was not running.
 - discovery.jsonl: one line per discovery pass (`tickr.data.discovery.pass_record`): every
   instrument's outcome (candidate, refused with cause and measured value, or not reached) and
   the active strategy's fast movers, with `provider` and `receipt_time` (the pass's end). Read
@@ -37,7 +46,7 @@ from typing import IO, Any
 from tickr.archive import GZ_SUFFIX, open_text
 from tickr.calendar import ny_date_of
 from tickr.config import Config
-from tickr.data.base import ScreenerRow, StreamNotice
+from tickr.data.base import ScreenerKind, ScreenerRow, ScreenerSession, StreamNotice
 from tickr.replay.bars import BAR_KEYS, parse_bar
 from tickr.replay.errors import BarFileError
 from tickr.types import Bar, Quote
@@ -47,6 +56,11 @@ BARS_FILE = "bars.jsonl"
 QUOTES_FILE = "quotes.jsonl"
 NOTICES_FILE = "notices.jsonl"
 DISCOVERY_FILE = "discovery.jsonl"
+SCREENER_RECORDED_FILE = "screener-recorded.jsonl"
+EVENTS_FILE = "events.jsonl"
+SCREENER_SKIPPED = "screener-skipped"
+BOT_START = "bot-start"
+BOT_STOP = "bot-stop"
 NOTICE_STATUS_TYPE = "1001"
 STREAM_SOURCE = "stream"
 CAPTURE_KEYS = frozenset({"provider", "receipt_time"})
@@ -158,11 +172,29 @@ class CaptureWriter:
             del self._bars_written[old]
 
     # -- discovery CaptureSink
-    def screener(self, rows: Sequence[ScreenerRow], provider: str, receipt_time: datetime) -> None:
+    def screener(self, rows: Sequence[ScreenerRow], provider: str, receipt_time: datetime,
+                 *, file: str = SCREENER_FILE, session: ScreenerSession | None = None) -> None:
+        """Discovery's records (screener.jsonl, the exact keys api.flow reads), or with
+        `session` the recorder's, which also state the session the lists rank by."""
         day = _day(receipt_time)
         records = [screener_record(r, provider, receipt_time) for r in rows]
+        if session is not None:
+            records = [{**r, "session": session.value} for r in records]
         with self._lock:
-            self._append(day, SCREENER_FILE, records)
+            self._append(day, file, records)
+
+    def screener_skipped(self, kinds: Sequence[ScreenerKind], cause: str, source: str,
+                         receipt_time: datetime) -> None:
+        """One `screener-skipped` event per kind not read."""
+        for kind in kinds:
+            self.event(SCREENER_SKIPPED, receipt_time, kind=kind.value, cause=cause,
+                       source=source)
+
+    def event(self, name: str, at: datetime, **fields: str) -> None:
+        """One line of events.jsonl."""
+        line = {"event": name, **fields, "provider": self._provider, "receipt_time": _time(at)}
+        with self._lock:
+            self._append(_day(at), EVENTS_FILE, [line])
 
     def bars(self, bars: Sequence[Bar], provider: str, receipt_time: datetime) -> None:
         day = _day(receipt_time)

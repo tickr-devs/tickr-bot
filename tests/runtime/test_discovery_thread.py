@@ -10,7 +10,7 @@ from decimal import Decimal as D
 
 from tickr.broker.webull import MalformedResponse
 from tickr.calendar import NEW_YORK
-from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow
+from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow, ScreenerSession
 from tickr.engine.core import Leg
 from tickr.runtime import service
 from tickr.runtime.evaluation import EVALUATION_STOPPED
@@ -36,14 +36,14 @@ class Gate(FakeMarketData):
         self.error: Exception | None = None
         self.blocked = False
 
-    def screener(self, kind: ScreenerKind) -> list[ScreenerRow]:
+    def screener(self, kind: ScreenerKind, session=ScreenerSession.REGULAR) -> list[ScreenerRow]:
         if not self.blocked:
             self.blocked = True
             self.entered.set()
             assert self.release.wait(HANG)
             if self.error is not None:
                 raise self.error
-        return super().screener(kind)
+        return super().screener(kind, session)
 
 
 class Threads:
@@ -228,11 +228,11 @@ class GateOver:
         self.entered = threading.Event()
         self.release = threading.Event()
 
-    def screener(self, kind: ScreenerKind) -> list[ScreenerRow]:
+    def screener(self, kind: ScreenerKind, session=ScreenerSession.REGULAR) -> list[ScreenerRow]:
         if not self.entered.is_set():
             self.entered.set()
             assert self.release.wait(HANG)
-        return self.inner.screener(kind)
+        return self.inner.screener(kind, session)
 
     def __getattr__(self, name: str):
         return getattr(self.inner, name)

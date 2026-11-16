@@ -40,9 +40,9 @@ from decimal import Decimal
 from typing import Protocol
 
 from tickr.broker.base import BrokerError
-from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar
+from tickr.calendar import NEW_YORK, CalendarRefused, MarketDay, SessionCalendar
 from tickr.config import Config
-from tickr.data.base import MarketData, MarketDataError
+from tickr.data.base import MarketData, MarketDataError, ScreenerRow
 from tickr.data.history import HistoryRead, HistoryReader, SessionHistory
 from tickr.data.todaybars import TodayBars
 from tickr.engine.core import Engine, Leg
@@ -81,6 +81,10 @@ class CandidateSource(Protocol):
 
     def candidates(self) -> list[str]:
         """The latest discovery's candidate symbols, best first."""
+        ...
+
+    def record_screeners(self, day: MarketDay, now: datetime) -> list[ScreenerRow] | None:
+        """Outside the regular session: one screener round when due (runtime.screeners)."""
         ...
 
 
@@ -186,9 +190,11 @@ class Evaluator:
         except CalendarRefused:
             return
         if now < day.regular_open:
-            self.preload.tick(day, now)  # reads only; nothing before the open decides
+            # Reads only; nothing before the open decides.
+            self.preload.tick(day, now, market.record_screeners(day, now))
             return
         if not day.in_regular_session(now):
+            market.record_screeners(day, now)
             return
         bar_start = now.replace(second=0, microsecond=0) - M1
         if bar_start >= day.regular_open and bar_start != self._last_bar:

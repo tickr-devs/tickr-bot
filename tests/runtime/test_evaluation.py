@@ -32,6 +32,7 @@ from tickr.runtime.evaluation import (
 )
 from tickr.runtime.market import StreamInbox
 from tickr.runtime.preload import PRELOAD
+from tickr.runtime.screeners import ScreenerRecorder
 from tickr.store import Store
 from tickr.strategy.base import Check, Decision, SymbolContext, Verdict
 from tickr.types import Bar, Quote
@@ -61,10 +62,14 @@ def prior_bars(symbol: str) -> list[Bar]:
 class Market:
     """The evaluation's view of runtime.market: fixed candidates, discovery passes counted."""
 
-    def __init__(self, symbols, on_discover=None) -> None:
+    def __init__(self, symbols, on_discover=None, recorder=None) -> None:
         self.symbols = list(symbols)
         self.discovered = 0
         self.on_discover = on_discover
+        self.recorder = recorder  # runtime.screeners.ScreenerRecorder, or none outside tests of it
+
+    def record_screeners(self, day, now):
+        return None if self.recorder is None else self.recorder.tick(day, now)
 
     def discover(self) -> None:
         self.discovered += 1
@@ -564,15 +569,17 @@ def test_preload_loads_screener_history_before_the_open_in_bounded_batches(tmp_p
         rig.source.add_bars(prior_bars(symbol))
     screener(rig, symbols)
     screener(rig, ["ETF1"], ScreenerKind.TOP_ACTIVES, security="ETF")  # not in the universe
+    market = Market([], recorder=ScreenerRecorder(CFG, rig.source, None))
     rig.now = PRE
-    rig.evaluator.tick(Market([]))
-    assert rig.source.calls == []  # before the window: nothing
-    rig.now += timedelta(seconds=1)  # 09:00:00
-    rig.evaluator.tick(Market([]))
-    assert [n for n, _ in rig.source.calls] == ["screener"] * 3  # this pass: screeners only
+    rig.evaluator.tick(market)
+    # Before the window the recorder reads its pre-market round; nothing is queued.
+    assert [n for n, _ in rig.source.calls] == ["screener"] * 3
+    rig.now += timedelta(seconds=1)  # 09:00:00, the recorder's next round
+    rig.evaluator.tick(market)
+    assert [n for n, _ in rig.source.calls] == ["screener"] * 6  # this pass: screeners only
     for _ in range(3):
         rig.now += timedelta(seconds=1)
-        rig.evaluator.tick(Market([]))
+        rig.evaluator.tick(market)
     loads = bars_calls(rig, "bars_before")
     assert [len(c) for c in loads] == [20, 5]  # one batch per pass, then nothing left
     assert rig.source.bars_reserves == [CFG.market_data.discovery_bars_reserve_requests] * 2
@@ -593,24 +600,28 @@ def test_preload_pauses_after_a_budget_refusal_and_stops_at_the_open(tmp_path):
     rig.source.add_bars(prior_bars("AAA"))
     screener(rig, ["AAA"])
     rig.source.limit("bars_before", 0)
+    market = Market([], recorder=ScreenerRecorder(CFG, rig.source, None))
     rig.now = datetime(2026, 11, 16, 9, 10, tzinfo=NEW_YORK)
-    rig.evaluator.tick(Market([]))  # screeners
+    rig.evaluator.tick(market)  # screeners
     rig.now += timedelta(seconds=1)
-    rig.evaluator.tick(Market([]))  # refused by the budget: no row, a pause
+    rig.evaluator.tick(market)  # refused by the budget: no row, a pause
     rig.now += timedelta(seconds=1)
-    rig.evaluator.tick(Market([]))
+    rig.evaluator.tick(market)
     assert rig.store.journal(PRELOAD) == []
     rig.source.limit("bars_before", 100)
     assert bars_calls(rig, "bars_before") == []
     rig.now += timedelta(seconds=float(CFG.market_data.history_preload_retry_seconds))
-    rig.evaluator.tick(Market([]))
+    rig.evaluator.tick(market)  # the recorder's next round takes this pass
+    rig.evaluator.tick(market)
     assert bars_calls(rig, "bars_before") == [("AAA",)]
     assert rig.store.journal(PRELOAD)[-1].body["loaded"] == 1
     screener(rig, ["BBB"])
     rig.source.add_bars(prior_bars("BBB"))
+    screens = [n for n, _ in rig.source.calls].count("screener")
     rig.now = OPEN  # the window ends at the open, whatever is queued
-    rig.evaluator.tick(Market([]))
-    assert [n for n, _ in rig.source.calls].count("screener") == 3
+    rig.evaluator.tick(market)
+    assert [n for n, _ in rig.source.calls].count("screener") == screens  # discovery's job now
+    assert bars_calls(rig, "bars_before") == [("AAA",)]
 
 
 def test_positions_and_watch_are_decided_before_discovery_runs(tmp_path):

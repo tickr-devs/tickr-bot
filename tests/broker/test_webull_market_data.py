@@ -20,6 +20,7 @@ from tickr.broker.base import RateLimited
 from tickr.broker.budget import RequestBudget, RouteLimit
 from tickr.broker.webull import (
     ACCOUNT_FREE_ROUTES,
+    AdapterConfigError,
     BrokerReadFailed,
     MalformedResponse,
     Route,
@@ -31,7 +32,13 @@ from tickr.broker.webull import (
     read_screener,
     read_snapshot,
 )
-from tickr.data.base import DelayedData, MarketData, MarketDataError, ScreenerKind
+from tickr.data.base import (
+    DelayedData,
+    MarketData,
+    MarketDataError,
+    ScreenerKind,
+    ScreenerSession,
+)
 from tickr.data.discovery import DiscoverySettings, merge, universe_cause
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "webull" / "market_data"
@@ -162,6 +169,27 @@ def test_screener_routes_params_and_profile_types():
     assert routes[3] == (Route.TOP_ACTIVES,
                          {"category": "US_STOCK", "rank_type": "RELATIVE_VOLUME_10D"})
     assert [r for r, _ in routes].count(Route.PROFILES) == 3
+
+
+def test_gainers_and_losers_rank_by_the_session_asked():
+    transport = Scripted(ok([]), ok([]), ok([]))
+    budget = RequestBudget(RouteLimit(30, 60, 60), clock=lambda: 0.0)
+    md = WebullMarketData(transport, budget, "US_STOCK", "DAY_1", "RELATIVE_VOLUME_10D", 100,
+                          utc_now=lambda: NOW,
+                          extended_rank_types={ScreenerSession.PRE: "PRE_MARKET",
+                                               ScreenerSession.POST: "AFTER_MARKET"})
+    md.screener(ScreenerKind.GAINERS, ScreenerSession.PRE)
+    md.screener(ScreenerKind.LOSERS, ScreenerSession.POST)
+    md.screener(ScreenerKind.TOP_ACTIVES, ScreenerSession.PRE)  # one ranking only
+    assert [p.get("rank_type") for _, p in transport.sent] == [
+        "PRE_MARKET", "AFTER_MARKET", "RELATIVE_VOLUME_10D"]
+
+
+def test_a_session_without_a_rank_type_is_refused_before_any_request():
+    md, transport = adapter()
+    with pytest.raises(AdapterConfigError, match="PRE"):
+        md.screener(ScreenerKind.GAINERS, ScreenerSession.PRE)
+    assert transport.sent == []
 
 
 def test_profile_cache_resets_on_a_new_new_york_day_and_chunks():
