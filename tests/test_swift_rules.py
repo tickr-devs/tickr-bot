@@ -493,3 +493,18 @@ def test_loop_rule_allows_a_decorative_marker(tmp_path):
         "scroll.repeatCount = .infinity\n"
     )
     assert load().loop_violations(write(tmp_path, source)) == []
+
+
+def test_truncation_rule_flags_modifiers_that_cut_or_shrink_text(tmp_path):
+    source = (
+        "Text(title).lineLimit(1)\n"
+        "  .truncationMode(.middle)\n"
+        "  .minimumScaleFactor(0.7)\n"
+        "  .allowsTightening(true)\n"
+        "  .lineLimit(typeSize.large ? nil : 2)\n"
+        "// .lineLimit(1) in a comment\n"
+        "Text(title).fixedSize()\n"
+        "Text(verbatim: \".lineLimit(1)\")\n"
+    )
+    found = load().truncation_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5]
