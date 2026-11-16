@@ -87,6 +87,9 @@
                   },
                   "note": {
                     "type": "string"
+                  },
+                  "against_trigger": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -167,9 +170,6 @@
                 "type": "null"
               }
             ]
-          },
-          "against_trigger": {
-            "type": "boolean"
           },
           "closeness_cause_codes": {
             "type": "array",

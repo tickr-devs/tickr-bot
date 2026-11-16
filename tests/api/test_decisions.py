@@ -262,9 +262,9 @@ def test_decisions_of_a_symbol(api, cfg):
     ]
     assert body["decisions"][0]["checks"] == [
         {"rule": "bars_consistent", "measured": None, "operator": "is", "threshold": None,
-         "passed": False, "note": "own symbol, increasing start"},
+         "passed": False, "note": "own symbol, increasing start", "against_trigger": False},
         {"rule": "relative_volume", "measured": "2.4", "operator": ">=", "threshold": "1.5",
-         "passed": True, "note": ""}]
+         "passed": True, "note": "", "against_trigger": False}]
     assert body["decisions"][1]["strategy"] == {"name": "price-action-v1", "version": "1"}
 
 

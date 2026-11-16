@@ -115,6 +115,9 @@
           },
           "note": {
             "type": "string"
+          },
+          "against_trigger": {
+            "type": "boolean"
           }
         },
         "required": [

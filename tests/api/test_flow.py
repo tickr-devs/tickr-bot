@@ -94,6 +94,9 @@ def test_closeness_is_null_with_a_cause_when_it_cannot_be_computed(decisive, cau
     assert closeness(decisive, 4) == (None, cause)
 
 
+TRIGGER_CHECK = "ask_above_trigger"
+
+
 @pytest.mark.parametrize(("measured", "operator", "trigger", "invalidation", "expected"), [
     # Long: ask below the trigger, scaled from the invalidation (0) to the trigger (1), not
     # from zero (57.10 / 57.11 would read 0.9998, a full bar 0.01 short of the trigger).
@@ -106,34 +109,41 @@ def test_closeness_is_null_with_a_cause_when_it_cannot_be_computed(decisive, cau
 ])
 def test_closeness_against_the_trigger_runs_from_the_invalidation(measured, operator, trigger,
                                                                   invalidation, expected):
-    decisive = check(measured, operator, trigger)
-    assert closeness(decisive, 4, Decimal(trigger), Decimal(invalidation)) == (
-        Decimal(expected), None)
+    decisive = check(measured, operator, trigger, TRIGGER_CHECK)
+    assert closeness(decisive, 4, Decimal(invalidation)) == (Decimal(expected), None)
 
 
-@pytest.mark.parametrize(("decisive", "trigger", "invalidation", "cause"), [
-    (check("57.10", ">", "57.11"), "57.11", None,
-     "r: no invalidation recorded to measure the trigger from"),
-    (check("57.10", ">", "57.11"), "57.11", "57.20",
-     "r: the invalidation is not on the far side of the trigger"),
-    (check("57.10", ">", "57.11"), "57.11", "57.11",
-     "r: the invalidation is not on the far side of the trigger"),
-    (check("10.20", "<", "10.00"), "10.00", "9.80",
-     "r: the invalidation is not on the far side of the trigger"),
-    (check("56.70", ">", "57.11"), "57.11", "56.80", "r: measured is past the invalidation"),
-    (check("57.12", ">", "57.11"), "57.11", "56.80",
-     "r: recorded as failed but measured meets the threshold"),
+@pytest.mark.parametrize(("decisive", "invalidation", "cause"), [
+    (check("57.10", ">", "57.11", TRIGGER_CHECK), None,
+     f"{TRIGGER_CHECK}: no invalidation recorded to measure the trigger from"),
+    (check("57.10", ">", "57.11", TRIGGER_CHECK), "57.20",
+     f"{TRIGGER_CHECK}: the invalidation is not on the far side of the trigger"),
+    (check("57.10", ">", "57.11", TRIGGER_CHECK), "57.11",
+     f"{TRIGGER_CHECK}: the invalidation is not on the far side of the trigger"),
+    (check("10.20", "<", "10.00", TRIGGER_CHECK), "9.80",
+     f"{TRIGGER_CHECK}: the invalidation is not on the far side of the trigger"),
+    (check("56.70", ">", "57.11", TRIGGER_CHECK), "56.80",
+     f"{TRIGGER_CHECK}: measured is past the invalidation"),
+    (check("57.12", ">", "57.11", TRIGGER_CHECK), "56.80",
+     f"{TRIGGER_CHECK}: recorded as failed but measured meets the threshold"),
 ])
-def test_closeness_against_the_trigger_is_null_with_a_cause(decisive, trigger, invalidation,
-                                                             cause):
+def test_closeness_against_the_trigger_is_null_with_a_cause(decisive, invalidation, cause):
     level = None if invalidation is None else Decimal(invalidation)
-    assert closeness(decisive, 4, Decimal(trigger), level) == (None, cause)
+    assert closeness(decisive, 4, level) == (None, cause)
 
 
-def test_closeness_of_a_check_not_against_the_trigger_stays_measured_from_zero():
-    # trigger_confirmation (a count) in a decision that also recorded a trigger.
-    decisive = check("1", ">=", "2", "trigger_confirmation")
-    assert closeness(decisive, 4, Decimal("57.11"), Decimal("56.80")) == (Decimal("0.5000"), None)
+def test_a_check_is_against_the_trigger_by_its_rule_never_by_its_values():
+    # A count whose threshold happens to equal the trigger's number stays a count, measured
+    # from zero; the real trigger check with the same numbers is a price range.
+    count = check("1", ">=", "2", "trigger_confirmation")
+    assert closeness(count, 4, Decimal("0")) == (Decimal("0.5000"), None)
+    assert not contract.check_v1(count).against_trigger
+    trigger = check("1", ">=", "2", TRIGGER_CHECK)
+    assert closeness(trigger, 4, Decimal("0")) == (Decimal("0.5000"), None)
+    assert closeness(trigger, 4, Decimal("0.5")) == (Decimal("0.3333"), None)
+    assert closeness(count, 4, Decimal("0.5")) == (Decimal("0.5000"), None)
+    assert contract.check_v1(trigger).against_trigger
+    assert contract.shown_check(trigger, 4).against_trigger
 
 
 # ---------------------------------------------------------------- GET /watching
@@ -147,7 +157,7 @@ def test_watching_lists_only_latest_watch_per_symbol_closest_first(api, cfg):
     near = check("12.33", ">", "12.35", "ask_above_trigger")
     _write(DecisionLog.from_config(cfg),
            _watch("ABCD", 0, PASS, check("1", ">=", "2")),
-           _watch("ABCD", 4, PASS, near),  # latest ABCD
+           _levels(_watch("ABCD", 4, PASS, near), "12.35", "12.10"),  # latest ABCD
            _watch("WXYZ", 1, FAIL, verdict=Verdict.IGNORE),
            _watch("FLAG", 2, FLAG, verdict=Verdict.IGNORE),
            _watch("PASS", 3, PASS),  # a WATCH without a quote: nothing failed
@@ -161,12 +171,12 @@ def test_watching_lists_only_latest_watch_per_symbol_closest_first(api, cfg):
     assert body["day"] == DAY.isoformat() and body["total"] == 2
     assert [(r["symbol"], r["verdict"], r["closeness"], r["closeness_cause"])
             for r in body["rows"]] == [
-        ("ABCD", "WATCH", "0.9983", None),
+        ("ABCD", "WATCH", "0.9200", None),
         ("PASS", "WATCH", None, "every recorded check passed")]
     first = body["rows"][0]
     assert first["decisive_check"] == {"rule": "ask_above_trigger", "measured": "12.33",
                                        "operator": ">", "threshold": "12.35", "passed": False,
-                                       "note": ""}
+                                       "note": "", "against_trigger": True}
     assert first["at"] == "2026-11-16T15:04:00.000Z"
     assert first["strategy"] == {"name": ACTIVE[0], "version": ACTIVE[1]}
     assert (first["quote_age_seconds"], first["quote_age_cause"]) == (None, NOT_RECORDED)
@@ -181,22 +191,26 @@ def _levels(record, trigger, invalidation):
 
 def test_watching_rows_carry_the_trigger_and_measure_from_the_invalidation():
     near = check("57.10", ">", "57.11", "ask_above_trigger")
+    # A count whose threshold equals the trigger's number: still a count, not a price range.
+    count = check("1", ">=", "2", "trigger_confirmation")
     records = (_levels(_watch("ABCD", 0, PASS, near), "57.11", "56.80"),
                _levels(_watch("NOQT", 1, PASS), "9.63", "9.24"),  # WATCH without a quote
-               _levels(_watch("CONF", 2, PASS, check("1", ">=", "2", "trigger_confirmation")),
-                       "12.35", "12.00"))
+               _levels(_watch("CONF", 2, PASS, count), "2", "0.5"))
     rows = {r.symbol: r for r in contract.watching_document(DAY, records, 4, 4).rows}
     abcd = rows["ABCD"]
-    assert (abcd.closeness, abcd.trigger, abcd.invalidation, abcd.against_trigger) == (
-        Decimal("0.9677"), Decimal("57.11"), Decimal("56.80"), True)
+    assert (abcd.closeness, abcd.trigger, abcd.invalidation) == (
+        Decimal("0.9677"), Decimal("57.11"), Decimal("56.80"))
+    assert abcd.decisive_check is not None and abcd.decisive_check.against_trigger
     noqt = rows["NOQT"]
-    assert (noqt.closeness, noqt.closeness_cause, noqt.trigger, noqt.against_trigger) == (
-        None, "every recorded check passed", Decimal("9.63"), False)
+    assert (noqt.closeness, noqt.closeness_cause, noqt.trigger, noqt.decisive_check) == (
+        None, "every recorded check passed", Decimal("9.63"), None)
     conf = rows["CONF"]
-    assert (conf.closeness, conf.against_trigger) == (Decimal("0.5000"), False)
+    assert conf.closeness == Decimal("0.5000")  # 1 / 2 from zero, not (1 - 0.5) / (2 - 0.5)
+    assert conf.decisive_check is not None and not conf.decisive_check.against_trigger
     raw = contract.to_jsonable(contract.watching_document(DAY, records[:1], 4, 4))["rows"][0]
-    assert (raw["trigger"], raw["invalidation"], raw["against_trigger"]) == (
+    assert (raw["trigger"], raw["invalidation"], raw["decisive_check"]["against_trigger"]) == (
         "57.11", "56.80", True)
+    assert "against_trigger" not in raw
 
 
 def test_watching_lists_every_symbol_and_ties_go_by_symbol():

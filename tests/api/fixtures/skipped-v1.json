@@ -29,7 +29,8 @@
           "operator": ">=",
           "threshold": "1.5",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": false
         },
         {
           "rule": "ask_above_trigger",
@@ -37,7 +38,8 @@
           "operator": ">",
           "threshold": "12.35",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": true
         }
       ],
       "prices_after": [
@@ -119,7 +121,8 @@
           "operator": ">",
           "threshold": "0.9850",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": true
         }
       ],
       "prices_after": [
@@ -192,7 +195,8 @@
           "operator": ">",
           "threshold": "5.25",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": true
         }
       ],
       "prices_after": [],

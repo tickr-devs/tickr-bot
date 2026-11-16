@@ -16,7 +16,8 @@
         "operator": ">",
         "threshold": "12.35",
         "passed": false,
-        "note": ""
+        "note": "",
+        "against_trigger": true
       },
       "closeness": "0.9200",
       "closeness_cause": null,
@@ -24,7 +25,6 @@
       "quote_age_cause": "not recorded: decision records hold no quote time",
       "trigger": "12.35",
       "invalidation": "12.10",
-      "against_trigger": true,
       "closeness_cause_codes": [],
       "quote_age_cause_codes": [
         {
@@ -47,7 +47,8 @@
         "operator": "<=",
         "threshold": "0.002",
         "passed": false,
-        "note": ""
+        "note": "",
+        "against_trigger": false
       },
       "closeness": "0.6451",
       "closeness_cause": null,
@@ -55,7 +56,6 @@
       "quote_age_cause": "not recorded: decision records hold no quote time",
       "trigger": null,
       "invalidation": null,
-      "against_trigger": false,
       "closeness_cause_codes": [],
       "quote_age_cause_codes": [
         {
@@ -78,7 +78,8 @@
         "operator": "is",
         "threshold": null,
         "passed": false,
-        "note": "own symbol, 0 < bid <= ask"
+        "note": "own symbol, 0 < bid <= ask",
+        "against_trigger": false
       },
       "closeness": null,
       "closeness_cause": "quote_valid: a yes/no check has no measured value",
@@ -86,7 +87,6 @@
       "quote_age_cause": "not recorded: decision records hold no quote time",
       "trigger": null,
       "invalidation": null,
-      "against_trigger": false,
       "closeness_cause_codes": [
         {
           "code": "yes_no_check",

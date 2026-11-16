@@ -874,7 +874,13 @@ records of the active strategy count (observer records are left out); the last o
 `symbol` must be a ticker in upper case, exactly as the bot records it; nothing is normalized.
 
 `checks` are in the order the strategy evaluated them: `measured` `operator` `threshold` and
-`passed`; yes/no rules have operator `"is"` with null `measured` and `threshold`.
+`passed`; yes/no rules have operator `"is"` with null `measured` and `threshold`. Every check
+shape (here and in `/decisions`, `/skipped`, `/symbols`, `/watching`) also has
+`against_trigger` (added later, `false` when absent): `true` for the rules the strategies record
+as a price against their setup's trigger, the threshold being the trigger (`ask_above_trigger`,
+`breakout_close_above_trigger`; `TRIGGER_RULES` in `api/contract.py`). It is set from the
+rule's name, never from the values: a count whose threshold happens to equal the trigger's
+number is not a price. The apps read the side the check needs from its operator.
 `first_failed_check` is the rule of the first check with `passed` false, or null. `admission` is
 `taken` / `refused` for an ENTER that reached admission (`refusal_cause` then holds the single
 `CAUSE: detail`), `not_evaluated` for an ENTER made too late to act on, `not_applicable` for
@@ -1094,9 +1100,7 @@ order evaluated, the same as explain-v1 `first_failed_check`; `null` when every 
 passed, as for a `WATCH` made without a quote), `closeness`, `closeness_cause`,
 `quote_age_seconds`, `quote_age_cause`, and (added later, absent from older documents)
 `trigger` and `invalidation` (the decision's recorded levels as recorded, `null` when it
-recorded none) and `against_trigger` (`true` when the decisive check's threshold is the
-recorded trigger: measured and threshold are then prices, and the apps say which side of the
-trigger the check needs from its operator).
+recorded none).
 
 Check values are rounded the same way in every document that shows checks (`/watching`,
 `/explain`, `/decisions`, `/skipped`): `measured` and `threshold` go to `[api]
@@ -1107,8 +1111,9 @@ recorded, and yes/no checks keep their nulls. `closeness` uses the recorded valu
 
 `closeness` (0..1, rounded down to `[api] watching_closeness_decimal_places`) says how near the
 decisive check is to passing:
-- a check against the trigger (`against_trigger`): where measured sits on the way from the
-  invalidation (0) to the trigger (1), `(measured - invalidation) / (trigger - invalidation)`,
+- a check against the trigger (its `against_trigger`; the threshold is the trigger): where
+  measured sits on the way from the row's `invalidation` (0) to the trigger (1),
+  `(measured - invalidation) / (threshold - invalidation)`,
   defined when the invalidation lies on the side the check moves away from (below the trigger
   for `>` `>=`, above it for `<` `<=`) and measured is not past it. A price is never scaled
   from zero: 57.10 against a trigger of 57.11 is 0.9998 of the trigger but, with the

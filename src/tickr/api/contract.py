@@ -1218,7 +1218,10 @@ class TradeWhatIfV1:
 @dataclass(frozen=True)
 class CheckV1:
     """One rule the strategy evaluated: `measured` `operator` `threshold`. Yes/no rules have
-    operator "is" and null measured and threshold."""
+    operator "is" and null measured and threshold. `against_trigger`: the rule is one the
+    strategies record as a price measured against their setup's trigger (`TRIGGER_RULES`), so
+    measured and threshold are prices and the threshold is the trigger; set from the rule's
+    identity, never from the values."""
 
     rule: str
     measured: Decimal | None
@@ -1226,6 +1229,7 @@ class CheckV1:
     threshold: Decimal | None
     passed: bool
     note: str
+    against_trigger: bool = _added_later(False)
 
 
 @dataclass(frozen=True)
@@ -1249,9 +1253,17 @@ class ExplainV1:
     api_version: int = _const(API_VERSION)
 
 
+# Rules the strategies record as a price measured against their setup's trigger, the
+# threshold being the trigger itself (strategy/price_action_v1.py, reused by v2 and v3):
+# the quote's ask, and the breakout bar's close. Known by name: a check's values never say
+# what it measures.
+TRIGGER_RULES = frozenset({"ask_above_trigger", "breakout_close_above_trigger"})
+
+
 def check_v1(c: Check) -> CheckV1:
     """The explain-v1 check shape, shared by every document that shows checks."""
-    return CheckV1(c.rule, c.measured, c.operator, c.threshold, c.passed, c.note)
+    return CheckV1(c.rule, c.measured, c.operator, c.threshold, c.passed, c.note,
+                   c.rule in TRIGGER_RULES)
 
 
 def checks_of(decision: Decision, places: int | None = None) -> tuple[CheckV1, ...]:
@@ -1758,8 +1770,8 @@ class WatchingRowV1:
     `closeness`: how near that check is to passing, 0..1 (see `closeness`), null with
     `closeness_cause`. `quote_age_seconds`: null with `quote_age_cause` (not recorded).
     `trigger` / `invalidation`: the decision's recorded levels (null when it recorded none).
-    `against_trigger`: the decisive check's threshold is the recorded trigger, so measured and
-    threshold are prices and `closeness` runs from the invalidation (0) to the trigger (1)."""
+    A decisive check `against_trigger` is measured from the invalidation (0) to the trigger
+    (1)."""
 
     symbol: str
     at: datetime
@@ -1772,7 +1784,6 @@ class WatchingRowV1:
     quote_age_cause: str | None
     trigger: Decimal | None = _added_later(None)
     invalidation: Decimal | None = _added_later(None)
-    against_trigger: bool = _added_later(False)
 
     closeness_cause_codes: tuple[ReasonV1, ...] = _reasons_of("closeness_cause")
     quote_age_cause_codes: tuple[ReasonV1, ...] = _reasons_of("quote_age_cause")
@@ -1825,17 +1836,17 @@ BINDING_NOT_RECORDED = ("not proven by the record: the planned loss, the notiona
                         "the daily room")
 
 
-def closeness(check: Check | None, places: int, trigger: Decimal | None = None,
+def closeness(check: Check | None, places: int,
               invalidation: Decimal | None = None) -> tuple[Decimal | None, str | None]:
     """(closeness, None) or (None, cause) for the decisive (failed) check, rounded down to
-    `places`. A check whose threshold is the decision's `trigger` compares prices: closeness
-    is where measured sits from the `invalidation` (0) to the trigger (1),
-    (measured - invalidation) / (trigger - invalidation), with the invalidation on the side
-    the check moves away from (below the trigger for `>` `>=`, above it for `<` `<=`). Any
-    other check is measured from zero: `>` `>=`: measured / threshold (needs threshold > 0
-    and measured >= 0); `<` `<=`: threshold / measured (needs measured > 0 and threshold >= 0).
-    1 is at the threshold; a value above 1 means the record contradicts itself and is
-    refused."""
+    `places`. A check against the trigger (its rule in `TRIGGER_RULES`: a price against the
+    setup's trigger, which is its threshold) is measured from the decision's `invalidation`
+    (0) to the trigger (1), (measured - invalidation) / (threshold - invalidation), with the
+    invalidation on the side the check moves away from (below the trigger for `>` `>=`, above
+    it for `<` `<=`). Any other check is measured from zero: `>` `>=`: measured / threshold
+    (needs threshold > 0 and measured >= 0); `<` `<=`: threshold / measured (needs measured > 0
+    and threshold >= 0). 1 is at the threshold; a value above 1 means the record contradicts
+    itself and is refused."""
     if check is None:
         return None, ALL_CHECKS_PASSED
     measured, threshold = check.measured, check.threshold
@@ -1843,10 +1854,10 @@ def closeness(check: Check | None, places: int, trigger: Decimal | None = None,
         return None, f"{check.rule}: a yes/no check has no measured value"
     if check.operator not in _RISE + _FALL:
         return None, f"{check.rule}: operator {check.operator!r} has no direction"
-    if trigger is not None and threshold == trigger:
+    if check.rule in TRIGGER_RULES:
         if invalidation is None:
             return None, f"{check.rule}: no invalidation recorded to measure the trigger from"
-        span = trigger - invalidation
+        span = threshold - invalidation
         if span == 0 or (span > 0) != (check.operator in _RISE):
             return None, f"{check.rule}: the invalidation is not on the far side of the trigger"
         value = (measured - invalidation) / span
@@ -1887,7 +1898,8 @@ def shown_check(check: Check, places: int) -> CheckV1:
         return value.quantize(step, rounding=way)
 
     return CheckV1(check.rule, shown(check.measured, measured_way), check.operator,
-                   shown(check.threshold, threshold_way), check.passed, check.note)
+                   shown(check.threshold, threshold_way), check.passed, check.note,
+                   check.rule in TRIGGER_RULES)
 
 
 def watching_document(day: date, records: tuple[DecisionRecord, ...], places: int,
@@ -1902,16 +1914,14 @@ def watching_document(day: date, records: tuple[DecisionRecord, ...], places: in
         if d.verdict is not Verdict.WATCH:
             continue
         decisive = d.decisive
-        value, cause = closeness(decisive, places, d.trigger, d.invalidation)
+        value, cause = closeness(decisive, places, d.invalidation)
         rows.append(WatchingRowV1(
             symbol=r.symbol, at=r.bar_start, strategy=StrategyId(d.strategy, d.version),
             verdict=d.verdict,
             decisive_check=None if decisive is None else shown_check(decisive, check_places),
             closeness=value, closeness_cause=cause, quote_age_seconds=None,
             quote_age_cause=QUOTE_AGE_NOT_RECORDED, trigger=d.trigger,
-            invalidation=d.invalidation,
-            against_trigger=(decisive is not None and d.trigger is not None
-                             and decisive.threshold == d.trigger)))
+            invalidation=d.invalidation))
     rows.sort(key=lambda w: (w.closeness is None, -(w.closeness or 0), w.symbol))
     return WatchingV1(day=day, total=len(rows), rows=tuple(rows),
                       latest_size=latest_size(records))

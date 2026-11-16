@@ -104,7 +104,8 @@
           "operator": ">",
           "threshold": "3.98",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": false
         },
         {
           "rule": "relative_volume",
@@ -112,7 +113,8 @@
           "operator": ">=",
           "threshold": "2.0",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": false
         }
       ]
     },
@@ -136,7 +138,8 @@
         "operator": ">",
         "threshold": "5.2",
         "passed": false,
-        "note": ""
+        "note": "",
+        "against_trigger": false
       },
       "detail": null,
       "verdict": "IGNORE",
@@ -174,7 +177,8 @@
           "operator": ">",
           "threshold": "5.2",
           "passed": false,
-          "note": ""
+          "note": "",
+          "against_trigger": false
         }
       ]
     },
@@ -198,7 +202,8 @@
         "operator": "<=",
         "threshold": "0.002",
         "passed": false,
-        "note": ""
+        "note": "",
+        "against_trigger": false
       },
       "detail": null,
       "verdict": null,

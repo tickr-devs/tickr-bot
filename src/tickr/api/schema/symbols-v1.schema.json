@@ -195,6 +195,9 @@
                   },
                   "note": {
                     "type": "string"
+                  },
+                  "against_trigger": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -367,6 +370,9 @@
                 },
                 "note": {
                   "type": "string"
+                },
+                "against_trigger": {
+                  "type": "boolean"
                 }
               },
               "required": [

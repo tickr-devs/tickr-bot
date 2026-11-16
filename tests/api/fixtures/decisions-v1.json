@@ -17,7 +17,8 @@
           "operator": ">",
           "threshold": "12.35",
           "passed": false,
-          "note": ""
+          "note": "",
+          "against_trigger": true
         }
       ],
       "entry_price": null,
@@ -41,7 +42,8 @@
           "operator": ">",
           "threshold": "12.35",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": true
         }
       ],
       "entry_price": "12.40",
@@ -65,7 +67,8 @@
           "operator": ">",
           "threshold": "12.35",
           "passed": true,
-          "note": ""
+          "note": "",
+          "against_trigger": true
         }
       ],
       "entry_price": "12.45",

@@ -419,18 +419,18 @@ def documents() -> dict[str, object]:
             DecisionV1(T0.replace(microsecond=0), Verdict.WATCH,
                        StrategyId("price-action-v1", "1"), False, (
                            CheckV1("ask_above_trigger", Decimal("12.33"), ">",
-                                   Decimal("12.35"), False, ""),), None, None,
+                                   Decimal("12.35"), False, "", True),), None, None,
                        Admission.NOT_APPLICABLE, None, None),
             DecisionV1(T0.replace(microsecond=0) + timedelta(minutes=1), Verdict.ENTER,
                        StrategyId("price-action-v1", "2"), True, (
                            CheckV1("ask_above_trigger", Decimal("12.37"), ">",
-                                   Decimal("12.35"), True, ""),),
+                                   Decimal("12.35"), True, "", True),),
                        Decimal("12.40"), Decimal("12.10"), Admission.NOT_EVALUATED, None,
                        None),
             DecisionV1(T0.replace(microsecond=0) + timedelta(minutes=2), Verdict.ENTER,
                        StrategyId("price-action-v1", "1"), False, (
                            CheckV1("ask_above_trigger", Decimal("12.41"), ">",
-                                   Decimal("12.35"), True, ""),),
+                                   Decimal("12.35"), True, "", True),),
                        Decimal("12.45"), Decimal("12.15"), Admission.REFUSED,
                        LIMIT_CAUSE, contract.refusal_of(LIMIT_CAUSE)))),
         "skipped-v1": SkippedV1(DAY, (
@@ -441,7 +441,7 @@ def documents() -> dict[str, object]:
                                 CheckV1("relative_volume", Decimal("2.4"), ">=",
                                         Decimal("1.5"), True, ""),
                                 CheckV1("ask_above_trigger", Decimal("12.41"), ">",
-                                        Decimal("12.35"), True, "")),
+                                        Decimal("12.35"), True, "", True)),
                             _after(T0 + timedelta(minutes=2), "12.38", "12.44", "12.52", "12.20"),
                             None, WhatIfV1(Decimal("-6.20"), Decimal("-1.0000"),
                                            ExitReason.STOP, None)),
@@ -450,7 +450,7 @@ def documents() -> dict[str, object]:
                             COOLDOWN_CAUSE, contract.refusal_of(COOLDOWN_CAUSE),
                             Decimal("0.9876"), Decimal("0.9512"), (
                                 CheckV1("ask_above_trigger", Decimal("0.9881"), ">",
-                                        Decimal("0.9850"), True, ""),),
+                                        Decimal("0.9850"), True, "", True),),
                             _after(T0 + timedelta(minutes=35), "0.9870", "0.9910", "1.0040",
                                    "0.9950"),
                             None, WhatIfV1(Decimal("17.05"), Decimal("0.4620"),
@@ -459,7 +459,7 @@ def documents() -> dict[str, object]:
                             StrategyId("price-action-v1", "1"), Admission.NOT_EVALUATED, None,
                             None, None, None, (
                                 CheckV1("ask_above_trigger", Decimal("5.31"), ">",
-                                        Decimal("5.25"), True, ""),),
+                                        Decimal("5.25"), True, "", True),),
                             (), "no captured bars for 2026-11-16",
                             WhatIfV1(None, None, None, "no captured bars for 2026-11-16")))),
         "skipped-v1.empty": SkippedV1(DAY - timedelta(days=3), ()),
@@ -495,11 +495,10 @@ def documents() -> dict[str, object]:
         "watching-v1": WatchingV1(DAY, 3, (
             WatchingRowV1("ABCD", T0.replace(microsecond=0), StrategyId("price-action-v1", "1"),
                           Verdict.WATCH, CheckV1("ask_above_trigger", Decimal("12.33"), ">",
-                                                 Decimal("12.35"), False, ""),
+                                                 Decimal("12.35"), False, "", True),
                           Decimal("0.9200"), None, None,
                           "not recorded: decision records hold no quote time",
-                          trigger=Decimal("12.35"), invalidation=Decimal("12.10"),
-                          against_trigger=True),
+                          trigger=Decimal("12.35"), invalidation=Decimal("12.10")),
             WatchingRowV1("WXYZ", T0.replace(microsecond=0), StrategyId("price-action-v1", "1"),
                           Verdict.IGNORE, CheckV1("spread_ratio", Decimal("0.0031"), "<=",
                                                   Decimal("0.002"), False, ""),

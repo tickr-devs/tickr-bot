@@ -21,6 +21,7 @@ from strategy_bars import (
     strategy_values,
 )
 
+from tickr.api.contract import TRIGGER_RULES
 from tickr.strategy import indicators as ind
 from tickr.strategy import price_action_v1 as pa
 from tickr.strategy.base import PositionView, SymbolContext, Verdict
@@ -360,6 +361,20 @@ def test_continuation_rule_failures(rule, key, factor):
         # chosen setup's checks are recorded.
         assert decision.verdict == Verdict.WATCH
         assert decision.setup == "breakout"
+
+
+def test_the_api_trigger_rules_are_the_checks_whose_threshold_is_the_trigger():
+    # api/contract.TRIGGER_RULES names the checks recorded as a price against the setup's
+    # trigger (the API flags them against_trigger by name). The ENTER path records both, with
+    # the trigger as threshold; no other check measures a price against the trigger.
+    decision = make().evaluate(ctx(BREAKOUT_BARS, GOOD_QUOTE))
+    assert decision.verdict is Verdict.ENTER and decision.trigger == TRIGGER
+    by_rule = {c.rule: c for c in decision.checks}
+    assert TRIGGER_RULES <= set(by_rule)
+    assert all(by_rule[r].threshold == TRIGGER for r in TRIGGER_RULES)
+    priced = {c.rule for c in decision.checks
+              if c.threshold == TRIGGER and c.measured is not None and c.measured >= TRIGGER}
+    assert priced == set(TRIGGER_RULES)
 
 
 # ---------------------------------------------------------------- quote rules

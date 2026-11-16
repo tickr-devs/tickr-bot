@@ -119,7 +119,8 @@ def test_explain_route(api, cfg):
                                                                    "WATCH")
     assert body["first_failed_check"] == "spread_ratio" and body["refusal_cause"] is None
     assert body["checks"][2] == {"rule": "spread_ratio", "measured": "0.0031", "operator": "<=",
-                                 "threshold": "0.002", "passed": False, "note": ""}
+                                 "threshold": "0.002", "passed": False, "note": "",
+                                 "against_trigger": False}
 
 
 @pytest.mark.parametrize("path, status, error", [

@@ -18,7 +18,8 @@
       "operator": "is",
       "threshold": null,
       "passed": true,
-      "note": "own symbol, increasing start"
+      "note": "own symbol, increasing start",
+      "against_trigger": false
     },
     {
       "rule": "relative_volume",
@@ -26,7 +27,8 @@
       "operator": ">=",
       "threshold": "1.5",
       "passed": true,
-      "note": ""
+      "note": "",
+      "against_trigger": false
     },
     {
       "rule": "spread_ratio",
@@ -34,7 +36,8 @@
       "operator": "<=",
       "threshold": "0.002",
       "passed": false,
-      "note": ""
+      "note": "",
+      "against_trigger": false
     }
   ],
   "api_version": 1
