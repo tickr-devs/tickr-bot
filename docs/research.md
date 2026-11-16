@@ -17,6 +17,13 @@ Live observers see only the symbols discovery kept, and discovery applies the ac
 liquidity rules, so observer results are comparable only while the active strategy (and its
 `[liquidity]` values) stays the same.
 
+Every simulated trade of `observers` also records the share of the stock's move it captured
+(owner 2026-11-16: settings are judged by that share together with the dollars):
+(exit - entry) / (move high - move low), the low from the regular open through the signal bar,
+the high from the entry bar through the flatten time; 1 is the whole move, below 0 a loss. The
+report's `average_captured_share` is over the trades that have one; a trade with missing bars or
+a move without height has none, with its cause.
+
 Outcomes are price moves, never called profit. What-if results are simulated with the replay's
 conservative fill model and prove nothing about real fills.
 

@@ -157,6 +157,7 @@ OBSERVER_COLUMNS = (
     "label", "strategy", "version", "role", "decisions", "enters", "enters_taken",
     "enters_refused", "trades", "wins", "losses", "total_r", "average_r", "total_usd",
     "usd_trades", "shared_enter_bars", "same", "verdict_changed", "levels_changed",
+    "captured_trades", "average_captured_share",
 )
 
 
@@ -170,7 +171,8 @@ def write_observer_report(
         return [orep.LABEL, r.strategy, r.version, r.role, r.decisions, r.enters,
                 r.enters_taken, r.enters_refused, r.trades, r.wins, r.losses, r.total_r,
                 r.average_r, r.total_usd, r.usd_trades, r.shared_enter_bars,
-                diff.get("same"), diff.get("verdict_changed"), diff.get("levels_changed")]
+                diff.get("same"), diff.get("verdict_changed"), diff.get("levels_changed"),
+                r.captured_trades, r.average_captured_share]
 
     _write_csv(out_dir / "observers.csv", OBSERVER_COLUMNS,
                (line(r) for r in result.identities), places)

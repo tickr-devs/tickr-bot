@@ -129,3 +129,25 @@ def test_the_active_strategy_is_not_deduplicated():
 
     act = run([signal("10:00"), signal("10:04")]).identities[0]
     assert act.simulated["skipped_same_signal"] == 0
+
+
+def test_each_trade_records_the_share_of_the_move_it_captured():
+    result = run()
+    act = result.identities[0]
+    (taken,) = [e for e in result.enters[("s", "1", "active")] if e.trade is not None]
+    # move low: lowest low from the open through the 10:00 signal bar (9.95); move high:
+    # highest high from the entry bar through the flatten (10.40 at 10:02)
+    assert (taken.move.low, taken.move.high) == (Decimal("9.95"), Decimal("10.40"))
+    share = (taken.trade.exit_price - taken.trade.entry_price) / (Decimal("10.40")
+                                                                 - Decimal("9.95"))
+    assert taken.move.captured_share == share < 0 and taken.move.cause == ""
+    assert act.captured_trades == 1 and act.average_captured_share == share
+
+
+def test_no_share_is_guessed_without_a_move():
+    from tickr.research.observer_report import move_of
+
+    taken = next(e for e in run().enters[("s", "1", "active")] if e.trade is not None)
+    late = [b for b in BARS if b.start > taken.trade.signal_bar_start]
+    missing = move_of(taken.trade, late, CLOCK)  # no bar from the open through the signal
+    assert missing.captured_share is None and "no bars" in missing.cause

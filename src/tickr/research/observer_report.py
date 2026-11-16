@@ -17,14 +17,21 @@ Per strategy identity (name + version + role):
 - every ENTER as simulated (`ObserverReport.enters`, read by GET /observers for its trades;
   not written to the report files);
 - for observers, a bar-by-bar diff against the active decisions (tickr.research.compare)
-  and how many ENTER bars it shares with the active strategy.
+  and how many ENTER bars it shares with the active strategy;
+- for every simulated trade, the share of the stock's move it captured (owner 2026-11-16: a
+  setting is judged by the share of the move captured together with its dollars):
+  (exit - entry) / (move high - move low), where the move low is the lowest low from the
+  regular open through the signal bar and the move high the highest high from the entry bar
+  through the flatten time (the move the bot could have held). No share (None, with its
+  cause) when bars are missing or the move has no height. An identity's average is over its
+  trades with a share.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -40,6 +47,7 @@ from tickr.strategy.base import Role, Verdict
 from tickr.types import Bar
 
 LABEL = "simulated"
+M1 = timedelta(minutes=1)
 ONE = Decimal(1)
 
 
@@ -63,6 +71,36 @@ class IdentityReport:
     usd_trades: int = 0
     vs_active: dict[str, int] | None = None
     shared_enter_bars: int | None = None
+    captured_trades: int = 0
+    average_captured_share: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class Move:
+    """The stock's move around one simulated trade (module text) and the share captured."""
+
+    low: Decimal | None
+    high: Decimal | None
+    captured_share: Decimal | None
+    cause: str
+    """Empty when the share is present; otherwise why it is missing."""
+
+
+def move_of(trade: SimulatedTrade, bars: Sequence[Bar], clock_for: ClockFor) -> Move:
+    """Low from the regular open through the signal bar, high from the entry bar through the
+    flatten time, both from the symbol's bars of the trade's session; never a later bar for
+    the low."""
+    clock = clock_for(trade.session_date)
+    before = [b.low for b in bars
+              if clock.regular_open <= b.start <= trade.signal_bar_start]
+    after = [b.high for b in bars
+             if trade.entry_time < b.start + M1 and b.start < clock.flatten]
+    if not before or not after:
+        return Move(None, None, None, "no bars before the signal or after the entry")
+    low, high = min(before), max(after)
+    if high <= low:
+        return Move(low, high, None, "the move has no height")
+    return Move(low, high, (trade.exit_price - trade.entry_price) / (high - low), "")
 
 
 SKIPPED_OVERLAP = "skipped_overlap"
@@ -80,6 +118,7 @@ class SimulatedEnter:
     cause: str
     trade: SimulatedTrade | None
     result_usd: Decimal | None
+    move: Move | None = None
 
 
 Identity = tuple[str, str, str]  # (strategy, version, role)
@@ -111,6 +150,7 @@ def _simulate(
     traded: set[tuple[date, str, str | None, Decimal]] = set()
     zone = ZoneInfo(TIMEZONE_NAME)
     r_values: list[Decimal] = []
+    shares: list[Decimal] = []
     for record in sorted(enters, key=lambda r: (r.symbol, r.bar_start)):
         if record.bar_start < busy_until.get(record.symbol, record.bar_start):
             outcomes[SKIPPED_OVERLAP] += 1
@@ -141,9 +181,12 @@ def _simulate(
         outcomes[result.outcome.value] += 1
         trade = result.trade
         usd = result.result_usd if has_usd and trade is not None else None
-        out.append(SimulatedEnter(record, result.outcome.value, result.cause, trade, usd))
+        move = None if trade is None else move_of(trade, bars, clock_for)
+        out.append(SimulatedEnter(record, result.outcome.value, result.cause, trade, usd, move))
         if trade is None:
             continue
+        if move is not None and move.captured_share is not None:
+            shares.append(move.captured_share)
         busy_until[record.symbol] = trade.exit_time
         if signal is not None:
             traded.add(signal)
@@ -157,6 +200,8 @@ def _simulate(
     row.losses = sum(1 for r in r_values if r < 0)
     row.total_r = sum(r_values, Decimal(0))
     row.average_r = row.total_r / len(r_values) if r_values else None
+    row.captured_trades = len(shares)
+    row.average_captured_share = sum(shares, Decimal(0)) / len(shares) if shares else None
     return tuple(out)
 
 

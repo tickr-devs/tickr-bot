@@ -87,6 +87,9 @@ def build_evidence(
             "price moves are observed captured prices, never profit",
             "simulated results use the replay fill model (window top + slippage, stop first, "
             "gross USD without commissions) and prove nothing about real fills",
+            "average_captured_share (owner's measure with the dollars): per simulated trade "
+            "(exit - entry) / (move high - move low), the low from the regular open through the "
+            "signal bar, the high from the entry through the flatten time; 1 = the whole move",
         ],
     }
     return _plain(bundle, places)
