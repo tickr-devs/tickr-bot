@@ -25,6 +25,7 @@ from tickr.api.history import (
     closed_trades,
     entry_send,
     recorded_fees,
+    total_net,
     trade_metrics,
     trade_strategy,
 )
@@ -683,15 +684,8 @@ class Service:
     def _trades_today(self, closed: list[api.DayTrade]) -> tuple[api.Trade, ...]:
         """For status only: today's trades with their stop confirmation time and, once the
         broker's fees on every fill are recorded, their result after fees."""
-        return tuple(replace(_status_trade(self._shown(t)), result_exact_usd=self._net(t))
+        return tuple(replace(_status_trade(self._shown(t)), result_exact_usd=t.result_net_usd)
                      for t in closed)
-
-    def _net(self, trade: api.DayTrade) -> Decimal | None:
-        """The trade's result after the broker's fees as the daily loss counts it: its gross
-        result (exact fill prices where recorded) less its recorded fees; None while any
-        filled order's fees are not recorded."""
-        fees = recorded_fees(self.engine.orders(trade.trade_id))
-        return None if fees is None else trade.result_gross_usd - fees
 
     def _broker_result_today(self, closed: list[api.DayTrade]) -> Decimal | None:
         """Today's realized result as the broker counts it: its day profit or loss less the
@@ -794,7 +788,7 @@ class Service:
             realized_loss_today_usd=loss, open_reservations_usd=reserved,
             daily_room_usd=room, positions=positions,
             code_version=self.engine.store.run_code_version(self.engine.run_id),
-            fees_today_usd=fees, result_today_net_usd=None if fees is None else gross - fees,
+            fees_today_usd=fees, result_today_net_usd=total_net(closed),
             result_today_broker_usd=self._broker_result_today(closed))
 
     def write_status(self) -> None:

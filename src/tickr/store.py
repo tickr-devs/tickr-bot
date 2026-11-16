@@ -142,9 +142,16 @@ def _schema_v6(db: sqlite3.Connection) -> None:
     db.execute("ALTER TABLE orders ADD COLUMN fees_usd TEXT")
 
 
+def _schema_v7(db: sqlite3.Connection) -> None:
+    # A finished order's settled cash amount from the account's cash activity of its fill,
+    # signed (a buy is negative), fees included (NULL: not proven yet). Once every filled
+    # order of a trade has one, their sum is the trade's result. Written once by the loop.
+    db.execute("ALTER TABLE orders ADD COLUMN net_cash_usd TEXT")
+
+
 # Forward-only migrations. Never edit a released entry; append a new one.
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
-    _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5, _schema_v6)
+    _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5, _schema_v6, _schema_v7)
 
 
 def _json_default(value: Any) -> Any:

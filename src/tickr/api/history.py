@@ -71,6 +71,28 @@ def recorded_fees(orders: list[OrderRow]) -> Decimal | None:
     return total
 
 
+def trade_net(orders: list[OrderRow], gross: Decimal) -> Decimal | None:
+    """A closed trade's result after the broker's fees, as the daily loss counts it: the sum
+    of its filled orders' settled cash amounts once every one is proven by the account's cash
+    activity (the broker's own figure); before that, `gross` (fill prices, exact where
+    recorded) less the recorded fees; None while any filled order's fees are not recorded."""
+    filled = [o for o in orders if o.filled_quantity > 0]
+    if filled and all(o.net_cash_usd is not None for o in filled):
+        return sum((o.net_cash_usd for o in filled if o.net_cash_usd is not None), ZERO)
+    fees = recorded_fees(orders)
+    return None if fees is None else gross - fees
+
+
+def total_net(trades: Iterable[api.DayTrade]) -> Decimal | None:
+    """The sum of the trades' results after fees; None while any of them is unknown."""
+    total = ZERO
+    for trade in trades:
+        if trade.result_net_usd is None:
+            return None
+        total += trade.result_net_usd
+    return total
+
+
 # The journal row that confirms a stop: a Detail read (`order-observed`) of one of the trade's
 # stop orders showing it working at the broker. The same row `protection-latency` records as
 # `stop_verified_at` (runtime/protection.py); the engine calls such a stop "verified".
@@ -331,6 +353,7 @@ def closed_trades(store: Store, environment: str | None = None,
             exit_reason=row["close_cause"], stop_price=stops[0] if stops else None,
             planned_loss_usd=Decimal(row["planned_loss_usd"]),
             result_gross_usd=(exit_price - entry_price) * quantity,
+            result_net_usd=trade_net(orders, (exit_price - entry_price) * quantity),
             # Display metrics are never read here (see `trade_metrics`): this path feeds the
             # daily-loss check and stays as it was.
             stop_confirmed_after_seconds=None, mae_usd=None, mfe_usd=None,
@@ -537,6 +560,7 @@ class History:
                 wins=sum(1 for t in of_day if t.result_gross_usd > 0),
                 losses=sum(1 for t in of_day if t.result_gross_usd < 0),
                 result_gross_usd=sum((t.result_gross_usd for t in of_day), ZERO),
+                result_net_usd=total_net(of_day),
                 has_bars=existing(self._bars_file(day)) is not None, clean=clean[day]))
         return api.DaysV1(environment=self.paths.environment, days=tuple(summaries))
 
@@ -546,7 +570,7 @@ class History:
         symbols = tuple(sorted(self._bars_by_symbol(day, today)))
         return api.DayV1(environment=self.paths.environment, day=day, trades=tuple(of_day),
                          result_gross_usd=sum((t.result_gross_usd for t in of_day), ZERO),
-                         bar_symbols=symbols)
+                         bar_symbols=symbols, result_net_usd=total_net(of_day))
 
     def bars(self, symbol: str, day: date, today: date) -> api.BarsV1:
         bars = self._bars_of(symbol, day, today)

@@ -127,6 +127,12 @@ EXACT_FILL_PRICE = "exact-fill-price"
 # A finished order's fees as the broker charged them, recorded once from the order history
 # (runtime/account.py, `record_exact_fills`); the body is the evidence it came from.
 ORDER_FEES = "order-fees"
+# A finished order's settled cash amount (fees included) from the account's cash activity,
+# recorded once; the body carries the order rows' provisional amount and the difference.
+ORDER_CASH = "order-cash"
+# Recorded fees that the cash activity proved wrong, replaced by the proven ones (before,
+# after); runtime/watch.py alerts on each such row.
+ORDER_FEES_CORRECTED = "order-fees-corrected"
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
 _WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
 # Cancel states after which a later Detail read decides whether the cancel took.
@@ -165,6 +171,9 @@ class OrderRow:
     exact_fill_price: Decimal | None = None
     # The broker's fees on the order (None: not read yet); the daily loss counts them.
     fees_usd: Decimal | None = None
+    # The settled cash amount from the fill's cash activity, signed, fees included (None:
+    # not proven yet).
+    net_cash_usd: Decimal | None = None
 
     @property
     def fill_price(self) -> Decimal | None:
@@ -227,6 +236,7 @@ def order_from_row(row: Any) -> OrderRow:
         absent_reads=row["absent_reads"], last_detail_at=row["last_detail_at"],
         exact_fill_price=_dec(row["exact_fill_price"]),
         fees_usd=_dec(row["fees_usd"]),
+        net_cash_usd=_dec(row["net_cash_usd"]),
     )
 
 
@@ -656,6 +666,38 @@ class Engine:
                 return False
             self.store.append(EXACT_FILL_PRICE, {"exact_fill_price": price, **evidence},
                               key=client_order_id, run_id=self.run_id)
+        return True
+
+    def record_order_cash(self, client_order_id: str, amount: Decimal, fees: Decimal,
+                          evidence: dict[str, Any]) -> bool:
+        """Record a finished order's settled cash amount, once, and make its recorded fees the
+        ones the cash activity proved (`fees`): unrecorded fees are recorded, different ones
+        are replaced with an `order-fees-corrected` row (the only change ever made to recorded
+        fees). One transaction. Returns whether the amount was written. Raises ValueError for
+        negative fees."""
+        if fees < 0:
+            raise ValueError(f"order fees {fees} are negative")
+        with self.store.transaction():
+            rows = self.store.query("SELECT fees_usd FROM orders WHERE client_order_id = ? "
+                                    "AND net_cash_usd IS NULL", (client_order_id,))
+            if len(rows) != 1:
+                return False
+            self.store.execute("UPDATE orders SET net_cash_usd = ? WHERE client_order_id = ?",
+                               (str(amount), client_order_id))
+            self.store.append(ORDER_CASH, {"net_cash_usd": amount, "fees_usd": fees,
+                                           **evidence}, key=client_order_id, run_id=self.run_id)
+            before = _dec(rows[0]["fees_usd"])
+            if before != fees:
+                self.store.execute("UPDATE orders SET fees_usd = ? WHERE client_order_id = ?",
+                                   (str(fees), client_order_id))
+                if before is None:
+                    self.store.append(ORDER_FEES, {"fees_usd": fees,
+                                                   "source": "cash-activities"},
+                                      key=client_order_id, run_id=self.run_id)
+                else:
+                    self.store.append(ORDER_FEES_CORRECTED, {
+                        "before": before, "after": fees, "difference": fees - before,
+                        "source": "cash-activities"}, key=client_order_id, run_id=self.run_id)
         return True
 
     def record_order_fees(self, client_order_id: str, fees: Decimal,

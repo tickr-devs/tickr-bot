@@ -176,6 +176,17 @@
               "day_end_seq"
             ],
             "additionalProperties": false
+          },
+          "result_net_usd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

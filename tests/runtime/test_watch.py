@@ -279,3 +279,40 @@ def test_loop_pass_never_waits_on_imessage_and_journals_its_outcome_when_known(t
     assert [(b["delivery"], b.get("channel")) for b in bodies] == [
         ("shown", None), ("failed", "imessage")]
     assert len(rig.notifier.shown) == 1
+
+
+def test_fees_still_unknown_after_the_configured_wait_alert_once(tmp_path):
+    rig = Rig(tmp_path, FakeBroker(fill_fees=None))  # Detail shows no readable fees
+    t = rig.engine.open_trade("ABC", D(2), D(10), D(9), D(1))
+    entry = rig.engine.orders(t)[0].client_order_id
+    rig.broker.fill(entry, D(2), D(10))
+    for _ in range(3):
+        rig.engine.step()
+    finished = datetime.now(NEW_YORK)  # the store stamps rows with the real clock here
+    wait = float(rig.cfg.orders.fees_unknown_alert_seconds)
+    rig.now = finished + timedelta(seconds=wait / 2)
+    rig.watch.check()
+    assert AlertKind.FEES_UNKNOWN not in rig.kinds()
+    rig.now = finished + timedelta(seconds=wait + 5)
+    rig.watch.check()
+    rig.watch.check()
+    assert rig.kinds().count(AlertKind.FEES_UNKNOWN) == 1
+    assert entry in rig.notifier.shown[-1][1]
+
+
+def test_each_fee_correction_alerts_once_and_not_again_after_a_restart(tmp_path):
+    rig = Rig(tmp_path)
+    t = rig.engine.open_trade("ABC", D(2), D(10), D(9), D(1))
+    entry = rig.engine.orders(t)[0].client_order_id
+    rig.broker.fill(entry, D(2), D(10))
+    for _ in range(3):
+        rig.engine.step()
+    assert rig.engine.record_order_cash(entry, D("-20.05"), D("0.05"), {})  # Detail said 0
+    rig.watch.check()
+    rig.watch.check()
+    assert rig.kinds().count(AlertKind.FEES_CORRECTED) == 1
+    assert "0 USD replaced by 0.05 USD" in rig.notifier.shown[-1][1]
+    again = Watch(rig.engine, rig.cfg, Alerter(rig.cfg.alerts, "Tickr test", rig.notifier,
+                                               lambda: rig.now), lambda: rig.now)
+    again.check()
+    assert rig.kinds().count(AlertKind.FEES_CORRECTED) == 1

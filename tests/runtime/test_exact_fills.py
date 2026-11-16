@@ -23,7 +23,8 @@ from .test_account import FUNDS, closed_trade
 from .test_service import CFG, Bot
 
 # Test data: the entry (2 shares, order rows say 10) really filled at 10.004 and the exit at
-# 9.995 after a 0.01 fee; exact gross result (9.995 - 10.004) x 2 = -0.018.
+# 9.995 after a 0.01 fee; exact gross result (9.995 - 10.004) x 2 = -0.018, after the fee the
+# cash says -20.008 + 19.98 = -0.028. The fake's Detail shows no fee (0), which the cash corrects.
 BUY_NET = D("-20.008")
 SELL_NET = D("19.98")
 SELL_FEE = D("0.01")
@@ -83,7 +84,11 @@ def test_the_loop_records_exact_prices_and_the_daily_loss_counts_them(tmp_path):
     entry, sell = filled(bot, t)
     assert (entry.exact_fill_price, sell.exact_fill_price) == (D("10.004"), D("9.995"))
     assert (entry.average_fill_price, sell.average_fill_price) == (D(10), D(10))  # kept
-    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.018")  # fees left out
+    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.028")  # the settled cash
+    (corrected,) = bot.engine.store.journal("order-fees-corrected")
+    assert corrected.key == sell.client_order_id
+    assert (corrected.body["before"], corrected.body["after"]) == ("0", "0.01")
+    assert (entry.net_cash_usd, sell.net_cash_usd) == (BUY_NET, SELL_NET)
     (trade,) = bot.service.status().trades_today
     assert (trade.entry_price, trade.exit_price, trade.result_gross_usd) == (
         D("10.004"), D("9.995"), D("-0.018"))
@@ -112,11 +117,11 @@ def test_a_late_activity_is_recorded_when_it_arrives(tmp_path):
     entry, sell = filled(bot, t)
     assert (entry.exact_fill_price, sell.exact_fill_price) == (D("10.004"), None)
     # Until then the exit counts at its rounded price: (10 - 10.004) x 2.
-    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.008")
+    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.008")  # Detail's 0 fees
     broker.cash = both(bot)
     assert record(bot, reads) == 1
     assert filled(bot, t)[1].exact_fill_price == D("9.995")
-    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.018")
+    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.028")
 
 
 def test_an_activity_that_never_arrives_keeps_the_order_rows_price(tmp_path):
@@ -251,3 +256,54 @@ def test_a_v5_database_gains_the_fees_column(tmp_path):
     assert "fees_usd" in [r[1] for r in s.query("PRAGMA table_info(orders)")]
     assert (tmp_path / "a.pre-v6.sqlite3").exists()
     s.close()
+
+
+def test_history_days_show_the_net_from_the_settled_cash(tmp_path):
+    from tickr.api.history import closed_trades, total_net
+
+    bot, _, broker, reads = setup(tmp_path)
+    (before,) = closed_trades(bot.engine.store)
+    assert before.result_net_usd == D(0)  # rounded prices, Detail's 0 fees: provisional
+    broker.cash = both(bot)
+    record(bot, reads)
+    (trade,) = closed_trades(bot.engine.store)
+    assert trade.result_net_usd == BUY_NET + SELL_NET == D("-0.028")
+    assert total_net([trade]) == D("-0.028")
+    rows = bot.engine.store.journal("order-cash")
+    assert [r.body["difference"] for r in rows] == ["-0.008", "-0.02"]  # cash - order rows
+
+
+def test_a_v6_database_gains_the_net_cash_column(tmp_path):
+    path = tmp_path / "a.sqlite3"
+    db = sqlite3.connect(path, isolation_level=None)
+    for migration in MIGRATIONS[:6]:
+        migration(db)
+    db.execute("PRAGMA user_version = 6")
+    db.close()
+    s = Store.open(path, busy_timeout_seconds=0)
+    assert "net_cash_usd" in [r[1] for r in s.query("PRAGMA table_info(orders)")]
+    s.close()
+
+
+def test_a_negative_history_fee_proves_nothing_and_never_stops_the_loop(tmp_path):
+    bot, t, _, _ = setup(tmp_path)
+    sell = filled(bot, t)[1]
+
+    class Negative(Exact):
+        def fills_today(self, day):
+            return [replace(f, fees=D("-0.01")) if f.side == str(Side.SELL) else f
+                    for f in super().fills_today(day)]
+
+    # The cash row agrees with the negative fee: (20.01 - 0.01) / 2 = 10, the row's price.
+    cash = [both(bot)[0], CashTrade("ABC", "SELL", D("20.01"), bot.now)]
+    reads = AccountReads(Negative(bot, cash), float(CFG.orders.balance_read_seconds),
+                         lambda: bot.now)
+    bot.service.account_reads = reads
+    reads.read_once()
+    with bot.engine.store.transaction():  # as if Detail had shown no readable fees
+        bot.engine.store.execute("UPDATE orders SET fees_usd = NULL WHERE client_order_id = ?",
+                                 (sell.client_order_id,))
+    assert bot.run(3)  # the reconciliation's recording raises nothing
+    sell = filled(bot, t)[1]
+    assert (sell.exact_fill_price, sell.net_cash_usd, sell.fees_usd) == (None, None, None)
+    assert entries.realized_loss_today(bot.engine, bot.now) is None  # waits; fees-unknown alerts

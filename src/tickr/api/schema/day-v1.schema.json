@@ -363,6 +363,17 @@
               }
             ]
           },
+          "result_net_usd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "entry_cause_codes": {
             "type": "array",
             "items": {
@@ -466,6 +477,17 @@
       "items": {
         "type": "string"
       }
+    },
+    "result_net_usd": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "api_version": {
       "type": "integer",

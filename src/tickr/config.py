@@ -126,6 +126,7 @@ class OrdersConfig:
     reconcile_proof_seconds: Decimal
     reconcile_max_gap_seconds: Decimal
     balance_read_seconds: Decimal
+    fees_unknown_alert_seconds: Decimal
 
 
 @dataclass(frozen=True)
@@ -540,6 +541,9 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[orders] stop_held_proof_seconds must be above 0")
     if built["orders"].balance_read_seconds <= 0:
         raise ConfigError("[orders] balance_read_seconds must be above 0")
+    if built["orders"].fees_unknown_alert_seconds <= built["orders"].balance_read_seconds:
+        raise ConfigError("[orders] fees_unknown_alert_seconds must be above "
+                          "balance_read_seconds")
     if built["orders"].reconcile_proof_seconds <= 0:
         raise ConfigError("[orders] reconcile_proof_seconds must be above 0")
     if not built["orders"].reconcile_max_gap_seconds > built["orders"].reconcile_proof_seconds:

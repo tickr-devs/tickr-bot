@@ -285,15 +285,16 @@ def exact_fill(order: OrderRow, fill: BrokerFill, snapshot: Balances,
     history row shows the bot's filled quantity; `exact_amount` accepts a cash activity for it
     against the snapshot's cash rows and fills (one row at the fill time, as many rows of the
     symbol and side as filled orders, implied price to the cent = the history row's price),
-    with the sign of the order's side; its fees are known; and the derived price, to the
-    cent, is also the order's own recorded average fill price. So a cash row that is only one
-    of several executions (unproven whether Webull writes one row per execution) is never
-    taken for the whole fill."""
+    with the sign of the order's side; its fees are known and not negative; and the derived
+    price, to the cent, is also the order's own recorded average fill price. So a cash row
+    that is only one of several executions (unproven whether Webull writes one row per
+    execution) is never taken for the whole fill."""
     if (order.broker_state is None or not order.broker_state.terminal
             or order.filled_quantity <= 0 or order.average_fill_price is None
             or fill.filled_quantity != order.filled_quantity
-            or fill.side != str(order.side)):
-        return None
+            or fill.side != str(order.side)
+            or fill.fees is None or fill.fees < 0):
+        return None  # negative fees prove nothing: the order waits (alert `fees-unknown`)
     amount = exact_amount(fill, snapshot.cash, snapshot.fills)
     if amount is None or (amount < 0) != (order.side is Side.BUY) or amount == 0:
         return None
@@ -321,13 +322,26 @@ def order_fees(order: OrderRow, fill: BrokerFill) -> tuple[Decimal, dict[str, An
                        "filled_at": fill.filled_at}
 
 
+def provisional_amount(order: OrderRow) -> Decimal | None:
+    """The signed cash amount the order rows give for a finished order (a buy is negative):
+    its rounded average fill price times the filled quantity, less the recorded fees; None
+    while either is unknown."""
+    if order.average_fill_price is None or order.fees_usd is None:
+        return None
+    gross = order.average_fill_price * order.filled_quantity
+    return -gross - order.fees_usd if order.side is Side.BUY else gross - order.fees_usd
+
+
 def record_exact_fills(engine: Engine, snapshot: Balances) -> int:
     """On the loop thread (the display thread never writes): for each of our orders in the
-    display reads' latest fills, record its exact fill price (`exact_fill`) and its fees
-    (`order_fees`) where not recorded yet and provable. An order whose history row or cash
-    activity is late is tried again on a later snapshot; one never proven keeps its rounded
-    price, or its fees stay unknown (and with them today's realized loss). Returns how many
-    values were recorded."""
+    display reads' latest fills, record what the broker proves and is not recorded yet.
+
+    Where the account's cash activity proves the fill (`exact_fill`): its exact fill price,
+    its settled cash amount, and the fees that cash agrees with (the order history row's),
+    which replace fees recorded from Detail when they differ (Detail may show an estimate).
+    Otherwise its fees from the order history (`order_fees`). An order whose history row or
+    cash activity is late is tried again on a later snapshot. Returns how many orders gained
+    a value."""
     by_id: dict[str, list[BrokerFill]] = {}
     for fill in snapshot.fills:
         if fill.client_order_id is not None:
@@ -335,23 +349,32 @@ def record_exact_fills(engine: Engine, snapshot: Balances) -> int:
     if not by_id:
         return 0
     marks = ", ".join("?" for _ in by_id)
-    rows = engine.store.query(f"SELECT * FROM orders WHERE client_order_id IN ({marks}) "
-                              "AND (exact_fill_price IS NULL OR fees_usd IS NULL)",
-                              tuple(by_id))
+    rows = engine.store.query(
+        f"SELECT * FROM orders WHERE client_order_id IN ({marks}) AND (exact_fill_price IS "
+        "NULL OR fees_usd IS NULL OR net_cash_usd IS NULL)", tuple(by_id))
     recorded = 0
     for order in map(order_from_row, rows):
         fills = by_id[order.client_order_id]
         if len(fills) != 1:
             continue  # the history lists the order twice: not one fill to prove
-        cid = order.client_order_id
-        if order.exact_fill_price is None:
-            found = exact_fill(order, fills[0], snapshot)
-            if found is not None and engine.record_exact_fill_price(cid, *found):
-                recorded += 1
-        if order.fees_usd is None:
-            fees = order_fees(order, fills[0])
-            if fees is not None and engine.record_order_fees(cid, *fees):
-                recorded += 1
+        fill, cid = fills[0], order.client_order_id
+        found = exact_fill(order, fill, snapshot)
+        wrote = False
+        if found is not None and fill.fees is not None:
+            price, evidence = found
+            if order.exact_fill_price is None:
+                wrote |= engine.record_exact_fill_price(cid, price, evidence)
+            if order.net_cash_usd is None:
+                amount = evidence["net_amount"]
+                provisional = provisional_amount(order)
+                wrote |= engine.record_order_cash(cid, amount, fill.fees, {
+                    "provisional": provisional,
+                    "difference": None if provisional is None else amount - provisional,
+                    "cash_at": fill.filled_at})
+        elif order.fees_usd is None:
+            fees = order_fees(order, fill)
+            wrote |= fees is not None and engine.record_order_fees(cid, *fees)
+        recorded += wrote
     return recorded
 
 

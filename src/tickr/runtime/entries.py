@@ -13,7 +13,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from tickr.api.history import closed_trades, recorded_fees
+from tickr.api.history import closed_trades, total_net
 from tickr.calendar import (
     NEW_YORK,
     CalendarCause,
@@ -29,7 +29,6 @@ from tickr.research.records import DecisionRecord
 from tickr.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation, admit
 from tickr.risk.causes import ENGINE_REFUSED
 from tickr.risk.ticks import round_to_tick
-from tickr.runtime.service import trades_today
 from tickr.strategy.base import Decision, Role, Verdict
 from tickr.types import Quote
 
@@ -105,22 +104,21 @@ def _closed_today_orders(engine: Engine, now: datetime,
     return found
 
 
-def _money_known(orders: list[OrderRow]) -> bool:
-    return all(o.fill_price is not None and o.fees_usd is not None
-               for o in orders if o.filled_quantity > 0)
+def _prices_known(orders: list[OrderRow]) -> bool:
+    return all(o.fill_price is not None for o in orders if o.filled_quantity > 0)
 
 
 def realized_loss_today(engine: Engine, now: datetime) -> Decimal | None:
     """Today's net realized loss as a non-negative amount: wins offset losses (owner
-    decision 2026-11-14), each fill at its exact price when recorded (`OrderRow.fill_price`),
-    less the fees the broker charged (owner decision 2026-11-16), so it matches the broker's
-    day result; None if a trade closed today has fills whose prices or fees are unknown."""
+    decision 2026-11-14), after the broker's fees (owner decision 2026-11-16): each trade's
+    `result_net_usd`, the settled cash once proven, else fill prices (exact where recorded)
+    less recorded fees, so it matches the broker's day result. None if a trade closed today
+    has fills whose prices or fees are unknown."""
     closed = _closed_today_orders(engine, now)
-    if not all(_money_known(orders) for _, orders in closed.values()):
+    if not all(_prices_known(orders) for _, orders in closed.values()):
         return None
-    fees = sum((recorded_fees(orders) or ZERO for _, orders in closed.values()), ZERO)
-    net = sum((t.result_gross_usd for t in trades_today(engine, now)), ZERO) - fees
-    return max(-net, ZERO)
+    net = total_net(closed_trades(engine.store, closed_on=now.astimezone(NEW_YORK).date()))
+    return None if net is None else max(-net, ZERO)
 
 
 def daily_loss_room(engine: Engine, config: Config, now: datetime) -> Decimal | None:
@@ -139,14 +137,13 @@ def last_loss_at(engine: Engine, symbol: str, now: datetime) -> datetime | None:
     after the broker's fees; a closed trade with fills whose prices or fees are unknown
     counts as a loss (the stricter answer)."""
     closed = _closed_today_orders(engine, now, symbol)
-    gross = {t.trade_id: t.result_gross_usd for t in closed_trades(
+    net = {t.trade_id: t.result_net_usd for t in closed_trades(
         engine.store, closed_on=now.astimezone(NEW_YORK).date())}
     closes = []
     for trade_id, (at, orders) in closed.items():
-        fees = recorded_fees(orders)
-        if not _money_known(orders) or fees is None:
+        if not _prices_known(orders):
             closes.append(at)
-        elif trade_id in gross and gross[trade_id] - fees < 0:
+        elif trade_id in net and (net[trade_id] is None or net[trade_id] < 0):
             closes.append(at)
     return max(closes, default=None)
 

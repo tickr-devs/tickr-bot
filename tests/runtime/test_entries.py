@@ -167,20 +167,19 @@ def test_unresolved_fence_blocks_entries(tmp_path):
 
 
 def test_realized_loss_is_the_net_loss_of_the_day(tmp_path, monkeypatch):
-    from tickr.api import contract as api
-    from tickr.api.history import NO_ENTRY, NOT_READ
+    from types import SimpleNamespace
 
-    def trade(result):
-        return api.Trade("ABC", D(1), D(10), D(10) + result, NOW, NOW, "x", result, D(5),
-                         None, NO_ENTRY, NOT_READ)
+    def trades(*nets):
+        return lambda store, closed_on: [SimpleNamespace(trade_id=str(i), result_net_usd=n)
+                                         for i, n in enumerate(nets)]
 
-    monkeypatch.setattr("tickr.runtime.entries.trades_today",
-                        lambda engine, now: (trade(D(-20)), trade(D(5)), trade(D(-5))))
+    monkeypatch.setattr("tickr.runtime.entries.closed_trades", trades(D(-20), D(5), D(-5)))
     desk = Desk(tmp_path)
     assert realized_loss_today(desk.engine, NOW) == D(20)  # wins offset losses (owner 2026-11-14)
-    monkeypatch.setattr("tickr.runtime.entries.trades_today",
-                        lambda engine, now: (trade(D(-20)), trade(D(50))))
+    monkeypatch.setattr("tickr.runtime.entries.closed_trades", trades(D(-20), D(50)))
     assert realized_loss_today(desk.engine, NOW) == D(0)
+    monkeypatch.setattr("tickr.runtime.entries.closed_trades", trades(D(-20), None))
+    assert realized_loss_today(desk.engine, NOW) is None  # a trade's fees not recorded yet
 
 
 def test_record_failure_after_send_is_journaled_and_never_raises(tmp_path):

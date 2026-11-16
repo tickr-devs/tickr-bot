@@ -135,6 +135,11 @@ reconcile_max_gap_seconds = 900
 # fills from the order history), made on their own thread so the loop never waits on them; display
 # only, shown in the account file; read by runtime.account.
 balance_read_seconds = 60
+# Seconds a finished own order with fills may go without recorded broker fees (from Detail, the
+# order history or the cash activities) before the owner is alerted; meanwhile today's realized
+# loss is unknown and entries are refused. Above balance_read_seconds, so the history read
+# (every balance_read_seconds) gets its turn first; read by runtime.watch.
+fees_unknown_alert_seconds = 180
 
 [probe]
 # Shares per probe order (owner 2026-11-14); read by the probe command.

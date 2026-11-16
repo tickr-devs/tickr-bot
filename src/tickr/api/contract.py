@@ -567,6 +567,11 @@ class DayTrade:
     strategy: StrategyId | None = None
     # As in `Trade`: the code version of the run that opened it. Added after version 1 shipped.
     code_version: str | None = _added_later(None)
+    # Added after version 1 shipped (2026-11-16): the result after the broker's fees, as the
+    # daily loss counts it (the orders' settled cash amounts once all are proven, else gross
+    # less recorded fees); null while any filled order's fees are not recorded (every trade
+    # closed before fees were recorded).
+    result_net_usd: Decimal | None = _added_later(None)
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
     prices_after_cause_codes: tuple[ReasonV1, ...] = _reasons_of("prices_after_cause")
@@ -622,6 +627,9 @@ class DaySummary:
     result_gross_usd: Decimal
     has_bars: bool
     clean: CleanDay
+    # Added after version 1 shipped (2026-11-16): the day's result after fees, the sum of its
+    # trades' `result_net_usd`; null while any of them is null.
+    result_net_usd: Decimal | None = _added_later(None)
 
 
 @dataclass(frozen=True)
@@ -643,6 +651,8 @@ class DayV1:
     trades: tuple[DayTrade, ...]
     result_gross_usd: Decimal
     bar_symbols: tuple[str, ...]
+    # Added after version 1 shipped (2026-11-16): as `DaySummary.result_net_usd`.
+    result_net_usd: Decimal | None = _added_later(None)
     api_version: int = _const(API_VERSION)
 
 

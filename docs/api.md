@@ -255,8 +255,13 @@ realized - reserved (may be negative). Entries are refused while the room is bel
 `position` is its first element or `null`, kept for older clients.
 
 Fill prices and fees come from the bot's own records: once an order is finished, the loop
-records its fees from the order history (`fees[].actual_value`) and, where the account's cash
-activity proves it, its exact fill price (Webull's order rows round sub-dollar prices to cents).
+records its fees (`fees[].actual_value`) from Detail, else the order history, and, where the
+account's cash activity proves the fill, its exact fill price (Webull's order rows round
+sub-dollar prices to cents), its settled cash amount (fees included) and the fees that cash
+agrees with, which replace different recorded ones (`order-fees-corrected`, alert
+`fees-corrected`). A trade's result after fees is the sum of its orders' cash amounts once all
+are proven, else gross less recorded fees. Fees still unknown `[orders]
+fees_unknown_alert_seconds` after an order finished alert `fees-unknown`.
 Each `trades_today` entry has `result_exact_usd`: the trade's result after those fees, as the
 daily loss counts it, `null` until every filled order's fees are recorded (the apps show it in
 place of `result_gross_usd` once present).
@@ -349,7 +354,10 @@ days and charts. Trades come from the bot database, opened read-only (WAL: the r
 the bot), limited to runs of the configured environment; a trade belongs to the New York date it
 closed. A trade is listed once it is closed and had fills: quantity is what was sold, prices are
 fill-weighted averages, `stop_price` is the first protective stop sent (null if none was), and
-1 R = `planned_loss_usd`. Bars come from the capture files
+1 R = `planned_loss_usd`. Each trade, each `/days` entry and `/days/<date>` carry `result_net_usd`, the
+result after the broker's fees exactly as status counts it (see `trades_today` above); null for a
+trade whose fees are not recorded (every trade before 2026-11-16) and for a day with such a trade.
+Apps show the net result where present, else the gross. Bars come from the capture files
 (`<capture_dir>/<environment>/<date>/bars.jsonl`): one bar per start time, the last version
 received when the provider revised one. On today's file a last line still being written is not
 read yet. Only M1 is served; clients aggregate M5/M15 and compute indicators themselves.

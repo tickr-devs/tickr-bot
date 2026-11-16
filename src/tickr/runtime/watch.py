@@ -12,17 +12,20 @@ journaled as `alert`, whether shown, suppressed or failed.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 
 from tickr.calendar import NEW_YORK
 from tickr.config import Config
-from tickr.engine.core import OPERATOR_FENCES, Engine, Fence
+from tickr.engine.core import OPERATOR_FENCES, ORDER_FEES_CORRECTED, Engine, Fence
 from tickr.runtime.alerts import Alerter, AlertKind, AlertOutcome
 from tickr.runtime.entries import realized_loss_today
+from tickr.types import OrderState
 
 ALERT = "alert"
 BACKUP = "backup"
@@ -69,6 +72,11 @@ class Watch:
         self._stream_lost: set[str] = set()  # trades alerted for a stream-lost exit
         self._backup_day: date | None = None
         self._ceiling_day: date | None = None  # day the daily ceiling was alerted
+        self._fees_alerted: set[str] = set()  # orders alerted for unknown fees
+        # Fee corrections recorded before this run were alerted by the run that made them.
+        last = engine.store.query("SELECT MAX(seq) AS seq FROM journal WHERE kind = ?",
+                                  (ORDER_FEES_CORRECTED,))[0]["seq"]
+        self._corrections_seen = 0 if last is None else int(last)
 
     def alert(self, kind: AlertKind, text: str) -> None:
         self._journal([self.alerter.alert(kind, text)])
@@ -106,6 +114,42 @@ class Watch:
                 self.alert(AlertKind.STREAM_LOST_WITH_POSITION,
                            f"{trade.symbol}: L1 stream lost, closing the position")
         self._check_daily_ceiling()
+        self._check_fees()
+
+    def _check_fees(self) -> None:
+        """Alert once per order whose fees are still unknown
+        `[orders] fees_unknown_alert_seconds` after it finished (entries are refused until
+        they are known), and once per fee correction the cash activities made."""
+        now = self.now()
+        midnight = datetime.combine(now.astimezone(NEW_YORK).date(), time(), NEW_YORK)
+        limit = float(self.config.orders.fees_unknown_alert_seconds)
+        rows = self.engine.store.query(
+            "SELECT client_order_id, symbol, side, filled_quantity, broker_state, updated_at "
+            "FROM orders WHERE fees_usd IS NULL AND updated_at >= ?",
+            (midnight.astimezone(UTC).isoformat(),))
+        for row in rows:
+            cid = row["client_order_id"]
+            if cid in self._fees_alerted or Decimal(row["filled_quantity"]) <= 0:
+                continue
+            if row["broker_state"] is None or not OrderState(row["broker_state"]).terminal:
+                continue
+            waited = (now - datetime.fromisoformat(row["updated_at"])).total_seconds()
+            if waited < limit:
+                continue
+            self._fees_alerted.add(cid)
+            self.alert(AlertKind.FEES_UNKNOWN,
+                       f"{row['symbol']} {row['side']} {cid}: broker fees unknown "
+                       f"{waited:.0f} s after it finished; today's loss is unknown and "
+                       "entries are refused until they are read")
+        for correction in self.engine.store.query(
+                "SELECT seq, key, body FROM journal WHERE kind = ? AND seq > ? ORDER BY seq",
+                (ORDER_FEES_CORRECTED, self._corrections_seen)):
+            self._corrections_seen = int(correction["seq"])
+            body = json.loads(correction["body"])
+            self.alert(AlertKind.FEES_CORRECTED,
+                       f"{correction['key']}: recorded fees {body['before']} USD replaced by "
+                       f"{body['after']} USD from the account's cash activity "
+                       f"(difference {body['difference']} USD)")
 
     def _check_daily_ceiling(self) -> None:
         now = self.now()

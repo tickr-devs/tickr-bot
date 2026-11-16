@@ -107,6 +107,11 @@ class AlertKind(StrEnum):
     # A close (session flatten or any other exit) was due outside the regular session: no
     # MARKET order was sent and the stop stays; the owner closes by hand (fence market-closed).
     FLATTEN_AFTER_CLOSE = "flatten-after-close"
+    # A finished order with fills still has no recorded broker fees after
+    # [orders] fees_unknown_alert_seconds: today's money is unknown, so entries are refused.
+    FEES_UNKNOWN = "fees-unknown"
+    # The account's cash activity proved an order's recorded fees wrong; they were replaced.
+    FEES_CORRECTED = "fees-corrected"
 
 
 class Delivery(StrEnum):
