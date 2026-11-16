@@ -24,6 +24,7 @@ from tickr.api.history import (
     average_fill_price,
     closed_trades,
     entry_send,
+    recorded_fees,
     trade_metrics,
     trade_strategy,
 )
@@ -44,7 +45,6 @@ from tickr.runtime import stopmarker
 from tickr.runtime.account import (
     AccountReads,
     account_document,
-    exact_amount,
     record_exact_fills,
     record_reconcile,
 )
@@ -80,7 +80,6 @@ ENTRY_SEND_FAILED = "entry-send-failed"  # one row per trade whose entry send is
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
-CENT = Decimal("0.01")  # one US cent (unit factor): the broker states money results in cents
 
 
 @dataclass(frozen=True)
@@ -675,30 +674,16 @@ class Service:
 
     def _trades_today(self, closed: list[api.DayTrade]) -> tuple[api.Trade, ...]:
         """For status only: today's trades with their stop confirmation time and, once the
-        account's cash activities list every fill, their exact result."""
-        return tuple(replace(_status_trade(self._shown(t)), result_exact_usd=self._exact(t))
+        broker's fees on every fill are recorded, their result after fees."""
+        return tuple(replace(_status_trade(self._shown(t)), result_exact_usd=self._net(t))
                      for t in closed)
 
-    def _exact(self, trade: api.DayTrade) -> Decimal | None:
-        """The trade's exact result after fees from the display reads (display only): the sum
-        of the cash amounts of its filled orders' fills, to the cent as the broker shows it;
-        None while any fill or its cash activity is not listed, or lists another quantity
-        than the bot's records."""
-        if self.account_reads is None:
-            return None
-        snapshot = self.account_reads.snapshot()
-        fills = {f.client_order_id: f for f in snapshot.fills}
-        total = ZERO
-        filled = [o for o in self.engine.orders(trade.trade_id) if o.filled_quantity > 0]
-        for order in filled:
-            fill = fills.get(order.client_order_id)
-            if fill is None or fill.filled_quantity != order.filled_quantity:
-                return None
-            amount = exact_amount(fill, snapshot.cash, snapshot.fills)
-            if amount is None:
-                return None
-            total += amount
-        return total.quantize(CENT) if filled else None
+    def _net(self, trade: api.DayTrade) -> Decimal | None:
+        """The trade's result after the broker's fees as the daily loss counts it: its gross
+        result (exact fill prices where recorded) less its recorded fees; None while any
+        filled order's fees are not recorded."""
+        fees = recorded_fees(self.engine.orders(trade.trade_id))
+        return None if fees is None else trade.result_gross_usd - fees
 
     def _broker_result_today(self, closed: list[api.DayTrade]) -> Decimal | None:
         """Today's realized result as the broker counts it: its day profit or loss less the
@@ -717,26 +702,14 @@ class Service:
         return balance.day_profit_loss - balance.unrealized_profit_loss
 
     def _fees_today(self, closed: list[api.DayTrade]) -> Decimal | None:
-        """The broker's fees on the fills of today's closed trades, from the display reads'
-        latest list of today's fills (display only). None (unknown) until every filled order
-        of those trades is in that list with its filled quantity and readable fees, so a fill
-        the list has not caught up with yet never shows as free."""
-        if self.account_reads is None:
-            return None
-        snapshot = self.account_reads.snapshot()
-        if snapshot.fills_read_at is None:
-            return None
-        fills = {f.client_order_id: f for f in snapshot.fills}
+        """The broker's fees on the fills of today's closed trades as recorded (the same the
+        daily loss counts); None while any of them is not recorded, never counted as free."""
         total = ZERO
         for trade in closed:
-            for order in self.engine.orders(trade.trade_id):
-                if order.filled_quantity <= 0:
-                    continue
-                fill = fills.get(order.client_order_id)
-                if fill is None or fill.fees is None \
-                        or fill.filled_quantity != order.filled_quantity:
-                    return None
-                total += fill.fees
+            fees = recorded_fees(self.engine.orders(trade.trade_id))
+            if fees is None:
+                return None
+            total += fees
         return total
 
     def _shown(self, trade: api.DayTrade) -> api.DayTrade:

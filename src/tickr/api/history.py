@@ -59,6 +59,18 @@ def average_fill_price(orders: list[OrderRow]) -> Decimal | None:
     return sum((q * price for q, price in priced), ZERO) / quantity
 
 
+def recorded_fees(orders: list[OrderRow]) -> Decimal | None:
+    """The broker's fees on the orders that filled, as recorded (`OrderRow.fees_usd`); None
+    while any of them is not recorded yet (never counted as free)."""
+    total = ZERO
+    for order in orders:
+        if order.filled_quantity > 0:
+            if order.fees_usd is None:
+                return None
+            total += order.fees_usd
+    return total
+
+
 # The journal row that confirms a stop: a Detail read (`order-observed`) of one of the trade's
 # stop orders showing it working at the broker. The same row `protection-latency` records as
 # `stop_verified_at` (runtime/protection.py); the engine calls such a stop "verified".

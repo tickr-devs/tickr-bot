@@ -293,7 +293,25 @@ def expected_order(row: Any, choices: Choices) -> OrderDetail:
         stop_price=positive_price(get(row, "stop_price"), choices),
         broker_order_id=None if missing(order_id, choices) else str(order_id),
         limit_price=limit,
+        fees=expected_fees(row),
     )
+
+
+def expected_fees(row: Mapping[str, Any]) -> D | None:
+    """The sum of `fees[].actual_value`, or None (unknown, never zero) when the list or any
+    value in it is missing or unreadable."""
+    fees = get(row, "fees")
+    if not isinstance(fees, list):
+        return None
+    total = D(0)
+    for fee in fees:
+        if not isinstance(fee, Mapping) or absent(get(fee, "actual_value")):
+            return None
+        try:
+            total += number(get(fee, "actual_value"))
+        except Refuse:
+            return None
+    return total
 
 
 def assert_one_reading(body: Any, got: Any, error: BaseException | None,

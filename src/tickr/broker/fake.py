@@ -46,6 +46,7 @@ class FakeBroker:
     place_budget: int | None = None  # None = unlimited; else place requests can_place admits
     funds: AccountBalance | None = None  # what balance() returns; None = the read fails
     cash: list[CashTrade] = field(default_factory=list)  # what cash_trades() returns
+    fill_fees: Decimal | None = Decimal(0)  # the fees a fill shows (None: unreadable)
     account_label: str | None = None
     balance_reads: int = 0
 
@@ -57,7 +58,7 @@ class FakeBroker:
 
     def fills_today(self, day: date) -> list[BrokerFill]:  # noqa: ARG002 - one fake day
         return [BrokerFill(o.client_order_id, o.symbol, str(o.side), str(o.order_type),
-                           o.filled_quantity, o.average_fill_price, None, None)
+                           o.filled_quantity, o.average_fill_price, None, o.fees)
                 for o in self.orders.values() if o.filled_quantity > 0]
 
     def cash_trades(self, day: date) -> list[CashTrade]:  # noqa: ARG002 - one fake day
@@ -162,7 +163,8 @@ class FakeBroker:
         raw = "FILLED" if state is OrderState.FILLED else "PARTIAL FILLED"
         self.orders[client_order_id] = replace(order, filled_quantity=filled,
                                                average_fill_price=average,
-                                               state=state, raw_status=raw)
+                                               state=state, raw_status=raw,
+                                               fees=self.fill_fees)
         signed = quantity if order.side is Side.BUY else -quantity
         self._apply(order.symbol, signed, price)
 

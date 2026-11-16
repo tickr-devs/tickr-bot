@@ -297,6 +297,8 @@ the shared database the first time its bot opens it, after a verified backup
   restarts bot and API together; a hand restart must do both.
 - Migration v5 (2026-11-16) adds `orders.exact_fill_price` (exact fill prices from the
   account's cash activities, read by the realized loss): one way like every migration.
+- Migration v6 (2026-11-16) adds `orders.fees_usd` (the broker's fees per finished order, counted
+  by the daily loss rule): one way as well.
 
 ### Emergency: the owner switches back by hand
 

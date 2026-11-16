@@ -306,11 +306,28 @@ def exact_fill(order: OrderRow, fill: BrokerFill, snapshot: Balances,
                    "average_fill_price": order.average_fill_price, "cash_at": fill.filled_at}
 
 
+def order_fees(order: OrderRow, fill: BrokerFill) -> tuple[Decimal, dict[str, Any]] | None:
+    """The fees the broker charged our finished `order` and the evidence, or None while they
+    cannot be proven: the order is finished at the broker, `fill` (the order history's one
+    row with its client order id) shows the bot's filled quantity and side, and its fees
+    (the sum of `fees[].actual_value`) are readable and not negative."""
+    if (order.broker_state is None or not order.broker_state.terminal
+            or order.filled_quantity <= 0
+            or fill.filled_quantity != order.filled_quantity
+            or fill.side != str(order.side)
+            or fill.fees is None or fill.fees < 0):
+        return None
+    return fill.fees, {"source": "history", "filled_quantity": fill.filled_quantity,
+                       "filled_at": fill.filled_at}
+
+
 def record_exact_fills(engine: Engine, snapshot: Balances) -> int:
-    """On the loop thread (the display thread never writes): record the exact fill price of
-    each of our orders in the display reads' latest fills that has none yet and can be proven
-    (`exact_fill`). An order whose cash activity is late is tried again on a later snapshot;
-    one never proven keeps its rounded price. Returns how many were recorded."""
+    """On the loop thread (the display thread never writes): for each of our orders in the
+    display reads' latest fills, record its exact fill price (`exact_fill`) and its fees
+    (`order_fees`) where not recorded yet and provable. An order whose history row or cash
+    activity is late is tried again on a later snapshot; one never proven keeps its rounded
+    price, or its fees stay unknown (and with them today's realized loss). Returns how many
+    values were recorded."""
     by_id: dict[str, list[BrokerFill]] = {}
     for fill in snapshot.fills:
         if fill.client_order_id is not None:
@@ -319,15 +336,22 @@ def record_exact_fills(engine: Engine, snapshot: Balances) -> int:
         return 0
     marks = ", ".join("?" for _ in by_id)
     rows = engine.store.query(f"SELECT * FROM orders WHERE client_order_id IN ({marks}) "
-                              "AND exact_fill_price IS NULL", tuple(by_id))
+                              "AND (exact_fill_price IS NULL OR fees_usd IS NULL)",
+                              tuple(by_id))
     recorded = 0
     for order in map(order_from_row, rows):
         fills = by_id[order.client_order_id]
         if len(fills) != 1:
             continue  # the history lists the order twice: not one fill to prove
-        found = exact_fill(order, fills[0], snapshot)
-        if found is not None and engine.record_exact_fill_price(order.client_order_id, *found):
-            recorded += 1
+        cid = order.client_order_id
+        if order.exact_fill_price is None:
+            found = exact_fill(order, fills[0], snapshot)
+            if found is not None and engine.record_exact_fill_price(cid, *found):
+                recorded += 1
+        if order.fees_usd is None:
+            fees = order_fees(order, fills[0])
+            if fees is not None and engine.record_order_fees(cid, *fees):
+                recorded += 1
     return recorded
 
 

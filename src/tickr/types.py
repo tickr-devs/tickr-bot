@@ -109,6 +109,9 @@ class OrderDetail:
     stop_price: Decimal | None = None
     broker_order_id: str | None = None
     limit_price: Decimal | None = None
+    # The sum of the row's `fees[].actual_value`; None when the row has no readable fees.
+    # Recorded once the order is finished (the daily loss counts it).
+    fees: Decimal | None = None
 
 
 @dataclass(frozen=True)

@@ -444,43 +444,59 @@ def closed_trade(bot: Bot) -> str:
     return t
 
 
-def test_status_result_after_the_brokers_fees_on_todays_fills(tmp_path):
+def closed_with_exit_fees(bot: Bot, fees: D | None) -> str:
+    """A closed trade whose entry the broker charged nothing and whose exit `fees`."""
+    t = opened(bot)
+    bot.broker.fill_fees = fees
+    bot.service.state = api.BotState.RUNNING
+    bot.command(api.CommandKind.FLATTEN)
+    assert bot.run(10)
+    return t
+
+
+def test_status_and_the_daily_loss_count_the_brokers_fees(tmp_path):
     bot = Bot(tmp_path)
-    t = closed_trade(bot)
-    filled = [o for o in bot.engine.orders(t) if o.filled_quantity > 0]
-    fees = {o.client_order_id: D("0.07") if o.side is Side.SELL else D(0) for o in filled}
-
-    class WithFees(FakeBroker):
-        def fills_today(self, day):
-            return [replace(f, fees=fees.get(f.client_order_id)) for f in super().fills_today(day)]
-
-    reads = AccountReads(WithFees(funds=FUNDS, orders=bot.broker.orders),
-                         float(CFG.orders.balance_read_seconds), lambda: bot.now)
-    bot.service.account_reads = reads
+    t = closed_with_exit_fees(bot, D("0.07"))
+    assert [o.fees_usd for o in bot.engine.orders(t) if o.filled_quantity > 0] == [
+        D(0), D("0.07")]  # recorded from Detail when each order finished
     status = bot.service.status()
-    assert (status.fees_today_usd, status.result_today_net_usd) == (None, None)  # not read yet
-    reads.read_once()
-    status = bot.service.status()
-    assert status.fees_today_usd == D("0.07")
-    assert status.result_today_net_usd == status.result_today_gross_usd - D("0.07")
+    assert status.result_today_gross_usd == D(0)
+    assert (status.fees_today_usd, status.result_today_net_usd) == (D("0.07"), D("-0.07"))
+    assert status.trades_today[0].result_exact_usd == D("-0.07")
+    assert status.realized_loss_today_usd == D("0.07")
+    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.07")
+    # A trade even before fees is a loss after them: the symbol's pause starts at its close.
+    assert entries.last_loss_at(bot.engine, "ABC", bot.now) is not None
 
 
-def test_fees_stay_unknown_while_a_fill_is_missing_from_the_list(tmp_path):
+def test_fees_not_shown_by_detail_come_from_the_history_and_until_then_money_is_unknown(
+        tmp_path):
     bot = Bot(tmp_path)
-    t = closed_trade(bot)
+    t = closed_with_exit_fees(bot, None)
     exit_id = [o for o in bot.engine.orders(t) if o.filled_quantity > 0][-1].client_order_id
-
-    class Lagging(FakeBroker):
-        def fills_today(self, day):
-            return [replace(f, fees=D(0)) for f in super().fills_today(day)
-                    if f.client_order_id != exit_id]
-
-    reads = AccountReads(Lagging(funds=FUNDS, orders=bot.broker.orders),
-                         float(CFG.orders.balance_read_seconds), lambda: bot.now)
-    bot.service.account_reads = reads
-    reads.read_once()
     status = bot.service.status()
     assert (status.fees_today_usd, status.result_today_net_usd) == (None, None)
+    assert status.realized_loss_today_usd is None and status.daily_room_usd is None
+    assert entries.realized_loss_today(bot.engine, bot.now) is None  # entries refused
+
+    class History(FakeBroker):
+        listed = False
+
+        def fills_today(self, day):
+            return [replace(f, fees=D("0.07")) for f in super().fills_today(day)
+                    if self.listed or f.client_order_id != exit_id]
+
+    broker = History(funds=FUNDS, orders=bot.broker.orders)
+    reads = with_reads(bot, broker)
+    reads.read_once()
+    bot.service._record_exact_fills()  # the loop's step after a reconciliation
+    assert entries.realized_loss_today(bot.engine, bot.now) is None  # exit not listed yet
+    broker.listed = True
+    reads.read_once()
+    bot.service._record_exact_fills()
+    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.07")
+    (row,) = [r for r in bot.engine.store.journal("order-fees") if r.key == exit_id]
+    assert row.body["source"] == "history" and row.body["fees_usd"] == "0.07"
 
 
 def test_status_carries_the_brokers_own_result_once_read_after_the_last_close(tmp_path):
@@ -505,30 +521,26 @@ def test_a_balance_read_before_the_last_close_is_not_todays_result(tmp_path):
     assert bot.service.status().result_today_broker_usd is None
 
 
-def test_exact_amounts_and_trade_result_from_the_cash_activities(tmp_path):
+def test_trade_result_after_fees_from_exact_prices_matches_the_cash(tmp_path):
     bot = Bot(tmp_path)
-    t = closed_trade(bot)
+    t = closed_with_exit_fees(bot, D("0.01"))
     filled = [o for o in bot.engine.orders(t) if o.filled_quantity > 0]
     at = bot.now
-    fees = {o.client_order_id: D(0) for o in filled}
 
     class Exact(FakeBroker):
         def fills_today(self, day):
-            return [replace(f, fees=fees.get(f.client_order_id), filled_at=at)
-                    for f in super().fills_today(day)]
+            return [replace(f, filled_at=at) for f in super().fills_today(day)]
 
-    cash = [CashTrade(o.symbol, str(o.side), D("-20.0004") if o.side is Side.BUY
-                      else D("19.9901"), at) for o in filled]
-    broker = Exact(funds=FUNDS, orders=bot.broker.orders, cash=cash)
-    reads = AccountReads(broker, float(CFG.orders.balance_read_seconds), lambda: bot.now)
-    bot.service.account_reads = reads
-    assert bot.service.status().trades_today[0].result_exact_usd is None  # nothing read
+    # Cash: bought 2 at 10.004, sold 2 at 9.995 less 0.01 fees: -20.008 + 19.98 = -0.028.
+    cash = [CashTrade(o.symbol, str(o.side), D("-20.008") if o.side is Side.BUY
+                      else D("19.98"), at) for o in filled]
+    reads = with_reads(bot, Exact(funds=FUNDS, orders=bot.broker.orders, cash=cash))
     reads.read_once()
+    bot.service._record_exact_fills()
     (trade,) = bot.service.status().trades_today
-    assert trade.result_exact_usd == D("-0.01")  # -0.0103 to the cent
-    broker.cash = cash[:1]  # the exit's activity not listed yet: back to the order prices
-    reads.read_once()
-    assert bot.service.status().trades_today[0].result_exact_usd is None
+    assert trade.result_gross_usd == D("-0.018")
+    assert trade.result_exact_usd == D("-0.028")  # the cash sum, to the cent and beyond
+    assert entries.realized_loss_today(bot.engine, bot.now) == D("0.028")
 
 
 def test_exact_price_from_the_amount_and_fees():

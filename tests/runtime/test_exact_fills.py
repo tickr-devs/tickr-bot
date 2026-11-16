@@ -228,3 +228,26 @@ def test_a_v4_database_gains_the_exact_fill_price_column(tmp_path):
     assert (row["client_order_id"], row["exact_fill_price"]) == ("o1", None)
     assert (tmp_path / "a.pre-v5.sqlite3").exists()
     s.close()
+
+
+def test_fees_are_recorded_once_and_never_negative(tmp_path):
+    bot, t, _, _ = setup(tmp_path)
+    entry, _ = filled(bot, t)
+    assert entry.fees_usd == D(0)  # from Detail when it finished
+    assert not bot.engine.record_order_fees(entry.client_order_id, D("0.05"), {})
+    assert filled(bot, t)[0].fees_usd == D(0)
+    with pytest.raises(ValueError, match="negative"):
+        bot.engine.record_order_fees(entry.client_order_id, D("-0.01"), {})
+
+
+def test_a_v5_database_gains_the_fees_column(tmp_path):
+    path = tmp_path / "a.sqlite3"
+    db = sqlite3.connect(path, isolation_level=None)
+    for migration in MIGRATIONS[:5]:
+        migration(db)
+    db.execute("PRAGMA user_version = 5")
+    db.close()
+    s = Store.open(path, busy_timeout_seconds=0)
+    assert "fees_usd" in [r[1] for r in s.query("PRAGMA table_info(orders)")]
+    assert (tmp_path / "a.pre-v6.sqlite3").exists()
+    s.close()

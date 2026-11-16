@@ -224,28 +224,29 @@ the strategy's own fixed text per rule and has no code: translate it by `rule` a
 text, or show it as is.
 
 Daily loss money (spec 7, check 6), exactly as the bot's admission computes it; `null` means
-unknown (a trade closed today has fills without a known price), never zero:
-`realized_loss_today_usd` is today's net realized loss (wins offset losses, never below 0),
-`open_reservations_usd` the planned loss of every open trade, and `daily_room_usd` =
-`[risk] max_daily_loss_usd` - realized - reserved (may be negative). Entries are refused while the
-room is below `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot
-tracks; `position` is its first element or `null`, kept for older clients.
+unknown (a trade closed today has fills without a known price or without recorded fees), never
+zero: `realized_loss_today_usd` is today's net realized loss after the broker's fees (wins offset
+losses, never below 0; fees counted since 2026-11-16, owner decision), `open_reservations_usd`
+the planned loss of every open trade, and `daily_room_usd` = `[risk] max_daily_loss_usd` -
+realized - reserved (may be negative). Entries are refused while the room is below
+`settings.risk.min_daily_room_usd`. `positions` lists every open position the bot tracks;
+`position` is its first element or `null`, kept for older clients.
 
-Each `trades_today` entry has `result_exact_usd`: the trade's result after fees from the cash
-amounts of all its fills, to the cent, `null` until every one is listed (display only; the
-apps show it in place of `result_gross_usd` once present).
+Fill prices and fees come from the bot's own records: once an order is finished, the loop
+records its fees from the order history (`fees[].actual_value`) and, where the account's cash
+activity proves it, its exact fill price (Webull's order rows round sub-dollar prices to cents).
+Each `trades_today` entry has `result_exact_usd`: the trade's result after those fees, as the
+daily loss counts it, `null` until every filled order's fees are recorded (the apps show it in
+place of `result_gross_usd` once present).
 
-`result_today_gross_usd` sums today's closed trades before fees. `fees_today_usd` is the broker's
-actual fees on the fills of those trades, from the display reads' list of today's fills (the
-account file's `fills`), and `result_today_net_usd` = gross - fees, the figure the broker's day
-P&L shows. Both are `null` until every filled order of today's closed trades is in that list
-with its filled quantity and readable fees. `result_today_broker_usd` is the broker's own
-realized result for today: its day P&L less the unrealized part, from the latest balance read,
-`null` until a balance read made after the last of today's trades closed. It is exact where
-the order rows are not (Webull returns sub-dollar fill prices rounded to cents, 2026-11-16),
-and covers the whole account (manual trades too). The apps show it as today's result when
-present, else the net, else the gross. Display only: the daily loss rule above counts neither
-fees nor this figure.
+`result_today_gross_usd` sums today's closed trades before fees. `fees_today_usd` is the recorded
+fees on the fills of those trades, and `result_today_net_usd` = gross - fees, the figure the
+broker's day P&L shows and the negative of the realized loss when it is a loss. Both are `null`
+until every filled order of today's closed trades has its fees recorded.
+`result_today_broker_usd` is the broker's own realized result for today: its day P&L less the
+unrealized part, from the latest balance read, `null` until a balance read made after the last
+of today's trades closed; it covers the whole account (manual trades too). The apps show it as
+today's result when present, else the net, else the gross. Display only.
 
 Each `trades_today` entry also has `planned_loss_usd` (1 R as recorded when the trade was opened)
 and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE are only in

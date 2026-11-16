@@ -367,6 +367,7 @@ def read_order(item: Any, is_own: IsOwnAccount, where: str) -> OrderDetail:
         stop_price=_optional_decimal(item, "stop_price", where),
         limit_price=limit_price,
         broker_order_id=None if _optional(item, "order_id") is None else str(item["order_id"]),
+        fees=_fees(item, where),
     )
 
 

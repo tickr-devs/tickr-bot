@@ -135,9 +135,16 @@ def _schema_v5(db: sqlite3.Connection) -> None:
     db.execute("ALTER TABLE orders ADD COLUMN exact_fill_price TEXT")
 
 
+def _schema_v6(db: sqlite3.Connection) -> None:
+    # A finished order's fees as the broker charged them (sum of the order history row's
+    # `fees[].actual_value`; NULL: not read yet). The daily loss counts them (owner decision
+    # 2026-11-16). Written once by the loop, never overwritten.
+    db.execute("ALTER TABLE orders ADD COLUMN fees_usd TEXT")
+
+
 # Forward-only migrations. Never edit a released entry; append a new one.
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
-    _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5)
+    _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5, _schema_v6)
 
 
 def _json_default(value: Any) -> Any:

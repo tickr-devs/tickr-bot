@@ -302,8 +302,11 @@ def test_status_trade_carries_planned_loss_and_stop_confirmation_time(tmp_path):
     (plain,) = service.trades_today(rig.engine, rig.now)
     assert plain.stop_confirmed_after_seconds is None
     assert plain.entry_cause == "not read on this path" and trade.entry.sends == 1
+    # Status adds the result after the recorded fees (the fake charges none).
+    assert trade.result_exact_usd == trade.result_gross_usd == D("-0.40")
     assert replace(plain, stop_confirmed_after_seconds=trade.stop_confirmed_after_seconds,
-                   entry=trade.entry, entry_cause=trade.entry_cause) == trade
+                   entry=trade.entry, entry_cause=trade.entry_cause,
+                   result_exact_usd=trade.result_exact_usd) == trade
 
 
 def test_a_malformed_fill_read_row_never_stops_the_loop_or_moves_the_daily_loss(tmp_path):

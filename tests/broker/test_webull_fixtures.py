@@ -326,6 +326,7 @@ def test_recorded_working_stop_is_our_live_stop():
     assert stop.state is OrderState.ACCEPTED and stop.raw_status == "SUBMITTED"
     assert (stop.quantity, stop.filled_quantity, stop.stop_price) == (D(64), D(0), D("38.04"))
     assert stop.limit_price is None
+    assert stop.fees == D("0.07")  # the broker's estimate already listed: SEC 0.06 + FINRA 0.01
 
 
 def test_recorded_fill_in_history():
@@ -345,6 +346,7 @@ def test_recorded_filled_entry_detail():
     entry = next(r for r in rows if r.order_type is OrderType.LIMIT)
     assert entry.state is OrderState.FILLED
     assert (entry.average_fill_price, entry.limit_price) == (D("38.44"), D("38.51"))
+    assert entry.fees == D(0)  # an empty `fees` list: nothing charged on the buy
 
 
 def test_fill_fees_sum_and_unreadable_fee():

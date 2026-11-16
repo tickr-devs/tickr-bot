@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from tickr.api.history import closed_trades, recorded_fees
 from tickr.calendar import (
     NEW_YORK,
     CalendarCause,
@@ -21,7 +22,7 @@ from tickr.calendar import (
     SessionCalendar,
 )
 from tickr.config import Config, trading_gate
-from tickr.engine.core import Engine, EntryRefused, Fence, Leg, TradeRow
+from tickr.engine.core import Engine, EntryRefused, Fence, Leg, OrderRow, TradeRow
 from tickr.observers.log import DecisionLog
 from tickr.research.records import Admission as RecordAdmission
 from tickr.research.records import DecisionRecord
@@ -86,19 +87,39 @@ def guard_entries(engine: Engine, config: Config, calendar: SessionCalendar | No
             engine.cancel_entry(trade.trade_id, cause)
 
 
+def _closed_today_orders(engine: Engine, now: datetime,
+                         symbol: str | None = None) -> dict[str, tuple[datetime, list[OrderRow]]]:
+    """Trades closed today (New York date), optionally of one symbol: trade id -> (close
+    time, its orders)."""
+    today = now.astimezone(NEW_YORK).date()
+    rows = engine.store.query("SELECT trade_id, symbol, closed_at FROM trades "
+                              "WHERE closed_at IS NOT NULL")
+    found = {}
+    for row in rows:
+        closed = datetime.fromisoformat(row["closed_at"])
+        if closed.astimezone(NEW_YORK).date() != today:
+            continue
+        if symbol is not None and row["symbol"] != symbol:
+            continue
+        found[row["trade_id"]] = (closed, engine.orders(row["trade_id"]))
+    return found
+
+
+def _money_known(orders: list[OrderRow]) -> bool:
+    return all(o.fill_price is not None and o.fees_usd is not None
+               for o in orders if o.filled_quantity > 0)
+
+
 def realized_loss_today(engine: Engine, now: datetime) -> Decimal | None:
     """Today's net realized loss as a non-negative amount: wins offset losses (owner
     decision 2026-11-14), each fill at its exact price when recorded (`OrderRow.fill_price`),
-    fees left out; None if a trade closed today has fills whose prices are unknown."""
-    today = now.astimezone(NEW_YORK).date()
-    for row in engine.store.query(
-            "SELECT trade_id, closed_at FROM trades WHERE closed_at IS NOT NULL"):
-        if datetime.fromisoformat(row["closed_at"]).astimezone(NEW_YORK).date() != today:
-            continue
-        for order in engine.orders(row["trade_id"]):
-            if order.filled_quantity > 0 and order.fill_price is None:
-                return None
-    net = sum((t.result_gross_usd for t in trades_today(engine, now)), ZERO)
+    less the fees the broker charged (owner decision 2026-11-16), so it matches the broker's
+    day result; None if a trade closed today has fills whose prices or fees are unknown."""
+    closed = _closed_today_orders(engine, now)
+    if not all(_money_known(orders) for _, orders in closed.values()):
+        return None
+    fees = sum((recorded_fees(orders) or ZERO for _, orders in closed.values()), ZERO)
+    net = sum((t.result_gross_usd for t in trades_today(engine, now)), ZERO) - fees
     return max(-net, ZERO)
 
 
@@ -114,18 +135,19 @@ def daily_loss_room(engine: Engine, config: Config, now: datetime) -> Decimal | 
 
 
 def last_loss_at(engine: Engine, symbol: str, now: datetime) -> datetime | None:
-    """Close time of the latest trade in `symbol` closed today (New York date) at a loss; a
-    closed trade with fills whose prices are unknown counts as a loss (the stricter answer)."""
-    closes = [t.closed_at for t in trades_today(engine, now)
-              if t.symbol == symbol and t.result_gross_usd < 0]
-    today = now.astimezone(NEW_YORK).date()
-    for row in engine.store.query("SELECT trade_id, closed_at FROM trades "
-                                  "WHERE closed_at IS NOT NULL AND symbol = ?", (symbol,)):
-        closed = datetime.fromisoformat(row["closed_at"])
-        if closed.astimezone(NEW_YORK).date() == today and any(
-                o.filled_quantity > 0 and o.fill_price is None
-                for o in engine.orders(row["trade_id"])):
-            closes.append(closed)
+    """Close time of the latest trade in `symbol` closed today (New York date) at a loss
+    after the broker's fees; a closed trade with fills whose prices or fees are unknown
+    counts as a loss (the stricter answer)."""
+    closed = _closed_today_orders(engine, now, symbol)
+    gross = {t.trade_id: t.result_gross_usd for t in closed_trades(
+        engine.store, closed_on=now.astimezone(NEW_YORK).date())}
+    closes = []
+    for trade_id, (at, orders) in closed.items():
+        fees = recorded_fees(orders)
+        if not _money_known(orders) or fees is None:
+            closes.append(at)
+        elif trade_id in gross and gross[trade_id] - fees < 0:
+            closes.append(at)
     return max(closes, default=None)
 
 

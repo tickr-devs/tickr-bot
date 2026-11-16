@@ -262,9 +262,9 @@ class Trade:
     # The bot code version (git commit, `-dirty` with changed tracked files) of the run that
     # opened the trade, from `runs`; null for a run recorded before it was. Added later.
     code_version: str | None = _added_later(None)
-    # The trade's exact result after fees: the sum of its fills' cash amounts from the
-    # account's cash activities; null until every fill's activity is listed (display only;
-    # the daily loss rule reads `result_gross_usd`). Added after version 1 shipped.
+    # The trade's result after the broker's fees as the daily loss counts it: its gross result
+    # (exact fill prices where recorded) less the fees recorded on its orders; null until
+    # every filled order's fees are recorded. Added after version 1 shipped.
     result_exact_usd: Decimal | None = _added_later(None)
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
@@ -314,9 +314,9 @@ class StatusV1:
     # The code version this run records (as `Trade.code_version`); null only for a run
     # recorded before it was. Added after version 1 shipped.
     code_version: str | None = _added_later(None)
-    # Added after v1 shipped (2026-11-16), display only: the broker's fees on the fills of
-    # today's closed trades, and the day's result after them (what the broker's day P&L
-    # counts); null while any of those fills or fees is not read yet.
+    # Added after v1 shipped (2026-11-16): the broker's fees recorded on the fills of today's
+    # closed trades, and the day's result after them (what the broker's day P&L counts and
+    # the daily loss rule reads); null while any of those fees is not recorded yet.
     fees_today_usd: Decimal | None = _added_later(None)
     result_today_net_usd: Decimal | None = _added_later(None)
     # Added after v1 shipped (2026-11-16), display only: the broker's own realized result for
