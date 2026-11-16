@@ -9,7 +9,14 @@ from md_helpers import NOW, OPEN, Screen, bars, quote, row, settings
 
 from tickr import config
 from tickr.data.base import FakeMarketData, ScreenerKind, StreamNotice
-from tickr.data.capture import DISCOVERY_FILE, CaptureError, CaptureWriter, export_replay_bars
+from tickr.data.capture import (
+    DISCOVERY_FILE,
+    CapturedBarsDays,
+    CaptureError,
+    CaptureWriter,
+    export_replay_bars,
+    read_captured_bars,
+)
 from tickr.data.discovery import discover
 from tickr.data.health import FanOut, StreamHealth
 from tickr.replay.bars import load_bars
@@ -147,3 +154,61 @@ def test_discovery_pass_is_one_line_with_provider_and_end_time(tmp_path):
     assert [json.loads(line) for line in lines] == [
         {"candidates": ["AAA"], "provider": "webull", "receipt_time": "2026-11-13T15:00:10+00:00"},
         {"candidates": [], "provider": "webull", "receipt_time": "2026-11-13T15:00:10+00:00"}]
+
+
+def _by_symbol(path: Path) -> dict[str, tuple[Bar, ...]]:
+    """What a full read keeps, by symbol and start: the shared reader must give the same."""
+    grouped: dict[str, list[Bar]] = {}
+    for (symbol, _), bar in sorted(read_captured_bars(path, open_tail=True).bars.items()):
+        grouped.setdefault(symbol, []).append(bar)
+    return {symbol: tuple(found) for symbol, found in grouped.items()}
+
+
+def test_shared_bars_read_on_as_the_file_grows(tmp_path):
+    w = CaptureWriter(tmp_path, "fake")
+    series = bars("BBB", 2) + bars("AAA", 3)
+    w.bars(series[:3], "fake", NOW)
+    captured = tmp_path / DAY / "bars.jsonl"
+    reader = CapturedBarsDays()
+    assert reader.by_symbol(captured, open_tail=True) == _by_symbol(captured)
+    revised = Bar("BBB", series[0].start, series[0].open, series[0].high, series[0].low,
+                  series[0].close, series[0].volume + 5)
+    w.bars([*series[3:], revised], "fake", NOW)
+    w.close()
+    # A line the bot is still writing waits for its newline.
+    with open(captured, "a", encoding="utf-8") as handle:
+        handle.write('{"symbol": "CCC"')
+    found = reader.by_symbol(captured, open_tail=True)
+    assert found == _by_symbol(captured)
+    assert len(found["AAA"]) == 3 and found["BBB"][0].volume == revised.volume
+    assert "CCC" not in found
+
+
+def test_shared_bars_read_a_replaced_file_anew(tmp_path):
+    w = CaptureWriter(tmp_path, "fake")
+    w.bars(bars("AAA", 3), "fake", NOW)
+    w.close()
+    captured = tmp_path / DAY / "bars.jsonl"
+    reader = CapturedBarsDays()
+    assert len(reader.by_symbol(captured, open_tail=True)["AAA"]) == 3
+    first = captured.read_text("utf-8").splitlines()[0]
+    replacement = tmp_path / "replacement.jsonl"
+    replacement.write_text(first.replace('"AAA"', '"ZZZ"') + "\n", "utf-8")
+    replacement.replace(captured)
+    assert set(reader.by_symbol(captured, open_tail=True)) == {"ZZZ"}
+
+
+def test_shared_bars_refuse_a_malformed_line_and_read_anew_after(tmp_path):
+    w = CaptureWriter(tmp_path, "fake")
+    w.bars(bars("AAA", 2), "fake", NOW)
+    w.close()
+    captured = tmp_path / DAY / "bars.jsonl"
+    good = captured.read_text("utf-8")
+    reader = CapturedBarsDays()
+    reader.by_symbol(captured, open_tail=True)
+    with open(captured, "a", encoding="utf-8") as handle:
+        handle.write("{not json\n")
+    with pytest.raises(CaptureError, match=":3:"):
+        reader.by_symbol(captured, open_tail=True)
+    captured.write_text(good, "utf-8")
+    assert reader.by_symbol(captured, open_tail=True) == _by_symbol(captured)

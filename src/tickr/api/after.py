@@ -39,6 +39,7 @@ from tickr.api.observer_results import (
     replay_inputs,
 )
 from tickr.calendar import CalendarRefused, SessionCalendar
+from tickr.data.capture import CapturedBarsDays
 from tickr.replay.clock import ClockFor
 from tickr.replay.errors import ReplayError
 from tickr.replay.settings import ReplaySettings
@@ -221,8 +222,9 @@ class SkippedAfter:
     transient failure decided (an OSError, an unreadable calendar) is not kept."""
 
     def __init__(self, paths: SimulationPaths, minutes: tuple[int, ...],
-                 check_places: int) -> None:
+                 check_places: int, bars: CapturedBarsDays | None = None) -> None:
         self.paths = paths
+        self.captured_bars = bars or CapturedBarsDays()  # the server's shared reader
         self.minutes = minutes
         self.check_places = check_places
         self.closes = Closes(paths.calendar)
@@ -243,7 +245,7 @@ class SkippedAfter:
         close: Close = ""
         if base.signals:
             try:
-                bars = day_bars(self.paths, day, today)
+                bars = day_bars(self.captured_bars, self.paths, day, today)
             except NoInputs as exc:
                 bars, transient = str(exc), exc.transient
             try:

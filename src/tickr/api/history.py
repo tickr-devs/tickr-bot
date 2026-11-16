@@ -25,7 +25,7 @@ from tickr.api.performance import performance
 from tickr.archive import existing
 from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.config import Config
-from tickr.data.capture import BARS_FILE, CaptureError, read_captured_bars
+from tickr.data.capture import BARS_FILE, CapturedBarsDays, CaptureError
 from tickr.engine.core import (
     ORDER_HELD,
     ORDER_OBSERVED,
@@ -36,7 +36,7 @@ from tickr.engine.core import (
     order_from_row,
 )
 from tickr.store import DATABASE_FILE, MIGRATIONS, Store
-from tickr.types import OrderState
+from tickr.types import Bar, OrderState
 from tickr.version import recorded
 
 ZERO = Decimal(0)
@@ -362,13 +362,13 @@ class History:
     """Answers GET /days, /days/<date>, /bars and /performance. Thread safe; caches the last
     bars file read. Without `after`, day-v1 trades carry no prices after and no overshoot."""
 
-    def __init__(self, paths: HistoryPaths, after: AfterSettings | None = None) -> None:
+    def __init__(self, paths: HistoryPaths, after: AfterSettings | None = None,
+                 bars: CapturedBarsDays | None = None) -> None:
         self.paths = paths
+        self.captured_bars = bars or CapturedBarsDays()  # the server's shared reader
         self.after = after
         self.closes = None if after is None else Closes(after.calendar)
         self._lock = threading.Lock()
-        self._bars_key: tuple[str, int, int, bool] | None = None
-        self._bars: dict[str, list[api.BarV1]] = {}
         self._session_calendar: SessionCalendar | None = None
 
     # ------------------------------------------------------------ sources
@@ -465,7 +465,7 @@ class History:
         except MalformedJournal:
             strategy = None
         trade = replace(trade, entry=entry, entry_cause=cause, strategy=strategy)
-        bars = self._bars_by_symbol(day, today).get(trade.symbol, [])
+        bars = self._bars_of(trade.symbol, day, today)
         if self.after is not None and self.closes is not None:
             trade = trade_after(trade, bars, self.closes.close(day), self.after)
         try:
@@ -482,27 +482,19 @@ class History:
     def _bars_file(self, day: date) -> Path:
         return self.paths.capture / day.isoformat() / BARS_FILE
 
-    def _bars_by_symbol(self, day: date, today: date) -> dict[str, list[api.BarV1]]:
+    def _bars_by_symbol(self, day: date, today: date) -> dict[str, tuple[Bar, ...]]:
         path = existing(self._bars_file(day))  # plain or archived (.gz)
         if path is None:
             return {}
-        stat = path.stat()
-        key = (str(path), stat.st_mtime_ns, stat.st_size, day == today)
-        with self._lock:
-            if self._bars_key == key:
-                return self._bars
         try:
             # Today's file may be half way through a line the bot is writing.
-            read = read_captured_bars(path, open_tail=day == today)
+            return self.captured_bars.by_symbol(path, open_tail=day == today)
         except (CaptureError, OSError) as exc:
             raise HistoryUnavailable(f"capture file unreadable: {exc}") from exc
-        by_symbol: dict[str, list[api.BarV1]] = {}
-        for (symbol, _), bar in sorted(read.bars.items()):
-            by_symbol.setdefault(symbol, []).append(api.BarV1(
-                bar.start, bar.open, bar.high, bar.low, bar.close, bar.volume))
-        with self._lock:
-            self._bars_key, self._bars = key, by_symbol
-        return by_symbol
+
+    def _bars_of(self, symbol: str, day: date, today: date) -> list[api.BarV1]:
+        return [api.BarV1(bar.start, bar.open, bar.high, bar.low, bar.close, bar.volume)
+                for bar in self._bars_by_symbol(day, today).get(symbol, ())]
 
     # ------------------------------------------------------------ answers
 
@@ -557,7 +549,7 @@ class History:
                          bar_symbols=symbols)
 
     def bars(self, symbol: str, day: date, today: date) -> api.BarsV1:
-        bars = self._bars_by_symbol(day, today).get(symbol, [])
+        bars = self._bars_of(symbol, day, today)
         return api.BarsV1(environment=self.paths.environment, symbol=symbol, day=day,
                           bars=tuple(bars))
 

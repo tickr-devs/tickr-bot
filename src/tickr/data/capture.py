@@ -26,14 +26,15 @@ Bulk market data never enters the trading database (spec section 3). A write fai
 from __future__ import annotations
 
 import json
+import os
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import IO, Any
 
-from tickr.archive import open_text
+from tickr.archive import GZ_SUFFIX, open_text
 from tickr.calendar import ny_date_of
 from tickr.config import Config
 from tickr.data.base import ScreenerRow, StreamNotice
@@ -49,6 +50,7 @@ DISCOVERY_FILE = "discovery.jsonl"
 NOTICE_STATUS_TYPE = "1001"
 STREAM_SOURCE = "stream"
 CAPTURE_KEYS = frozenset({"provider", "receipt_time"})
+NEWLINE = b"\n"
 
 
 class CaptureError(Exception):
@@ -249,17 +251,7 @@ def read_captured_bars(captured: Path, *, open_tail: bool = False) -> CapturedBa
     for number, text in enumerate(lines, start=1):
         if not text.strip():
             continue
-        try:
-            record = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise CaptureError(f"{captured}:{number}: invalid JSON: {exc.msg}") from exc
-        if not isinstance(record, dict) or set(record) != BAR_KEYS | CAPTURE_KEYS:
-            raise CaptureError(f"{captured}:{number}: not a captured bar record")
-        bar_only = {k: record[k] for k in BAR_KEYS}
-        try:
-            bar = parse_bar(str(captured), number, json.dumps(bar_only))
-        except BarFileError as exc:
-            raise CaptureError(str(exc)) from exc
+        bar = _captured_bar(captured, number, text)
         key = (bar.symbol, bar.start)
         previous = latest.get(key)
         if previous is not None:
@@ -269,6 +261,128 @@ def read_captured_bars(captured: Path, *, open_tail: bool = False) -> CapturedBa
                 revised += 1
         latest[key] = bar
     return CapturedBars(latest, duplicates, revised)
+
+
+def _captured_bar(captured: Path, number: int, text: str) -> Bar:
+    """The bar of line `number` of a captured bars.jsonl; CaptureError naming the line."""
+    try:
+        record = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise CaptureError(f"{captured}:{number}: invalid JSON: {exc.msg}") from exc
+    if not isinstance(record, dict) or set(record) != BAR_KEYS | CAPTURE_KEYS:
+        raise CaptureError(f"{captured}:{number}: not a captured bar record")
+    bar_only = {k: record[k] for k in BAR_KEYS}
+    try:
+        return parse_bar(str(captured), number, json.dumps(bar_only))
+    except BarFileError as exc:
+        raise CaptureError(str(exc)) from exc
+
+
+class _BarsTail:
+    """One captured bars.jsonl read on as the bot appends: only the lines added since the last
+    read are parsed. Each symbol's bars (one per start, the last version received, as
+    `read_captured_bars` keeps them) are kept in start order and sorted again only when a new
+    line touches that symbol. Not thread safe: `CapturedBarsDays` holds the lock."""
+
+    def __init__(self, captured: Path) -> None:
+        self.captured = captured
+        self._reset(None)
+
+    def _reset(self, identity: tuple[int, int] | None) -> None:
+        self._identity = identity  # st_dev, st_ino of what was read
+        self._head = b""  # the file's first line as read; a different one means another file
+        self._offset = 0  # bytes parsed so far: complete lines only
+        self._lines = 0  # lines parsed so far, for the line number of a malformed one
+        self._latest: dict[str, dict[datetime, Bar]] = {}
+        self._by_symbol: dict[str, tuple[Bar, ...]] = {}
+
+    def by_symbol(self, open_tail: bool) -> dict[str, tuple[Bar, ...]]:
+        if self.captured.name.endswith(GZ_SUFFIX):  # archived: read once, never appended to
+            if self._identity is None:
+                with open_text(self.captured) as text:
+                    self._fold(self._parse(text, open_tail=False))
+                stat = self.captured.stat()
+                self._identity = (stat.st_dev, stat.st_ino)
+            return dict(self._by_symbol)
+        with open(self.captured, "rb") as handle:
+            stat = os.fstat(handle.fileno())
+            identity = (stat.st_dev, stat.st_ino)
+            head = handle.read(len(self._head)) if self._head else b""
+            if identity != self._identity or stat.st_size < self._offset or head != self._head:
+                self._reset(identity)  # replaced, shrunk or recreated: read anew
+            handle.seek(self._offset)
+            if not self._head:
+                self._head = handle.readline()  # the first line, to know the file again
+                handle.seek(self._offset)
+                if not self._head.endswith(NEWLINE):
+                    self._head = b""  # not a whole line yet
+            self._fold(self._parse(handle, open_tail))
+        return dict(self._by_symbol)
+
+    def _parse(self, lines: Iterable[bytes] | Iterable[str], open_tail: bool,
+               ) -> tuple[dict[str, dict[datetime, Bar]], int, int]:
+        """The bars of `lines` read on from the last one parsed (the last version per symbol and
+        start), the bytes they took and the number of the last line. With `open_tail` a line
+        without its newline (the bot is still writing it) is not read yet."""
+        found: dict[str, dict[datetime, Bar]] = {}
+        consumed = 0
+        number = self._lines
+        for raw in lines:
+            if isinstance(raw, bytes):
+                if open_tail and not raw.endswith(NEWLINE):
+                    break
+                try:
+                    text = raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise CaptureError(f"{self.captured}:{number + 1}: {exc}") from exc
+                consumed += len(raw)
+            else:
+                text = raw
+            number += 1
+            if text.strip():
+                bar = _captured_bar(self.captured, number, text)
+                found.setdefault(bar.symbol, {})[bar.start] = bar
+        return found, consumed, number
+
+    def _fold(self, parsed: tuple[dict[str, dict[datetime, Bar]], int, int]) -> None:
+        """Keeps a fully parsed chunk: a malformed line raised before and left the tail as it
+        was. Each symbol a new line touched is put in start order again."""
+        found, consumed, number = parsed
+        for symbol, starts in found.items():
+            kept = self._latest.setdefault(symbol, {})
+            kept.update(starts)
+            self._by_symbol[symbol] = tuple(kept[start] for start in sorted(kept))
+        self._offset += consumed
+        self._lines = number
+
+
+class CapturedBarsDays:
+    """The bars of captured bars.jsonl files by symbol, shared by every reader in the API (a
+    day's trades and bars, the observers' and the skipped signals' simulations, a trade's
+    what-if). Today's file is read on as the bot appends (`_BarsTail`): re-reading all of it
+    whenever it grew cost the API tens of seconds of CPU per request on a busy day. Holds the
+    file read with `open_tail` (today's) and the last other one. Thread safe."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open: _BarsTail | None = None  # today's file, still being appended to
+        self._closed: _BarsTail | None = None  # the last other day's file read
+
+    def by_symbol(self, captured: Path, *, open_tail: bool) -> dict[str, tuple[Bar, ...]]:
+        """Each symbol's bars of `captured` (plain or archived), oldest first, one per start:
+        what `read_captured_bars` keeps. Raises CaptureError (a malformed line: the file is
+        read anew next time) or OSError."""
+        with self._lock:
+            slot = "_open" if open_tail else "_closed"
+            tail: _BarsTail | None = getattr(self, slot)
+            if tail is None or tail.captured != captured:
+                tail = _BarsTail(captured)
+                setattr(self, slot, tail)
+            try:
+                return tail.by_symbol(open_tail)
+            except CaptureError:
+                setattr(self, slot, None)
+                raise
 
 
 def export_replay_bars(captured: Path, out: Path) -> ExportResult:

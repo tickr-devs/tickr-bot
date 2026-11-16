@@ -28,6 +28,7 @@ from tickr.api import contract as api
 from tickr.api.observer_results import NoInputs, SimulationPaths, day_bars, replay_inputs
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.config import Config
+from tickr.data.capture import CapturedBarsDays
 from tickr.observers.errors import ObserverError
 from tickr.observers.loader import check_history, load_strategy, parse_modules
 from tickr.replay.bars import load_bars
@@ -89,7 +90,7 @@ def refuse_in_session(settings: TradeWhatIfSettings, now: datetime) -> None:
 
 
 def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,
-            now: datetime) -> api.TradeWhatIfV1:
+            now: datetime, bars: CapturedBarsDays) -> api.TradeWhatIfV1:
     """The version in strategies/<folder> replayed on `symbol`'s bars of `day`. Raises
     TradeWhatIfRefused in session; every other failure is the document's cause."""
     refuse_in_session(settings, now)
@@ -107,7 +108,7 @@ def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,
         return failed(str(exc))
     name, version = loaded.strategy.name, loaded.strategy.version
     try:
-        today_bars = day_bars(settings.paths, day, ny_date_of(now)).get(symbol, ())
+        today_bars = day_bars(bars, settings.paths, day, ny_date_of(now)).get(symbol, ())
         replay_settings, clock_for = replay_inputs(settings.paths)
     except NoInputs as exc:
         return failed(str(exc), name, version)

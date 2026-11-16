@@ -37,7 +37,7 @@ from tickr.api.contract import ObserverResult, ObserverTradeV1
 from tickr.archive import existing
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import Config, SessionConfig
-from tickr.data.capture import BARS_FILE, CaptureError, read_captured_bars
+from tickr.data.capture import BARS_FILE, CapturedBarsDays, CaptureError
 from tickr.replay.clock import ClockFor, calendar_clock
 from tickr.replay.errors import ReplayError
 from tickr.replay.settings import ReplaySettings, load_settings
@@ -137,8 +137,10 @@ def _result(row: observer_report.IdentityReport, enters: Sequence[observer_repor
 class ObserverResults:
     """Thread safe; remembers the last day it simulated."""
 
-    def __init__(self, paths: SimulationPaths, max_trades: int) -> None:
+    def __init__(self, paths: SimulationPaths, max_trades: int,
+                 bars: CapturedBarsDays | None = None) -> None:
         self.paths = paths
+        self.captured_bars = bars or CapturedBarsDays()  # the server's shared reader
         self.max_trades = max_trades  # [api] observer_trades_max_rows
         self._lock = threading.Lock()
         self._key: tuple[object, ...] | None = None
@@ -175,7 +177,7 @@ class ObserverResults:
         if not trading:
             return out, False
         try:
-            bars = day_bars(self.paths, day, today)
+            bars = day_bars(self.captured_bars, self.paths, day, today)
             settings, clock_for = replay_inputs(self.paths)
             report = observer_report.report(
                 [r for i in trading for r in groups[i]], bars, settings, clock_for)
@@ -223,18 +225,15 @@ def replay_inputs(paths: SimulationPaths) -> tuple[ReplaySettings, ClockFor]:
     return settings, calendar_clock(load_calendar(paths), paths.session)
 
 
-def day_bars(paths: SimulationPaths, day: date, today: date) -> dict[str, tuple[Bar, ...]]:
-    path = bars_file(paths, day)
-    if existing(path) is None:
+def day_bars(bars: CapturedBarsDays, paths: SimulationPaths, day: date,
+             today: date) -> dict[str, tuple[Bar, ...]]:
+    path = existing(bars_file(paths, day))  # plain or archived (.gz)
+    if path is None:
         raise NoInputs(f"no captured bars for {day.isoformat()}")
     try:
         # Today's file may be half way through a line the bot is writing.
-        read = read_captured_bars(path, open_tail=day == today)
+        return bars.by_symbol(path, open_tail=day == today)
     except CaptureError as exc:
         raise NoInputs(f"capture file refused: {exc}") from exc
     except OSError as exc:
         raise NoInputs(f"capture file refused: {exc}", transient=True) from exc
-    by_symbol: dict[str, list[Bar]] = defaultdict(list)
-    for (symbol, _), bar in sorted(read.bars.items()):
-        by_symbol[symbol].append(bar)
-    return {symbol: tuple(bars) for symbol, bars in by_symbol.items()}

@@ -70,7 +70,7 @@ from tickr.api.lab_replay import LabReplay, LabReplayRefused, LabReplaySettings
 from tickr.api.observer_results import ObserverResults, SimulationPaths
 from tickr.calendar import ny_date_of
 from tickr.config import Config, ConfigError
-from tickr.data.capture import CaptureError
+from tickr.data.capture import CapturedBarsDays, CaptureError
 from tickr.data.discovery import DiscoverySettings
 from tickr.data.history import SYMBOL_PATTERN as TICKER_PATTERN
 from tickr.observers.errors import ObserverError
@@ -339,15 +339,17 @@ class ApiServer(ThreadingHTTPServer):
         # Shared too, so one replay at a time whichever listener started it.
         self.lab = lab or LabReplay(settings.lab, clock)
         self.page = (STATIC_DIR / "status.html").read_bytes()
-        self.history = History(settings.history, settings.after)
+        # Captured bars by symbol, read on as the bot appends; shared by every reader below.
+        self.captured_bars = CapturedBarsDays()
+        self.history = History(settings.history, settings.after, self.captured_bars)
         # Today's decision records, parsed once and read on as the bot appends.
         self.decisions = DecisionCache(DecisionLog(settings.decisions))
-        self.observer_results = ObserverResults(settings.simulation,
-                                                settings.observer_trades_max_rows)
+        self.observer_results = ObserverResults(
+            settings.simulation, settings.observer_trades_max_rows, self.captured_bars)
         self.screener_chips = flow.ScreenerChips(settings.universe, settings.change_pct_places)
         self.discovery_day = symbols.DiscoveryDay()  # GET /symbols and /movers
         self.skipped = SkippedAfter(settings.simulation, settings.after.minutes,
-                                    settings.check_places)
+                                    settings.check_places, self.captured_bars)
         # No source until one is attached (python -m tickr.api, or the demo's world).
         self.chart = Chart(settings.chart)
         self.start_runner = run_command  # runs [api] start_bot_command; replaced in tests
@@ -953,7 +955,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             document = trade_whatif.what_if(self.server.settings.trade_whatif,
                                             params["version"], params["symbol"], day,
-                                            self.server.clock())
+                                            self.server.clock(), self.server.captured_bars)
         except trade_whatif.TradeWhatIfRefused as exc:
             self._error("conflict", str(exc))
             return
