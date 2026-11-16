@@ -46,6 +46,8 @@ class OrderType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
     STOP_LOSS = "STOP_LOSS"
+    # Sent only by the extended-hours probe (engine/session_probe.py) until F7 is answered.
+    STOP_LOSS_LIMIT = "STOP_LOSS_LIMIT"
 
 
 class TimeInForce(StrEnum):

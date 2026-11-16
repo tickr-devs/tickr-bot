@@ -174,6 +174,23 @@ chart_limit_start_delay_seconds = 20
 chart_client_reads = 20
 # Seconds between two chart-client reads; keep 60 / this at or below half of [chart] requests_per_minute, so the API's own charts still fit in the chart's slice; read by the probes.
 chart_client_interval_seconds = 30
+# probe-extended (F7): least minutes left in the pre-market or post-market when it starts, so all four steps and the close
+# fit before the session ends (about 8 minutes at worst); read by the probe-extended command.
+extended_end_margin_minutes = 15
+# probe-extended: acceptance-test BUY stops sit this many percent above the ask, so none can trigger; read by the probe-extended command.
+extended_far_stop_percent = 20
+# probe-extended: a STOP_LOSS_LIMIT's limit lies this many percent beyond its stop (above for a BUY, below for a SELL); read by the probe-extended command.
+extended_stop_limit_percent = 2
+# probe-extended: seconds an acceptance-test stop is read by Detail before it is cancelled; read by the probe-extended command.
+extended_observe_seconds = 9
+# probe-extended: seconds a SELL stop one tick below the bid is watched for a trigger before it is cancelled; read by the probe-extended command.
+extended_trigger_seconds = 180
+# probe-extended: the closing SELL LIMIT lies this many percent below the bid, so it fills at the bid in a thin book; read by the probe-extended command.
+extended_close_percent = 2
+# probe-extended: seconds the positions read may take to agree with the fills Detail proved, read once per
+# [orders] detail_poll_seconds, before a SELL, the close or the final verdict; still different = the probe stops and
+# exits 4; read by the probe-extended command.
+extended_position_agree_seconds = 15
 
 [api]
 # Local API bind address; loopback only; read by the api server.

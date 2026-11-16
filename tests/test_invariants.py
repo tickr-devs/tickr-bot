@@ -514,8 +514,8 @@ def test_every_engine_and_adapter_in_source_is_built_with_the_trading_gate():
 
 def test_only_engine_open_trade_creates_entries_and_only_the_engine_sends():
     """Structural: the one entry intent is written in Engine.open_trade; only the engine
-    calls broker.place/cancel; only the entry desk (admission) and the manual command
-    (probe limits) call open_trade."""
+    calls broker.place/cancel (besides the F7 probe); only the entry desk (admission) and the
+    manual command (probe limits) call open_trade."""
     entry_writers, senders, openers = [], [], []
     for path in SRC.rglob("*.py"):
         rel = path.relative_to(SRC).as_posix()
@@ -532,7 +532,11 @@ def test_only_engine_open_trade_creates_entries_and_only_the_engine_sends():
                 elif name == "open_trade":
                     openers.append(f"{rel}:{fn.name}")
     assert entry_writers == ["engine/core.py:open_trade"]
-    assert sorted(set(senders)) == ["engine/core.py:_cancel", "engine/core.py:_send"]
+    # The one other sender: the owner-run F7 probe, which holds the bot's lock (no engine runs
+    # next to it), records every order before sending it and never resends.
+    assert sorted(set(senders)) == ["engine/core.py:_cancel", "engine/core.py:_send",
+                                    "engine/session_probe.py:finish",
+                                    "engine/session_probe.py:place"]
     assert sorted(openers) == ["cli.py:_trade", "runtime/entries.py:on_decision"]
 
 
@@ -769,3 +773,13 @@ def test_an_entry_never_follows_a_rejected_stop_until_the_operator_looks(tmp_pat
     assert broker.entries == 1 and broker.violations == []
     store.close()
 
+
+
+def test_only_the_f7_probe_builds_stop_limit_orders():
+    """Structural: OrderType.STOP_LOSS_LIMIT is sent only by the extended-hours probe; the
+    broker adapter only shapes and reads it. The engine never builds one."""
+    users = sorted({path.relative_to(SRC).as_posix() for path in SRC.rglob("*.py")
+                    if any(isinstance(n, ast.Attribute) and n.attr == "STOP_LOSS_LIMIT"
+                           and ast.unparse(n.value) == "OrderType"
+                           for n in ast.walk(parsed(path)))})
+    assert users == ["broker/webull.py", "engine/session_probe.py"]

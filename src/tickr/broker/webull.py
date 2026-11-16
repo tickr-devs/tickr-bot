@@ -349,11 +349,11 @@ def read_order(item: Any, is_own: IsOwnAccount, where: str) -> OrderDetail:
     quantity = _decimal_field(item, "total_quantity", where)
     filled = _decimal_field(item, "filled_quantity", where)
     order_type = _enum_field(item, "order_type", OrderType, where)
-    # Display only: read on LIMIT rows, the one type it was recorded on, and an unreadable
-    # value is shown as unknown: nothing decides on it, so it can never make one of our
-    # orders unreadable.
+    # Display only: read on LIMIT rows, the one type it was recorded on (and STOP_LOSS_LIMIT
+    # rows, sent only by the F7 probe), and an unreadable value is shown as unknown: nothing
+    # decides on it, so it can never make one of our orders unreadable.
     limit_price = _display_decimal(item, "limit_price", where) \
-        if order_type is OrderType.LIMIT else None
+        if order_type in (OrderType.LIMIT, OrderType.STOP_LOSS_LIMIT) else None
     return OrderDetail(
         client_order_id=str(_require(item, "client_order_id", where)),
         symbol=str(_require(item, "symbol", where)),
@@ -648,8 +648,8 @@ def build_order_body(request: OrderRequest, client_order_id_max_length: int) -> 
     q = request.quantity
     if not q.is_finite() or q <= 0 or q != q.to_integral_value():
         raise Refused("LOCAL_QUANTITY", "quantity must be a positive whole number")
-    needs_limit = request.order_type is OrderType.LIMIT
-    needs_stop = request.order_type is OrderType.STOP_LOSS
+    needs_limit = request.order_type in (OrderType.LIMIT, OrderType.STOP_LOSS_LIMIT)
+    needs_stop = request.order_type in (OrderType.STOP_LOSS, OrderType.STOP_LOSS_LIMIT)
     if needs_limit != (request.limit_price is not None):
         raise Refused("LOCAL_LIMIT_PRICE", f"limit_price does not fit {request.order_type}")
     if needs_stop != (request.stop_price is not None):

@@ -147,6 +147,13 @@ class ProbeConfig:
     chart_limit_start_delay_seconds: int
     chart_client_reads: int
     chart_client_interval_seconds: int
+    extended_end_margin_minutes: int
+    extended_far_stop_percent: Decimal
+    extended_stop_limit_percent: Decimal
+    extended_observe_seconds: int
+    extended_trigger_seconds: int
+    extended_close_percent: Decimal
+    extended_position_agree_seconds: int
 
 
 @dataclass(frozen=True)

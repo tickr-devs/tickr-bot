@@ -349,6 +349,32 @@ def _probe_replace_stop(args: argparse.Namespace) -> int:
     return 3 if verdict is replace_probe.Verdict.NOT_SENT else 4
 
 
+def _probe_extended(args: argparse.Namespace) -> int:
+    """Probe F7 in the pre-market or post-market: which stops Webull accepts, fills and
+    triggers there (engine/session_probe.py). Exit 0 answered, 3 refused, 4 the operator must
+    close a leftover position in the Webull app."""
+    from tickr.engine import session_probe
+
+    cfg = config_module.load(args.config)
+    gate = config_module.trading_gate(cfg)
+    if not gate.open:
+        raise ManualRefused(f"trading gate closed: {gate.cause}")
+    if not session_probe.SYMBOL.match(args.symbol):
+        raise ManualRefused(f"{args.symbol!r} is not a ticker")
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    session, end = session_probe.check_time(cfg, calendar, NOW())
+    _, lock_path = data_paths(cfg)
+    with SingleInstanceLock(lock_path):
+        broker, market = PROBE_ADAPTERS(cfg)
+        folder = session_probe.evidence_folder(cfg, NOW())
+        print(f"probe-extended {args.symbol} in the {session} (ends {end.isoformat()}); "
+              f"evidence in {folder}")
+        code = session_probe.run(cfg, broker, market, args.symbol, folder, now=NOW,
+                                 sleep=SLEEP, out=print, session=session, session_end=end)
+        print(f"summary: {folder / 'summary.json'}")
+        return code
+
+
 def _check_quote(args: argparse.Namespace) -> int:
     """Read-only: one snapshot quote through the probes' market-data path, and whether its age
     passes the check `probe-replace-stop` applies. Sends no orders. Exit 0 fresh, 3 not."""
@@ -664,6 +690,10 @@ def main(argv: list[str] | None = None) -> int:
     replace = sub.add_parser("probe-replace-stop",
                              help="probe F5: tighten the open trade's stop once by replace")
     replace.add_argument("--to", type=_decimal, required=True, help="new stop price, USD")
+    extended = sub.add_parser("probe-extended", help="probe F7 in the pre-market or "
+                              "post-market, bot stopped, account flat: which stops Webull "
+                              "accepts and triggers there")
+    extended.add_argument("symbol")
     sub.add_parser("run", help="the bot service (launchd): protect, obey commands, drain on "
                    "SIGTERM")
     sub.add_parser("resume", help="recover after a crash and keep protecting open trades")
@@ -702,6 +732,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resume(args, exit_all=True)
         if args.command == "probe-replace-stop":
             return _probe_replace_stop(args)
+        if args.command == "probe-extended":
+            return _probe_extended(args)
         if args.command == "check-quote":
             return _check_quote(args)
         if args.command == "explain":
