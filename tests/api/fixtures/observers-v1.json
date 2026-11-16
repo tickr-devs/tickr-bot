@@ -67,6 +67,14 @@
       ],
       "trades_cause": null,
       "trades_truncated": false,
+      "watching_since": "2026-11-16T14:59:02.000Z",
+      "settings_differences": [
+        {
+          "key": "indicators.minimum_relative_volume",
+          "value": "1.5",
+          "active_value": "2.0"
+        }
+      ],
       "result_cause_codes": [],
       "trades_cause_codes": []
     },
@@ -79,6 +87,8 @@
       "trades": null,
       "trades_cause": "no decisions recorded that day",
       "trades_truncated": false,
+      "watching_since": null,
+      "settings_differences": null,
       "result_cause_codes": [
         {
           "code": "no_decisions",
@@ -108,6 +118,8 @@
       "trades": null,
       "trades_cause": "no captured bars for 2026-11-16",
       "trades_truncated": false,
+      "watching_since": "2026-11-16T15:02:01.000Z",
+      "settings_differences": [],
       "result_cause_codes": [
         {
           "code": "no_captured_bars",

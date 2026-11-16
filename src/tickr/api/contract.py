@@ -1292,6 +1292,19 @@ class ObserverTradeV1:
 
     cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
+
+@dataclass(frozen=True)
+class SettingDifferenceV1:
+    """One setting where an observer's strategy file differs from the active strategy's, display
+    only: `key` is the dotted TOML path (`indicators.minimum_relative_volume`), each value the
+    setting as written in that file (JSON text of a number, bool or list; a string as is), null
+    when that file has no such key."""
+
+    key: str
+    value: str | None
+    active_value: str | None
+
+
 @dataclass(frozen=True)
 class ObserverV1:
     """One configured observer. `result_gross_usd` is its simulated gross day result (the
@@ -1299,7 +1312,12 @@ class ObserverV1:
     null when it cannot be computed, and then `result_cause` says why (else null). `trades`:
     every ENTER of that simulation, oldest first, at most `[api] observer_trades_max_rows`
     (`trades_truncated` true when the cap left some out); null with `trades_cause` when the
-    simulation could not run (else `trades_cause` is null)."""
+    simulation could not run (else `trades_cause` is null). `watching_since`: the decision time
+    of its first recorded decision that day (it records one per symbol per evaluation, so this is
+    when it started watching, e.g. at a restart that added it); null without decisions.
+    `settings_differences`: every setting of its strategy file that differs from the active
+    strategy's file (empty when none); null when it is another strategy than the active one, or
+    when no configured folder declares this version now (its file changed since). Display only."""
 
     name: str
     version: str
@@ -1309,6 +1327,8 @@ class ObserverV1:
     trades: tuple[ObserverTradeV1, ...] | None
     trades_cause: str | None
     trades_truncated: bool
+    watching_since: datetime | None = _added_later(None)
+    settings_differences: tuple[SettingDifferenceV1, ...] | None = _added_later(None)
 
     result_cause_codes: tuple[ReasonV1, ...] = _reasons_of("result_cause")
     trades_cause_codes: tuple[ReasonV1, ...] = _reasons_of("trades_cause")
@@ -1393,15 +1413,45 @@ class ObserverResult:
 NO_DECISIONS = "no decisions recorded that day"
 
 
+def settings_differences(values: Mapping[str, Any],
+                         active: Mapping[str, Any]) -> tuple[SettingDifferenceV1, ...]:
+    """Every setting where two parsed strategy files differ, by dotted key in sorted order. The
+    `[strategy]` table (name and version, which always differ) is left out. Display only."""
+    mine, theirs = _flat_settings(values), _flat_settings(active)
+    return tuple(SettingDifferenceV1(key, mine.get(key), theirs.get(key))
+                 for key in sorted(set(mine) | set(theirs)) if mine.get(key) != theirs.get(key))
+
+
+_IDENTITY_TABLE = "strategy"  # [strategy] name/version: an identity, not a setting
+
+
+def _flat_settings(values: Mapping[str, Any], prefix: str = "") -> dict[str, str]:
+    flat: dict[str, str] = {}
+    for key, value in values.items():
+        if not prefix and key == _IDENTITY_TABLE:
+            continue
+        path = f"{prefix}{key}"
+        if isinstance(value, Mapping):
+            flat.update(_flat_settings(value, f"{path}."))
+        else:
+            flat[path] = value if isinstance(value, str) else json.dumps(value, default=str)
+    return flat
+
+
 def observers_document(day: date, identities: tuple[tuple[str, str], ...],
                        records: tuple[DecisionRecord, ...],
-                       results: Mapping[tuple[str, str], ObserverResult]) -> ObserversV1:
+                       results: Mapping[tuple[str, str], ObserverResult],
+                       differences: Mapping[tuple[str, str], tuple[SettingDifferenceV1, ...]]
+                       | None = None) -> ObserversV1:
     """`identities`: (name, current version) of each configured observer, in configuration
     order; `records`: observer records only. Observers are matched by name: one entry per
     version recorded that day (config order, then version), or, when a name has no records,
     one empty entry per current version, so a version bump never hides earlier records.
     `results`: the simulated result of every (name, version) recorded that day; an entry
-    without records gets null result and trades with the cause NO_DECISIONS."""
+    without records gets null result and trades with the cause NO_DECISIONS. `differences`:
+    each (name, version) whose settings can be compared with the active strategy's; any other
+    entry gets null `settings_differences`."""
+    differences = differences or {}
     ordered = _oldest_first(records)
     names = list(dict.fromkeys(name for name, _ in identities))
     entries: list[ObserverV1] = []
@@ -1415,10 +1465,14 @@ def observers_document(day: date, identities: tuple[tuple[str, str], ...],
                 raise ContractError(f"no simulated result for observer {name} v{version}")
             else:
                 result = ObserverResult(None, NO_DECISIONS, None, NO_DECISIONS)
+            times = [r.time for r in ordered if (r.decision.strategy, r.decision.version)
+                     == (name, version)]
             entries.append(ObserverV1(
                 name=name, version=version, result_gross_usd=result.gross_usd,
                 result_cause=result.cause, trades=result.trades,
                 trades_cause=result.trades_cause, trades_truncated=result.trades_truncated,
+                watching_since=min(times) if times else None,
+                settings_differences=differences.get((name, version)),
                 decisions=tuple(
                 ObserverDecisionV1(r.bar_start, r.symbol, r.decision.verdict,
                                    tuple(c.rule for c in r.decision.checks if not c.passed))

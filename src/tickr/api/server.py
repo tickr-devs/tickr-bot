@@ -1014,7 +1014,8 @@ class Handler(BaseHTTPRequestHandler):
                 results = self.server.observer_results.results(
                     day, today, [r for r in records if r.decision.strategy in configured],
                     log.path(day))
-                document: Any = contract.observers_document(day, identities, records, results)
+                document: Any = contract.observers_document(day, identities, records, results,
+                                                            self._observer_differences())
             elif path == "/skipped":
                 document = self.server.skipped.document(
                     day, today, cache.records(day, today, role=Role.ACTIVE), log.path(day))
@@ -1069,6 +1070,23 @@ class Handler(BaseHTTPRequestHandler):
         return symbols.symbols_document(day, self._discovery(day, today), chips, records,
                                         self.server.history.entries(day, today),
                                         settings.check_places)
+
+    def _observer_differences(self) -> dict[tuple[str, str], tuple[contract.SettingDifferenceV1,
+                                                                    ...]]:
+        """Display only: each configured observer folder of the active strategy's name, by the
+        (name, version) its file declares now, with the settings where its file differs from
+        the active strategy's file. Nothing is imported or built; ObserverError when a file is
+        unreadable."""
+        settings = self.server.settings
+        root, active_folder = settings.strategies_root, settings.shown.active_strategy
+        active_name, _ = read_identity(root, active_folder)
+        active = read_values(root, active_folder)
+        found: dict[tuple[str, str], tuple[contract.SettingDifferenceV1, ...]] = {}
+        for folder in settings.shown.observers:
+            identity = read_identity(root, folder)
+            if identity[0] == active_name:
+                found[identity] = contract.settings_differences(read_values(root, folder), active)
+        return found
 
     def _movers(self, day: date, today: date,
                 records: tuple[DecisionRecord, ...]) -> contract.MoversV1:

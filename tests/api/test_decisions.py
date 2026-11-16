@@ -147,7 +147,49 @@ def test_observers_today(api, cfg):
              "reasons": []},
         ], "result_cause": "no captured bars for 2026-11-16", "trades": None,
         "trades_cause": "no captured bars for 2026-11-16", "trades_truncated": False,
+        # the first recorded decision's time (the early one), not the first bar's start
+        "watching_since": "2026-11-16T15:02:01.000Z",
+        # another strategy than the active price-action-v3: its settings are not compared
+        "settings_differences": None,
         "result_cause_codes": NO_BARS_CODES, "trades_cause_codes": NO_BARS_CODES}]
+
+
+def test_observer_settings_differ_from_the_active_strategy(tmp_path):
+    """An observer folder of the active strategy's name: the settings its file changes, from
+    the files themselves; a version no folder declares now has none (its file changed)."""
+    cfg = _cfg(tmp_path, '["price-action-v3-relvol-1.5"]')
+    variant = ("price-action-v3", "2-relvol-1.5")  # strategies/price-action-v3-relvol-1.5
+    older = ("price-action-v3", "1-relvol-1.5")
+    _write(DecisionLog.from_config(cfg),
+           _record(older, role=Role.OBSERVER, minute=0),
+           _record(variant, role=Role.OBSERVER, minute=3))
+    server = _serve(cfg)
+    try:
+        body = _get(server, "/observers", "observers-v1")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert [(o["version"], o["watching_since"], o["settings_differences"])
+            for o in body["observers"]] == [
+        ("1-relvol-1.5", "2026-11-16T15:01:00.000Z", None),
+        ("2-relvol-1.5", "2026-11-16T15:04:03.000Z", [
+            {"key": "indicators.minimum_relative_volume", "value": "1.5",
+             "active_value": "2.0"}]),
+    ]
+
+
+def test_settings_differences_by_dotted_key():
+    observer = {"strategy": {"name": "s", "version": "2"}, "a": {"x": 1, "y": True},
+                "b": {"c": {"d": "on"}}, "only_here": {"k": [1, 2]}}
+    active = {"strategy": {"name": "s", "version": "1"}, "a": {"x": 1, "y": False},
+              "b": {"c": {"d": "off"}}, "only_active": {"k": 2.5}}
+    assert contract.settings_differences(observer, active) == (
+        contract.SettingDifferenceV1("a.y", "true", "false"),
+        contract.SettingDifferenceV1("b.c.d", "on", "off"),
+        contract.SettingDifferenceV1("only_active.k", None, "2.5"),
+        contract.SettingDifferenceV1("only_here.k", "[1, 2]", None),
+    )
+    assert contract.settings_differences(active, active) == ()
 
 
 def test_observer_without_decisions_and_no_observers(api, cfg, tmp_path_factory):

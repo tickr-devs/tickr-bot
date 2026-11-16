@@ -909,6 +909,18 @@ inputs, simulation refused) or, for an unexpected error while listing them, `<Er
 otherwise `trades_cause` is `null`. The active strategy's trades are not here: `/observers`
 holds observers only, and the bot's real trades are in `day-v1`.
 
+Two keys added after version 1 shipped (an older bot's answer has neither; clients read them as
+unknown), both display only: `watching_since` is the decision time of the observer's first
+recorded decision that day (an observer records one decision per symbol per evaluation, so this
+is when it started watching, for example at a restart that added it; the Lab chart starts its
+line there), `null` without decisions. `settings_differences` lists every setting where the
+observer's `strategy.toml` differs from the active strategy's, as `{key, value, active_value}`:
+the dotted TOML key (`indicators.minimum_relative_volume`) and each file's value as written
+(JSON text of a number, bool or list; a string as is), `null` when that file lacks the key;
+sorted by key, `[strategy]` (name and version) left out, `[]` when the files agree. It is `null`
+when the observer is another strategy than the active one, or when no configured folder declares
+that version now (its file changed since). The apps name an observer by it: `v3 · rel vol 1.5×`.
+
 `/decisions?symbol=&date=` (both required) lists the active strategy's and the observers'
 decisions for the symbol, `observer` true for an observer record, `strategy` its `{name,
 version}`. `checks` have the explain-v1 shape (`rule` `measured` `operator` `threshold` `passed`
