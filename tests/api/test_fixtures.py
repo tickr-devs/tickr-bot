@@ -260,7 +260,9 @@ def documents() -> dict[str, object]:
                 DAY, datetime(2026, 11, 16, 14, 30, tzinfo=UTC),
                 datetime(2026, 11, 16, 20, 45, tzinfo=UTC),
                 datetime(2026, 11, 16, 20, 55, tzinfo=UTC),
-                datetime(2026, 11, 16, 21, 0, tzinfo=UTC)), None,
+                datetime(2026, 11, 16, 21, 0, tzinfo=UTC),
+                datetime(2026, 11, 16, 9, 0, tzinfo=UTC),
+                datetime(2026, 11, 17, 1, 0, tzinfo=UTC)), None,
             # Last night added Friday 2026-11-13 to the Lab's data.
             NightlyFetchJobV1(datetime(2026, 11, 14, 1, 42, 7, tzinfo=UTC), DAY - timedelta(days=3),
                               1, None)),

@@ -769,13 +769,17 @@ class BackupJobV1:
 
 @dataclass(frozen=True)
 class SessionTimesV1:
-    """Today's New York session and the bot's cutoffs from the calendar and [session]."""
+    """Today's New York session and the bot's cutoffs from the calendar and [session].
+    `premarket_open` and `extended_close` (the calendar's extended hours, shown, not traded) were
+    added after version 1 shipped."""
 
     day: date
     regular_open: datetime
     last_entry_at: datetime
     flatten_at: datetime
     regular_close: datetime
+    premarket_open: datetime
+    extended_close: datetime
 
 
 @dataclass(frozen=True)

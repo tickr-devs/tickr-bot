@@ -75,6 +75,10 @@ def test_without_status_or_database_only_config_and_calendar_answer(cfg):
         minutes=cfg.session.last_entry_minutes_before_close)
     assert contract.parse_time(session["flatten_at"]) == close - timedelta(
         minutes=cfg.session.flatten_minutes_before_close)
+    # The calendar's extended hours: pre-market from 04:00, post-market to 20:00 New York.
+    premarket, extended = datetime(2026, 11, 16, 9, 0, tzinfo=UTC), close + timedelta(hours=4)
+    assert contract.parse_time(session["premarket_open"]) == premarket
+    assert contract.parse_time(session["extended_close"]) == extended
 
 
 def test_running_bot_gives_its_start_next_reconcile_and_last_backup(cfg, tmp_path):

@@ -148,4 +148,4 @@ def _session(settings: JobsSettings,
     if day.half_day and not settings.half_days_enabled:  # as preflight and admission decide
         return None, f"no session {day.ny_date}: half day, half_days_enabled = false"
     return api.SessionTimesV1(day.ny_date, day.regular_open, times.last_entry, times.flatten,
-                              day.regular_close), None
+                              day.regular_close, day.premarket_open, day.extended_close), None

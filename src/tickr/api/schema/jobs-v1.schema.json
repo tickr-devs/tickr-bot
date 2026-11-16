@@ -179,6 +179,14 @@
             "regular_close": {
               "type": "string",
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            "premarket_open": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            "extended_close": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
             }
           },
           "required": [
@@ -186,7 +194,9 @@
             "regular_open",
             "last_entry_at",
             "flatten_at",
-            "regular_close"
+            "regular_close",
+            "premarket_open",
+            "extended_close"
           ],
           "additionalProperties": false
         },

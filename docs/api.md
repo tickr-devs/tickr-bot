@@ -528,8 +528,11 @@ reads and writes nothing for it.
   own time zone and launchd `weekdays` (1 = Monday ... 5 = Friday). No next time is computed: the
   API does not guess the Mac's time zone rules, and the session calendar still decides each day.
 - `session`: today's New York date with `regular_open`, `last_entry_at`, `flatten_at` and
-  `regular_close`, or null with `session_cause` (a weekend, a closure, a half day with
-  `half_days_enabled = false`, a calendar that does not cover today).
+  `regular_close`, and the calendar's extended hours `premarket_open` and `extended_close`
+  (shown, not traded), or null with `session_cause` (a weekend, a closure, a half day with
+  `half_days_enabled = false`, a calendar that does not cover today). `premarket_open` and
+  `extended_close` were added after version 1 shipped: a reader takes a session without them as
+  having unknown extended hours; the bot always writes them.
 - `nightly_fetch`: the nightly backtest-data refresh's last outcome, from its `nightly.json`
   (docs/backtest.md, "Nightly"): `finished_at`, `last_day` (where the Lab's data now ends),
   `new_sessions` added (0 = already up to date) and `cause` when it was refused or stopped (the

@@ -65,7 +65,9 @@
     "regular_open": "2026-11-16T14:30:00.000Z",
     "last_entry_at": "2026-11-16T20:45:00.000Z",
     "flatten_at": "2026-11-16T20:55:00.000Z",
-    "regular_close": "2026-11-16T21:00:00.000Z"
+    "regular_close": "2026-11-16T21:00:00.000Z",
+    "premarket_open": "2026-11-16T09:00:00.000Z",
+    "extended_close": "2026-11-17T01:00:00.000Z"
   },
   "session_cause": null,
   "nightly_fetch": {
