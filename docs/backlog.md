@@ -52,7 +52,7 @@ Goal, scope and stages: `docs/spec-v1.md`. What is left:
 
 Goal: the tools and rules to tell a strategy with a positive net result after costs, on data it was
 not fitted on, from a fitted one. Scope: offline research tools and strategy versions only; nothing
-in the order, risk or session path changes. Strategies still never send orders (rule 8). R6-R11 are
+in the order, risk or session path changes. Strategies still never send orders (rule 8). R6-R12 are
 research runs and candidates: they go on in every later version and never gate a merge.
 
 - **R1** Promotion ladder with written criteria: history, observer for N sessions, active in Sandbox,
@@ -79,6 +79,11 @@ research runs and candidates: they go on in every later version and never gate a
 - **R11** Observers see what they would trade: discovery applies the union of the active strategy's
   and the observers' liquidity rules, so an observer with looser rules is not starved (left over
   from #403).
+- **R12** Intra-minute breakout entry (owner, 2026-11-16): a strategy variant that enters on the L1
+  stream when the breakout happens, instead of waiting for the M1 bar to close above it. Webull
+  history has only minute bars, so it cannot be backtested. First step: record every L1 quote of
+  WATCH symbols from the stream the bot already holds (no extra bars quota), check the capture
+  (`quotes.jsonl`) misses none, then judge the variant by quote-level replay and as an observer.
 
 Exit: R1-R5 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
 while later versions are built.
