@@ -502,3 +502,70 @@ def test_restart_command_names_the_bot_job_label(config_path):
     label = cfg.runtime.watchdog_restart_command[-1].rsplit("/", 1)[1]
     assert f"<key>Label</key>\n  <string>{label}</string>" in template
     assert "-k" not in cfg.runtime.watchdog_restart_command  # never kills a running job
+
+
+def _resting_trade(database: Path, *, entry_state: str | None = "ACCEPTED",
+                   rest: bool = True) -> None:
+    database.parent.mkdir(parents=True, exist_ok=True)
+    store = Store.open(database, busy_timeout_seconds=Decimal(5))
+    store._db.execute(
+        "INSERT INTO trades (trade_id, run_id, symbol, state, entry_quantity, entry_limit_price,"
+        " stop_price, planned_loss_usd, opened_at, entry_low_price, entry_rest_until) VALUES "
+        "('t1', 'r1', 'ABCD', 'opening', '10', '9.9', '9.6', '3', '2026-11-16T15:00:00+00:00',"
+        " '9.8', ?)", ("2026-11-16T15:06:00+00:00" if rest else None,))
+    store._db.execute(
+        "INSERT INTO orders (client_order_id, trade_id, leg, symbol, side, order_type, quantity,"
+        " limit_price, send_state, broker_state, updated_at) VALUES ('ap-t1-e1', 't1', 'entry',"
+        " 'ABCD', 'BUY', 'LIMIT', '10', '9.9', 'acknowledged', ?, '2026-11-16T15:00:00+00:00')",
+        (entry_state,))
+    store.close()
+
+
+EARLY = datetime(2026, 11, 16, 15, 3, tzinfo=UTC)  # 10:03 ET, long before the restart time
+
+
+@pytest.mark.parametrize("entry_state,rest,expected,started", [
+    ("ACCEPTED", True, ["watchdog-restarted-bot"], True),
+    ("PARTIALLY_FILLED", True, ["watchdog-restarted-bot"], True),
+    (None, True, ["watchdog-restarted-bot"], True),  # sent, Detail not read yet
+    ("CANCELLED", True, ["bot-down-with-open-trade"], False),
+    ("ACCEPTED", False, ["bot-down-with-open-trade"], False),  # a marketable entry
+])
+def test_a_resting_entry_restarts_a_down_bot_at_once(cfg, tmp_path, entry_state, rest,
+                                                     expected, started):
+    database, _ = data_paths(cfg)
+    _resting_trade(database, entry_state=entry_state, rest=rest)
+    runs = Runs()
+    guard, recorder = make(cfg, Clock(EARLY), None, tmp_path, runs)
+    assert EARLY < guard.restart_at
+    guard.bot_check(EARLY)
+    assert kinds(recorder) == expected
+    assert bool(runs.calls) is started
+    if started:
+        assert watchdog.restarted_on(watchdog.entry_restart_file(cfg)) == date(2026, 11, 16)
+        assert not watchdog.restart_file(cfg).exists()  # the flatten restart stays available
+        assert "cancels it at startup" in recorder.shown[0]
+
+
+def test_the_early_restart_is_once_a_day_and_leaves_the_flatten_restart(cfg, tmp_path):
+    database, _ = data_paths(cfg)
+    _resting_trade(database)
+    runs = Runs()
+    guard, recorder = make(cfg, Clock(EARLY), None, tmp_path, runs)
+    guard.bot_check(EARLY)
+    guard.bot_check(EARLY + timedelta(minutes=1))
+    assert len(runs.calls) == 1
+    assert kinds(recorder)[-1] == "bot-down-with-open-trade"
+    guard.bot_check(restart_at(cfg))
+    assert len(runs.calls) == 2  # the flatten restart still happens
+    assert watchdog.restarted_on(watchdog.restart_file(cfg)) == date(2026, 11, 16)
+
+
+def test_the_early_restart_respects_the_operator_stop(cfg, tmp_path):
+    database, _ = data_paths(cfg)
+    _resting_trade(database)
+    stopmarker.write(cfg, "cmd-1", EARLY)
+    runs = Runs()
+    guard, recorder = make(cfg, Clock(EARLY), None, tmp_path, runs)
+    guard.bot_check(EARLY)
+    assert kinds(recorder) == ["watchdog-restart-refused"] and runs.calls == []

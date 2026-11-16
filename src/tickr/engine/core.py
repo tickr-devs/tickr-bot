@@ -98,6 +98,9 @@ class Fence(StrEnum):
     # state is unknown. While set, the order proves nothing: a stop is not verified protection
     # and an entry or close does not excuse a quantity mismatch. Clears on the next good read.
     DETAIL_UNREADABLE = "detail-unreadable"
+    # The watchdog started this run early for a resting entry (runtime/watchdog.py): the run
+    # protects, cancels and flattens, but takes no new entry until the operator clears it.
+    WATCHDOG_STARTED = "watchdog-started"
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
@@ -105,7 +108,7 @@ class Fence(StrEnum):
 OPERATOR_FENCES = frozenset({Fence.STOP_REJECTED, Fence.EXIT_REFUSED, Fence.CANCEL_FAILED,
                              Fence.RESURRECTED, Fence.UNPROTECTED_TIMEOUT,
                              Fence.REPLACE_UNRESOLVED, Fence.EXIT_NOT_FILLED,
-                             Fence.MARKET_CLOSED})
+                             Fence.MARKET_CLOSED, Fence.WATCHDOG_STARTED})
 
 _LEG_LETTER = {Leg.ENTRY: "e", Leg.STOP: "s", Leg.EXIT: "x"}
 # Key of the broker-read fence a failed open-orders read sets; only a reconcile clears it.
@@ -363,6 +366,10 @@ class Engine:
                 self.store.append("fence-cleared", {"by": "operator"}, key=name,
                                   run_id=self.run_id)
         return bool(removed)
+
+    def watchdog_started_fence(self, cause: str) -> None:
+        """Block new entries after an early watchdog start; only the operator clears it."""
+        self._set_fence(Fence.WATCHDOG_STARTED, "", cause)
 
     def entry_stop_row(self, on: bool, cause: str) -> None:
         """Operator entry-stop, inside the caller's transaction (the command is journaled in

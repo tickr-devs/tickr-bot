@@ -34,6 +34,17 @@ On an open market day (half days too: a position after the flatten time is wrong
   clock's New York date is not the calendar day. After a restart, a broker check that is not
   flat, or that finds the bot still down with an open trade, alerts `watchdog-restart-failed`
   instead of `watchdog-not-flat`.
+- earlier, at any bot check in the regular session: a bot that is not running while the
+  database shows an open trade with a rest time (`trades.entry_rest_until`) whose entry may
+  still work at the broker is started at once, also once a day, recorded in its own
+  `<data_dir>/<watchdog_entry_restart_file>` (so the flatten restart above stays available):
+  the broker order is a DAY limit, so it could fill with no stop until the bot starts; the
+  started bot cancels every working entry at startup and protects any fill. Same refusals
+  (operator stop marker, unreadable record, wrong day) and alerts. That run takes no new entry:
+  at startup the bot reads this record and, when it is today's, sets the `watchdog-started`
+  fence, which only the operator clears (runtime/service.py), so a bot started unattended
+  still never opens a trade on its own. After an early restart, a later not-flat check alerts
+  `watchdog-not-flat` (the "after a restart" rule above reads the flatten restart record only).
 Every broker check, every "bot down" finding and every alert is one JSON line on stdout (the
 job log) and in `<data_dir>/<watchdog_journal_file>`.
 """
@@ -53,12 +64,12 @@ from tickr.api import contract
 from tickr.broker.base import Broker, BrokerError
 from tickr.calendar import NEW_YORK, CalendarCause, CalendarRefused, MarketDay, SessionCalendar
 from tickr.config import Config
-from tickr.engine.core import TradeState
+from tickr.engine.core import Leg, SendState, TradeState
 from tickr.lock import recorded_holder
 from tickr.runtime import stopmarker
 from tickr.runtime.alerts import Alerter, AlertKind
 from tickr.store import Store
-from tickr.types import OrderDetail, Position
+from tickr.types import OrderDetail, OrderState, Position
 
 START = "watchdog-start"
 CHECK = "watchdog-check"
@@ -90,6 +101,10 @@ def restart_command(config: Config) -> list[str]:
 
 def restart_file(config: Config) -> Path:
     return config.root / config.run.data_dir / config.runtime.watchdog_restart_file
+
+
+def entry_restart_file(config: Config) -> Path:
+    return config.root / config.run.data_dir / config.runtime.watchdog_entry_restart_file
 
 
 def restarted_on(path: Path) -> date | None:
@@ -154,6 +169,32 @@ def open_trades(database: Path) -> int:
     return int(rows[0]["n"])
 
 
+# An entry that may still work at the broker: sent (or maybe sent) and not shown ended.
+_WORKING = tuple(s.value for s in OrderState if not s.terminal)
+_SENT = tuple(s.value for s in (SendState.ATTEMPTED, SendState.ACKNOWLEDGED,
+                                SendState.UNKNOWN))
+
+
+def resting_entries(database: Path) -> int:
+    """Open trades with a rest time (`trades.entry_rest_until`) whose entry may still work at
+    the broker, read-only; 0 when the database was never created."""
+    if not database.exists():
+        return 0
+    store = Store.open_readonly(database)
+    try:
+        rows = store.query(
+            "SELECT COUNT(*) AS n FROM trades t WHERE t.state != ? "
+            "AND t.entry_rest_until IS NOT NULL AND EXISTS (SELECT 1 FROM orders o "
+            "WHERE o.trade_id = t.trade_id AND o.leg = ? "
+            f"AND o.send_state IN ({', '.join('?' * len(_SENT))}) "
+            f"AND (o.broker_state IS NULL OR o.broker_state IN "
+            f"({', '.join('?' * len(_WORKING))})))",
+            (TradeState.CLOSED.value, Leg.ENTRY.value, *_SENT, *_WORKING))
+    finally:
+        store.close()
+    return int(rows[0]["n"])
+
+
 class Journal:
     """JSON lines to stdout and to the watchdog's own file (never the bot's database)."""
 
@@ -193,6 +234,7 @@ class Watchdog:
         self.restart_at = flatten - timedelta(
             seconds=config.runtime.watchdog_restart_before_flatten_seconds)
         self._restart_file = restart_file(config)
+        self._entry_restart_file = entry_restart_file(config)
         self._runner = runner
         self.interval = float(config.runtime.watchdog_bot_check_seconds)
         self.stale_seconds = config.runtime.watchdog_status_stale_seconds
@@ -304,13 +346,28 @@ class Watchdog:
                                       "why": why})
         if now >= self.restart_at and self.restart(now, why, count):
             return
+        if now < self.restart_at and self._resting(now) and self.restart(
+                now, why, count, record=self._entry_restart_file, early=True):
+            return
         self.alert(AlertKind.BOT_DOWN_WITH_OPEN_TRADE,
                    f"the bot is not running ({why}) and the database shows {count} open "
                    "trade(s): "
                    "nothing will flatten it. Open the Webull app: check the stop, close by hand "
                    f"before {_ny(self.day.regular_close)}")
 
-    # --- the one restart a day -------------------------------------------------------------
+    def _resting(self, now: datetime) -> bool:
+        """An entry with a rest time may still work at the broker while the bot is down: a
+        fill would stay without a stop until the bot starts. False when unreadable (the
+        bot-down alert still fires)."""
+        try:
+            return resting_entries(self._database) > 0
+        except sqlite3.Error as exc:
+            self.journal.write(BOT_DOWN, {"at": now.isoformat(),
+                                          "resting_entries": f"unreadable "
+                                                             f"({type(exc).__name__})"})
+            return False
+
+    # --- the one restart a day (and one early one for a resting entry) ---------------------
 
     def _restarted_today(self) -> bool:
         try:
@@ -326,16 +383,20 @@ class Watchdog:
                    f"{_ny(self.day.regular_close)}; the stop is DAY")
         return True
 
-    def restart(self, now: datetime, why: str, count: int) -> bool:
+    def restart(self, now: datetime, why: str, count: int, *, record: Path | None = None,
+                early: bool = False) -> bool:
         """Start the bot job once today; False when today's attempt was already made (the
-        caller then alerts bot-down as usual), True when this call alerted."""
+        caller then alerts bot-down as usual), True when this call alerted. `early`: the
+        restart for a resting entry, before the flatten restart time, recorded in its own
+        file (`record`) so the flatten restart stays available."""
+        path = self._restart_file if record is None else record
         if now.astimezone(NEW_YORK).date() != self.day.ny_date:
             return self._refuse(now, "the clock's New York date is not the calendar day "
                                      f"{self.day.ny_date.isoformat()}")
         try:
-            last = restarted_on(self._restart_file)
+            last = restarted_on(path)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            return self._refuse(now, f"restart record {self._restart_file.name} unreadable "
+            return self._refuse(now, f"restart record {path.name} unreadable "
                                      f"({type(exc).__name__})")
         if last == self.day.ny_date:
             return False
@@ -344,9 +405,9 @@ class Watchdog:
             return self._refuse(now, f"{marker}; the watchdog never starts a bot the operator "
                                      "stopped")
         try:  # durable before the command: a day never gets a second attempt
-            contract.write_atomic(self._restart_file, json.dumps(
+            contract.write_atomic(path, json.dumps(
                 {"ny_date": self.day.ny_date.isoformat(), "at": now.isoformat(),
-                 "why": why, "open_trades": count}) + "\n")
+                 "why": why, "open_trades": count, "early": early}) + "\n")
         except OSError as exc:
             return self._refuse(now, f"restart record cannot be written ({type(exc).__name__})")
         runtime = self.config.runtime
@@ -358,6 +419,7 @@ class Watchdog:
             failure = f"restart command failed ({type(exc).__name__})"
         self.journal.write(RESTART, {"at": now.isoformat(), "started": failure is None,
                                      "why": why, "open_trades": count, "cause": failure,
+                                     "early": early,
                                      "command": list(runtime.watchdog_restart_command)})
         if failure is not None:
             self.alert(AlertKind.WATCHDOG_RESTART_FAILED,
@@ -365,10 +427,15 @@ class Watchdog:
                        f"the watchdog could not start it: {failure}. Open the Webull app now: "
                        f"close the position by hand before {_ny(self.day.regular_close)}")
         else:
+            purpose = ("an entry with a rest time may still work at the broker; the bot "
+                       "cancels it at startup and protects any fill. New entries stay "
+                       "blocked (fence watchdog-started) until you look and run: tickr "
+                       "clear-fence watchdog-started" if early else
+                       "so it flattens at the flatten time")
             self.alert(AlertKind.WATCHDOG_RESTARTED_BOT,
                        f"the bot was not running ({why}) with {count} open trade(s): the "
-                       "watchdog started the bot job once so it flattens at the flatten time. "
-                       "Watch for a quiet check after the flatten time")
+                       f"watchdog started the bot job once: {purpose}. Watch for a quiet "
+                       "check after the flatten time")
         return True
 
     def _after_restart(self, now: datetime, left: list[str]) -> None:

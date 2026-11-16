@@ -722,7 +722,8 @@ that finds the bot down while its database shows an open trade starts the bot jo
 schedule starts: preflight again (a failure alerts `bot-did-not-start`), the supervisor, the
 single-instance lock, then the normal startup: recovery, reconciliation, the stop verified.
 Config refuses a restart time at or before the last entry time, so the restarted bot can never
-open a trade; at the flatten time its own `flatten_due` closes the position through the
+open a trade (the earlier restart for a resting entry, below, starts a run fenced by
+`watchdog-started` instead); at the flatten time its own `flatten_due` closes the position through the
 normal exit path. The watchdog itself never places, cancels or replaces anything.
 
 - Once a day: the New York date is written to `data/watchdog-restart.json` (`[runtime]
@@ -739,6 +740,13 @@ normal exit path. The watchdog itself never places, cancels or replaces anything
   flatten time finds a position or open order, or the bot still down with an open trade. It
   replaces `watchdog-not-flat` on that day. Open the Webull app now and close by hand.
 - On a quiet day nothing changes: a running bot, or a flat database, never triggers it.
+- Earlier, at any bot check in the regular session: a bot that is down while the database shows
+  an open trade whose resting entry (`trades.entry_rest_until`) may still work at Webull is
+  started at once, once a day, recorded in `data/watchdog-entry-restart.json` (`[runtime]
+  watchdog_entry_restart_file`), so the flatten restart stays available. The started bot cancels
+  every working entry and protects any fill, but it sets the `watchdog-started` fence: no new
+  entry that day until you look and clear it (`tickr clear-fence watchdog-started`). It is set
+  once per record, so a later start the same day after you cleared it is not fenced again.
 - To keep the bot down on purpose with a position open (a manual trade), unload the bot job, or
   keep a stop marker left from an earlier stop made while flat. A new `stop-bot` is refused while
   any trade is open, so it cannot create the marker then. See docs/manual-trade.md.

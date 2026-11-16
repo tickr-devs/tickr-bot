@@ -8,6 +8,7 @@ status says so as the entry-blocking reason.
 
 from __future__ import annotations
 
+import json
 import time
 import tomllib
 from collections.abc import Callable
@@ -35,6 +36,7 @@ from tickr.calendar import (
     CalendarRefused,
     MarketDay,
     SessionCalendar,
+    ny_date_of,
 )
 from tickr.config import Config, trading_gate
 from tickr.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
@@ -53,6 +55,7 @@ from tickr.runtime.account import (
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.dayend import DayEnd
 from tickr.runtime.protection import LatencyLog, busy
+from tickr.runtime.watchdog import entry_restart_file
 
 if TYPE_CHECKING:
     from tickr.observers.runner import ObserverSet
@@ -82,6 +85,9 @@ ACCOUNT_WRITE_FAILED = "account-write-failed"  # one row per stretch of failed w
 STOP_TIMING_FAILED = "stop-timing-failed"  # one row per trade whose stop timing is unreadable
 ENTRY_SEND_FAILED = "entry-send-failed"  # one row per trade whose entry send is unreadable
 RESTART_ENTRY_CANCEL = "bot restarted: a working entry is never resumed"
+FENCE_SET = "fence-set"
+WATCHDOG_FENCE_TAIL = ("no new entry until the operator clears this "
+                       "(tickr clear-fence watchdog-started)")
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
@@ -93,13 +99,16 @@ class ServicePaths:
     inbox: Path
     processed: Path
     account: Path | None = None  # None: no account file is written (tools, some tests)
+    # The watchdog's early-restart record; None: never read (tools, some tests).
+    watchdog_entry_restart: Path | None = None
 
     @classmethod
     def from_config(cls, config: Config) -> ServicePaths:
         data = config.root / config.run.data_dir
         commands = data / config.api.commands_dir
         return cls(data / config.api.status_file, commands / api.INBOX,
-                   commands / api.PROCESSED, data / config.api.account_file)
+                   commands / api.PROCESSED, data / config.api.account_file,
+                   entry_restart_file(config))
 
 
 def _no_quote(symbol: str) -> Quote | None:  # noqa: ARG001 - no market: no quote for any
@@ -848,6 +857,38 @@ class Service:
         """A positions or open-orders read is failing (the fence, plain or keyed)."""
         return any(n.split(":", 1)[0] == Fence.BROKER_READ for n in self.engine.fences())
 
+    def _fence_after_early_watchdog_start(self) -> None:
+        """A run the watchdog started early for a resting entry (its record says today)
+        protects, cancels and flattens but takes no new entry: the `watchdog-started` fence,
+        which only the operator clears (owner rule: a bot started unattended never opens a
+        trade on its own). An unreadable record sets it too. Set once per record, so a later
+        start the same day, after the operator cleared it, is not fenced again."""
+        path = self.paths.watchdog_entry_restart
+        if path is None:
+            return
+        try:
+            record = json.loads(path.read_text("utf-8"))
+            day, at = date.fromisoformat(record["ny_date"]), str(record["at"])
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            cause = (f"the watchdog's early restart record is unreadable ({type(exc).__name__})"
+                     f": {WATCHDOG_FENCE_TAIL}")
+        else:
+            if day != ny_date_of(self.now()):
+                return
+            try:
+                started = datetime.fromisoformat(at).astimezone(NEW_YORK).strftime("%H:%M")
+            except (ValueError, TypeError):
+                started = "an unreadable time"
+            cause = (f"the watchdog started the bot at {started} for a resting entry: "
+                     f"{WATCHDOG_FENCE_TAIL}")
+        name = str(Fence.WATCHDOG_STARTED)
+        if any(row.body.get("cause") == cause
+               for row in self.engine.store.journal(FENCE_SET, key=name)):
+            return
+        self.engine.watchdog_started_fence(cause)
+
     def run(self, *, should_stop: Callable[[], bool],
             sleep: Callable[[float], None] = time.sleep,
             monotonic: Callable[[], float] = time.monotonic) -> bool:
@@ -863,6 +904,7 @@ class Service:
         for trade in self.engine.trades():
             if trade.exit_requested is None:
                 self.engine.cancel_entry(trade.trade_id, RESTART_ENTRY_CANCEL)
+        self._fence_after_early_watchdog_start()
         # Nothing when the startup reconcile did not read.
         self._disagreed = record_reconcile(self.engine, False)
         if not self._broker_read_failing():

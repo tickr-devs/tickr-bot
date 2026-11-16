@@ -159,7 +159,7 @@ def check_timings(config: Config) -> None:
         raise ConfigError(
             f"[runtime] watchdog_restart_before_flatten_seconds ({restart}) must be positive and "
             f"below the last-entry-to-flatten time ({entry_gap} s): a restarted bot must never "
-            "be able to open a trade")
+            "be able to open a trade (an early restart for a resting entry is fenced instead)")
     if not runtime.watchdog_restart_command or runtime.watchdog_restart_timeout_seconds <= 0:
         raise ConfigError("[runtime] watchdog_restart_command must be non-empty and "
                           "watchdog_restart_timeout_seconds positive")

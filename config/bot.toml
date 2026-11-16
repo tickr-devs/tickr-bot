@@ -530,7 +530,8 @@ watchdog_status_stale_seconds = 60
 watchdog_journal_file = "watchdog.jsonl"
 # From this many seconds before the flatten time (15:50 ET on a normal day) the watchdog starts the bot job once a day
 # when the bot is not running and its database shows an open trade, so the bot's own flatten closes it; must be positive
-# and below the last-entry-to-flatten time so the restarted bot can never open a trade; read by runtime.watchdog.
+# and below the last-entry-to-flatten time so the restarted bot can never open a trade (the earlier restart for a resting entry starts a run fenced
+# by watchdog-started, so it cannot either); read by runtime.watchdog.
 watchdog_restart_before_flatten_seconds = 300
 # Command the watchdog runs to start the bot job (the same job the schedule starts: preflight, then the supervised bot);
 # "{uid}" is replaced by the user id; kickstart without -k never touches a running job; read by runtime.watchdog.
@@ -540,6 +541,11 @@ watchdog_restart_timeout_seconds = 10
 # Record of the watchdog's one restart a day (New York date), relative to data_dir; written before the command runs and
 # never removed, so a day never gets a second attempt; read by runtime.watchdog.
 watchdog_restart_file = "watchdog-restart.json"
+# Record of the watchdog's one early restart a day for a resting limit entry (New York date), relative to data_dir: a bot
+# that is down while an entry of a trade with a rest time still works at the broker is started at once, not at the restart
+# time above, so its startup cancels that entry and protects any fill; written before the command runs and never removed;
+# separate from watchdog_restart_file, so the flatten restart stays available; read by runtime.watchdog.
+watchdog_entry_restart_file = "watchdog-entry-restart.json"
 # Seconds one loop pass may spend on market upkeep and the strategy before an evaluation-slow journal row (the next
 # Detail read waits for it; keep it near [orders] detail_poll_seconds). Discovery runs on its own thread and is not part
 # of it: its duration is the `seconds` of each discovery journal row; read by runtime.service.

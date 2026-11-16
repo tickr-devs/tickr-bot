@@ -4,6 +4,7 @@ Newest first. Only decisions that are in force. Each line: date, decision, where
 
 | Date | Decision | Applies to |
 |---|---|---|
+| 2026-11-16 | A bot the watchdog starts early (a resting entry may still work at Webull while the bot is down) protects only: it cancels working entries, keeps stops and flattens, and takes no new entry until the operator clears the `watchdog-started` fence (`tickr clear-fence watchdog-started`). An unattended start never opens a trade. | runtime/watchdog.py, runtime/service.py |
 | 2026-11-16 | Backlog versions: extended hours and half days (X4) and the limit-exit chase (X3) go to v2; several positions with top-up (X1) and risk as percent of equity (X2) to v3; short selling (X5) to v3 only if the short-side research finds an edge, the 2026-10-23 ban staying until then. | docs/backlog.md |
 | 2026-11-16 | Manual trades in the bot's account are ignored: no fence blocks the bot; it still never sells shares it does not own (2026-11-15). | engine, risk |
 | 2026-11-16 | A halt with a position open, or a position that cannot close: keep the resting stop, alert, send no order into the halted book, and close at the first chance once trading resumes, the next morning if forced. | engine, backlog T8 |

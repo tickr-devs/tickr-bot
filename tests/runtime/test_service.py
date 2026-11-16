@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import signal
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
@@ -1188,3 +1189,43 @@ def test_without_a_market_every_working_entry_is_cancelled(tmp_path):
     (row,) = bot.store.journal("entry-cancel")
     assert row.body["cause"] == "no quote"
     assert bot.engine.orders(t)[0].cancel_state == "sent"
+
+
+def _early(tmp_path: Path, record: str | None) -> Bot:
+    """A bot whose paths name a watchdog early-restart record holding `record`."""
+    path = tmp_path / "watchdog-entry-restart.json"
+    if record is not None:
+        path.write_text(record, "utf-8")
+    bot = Bot(tmp_path, broker=FakeBroker())
+    bot.service.paths = replace(bot.paths, watchdog_entry_restart=path)
+    return bot
+
+
+def _today_record(at: datetime = MONDAY_11) -> str:
+    return json.dumps({"ny_date": at.date().isoformat(), "at": at.isoformat(),
+                       "early": True}) + "\n"
+
+
+def test_a_run_the_watchdog_started_early_takes_no_new_entry_until_cleared(tmp_path):
+    bot = _early(tmp_path, _today_record())
+    bot.run(0)
+    fences = bot.engine.fences()
+    assert str(Fence.WATCHDOG_STARTED) in fences
+    assert "no new entry" in fences[str(Fence.WATCHDOG_STARTED)]
+    assert bot.engine.clear_operator_fence(str(Fence.WATCHDOG_STARTED))
+    again = _early(tmp_path, _today_record())  # a later start the same day, same record
+    again.run(0)
+    assert str(Fence.WATCHDOG_STARTED) not in again.engine.fences()
+
+
+@pytest.mark.parametrize("record", [None, _today_record(MONDAY_11 - timedelta(days=3))])
+def test_no_fence_without_a_record_of_today(tmp_path, record):
+    bot = _early(tmp_path, record)
+    bot.run(0)
+    assert str(Fence.WATCHDOG_STARTED) not in bot.engine.fences()
+
+
+def test_an_unreadable_early_restart_record_fences_too(tmp_path):
+    bot = _early(tmp_path, "{not json")
+    bot.run(0)
+    assert "unreadable" in bot.engine.fences()[str(Fence.WATCHDOG_STARTED)]
