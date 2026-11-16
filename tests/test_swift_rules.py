@@ -604,6 +604,22 @@ def test_apps_use_no_system_button_look(tmp_path):
     assert [line for line, _ in found] == [1, 2, 3, 4, 5, 6]
 
 
+def test_apps_use_one_segmented_switch_and_one_chip(tmp_path):
+    source = (
+        ".pickerStyle(.segmented)\n"
+        ".pickerStyle( .segmented )\n"
+        ".pickerStyle(SegmentedPickerStyle())\n"
+        "private struct ChipLook: ViewModifier {\n"
+        "struct RangeChips<T>: ViewModifier where T: Hashable {\n"
+        ".pickerStyle(.menu)\n"
+        "private struct SymbolChips: View {\n"
+        ".buttonStyle(.chip(selected: true))\n"
+        "// .pickerStyle(.segmented)\n"
+    )
+    found = load().control_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5]
+
+
 def test_one_symbol_per_meaning(tmp_path):
     source = (
         'static let previousSymbol = "chevron.left"\n'
