@@ -1,5 +1,5 @@
 # Strategy "price-action-v2": price-action-v1 plus trigger confirmation and a no-progress exit
-# (backlog, "Strategy and research"). A candidate for observers, replay and research decide/diff;
+# (backlog item R8). A candidate for observers, replay and research decide/diff;
 # not the active strategy. Every v1 section below keeps the v1 version 1 values. Changing any
 # value means a new `version`.
 

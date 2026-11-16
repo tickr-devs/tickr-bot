@@ -149,6 +149,6 @@ deliveries. `202`. Rate-limited by the existing `[alerts] dedupe_window_seconds`
 
 ## Order of building
 
-Trailing stop first (first backlog item, trading-critical, needs the probe and an independent
+Trailing stop first (backlog T1, trading-critical, needs the probe and an independent
 review). Then notifications (helps unattended running), then the Production readiness view (before
 the enabling day). The advisor endpoints are already in progress in their own work.

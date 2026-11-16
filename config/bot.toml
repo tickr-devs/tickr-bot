@@ -16,7 +16,7 @@ backups_dir = "backups"
 maintain_keep_sessions = 20
 # Days, counted back from today's New York date, an archived (all *.jsonl.gz) finished capture or decision day folder is
 # kept; `tickr maintain --apply` deletes older ones. 0 = never delete (shipped: retention is an open owner question,
-# docs/backlog.md); read by maintain.
+# docs/backlog.md Q4); read by maintain.
 maintain_archive_max_age_days = 0
 
 [strategy]

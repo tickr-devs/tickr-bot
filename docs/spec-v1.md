@@ -1,6 +1,6 @@
 # Tickr spec, first release (v1)
 
-Status: accepted by the owner 2026-11-14. Everything not described here is in `docs/backlog.md` and is out of scope for v1.
+Status: accepted by the owner 2026-11-14. Everything not described here is out of scope for v1; the versions after it (v1.1 to v6), each with its goal, items and exit, are in `docs/backlog.md`.
 Broker facts: `docs/webull-facts.md`. Owner decisions: `docs/decisions.md`.
 
 ## 1. Goal
@@ -152,4 +152,4 @@ Each stage is one or more PRs; the next starts after the previous merges.
 | 4 | Risk and session | admission checklist, daily risk, entry-stop, cancel-own-orders, flatten, 15:45/15:55 timers. |
 | 5 | Data and strategy | discovery, bars, L1 stream, capture files, strategy interface + price-action-v1, decision recording; historical M1 replay of the strategy as an evaluation tool. |
 | 6 | Automatic trading | strategy ENTER wired to orders, launchd jobs, alerts, local API + status screen; 5 clean trading days. |
-| 7 | Later (backlog) | trailing stop, macOS app, signal-outcome reports, replay of other versions, observers, AI advisor, more positions, extended hours, Production. |
+| 7 | Later | Versions v1.1 to v6 in `docs/backlog.md`. Development does not wait for the 5 clean days: v1 is released and keeps collecting them while the next version is built (owner, 2026-11-16). |
