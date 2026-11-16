@@ -85,6 +85,22 @@ So `tickr demo` builds it when needed:
   longer fit): build it first, in the foreground (a few minutes, once), then serve. To skip that
   wait, run `tickr demo --build-fixture` once before loading the job.
 
+A build never leaves a fixture a start would take but should not:
+
+- **Stopped from outside** (SIGTERM from launchd or from the demo ending its background build,
+  Ctrl-C): the bot stops cleanly, as at the build's own stop, only earlier. The build checks that
+  every session ran to its own stop (`past_stop`, then `clock`), so a cut-short day is never
+  stored; nothing is recorded, and the next start builds again. The archive is written as
+  `.<digest>.tar.xz.partial` (manifest last) and gets its name only once complete and checked; a
+  start never reads a partial file, and the next build deletes one a killed writer left.
+- **Refused**: the day not flat at the clock, the bot failing, or the new archive failing the
+  same checks a start runs on it (manifest, extraction, the store's forward migrations, done in a
+  scratch folder). Nothing is stored, the previous build is kept, and the cause is recorded in
+  `demo-fixture/<digest>.refused`. A start then serves the previous build and says so once,
+  without building again (no build-and-restart loop); with no previous build it is refused (exit
+  2, which launchd does not retry). An explicit `tickr demo --build-fixture` tries again and
+  clears the record when it succeeds; a change of the inputs gives a new digest anyway.
+
 CI builds the real fixture on every Python change (job `demo-fixture`), so a change that breaks the
 build (the day not flat at the clock, the bot failing) fails the pull request instead of the
 Mac's next build. `tests/demo` builds a short day's fixture once per test module and checks the

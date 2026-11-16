@@ -28,13 +28,16 @@ import os
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
@@ -70,6 +73,13 @@ UNSET_VARIABLE_PREFIX = "TICKR_DEMO_NEVER_SET_"
 
 class DemoRefused(Exception):
     """The demo cannot be built; the message is the single cause."""
+
+
+class FixtureRefused(DemoRefused):
+    """A fixture build of these inputs ran to its end and was refused (the day not flat, the
+    bot failing, the archive refused by the start checks): building again gives the same, so it
+    is recorded (`demo-fixture/<digest>.refused`) and not retried until the inputs change or an
+    operator runs `tickr demo --build-fixture`."""
 
 
 class Notifier:
@@ -253,6 +263,20 @@ def _stop_self() -> None:
     os.kill(os.getpid(), signal.SIGTERM)
 
 
+def _stop_at(world: World, when: datetime) -> Callable[[], bool]:
+    """Stop the bot at `when`; the returned check says whether it was this stop that ended the
+    run. A stop from outside (SIGTERM from launchd or the demo ending its build, Ctrl-C) ends
+    the bot's run the same clean way, but earlier: that day is cut short."""
+    reached: list[bool] = []
+
+    def stop() -> None:
+        reached.append(True)
+        _stop_self()
+
+    world.at(when, stop)
+    return lambda: bool(reached)
+
+
 def _command_writer(inbox: Path, world: World, command: DemoCommand) -> Callable[[], None]:
     def write() -> None:
         api.write_command(inbox, api.new_command(command.kind, world.now, COMMAND_SOURCE,
@@ -265,9 +289,17 @@ def _demo_day(session: Session, world: World, cfg: config_module.Config,
     """Replay the demo day fast from `bot_start` up to `clock`, then stop the bot there."""
     scenario = session.scenario
     _schedule(session, world, cfg, after=None)
-    world.at(ny(session.day, scenario.clock), _stop_self)
+    reached = _stop_at(world, ny(session.day, scenario.clock))
     log(f"demo: session {session.day.isoformat()} (the demo day, up to {scenario.clock})")
-    return session.run(world)
+    code = session.run(world)
+    _require_reached(reached, session, scenario.clock)
+    return code
+
+
+def _require_reached(reached: Callable[[], bool], session: Session, at: str) -> None:
+    if not reached():
+        raise DemoRefused(f"interrupted: the bot was stopped from outside before {at} on "
+                          f"{session.day.isoformat()}; that day is cut short, nothing is stored")
 
 
 def _schedule(session: Session, world: World, cfg: config_module.Config,
@@ -305,8 +337,9 @@ def replay(repo: Path, scenario: Scenario, today: date,
         if demo_day:
             return cfg, session.day, _demo_day(session, world, cfg, log)
         log(f"demo: session {session.day.isoformat()} (past)")
-        world.at(ny(session.day, scenario.past_stop), _stop_self)
+        reached = _stop_at(world, ny(session.day, scenario.past_stop))
         code = session.run(world)
+        _require_reached(reached, session, scenario.past_stop)
         if code != 0:
             raise DemoRefused(f"the bot ended {session.day} with exit code {code}")
     raise AssertionError("unreachable: the loop ends on the demo day")
@@ -320,6 +353,11 @@ FIXTURE_SUFFIX = ".tar.xz"
 # holding the data folder and the manifest. Only the latest build is kept.
 FIXTURE_NAME = re.compile(r"^[0-9a-f]{64}\.tar\.xz$")
 FIXTURE_MANIFEST = "manifest.json"  # inside the archive, beside data/
+# `.<name>.partial`: an archive being written (renamed to its name only once checked, deleted
+# by the next build if the writer was killed); `<digest>.refused`: the cause a finished build of
+# those inputs was refused for, so no start builds them again.
+PARTIAL_SUFFIX = ".partial"
+REFUSED_SUFFIX = ".refused"
 # A build replays into `<root_dir>-build/` under its own lock, so it can run while the demo
 # serves from `<root_dir>/`.
 BUILD_SUFFIX = "-build"
@@ -374,43 +412,87 @@ def _tar_filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
     return info
 
 
+def refusal_path(repo: Path, inputs: str) -> Path:
+    return repo / FIXTURE_DIR / f"{inputs}{REFUSED_SUFFIX}"
+
+
+def recorded_refusal(repo: Path, inputs: str) -> str | None:
+    """The cause a finished build of these inputs was refused for, or None."""
+    try:
+        return refusal_path(repo, inputs).read_text("utf-8").strip()
+    except FileNotFoundError:
+        return None
+
+
 def build_fixture(repo: Path, scenario: Scenario, today: date,
                   log: Callable[[str], None] = print) -> Path:
     """Replay the past sessions and the demo day up to `clock` with the real bot (in
     `<root_dir>-build/`) and store the result as `demo-fixture/<inputs digest>.tar.xz`; older
-    builds are then deleted. Refused unless the bot ends flat."""
+    builds are deleted only then. A build stopped from outside stores nothing; a finished build
+    that is refused (the day not flat, the bot failing, the start checks refusing the archive)
+    stores nothing either, keeps the older builds and records its cause (`FixtureRefused`)."""
     inputs = fixture_inputs(repo, scenario)
     building = replace(scenario, root_dir=scenario.root_dir + BUILD_SUFFIX)
     with running_lock(repo, building):
+        folder = repo / FIXTURE_DIR
+        folder.mkdir(exist_ok=True)
+        for leftover in folder.glob(f".*{PARTIAL_SUFFIX}"):  # a build killed while writing
+            leftover.unlink()
+        refusal_path(repo, inputs).unlink(missing_ok=True)  # an explicit build tries again
         cfg, day, code = replay(repo, building, today, log)
-        if code != 0:
-            raise DemoRefused(f"the bot ended the demo day with exit code {code}")
-        status = api.read_status(cfg.root / cfg.run.data_dir / cfg.api.status_file)
-        if status.positions:
-            raise DemoRefused(f"the demo day is not flat at {scenario.clock} "
-                              f"({[p.symbol for p in status.positions]}): the live part "
-                              "starts a fresh simulated exchange")
-        archive = fixture_path(repo, inputs)
-        archive.parent.mkdir(exist_ok=True)
-        manifest = json.dumps({"inputs": inputs, "demo_day": day.isoformat(),
-                               "clock": scenario.clock, "schema": len(MIGRATIONS),
-                               "built_by": "tickr demo"}, indent=2).encode() + b"\n"
-        partial = archive.with_name(f".{archive.name}.partial")  # a reader never sees half
-        with tarfile.open(partial, "w:xz") as tar:
-            tar.add(cfg.root / cfg.run.data_dir, arcname=DEMO_DATA_DIR, filter=_tar_filter)
-            info = tarfile.TarInfo(FIXTURE_MANIFEST)
-            info.size = len(manifest)
-            tar.addfile(info, io.BytesIO(manifest))
-        os.replace(partial, archive)
-        for old in archive.parent.iterdir():
-            if old != archive and FIXTURE_NAME.match(old.name):
+        try:
+            archive = _store_fixture(repo, scenario, inputs, cfg, day, code)
+        except FixtureRefused as exc:
+            refusal_path(repo, inputs).write_text(f"{exc}\n", "utf-8")
+            raise
+        for old in folder.iterdir():
+            if old != archive and (FIXTURE_NAME.match(old.name)
+                                   or old.name.endswith(REFUSED_SUFFIX)):
                 old.unlink()
         log(f"demo: fixture {archive} ({archive.stat().st_size} bytes) for {day.isoformat()}")
         return archive
 
 
-def read_fixture(archive: Path, scenario: Scenario) -> dict[str, object]:
-    """The archive's manifest, refused when a start cannot use it."""
+def _store_fixture(repo: Path, scenario: Scenario, inputs: str, cfg: config_module.Config,
+                   day: date, code: int) -> Path:
+    """Check the replayed day, write its archive under a temporary name, check it exactly as a
+    start will (`unpack_fixture`, into a scratch folder), and only then give it its name."""
+    if code != 0:
+        raise FixtureRefused(f"the bot ended the demo day with exit code {code}")
+    data = cfg.root / cfg.run.data_dir
+    status = api.read_status(data / cfg.api.status_file)
+    if status.positions:
+        raise FixtureRefused(f"the demo day is not flat at {scenario.clock} "
+                             f"({[p.symbol for p in status.positions]}): the live part "
+                             "starts a fresh simulated exchange")
+    archive = fixture_path(repo, inputs)
+    manifest = json.dumps({"inputs": inputs, "demo_day": day.isoformat(),
+                           "clock": scenario.clock, "schema": len(MIGRATIONS),
+                           "built_by": "tickr demo"}, indent=2).encode() + b"\n"
+    partial = archive.with_name(f".{archive.name}{PARTIAL_SUFFIX}")  # never read by a start
+    try:
+        with tarfile.open(partial, "w:xz") as tar:
+            tar.add(data, arcname=DEMO_DATA_DIR, filter=_tar_filter)
+            info = tarfile.TarInfo(FIXTURE_MANIFEST)  # last: an archive without it is refused
+            info.size = len(manifest)
+            tar.addfile(info, io.BytesIO(manifest))
+        with tempfile.TemporaryDirectory(dir=cfg.root) as scratch:
+            try:
+                unpack_fixture(partial, scenario, Path(scratch) / DEMO_DATA_DIR,
+                               cfg.run.database_busy_timeout_seconds, name=archive.name)
+            except DemoRefused as exc:
+                raise FixtureRefused(f"the start checks refuse the new build: {exc}") from exc
+        os.replace(partial, archive)
+    finally:
+        partial.unlink(missing_ok=True)
+    return archive
+
+
+def read_fixture(archive: Path, scenario: Scenario,
+                 name: str | None = None) -> dict[str, object]:
+    """The archive's manifest, refused when a start cannot use it. `name`: the name it is
+    checked under (default its own; a build checks its temporary file under the final one)."""
+    name = name or archive.name
     try:
         with tarfile.open(archive, "r:xz") as tar:
             member = tar.extractfile(FIXTURE_MANIFEST)
@@ -418,14 +500,30 @@ def read_fixture(archive: Path, scenario: Scenario) -> dict[str, object]:
                 raise KeyError(FIXTURE_MANIFEST)
             manifest = json.loads(member.read())
     except (OSError, KeyError, ValueError, tarfile.TarError) as exc:
-        raise DemoRefused(f"{archive.name} is not a demo fixture: {exc}") from exc
-    if f"{manifest.get('inputs')}{FIXTURE_SUFFIX}" != archive.name:
-        raise DemoRefused(f"{archive.name} holds the fixture of other inputs")
+        raise DemoRefused(f"{name} is not a demo fixture: {exc}") from exc
+    if f"{manifest.get('inputs')}{FIXTURE_SUFFIX}" != name:
+        raise DemoRefused(f"{name} holds the fixture of other inputs")
     if not isinstance(manifest.get("schema"), int) or manifest["schema"] > len(MIGRATIONS):
-        raise DemoRefused(f"{archive.name}: its database is newer than this code")
+        raise DemoRefused(f"{name}: its database is newer than this code")
     if manifest.get("clock") != scenario.clock:
-        raise DemoRefused(f"{archive.name} ends at {manifest.get('clock')}, not at "
+        raise DemoRefused(f"{name} ends at {manifest.get('clock')}, not at "
                           f"[demo] clock {scenario.clock}")
+    return manifest
+
+
+def unpack_fixture(archive: Path, scenario: Scenario, data: Path,
+                   busy_timeout_seconds: Decimal, name: str | None = None) -> dict[str, object]:
+    """What a start does with an archive: check its manifest, extract its data folder as
+    `data`, run the store's normal forward migrations on it (as for real data). Returns the
+    manifest; refused (DemoRefused) on any failure. A build runs the same on its new archive."""
+    manifest = read_fixture(archive, scenario, name)
+    try:
+        with tarfile.open(archive, "r:xz") as tar:
+            members = [m for m in tar.getmembers() if m.name != FIXTURE_MANIFEST]
+            tar.extractall(data.parent, members=members, filter="data")
+        Store.open(data / DATABASE_FILE, busy_timeout_seconds=busy_timeout_seconds).close()
+    except (OSError, tarfile.TarError, sqlite3.Error, RuntimeError) as exc:
+        raise DemoRefused(f"{name or archive.name} cannot be started from: {exc}") from exc
     return manifest
 
 
@@ -475,7 +573,12 @@ def run_demo(repo: Path, scenario: Scenario, today: date, *, live: bool = True,
 
 def _start_live(repo: Path, scenario: Scenario, today: date, log: Callable[[str], None],
                 start_build: Callable[[Path], Builder]) -> int:
+    refused = recorded_refusal(repo, fixture_inputs(repo, scenario))
     fixture = find_fixture(repo, scenario, log)
+    if fixture is None and refused is not None:
+        raise DemoRefused(f"a build of these inputs was refused ({refused}) and there is no "
+                          "previous fixture to serve: fix the cause, then run `tickr demo "
+                          "--build-fixture`")
     if fixture is None:  # first start on this Mac: nothing to serve yet
         log("demo: no fixture yet: building it first (a few minutes, once; docs/demo.md)")
         build_fixture(repo, scenario, today, log)
@@ -499,20 +602,19 @@ def _start_live(repo: Path, scenario: Scenario, today: date, log: Callable[[str]
     builder: Builder | None = None
     ending = threading.Event()
     try:
-        if not fixture.current:
+        if not fixture.current and refused is not None:
+            # Building again gives the same: no rebuild and restart loop.
+            log(f"demo: a build of the changed inputs was refused ({refused}): serving the "
+                "previous fixture; fix the cause, then run `tickr demo --build-fixture`")
+        elif not fixture.current:
             log("demo: the scenario, the demo code, the API contract or a strategy changed: "
                 "serving the previous fixture while the new one builds; the demo restarts "
                 "onto it")
             builder = start_build(repo)
             threading.Thread(target=_swap_when_built, args=(builder, world, ending, log),
                              daemon=True).start()
-        data = cfg.root / cfg.run.data_dir
-        with tarfile.open(fixture.archive, "r:xz") as tar:
-            members = [m for m in tar.getmembers() if m.name != FIXTURE_MANIFEST]
-            tar.extractall(data.parent, members=members, filter="data")
-        # The normal forward migrations, as for real data, before anything reads it.
-        Store.open(data / DATABASE_FILE,
-                   busy_timeout_seconds=cfg.run.database_busy_timeout_seconds).close()
+        unpack_fixture(fixture.archive, scenario, cfg.root / cfg.run.data_dir,
+                       cfg.run.database_busy_timeout_seconds)
         _schedule(session, world, cfg, after=scenario.clock)
         world.at(ny(day, scenario.live_until), _stop_self)
         server.chart.use(world.feed)  # GET /chart serves the simulated world
@@ -544,7 +646,8 @@ def _swap_when_built(builder: Builder, world: World, ending: threading.Event,
         world.call_soon(_stop_self)
     else:
         log(f"demo: the fixture build ended with exit code {code}; still serving the previous "
-            "fixture (its cause is in the lines above)")
+            "fixture (its cause is in the lines above; a refused build is not tried again "
+            "until the inputs change)")
 
 
 def main(repo: Path, scenario_path: Path, *, build: bool = False) -> int:

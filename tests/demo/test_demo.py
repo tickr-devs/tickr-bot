@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import sys
 import tarfile
@@ -808,3 +809,96 @@ def test_a_busy_demo_port_is_refused_at_start(tmp_path):
         busy.listen()
         with pytest.raises(demo.DemoRefused, match="cannot listen"):
             demo.run_demo(root, scenario, SUNDAY, log=lambda line: None, start_build=_no_build)
+
+
+def _stale_repo(tmp_path: Path, first_start) -> tuple[Path, Path]:
+    """A repo whose inputs changed since the module's build: that build is the previous one."""
+    root, _, previous = _with_fixture(tmp_path, first_start)
+    strategy = root / "strategies" / "price-action-v1" / "strategy.toml"
+    strategy.write_text(strategy.read_text("utf-8") + "# changed\n", "utf-8")
+    return root, previous
+
+
+def test_a_build_stopped_from_outside_stores_nothing(tmp_path, monkeypatch, first_start):
+    """SIGTERM (launchd, the demo ending its background build, Ctrl-C) stops the bot the same
+    clean way as the build's own stop, only earlier: the cut-short day is never stored, the
+    previous build stays the one served, and nothing is recorded as refused (the next start
+    builds again). A partial archive a killed writer left is never read and is cleaned up."""
+    root, previous = _stale_repo(tmp_path, first_start)
+    scenario = _short_day(root)
+    leftover = root / demo.FIXTURE_DIR / f".{'d' * 64}.tar.xz{demo.PARTIAL_SUFFIX}"
+    leftover.write_bytes(b"cut short")
+    assert demo.find_fixture(root, scenario, log=lambda line: None).archive == previous
+    world = demo.Session.world
+
+    def interrupted(self, plans, listed=(), start=None):
+        made = world(self, plans, listed, start)
+        made.at(ny(self.day, "09:40"), lambda: os.kill(os.getpid(), signal.SIGTERM))
+        return made
+
+    monkeypatch.setattr(demo.Session, "world", interrupted)
+    with pytest.raises(demo.DemoRefused, match="interrupted.*before 09:50") as refused:
+        demo.build_fixture(root, scenario, SUNDAY, log=lambda line: None)
+    assert not isinstance(refused.value, demo.FixtureRefused)
+    assert list((root / demo.FIXTURE_DIR).iterdir()) == [previous]  # leftover cleaned
+    found = demo.find_fixture(root, scenario, log=lambda line: None)
+    assert found is not None and (found.archive, found.current) == (previous, False)
+
+
+def test_a_build_killed_while_writing_its_archive_leaves_none(tmp_path, monkeypatch,
+                                                               first_start):
+    built, _, _, _ = first_start
+    root, previous = _stale_repo(tmp_path, first_start)
+    scenario = _short_day(root)
+    inputs = demo.fixture_inputs(root, scenario)
+    cfg = config.load(built / (scenario.root_dir + demo.BUILD_SUFFIX) / "config" / "bot.toml")
+    written: list[str] = []
+
+    def killed(info):
+        written.append(info.name)
+        if len(written) > 3:
+            raise KeyboardInterrupt
+        return demo_filter(info)
+
+    demo_filter = demo._tar_filter
+    monkeypatch.setattr(demo, "_tar_filter", killed)
+    with pytest.raises(KeyboardInterrupt):
+        demo._store_fixture(root, scenario, inputs, cfg, FRIDAY, 0)
+    assert list((root / demo.FIXTURE_DIR).iterdir()) == [previous]  # no archive, no partial
+
+
+def test_a_build_the_start_would_refuse_is_not_stored_and_not_tried_again(
+        tmp_path, monkeypatch, first_start):
+    """The build checks its archive exactly as a start will (extract, migrate). Refused: no
+    archive, the previous builds kept, the cause recorded under the inputs' digest; a start then
+    serves the previous build without building again (no build-and-restart loop), and with no
+    previous build it is refused at once."""
+    built, _, _, _ = first_start
+    root, previous = _stale_repo(tmp_path, first_start)
+    scenario = _short_day(root)
+    inputs = demo.fixture_inputs(root, scenario)
+    cfg = config.load(built / (scenario.root_dir + demo.BUILD_SUFFIX) / "config" / "bot.toml")
+    monkeypatch.setattr(demo, "replay", lambda *args: (cfg, FRIDAY, 0))  # the module's replay
+
+    def newer(*args, **kwargs):
+        raise RuntimeError("database schema is newer than this code")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(demo.Store, "open", newer)
+        with pytest.raises(demo.FixtureRefused, match="start checks refuse.*newer"):
+            demo.build_fixture(root, scenario, SUNDAY, log=lambda line: None)
+    assert "newer than this code" in demo.recorded_refusal(root, inputs)
+    assert sorted(p.name for p in (root / demo.FIXTURE_DIR).iterdir()) == sorted(
+        [previous.name, demo.refusal_path(root, inputs).name])
+
+    lines: list[str] = []
+    assert demo.run_demo(root, scenario, SUNDAY, log=lines.append, start_build=_no_build) == 0
+    assert sum("was refused" in line for line in lines) == 1
+    previous.unlink()
+    with pytest.raises(demo.DemoRefused, match="refused.*no previous fixture"):
+        demo.run_demo(root, scenario, SUNDAY, log=lambda line: None, start_build=_no_build)
+    # An explicit build tries again: once it is stored, the record is gone.
+    demo.build_fixture(root, scenario, SUNDAY, log=lambda line: None)
+    assert demo.recorded_refusal(root, inputs) is None
+    assert [p.name for p in (root / demo.FIXTURE_DIR).iterdir()] == [
+        demo.fixture_path(root, inputs).name]
