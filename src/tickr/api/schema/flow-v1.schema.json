@@ -60,6 +60,30 @@
                 "type": "null"
               }
             ]
+          },
+          "ranks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "GAINERS",
+                    "LOSERS",
+                    "TOP_ACTIVES"
+                  ]
+                },
+                "rank": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "rank"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -67,7 +91,8 @@
           "sources",
           "change_pct",
           "change_cause",
-          "excluded_cause"
+          "excluded_cause",
+          "ranks"
         ],
         "additionalProperties": false
       }

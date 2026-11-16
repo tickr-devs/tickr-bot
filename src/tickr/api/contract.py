@@ -1570,6 +1570,14 @@ class Agreement(StrEnum):
 
 
 @dataclass(frozen=True)
+class SymbolSourceV1:
+    """A screener that listed the symbol that day, with its rank in the latest such list."""
+
+    kind: ScreenerKind
+    rank: int
+
+
+@dataclass(frozen=True)
 class FlowChipV1:
     """One symbol a screener listed that day. `sources`: every screener that listed it that
     day. `change_pct`: (price - pre_close) / pre_close x 100 from its latest captured row, null
@@ -1581,6 +1589,8 @@ class FlowChipV1:
     change_pct: Decimal | None
     change_cause: str | None
     excluded_cause: str | None
+    ranks: tuple[SymbolSourceV1, ...] = _added_later(())
+    """Each screener's rank of the symbol in its latest list that day, in `sources` order."""
 
 
 @dataclass(frozen=True)
@@ -1796,6 +1806,125 @@ def latest_size(records: tuple[DecisionRecord, ...]) -> LatestSizeV1 | None:
     return None
 
 
+# ------------------------------------------------------- symbols and fast movers (read-only)
+
+
+class SymbolStage(StrEnum):
+    """The pipeline a screened symbol goes through, in order (the Overview funnel without the
+    reconciliation, which is not per symbol)."""
+
+    SCREENERS = "screeners"  # listed by a screener
+    UNIVERSE = "universe"  # exchange, currency and security type allowed
+    QUOTE = "quote"  # a valid, fresh snapshot quote that passed the strategy's quote rules
+    BARS = "bars"  # session bars that passed the strategy's session rules: a candidate
+    STRATEGY = "strategy"  # the active strategy recorded a decision
+    RISK = "risk"  # an ENTER that admission took
+    ORDER = "order"  # the entry order of a trade filled
+    STOP = "stop"  # that trade's broker stop was seen working
+
+
+class SymbolState(StrEnum):
+    """Where a symbol stands now at its current stage (`SymbolRowV1.stage`)."""
+
+    PASSED = "passed"  # through the last stage: in a trade whose stop was seen working
+    WAITING = "waiting"  # nothing failed; the next stage has not happened yet (e.g. WATCH)
+    DROPPED = "dropped"  # refused at this stage; `cause` and the check or detail say why
+    NOT_REACHED = "not_reached"  # the latest pass stopped before deciding it (bars budget)
+
+
+@dataclass(frozen=True)
+class SymbolRowV1:
+    """One symbol seen on the day. `furthest`: the furthest stage it got to (judged or
+    waiting there) at any time of the day, never before `stage`. `stage` and `state`: where
+    it stands now, from the newer of its latest discovery pass and its latest active decision
+    (trades win: a filled entry is at `order` or `stop`).
+    `cause`: the code of why it was dropped or not reached (a discovery cause such as
+    `QUOTE_STALE` or `STRATEGY_LIQUIDITY`, the verdict `IGNORE`, or the admission `refused`),
+    null otherwise. `check`: the failed check (a strategy rule, rounded like every shown check);
+    `detail`: the measured value against the threshold of a platform cause, or the admission's
+    refusal text. `at`: the time of the current state. `first_seen`: the start of the first
+    pass that listed it; null for a symbol only known from decisions or trades."""
+
+    symbol: str
+    sources: tuple[SymbolSourceV1, ...]
+    change_pct: Decimal | None
+    first_seen: datetime | None
+    furthest: SymbolStage
+    stage: SymbolStage
+    state: SymbolState
+    cause: str | None
+    check: CheckV1 | None
+    detail: str | None
+    verdict: Verdict | None
+    setup: str | None
+    at: datetime | None
+
+
+@dataclass(frozen=True)
+class SymbolStageCountV1:
+    """How many symbols reached `stage` that day (`furthest` at or beyond it)."""
+
+    stage: SymbolStage
+    count: int
+
+
+@dataclass(frozen=True)
+class SymbolsV1:
+    """GET /symbols?date=: every symbol the bot looked at that day, with its furthest stage
+    and where and why it stands now; `stages` counts each stage, in pipeline order.
+    `as_of`: the end of the latest recorded discovery pass, null with `as_of_cause`."""
+
+    day: date
+    as_of: datetime | None
+    as_of_cause: str | None
+    stages: tuple[SymbolStageCountV1, ...]
+    rows: tuple[SymbolRowV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class FastMoverRulesV1:
+    """The active strategy's fast-mover thresholds (its strategy.toml `[spike]`)."""
+
+    lookback_bars: int
+    min_volume_ratio: Decimal
+    min_move_atr: Decimal
+    min_dollar_volume_ratio: Decimal
+    min_bar_dollar_volume_usd: Decimal
+
+
+@dataclass(frozen=True)
+class FastMoverV1:
+    """The latest bar of the day that made `symbol` a fast mover. `move_atr` is signed (above
+    0 the bar closed up); `fired` names the signals that reached their thresholds
+    (`volume_ratio`, `move_atr`, `dollar_volume_ratio`); `spike_up`: what the strategy's spike
+    setup trades. `watching`: its latest active decision of the day is WATCH."""
+
+    symbol: str
+    at: datetime  # the bar's start
+    close: Decimal
+    bar_dollar_volume: Decimal
+    volume_ratio: Decimal
+    move_atr: Decimal
+    dollar_volume_ratio: Decimal
+    fired: tuple[str, ...]
+    spike_up: bool
+    watching: bool
+
+
+@dataclass(frozen=True)
+class MoversV1:
+    """GET /movers?date=: every symbol that was a fast mover that day, its latest such bar
+    newest first. `rules`: the active strategy's thresholds, null with `rules_cause` when it
+    defines none (then nothing is measured and `movers` is empty)."""
+
+    day: date
+    rules: FastMoverRulesV1 | None
+    rules_cause: str | None
+    movers: tuple[FastMoverV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
 # ---------------------------------------------------------------- performance (read-only)
 
 
@@ -1887,6 +2016,8 @@ SCHEMA_TYPES: dict[str, type] = {
     "skipped-v1": SkippedV1,
     "flow-v1": FlowV1,
     "watching-v1": WatchingV1,
+    "symbols-v1": SymbolsV1,
+    "movers-v1": MoversV1,
     "performance-v1": PerformanceV1,
     "account-v1": AccountV1,
     "account-response-v1": AccountResponseV1,

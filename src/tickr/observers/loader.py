@@ -65,6 +65,11 @@ def _read_values(root: Path, folder: str) -> tuple[dict[str, Any], dict[str, Any
     return values, table, name
 
 
+def read_values(root: Path, folder: str) -> dict[str, Any]:
+    """The folder's parsed strategy.toml (nothing imported or built); ObserverError otherwise."""
+    return _read_values(root, folder)[0]
+
+
 def read_identity(root: Path, folder: str) -> tuple[str, str]:
     """(name, version) a strategy folder declares, read from its file only (nothing imported
     or built): what its recorded decisions are tagged with. ObserverError when unreadable."""

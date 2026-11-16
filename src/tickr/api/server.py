@@ -42,7 +42,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import contract, flow, trade_whatif
+from tickr.api import contract, flow, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
@@ -74,7 +74,7 @@ from tickr.data.capture import CaptureError
 from tickr.data.discovery import DiscoverySettings
 from tickr.data.history import SYMBOL_PATTERN as TICKER_PATTERN
 from tickr.observers.errors import ObserverError
-from tickr.observers.loader import read_identity
+from tickr.observers.loader import read_identity, read_values
 from tickr.observers.log import DecisionLog
 from tickr.research.errors import RecordFileError
 from tickr.research.records import DecisionRecord
@@ -345,6 +345,7 @@ class ApiServer(ThreadingHTTPServer):
         self.observer_results = ObserverResults(settings.simulation,
                                                 settings.observer_trades_max_rows)
         self.screener_chips = flow.ScreenerChips(settings.universe, settings.change_pct_places)
+        self.discovery_day = symbols.DiscoveryDay()  # GET /symbols and /movers
         self.skipped = SkippedAfter(settings.simulation, settings.after.minutes,
                                     settings.check_places)
         # No source until one is attached (python -m tickr.api, or the demo's world).
@@ -491,7 +492,7 @@ _ERROR_CODES = {
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/journal", "/config",
-              "/trades/whatif", "/advisor")
+              "/trades/whatif", "/advisor", "/symbols", "/movers")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
 HTML_TYPE = "text/html; charset=utf-8"
@@ -669,7 +670,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._trade_whatif()
             elif path == "/explain":
                 self._explain()
-            elif path in ("/observers", "/decisions", "/skipped", "/flow", "/watching"):
+            elif path in ("/observers", "/decisions", "/skipped", "/flow", "/watching",
+                          "/symbols", "/movers"):
                 self._recorded_decisions(path)
             elif path == "/account":
                 self._account()
@@ -1020,6 +1022,10 @@ class Handler(BaseHTTPRequestHandler):
                     settings.check_places)
             elif path == "/flow":
                 document = self._flow(day, today, cache.records(day, today, role=Role.ACTIVE))
+            elif path == "/symbols":
+                document = self._symbols(day, today, cache.records(day, today, role=Role.ACTIVE))
+            elif path == "/movers":
+                document = self._movers(day, today, cache.records(day, today, role=Role.ACTIVE))
             else:
                 symbol = params["symbol"]
                 document = contract.decisions_document(symbol, day,
@@ -1048,6 +1054,26 @@ class Handler(BaseHTTPRequestHandler):
             self.server.screener_chips.chips(path, open_tail=day == today), records,
             self.server.history.entries(day, today),
             flow.reconcile(day, today, settings.status_path, settings.account_path))
+
+    def _discovery(self, day: date, today: date) -> symbols.DiscoveryFolded:
+        return self.server.discovery_day.read(
+            symbols.discovery_path(self.server.settings.history.capture, day), day == today)
+
+    def _symbols(self, day: date, today: date,
+                 records: tuple[DecisionRecord, ...]) -> contract.SymbolsV1:
+        settings = self.server.settings
+        chips = self.server.screener_chips.chips(
+            flow.screener_path(settings.history.capture, day), open_tail=day == today)
+        return symbols.symbols_document(day, self._discovery(day, today), chips, records,
+                                        self.server.history.entries(day, today),
+                                        settings.check_places)
+
+    def _movers(self, day: date, today: date,
+                records: tuple[DecisionRecord, ...]) -> contract.MoversV1:
+        settings = self.server.settings
+        toml = read_values(settings.strategies_root, settings.shown.active_strategy)
+        return symbols.movers_document(day, self._discovery(day, today),
+                                       symbols.mover_rules(toml), records)
 
     def _read_json_body(self) -> dict[str, Any] | None:
         media = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()

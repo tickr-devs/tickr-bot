@@ -114,6 +114,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/skipped?date=<YYYY-MM-DD>` | `200` `skipped-v1`: every ENTER of the active strategy that date (default today) that did not become a position (admission `refused` or `not_evaluated`), oldest first, with checks, prices after the signal and the simulated what-if. |
 | GET | `/flow?date=<YYYY-MM-DD>` | `200` `flow-v1`: the Overview's live flow that date (default today): screener chips and the pipeline stages from screeners to verified broker stops, with reconciliation. |
 | GET | `/watching?date=<YYYY-MM-DD>` | `200` `watching-v1`: every symbol the active strategy is watching on that date (default today), closest to entering first. |
+| GET | `/symbols?date=<YYYY-MM-DD>` | `200` `symbols-v1`: every symbol the bot looked at that date (default today), with the furthest pipeline stage it reached and where and why it stands now (see GET /symbols below). |
+| GET | `/movers?date=<YYYY-MM-DD>` | `200` `movers-v1`: the fast movers of that date (default today), newest bar first, with the active strategy's thresholds (see GET /movers below). |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
 | POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
@@ -939,6 +941,8 @@ not read yet.
 `chips`: one per symbol a screener listed that day, from the captured `screener.jsonl`, most
 recently listed first (within a discovery pass: gainers, losers, top actives, each by rank).
 - `sources`: every screener that listed it that day: `GAINERS` `LOSERS` `TOP_ACTIVES`.
+- `ranks`: `{kind, rank}` per screener in `sources` order: its rank (1 is first) in the
+  latest list of that screener that held it. Added later; older bots omit it.
 - `change_pct`: `(price - pre_close) / pre_close x 100` of its latest captured provider row,
   rounded half-even to `[api] flow_change_pct_decimal_places`. `null` when the row lacks a
   number for either key or `pre_close` is not positive; `change_cause` then says which
@@ -1029,6 +1033,57 @@ quantity. The room check alone proves nothing: the notional cap can still cut be
 Otherwise `binding` is `null` with `binding_cause`. It is the last size given, not a forecast of
 the next one (that depends on the next signal's price and stop). `latest_size` is `null` when no
 decision that day reached sizing.
+
+### GET /symbols (read-only)
+
+`/symbols?date=` (date optional, default today in New York) is the Symbols screen behind the
+Overview funnel: every symbol of the day, one row each, sorted by symbol. Sources: the day's
+captured `discovery.jsonl` (one line per discovery pass, written by the bot), the screener
+chips of `/flow`, the active strategy's decisions and the bot database. Read incrementally and
+archived (`.gz`) files the same way, like `/flow`.
+
+`stages`: always eight, in pipeline order `screeners`, `universe`, `quote`, `bars`, `strategy`,
+`risk`, `order`, `stop`, each `{stage, count}`: how many rows have `furthest` at or past it.
+
+Each row:
+- `sources`: `{kind, rank}` per screener that listed it, as the `/flow` chip's `ranks` (its
+  latest rank in each list); `change_pct` as the chip's.
+- `first_seen`: the start of the first discovery pass that listed it.
+- `furthest`: the furthest stage it got to that day, judged or waiting there (a refusal at a
+  stage got to that stage, a pass candidate and a decision `strategy`, a taken entry `risk`, a
+  filled entry `order`, a verified stop `stop`); never before `stage`.
+- `stage` and `state`: where it stands now: `passed` (stop verified), `waiting` (nothing
+  failed, the next stage has not happened yet: a candidate awaiting the strategy, a `WATCH`,
+  a taken entry awaiting its fill, a stop not yet seen working), `dropped` (refused at
+  `stage`), `not_reached` (the latest pass stopped before deciding it, or no pass ran since a
+  screener listed it). The newer of the latest pass's outcome and the latest decision wins; a
+  decision always replaces a pass's `waiting`.
+- `cause`: the discovery refusal code (`SECURITY_TYPE_NOT_ALLOWED`, `QUOTE_STALE`,
+  `STRATEGY_LIQUIDITY`, ...), `IGNORE`, the admission (`refused`, `not_evaluated`), the stop
+  state (`never_verified`, `unknown`), or the stopped pass's `<stage> <cause>`; `null` otherwise.
+- `check`: the failed strategy check (rounded like `/watching`) when a rule dropped it;
+  `detail` otherwise: `measured (needs threshold)` of a platform refusal, the admission's cause
+  or the stopped pass's detail.
+- `verdict`, `setup`: of its latest decision that day (`null` without one); `at`: when the
+  current state was recorded.
+
+`as_of` is the end of the latest pass; `null` with `as_of_cause` when none is recorded for the
+day. A malformed capture line is `503 unavailable`.
+
+### GET /movers (read-only)
+
+`/movers?date=` (date optional, default today in New York) lists the day's fast movers: a
+symbol whose latest completed one-minute bar, measured by discovery on the bars it already
+reads, fired at least one signal against the mean of the previous `lookback_bars` bars. One
+row per symbol (its latest such bar), newest bar first, then by symbol: `at` (bar start),
+`close`, `bar_dollar_volume`, `volume_ratio`, `move_atr` (signed, in ATRs of the previous bars),
+`dollar_volume_ratio`, `fired` (the signals that reached their thresholds), `spike_up` (volume
+and an upward move both fired: the strategy's spike setup) and `watching` (its latest decision
+of the active strategy that day is `WATCH`).
+
+`rules` are the thresholds of the active strategy's `[spike]` section as the API loaded them;
+`null` with `rules_cause` when the strategy defines none. An unreadable `[spike]` is
+`503 unavailable`.
 
 ### Commands
 

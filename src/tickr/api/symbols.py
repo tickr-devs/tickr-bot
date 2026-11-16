@@ -1,0 +1,325 @@
+"""GET /symbols and GET /movers: every symbol of a day through the pipeline, and its fast movers.
+
+Read-only. Sources (docs/api.md, "GET /symbols", "GET /movers"):
+- the day's captured `discovery.jsonl` (one line per discovery pass, `data.discovery.pass_record`):
+  first seen, the discovery stages reached (screeners, universe, quote, bars), the latest pass's
+  outcome with its cause, and the fast movers;
+- the day's screener chips (`flow.ScreenerChips`): screeners, ranks and the change;
+- the decision file (active strategy): the strategy and risk stages;
+- the bot database (`History.entries`): the order and stop stages;
+- the active strategy's strategy.toml `[spike]`: the fast-mover thresholds.
+
+The capture is read incrementally like the screener chips: only lines appended since the last
+read are parsed and folded, so a request costs the new passes, not the whole day.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+
+from tickr.api import contract as api
+from tickr.archive import GZ_SUFFIX, existing, open_text
+from tickr.data.capture import DISCOVERY_FILE, CaptureError
+from tickr.observers.errors import ObserverError
+from tickr.research.records import Admission, DecisionRecord
+from tickr.strategy.base import Check, Verdict
+
+S = api.SymbolStage
+ORDER = tuple(S)  # pipeline order
+NO_PASS = "no discovery pass recorded for this day"
+NO_RULES = "the active strategy defines no fast movers ([spike] in its strategy.toml)"
+SIGNALS = ("volume_ratio", "move_atr", "dollar_volume_ratio")
+# Where a refusal of each discovery stage leaves the symbol (data.discovery.Stage values).
+_DROPPED_AT = {"screener": S.UNIVERSE, "snapshot": S.QUOTE, "bars": S.BARS}
+NEVER_VERIFIED = "never_verified"
+
+
+def discovery_path(capture: Path, day: date) -> Path | None:
+    """The day's discovery capture, plain or archived; None when there is none."""
+    return existing(capture / day.isoformat() / DISCOVERY_FILE)
+
+
+def _later(a: S, b: S) -> S:
+    return a if ORDER.index(a) >= ORDER.index(b) else b
+
+
+def _decimal(value: Any, where: str) -> Decimal:
+    try:
+        return Decimal(value)
+    except (InvalidOperation, TypeError) as exc:
+        raise ValueError(f"{where} is not a number: {value!r}") from exc
+
+
+def _time(value: Any, where: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"{where} is not a time")
+    at = datetime.fromisoformat(value)
+    if at.tzinfo is None:
+        raise ValueError(f"{where} has no UTC offset")
+    return at
+
+
+def _check(raw: Any) -> Check | None:
+    if raw is None:
+        return None
+    measured, threshold = raw["measured"], raw["threshold"]
+    return Check(raw["rule"], None if measured is None else _decimal(measured, "check"),
+                 raw["operator"], None if threshold is None else _decimal(threshold, "check"),
+                 bool(raw["passed"]), raw["note"])
+
+
+@dataclass
+class _Outcome:
+    """A symbol's state in one discovery pass."""
+
+    stage: S
+    state: api.SymbolState
+    at: datetime | None
+    cause: str | None = None
+    detail: str | None = None
+    check: Check | None = None
+
+
+@dataclass(frozen=True)
+class _Mover:
+    """A fast mover's latest bar, parsed when its pass is folded."""
+
+    at: datetime
+    close: Decimal
+    bar_dollar_volume: Decimal
+    volume_ratio: Decimal
+    move_atr: Decimal
+    dollar_volume_ratio: Decimal
+    fired: tuple[str, ...]
+    spike_up: bool
+
+    @staticmethod
+    def parse(m: dict[str, Any]) -> _Mover:
+        for signal in SIGNALS:
+            if not isinstance(m[signal]["fired"], bool):
+                raise ValueError(f"{signal} fired is not true or false")
+        if not isinstance(m["spike_up"], bool):
+            raise ValueError("spike_up is not true or false")
+        return _Mover(
+            _time(m["bar_start"], "bar_start"), _decimal(m["close"], "close"),
+            _decimal(m["bar_dollar_volume"], "bar_dollar_volume"),
+            *(_decimal(m[s]["value"], s) for s in SIGNALS),
+            tuple(s for s in SIGNALS if m[s]["fired"]), m["spike_up"])
+
+
+@dataclass
+class DiscoveryFolded:
+    """What the passes folded so far say, per symbol."""
+
+    first_seen: dict[str, datetime] = field(default_factory=dict)
+    furthest: dict[str, S] = field(default_factory=dict)
+    latest: dict[str, _Outcome] = field(default_factory=dict)
+    movers: dict[str, _Mover] = field(default_factory=dict)
+    measured: bool | None = None  # of the latest pass
+    as_of: datetime | None = None
+
+    def fold(self, raw: dict[str, Any]) -> None:
+        started = _time(raw["started_at"], "started_at")
+        finished = _time(raw["finished_at"], "finished_at")
+
+        def reach(symbol: str, stage: S) -> None:
+            self.first_seen.setdefault(symbol, started)
+            self.furthest[symbol] = _later(self.furthest.get(symbol, S.SCREENERS), stage)
+
+        for instrument in raw["instruments"]:
+            reach(instrument["symbol"], S.SCREENERS)
+        for r in raw["rejections"]:
+            stage = _DROPPED_AT[r["stage"]]
+            reach(r["symbol"], stage)
+            check = _check(r["check"])
+            self.latest[r["symbol"]] = _Outcome(
+                stage, api.SymbolState.DROPPED, finished, r["cause"],
+                None if check is not None else f"{r['measured']} (needs {r['threshold']})",
+                check)
+        for symbol in raw["candidates"]:
+            reach(symbol, S.STRATEGY)
+            self.latest[symbol] = _Outcome(S.STRATEGY, api.SymbolState.WAITING, finished)
+        stopped = raw["stopped"]
+        for symbol in raw["not_reached"]:
+            stage = S.BARS if stopped is not None and stopped["stage"] == "bars" else S.QUOTE
+            reach(symbol, stage)
+            cause = None if stopped is None else f"{stopped['stage']} {stopped['cause']}"
+            self.latest[symbol] = _Outcome(stage, api.SymbolState.NOT_REACHED, finished, cause,
+                                           None if stopped is None else stopped["detail"])
+        for m in raw["movers"]:
+            if not isinstance(m["symbol"], str):
+                raise ValueError("a mover's symbol is not text")
+            self.movers[m["symbol"]] = _Mover.parse(m)
+        if not isinstance(raw["movers_measured"], bool):
+            raise ValueError("movers_measured is not true or false")
+        self.measured = raw["movers_measured"]
+        self.as_of = finished
+
+    def snapshot(self) -> DiscoveryFolded:
+        """A copy whose maps a later fold never changes (their values are never mutated)."""
+        return DiscoveryFolded(dict(self.first_seen), dict(self.furthest), dict(self.latest),
+                               dict(self.movers), self.measured, self.as_of)
+
+
+class DiscoveryDay:
+    """The fold of one day's `discovery.jsonl`, read incrementally (see the module docstring).
+    A file that is replaced, shrinks or is archived is read anew. Raises CaptureError."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._reset(None)
+
+    def _reset(self, identity: tuple[object, ...] | None) -> None:
+        self._identity = identity
+        self._offset = 0
+        self._lines = 0
+        self._day = DiscoveryFolded()
+
+    def read(self, path: Path | None, open_tail: bool) -> DiscoveryFolded:
+        if path is None:
+            return DiscoveryFolded()
+        with self._lock:
+            try:
+                path = existing(path) or path
+                stat = path.stat()
+                identity = (str(path), stat.st_dev, stat.st_ino, open_tail)
+                if identity != self._identity or stat.st_size < self._offset:
+                    self._reset(identity)
+                self._read(path, open_tail)
+            except OSError as exc:
+                raise CaptureError(str(exc)) from exc
+            except CaptureError:
+                self._reset(None)
+                raise
+            return self._day.snapshot()  # requests run on threads: never hand out the live fold
+
+    def _read(self, path: Path, open_tail: bool) -> None:
+        if path.name.endswith(GZ_SUFFIX):  # archived: read once, never appended to
+            if self._offset:
+                return
+            with open_text(path) as handle:
+                lines = handle.readlines()
+            self._offset = path.stat().st_size
+        else:
+            with open(path, "rb") as handle:
+                handle.seek(self._offset)
+                data = handle.read()
+            complete = data if not open_tail else data[:data.rfind(b"\n") + 1]
+            try:
+                lines = complete.decode("utf-8").splitlines(keepends=True)
+            except UnicodeDecodeError as exc:
+                raise CaptureError(f"{path}: {exc}") from exc
+            self._offset += len(complete)
+        for text in lines:
+            self._lines += 1
+            if not text.strip():
+                continue
+            try:
+                self._day.fold(json.loads(text))
+            except (ValueError, TypeError, KeyError) as exc:
+                raise CaptureError(f"{path}:{self._lines}: {exc}") from exc
+
+
+def _decision_state(record: DecisionRecord, places: int) -> _Outcome:
+    d = record.decision
+    if d.verdict is Verdict.IGNORE:
+        return _Outcome(S.STRATEGY, api.SymbolState.DROPPED, record.time, Verdict.IGNORE.value,
+                        check=d.decisive)
+    if d.verdict is Verdict.ENTER:
+        if record.admission is Admission.TAKEN:
+            return _Outcome(S.ORDER, api.SymbolState.WAITING, record.time)
+        return _Outcome(S.RISK, api.SymbolState.DROPPED, record.time, record.admission.value,
+                        record.refusal_cause)
+    return _Outcome(S.STRATEGY, api.SymbolState.WAITING, record.time)  # WATCH, HOLD, EXIT
+
+
+def symbols_document(day: date, folded: DiscoveryFolded, chips: Sequence[api.FlowChipV1],
+                     records: Sequence[DecisionRecord], stops: Sequence[api.FlowStopV1],
+                     places: int) -> api.SymbolsV1:
+    """`records`: the active strategy's records of `day`; `stops`: one per trade whose entry
+    filled that day."""
+    latest_record = {r.symbol: r for r in sorted(records, key=lambda r: r.time)}
+    taken = {r.symbol for r in records
+             if r.decision.verdict is Verdict.ENTER and r.admission is Admission.TAKEN}
+    stop_of = {s.symbol: s for s in stops}
+    chip_of = {c.symbol: c for c in chips}
+    symbols = sorted(set(chip_of) | set(folded.furthest) | set(latest_record) | set(stop_of))
+    rows = []
+    for symbol in symbols:
+        furthest = folded.furthest.get(symbol, S.SCREENERS)
+        record = latest_record.get(symbol)
+        if record is not None:
+            furthest = _later(furthest, S.STRATEGY)
+        if symbol in taken:
+            furthest = _later(furthest, S.RISK)
+        now = folded.latest.get(symbol)
+        if record is not None and (now is None or record.time >= now.at
+                                   or now.state is api.SymbolState.WAITING):
+            now = _decision_state(record, places)
+        stop = stop_of.get(symbol)
+        if stop is not None:
+            furthest = _later(furthest, S.ORDER)
+            if stop.state is api.FlowStopState.VERIFIED:
+                furthest = S.STOP
+                now = _Outcome(S.STOP, api.SymbolState.PASSED, now.at if now else None)
+            elif stop.state is api.FlowStopState.PENDING:
+                now = _Outcome(S.STOP, api.SymbolState.WAITING, now.at if now else None)
+            else:
+                now = _Outcome(S.STOP, api.SymbolState.DROPPED, now.at if now else None,
+                               stop.state.value)
+        if now is None:  # listed by a screener after the latest recorded pass
+            now = _Outcome(S.UNIVERSE, api.SymbolState.NOT_REACHED, None, NO_PASS)
+        furthest = _later(furthest, now.stage)  # where it stands now, it got to
+        chip = chip_of.get(symbol)
+        rows.append(api.SymbolRowV1(
+            symbol=symbol, sources=chip.ranks if chip else (),
+            change_pct=chip.change_pct if chip else None,
+            first_seen=folded.first_seen.get(symbol), furthest=furthest, stage=now.stage,
+            state=now.state, cause=now.cause,
+            check=None if now.check is None else api.shown_check(now.check, places),
+            detail=now.detail, verdict=None if record is None else record.decision.verdict,
+            setup=None if record is None else record.decision.setup, at=now.at))
+    counts = tuple(api.SymbolStageCountV1(
+        stage, sum(1 for r in rows if ORDER.index(r.furthest) >= ORDER.index(stage)))
+        for stage in ORDER)
+    return api.SymbolsV1(day, folded.as_of, None if folded.as_of else NO_PASS, counts,
+                         tuple(rows))
+
+
+def movers_document(day: date, folded: DiscoveryFolded, rules: api.FastMoverRulesV1 | None,
+                    records: Sequence[DecisionRecord]) -> api.MoversV1:
+    """Every fast mover of the day, newest bar first, then by symbol."""
+    latest = {r.symbol: r for r in sorted(records, key=lambda r: r.time)}
+    movers = []
+    for symbol, m in folded.movers.items():
+        record = latest.get(symbol)
+        movers.append(api.FastMoverV1(
+            symbol=symbol, at=m.at, close=m.close, bar_dollar_volume=m.bar_dollar_volume,
+            volume_ratio=m.volume_ratio, move_atr=m.move_atr,
+            dollar_volume_ratio=m.dollar_volume_ratio, fired=m.fired, spike_up=m.spike_up,
+            watching=record is not None and record.decision.verdict is Verdict.WATCH))
+    movers.sort(key=lambda m: (-m.at.timestamp(), m.symbol))
+    return api.MoversV1(day, rules, None if rules else NO_RULES, tuple(movers))
+
+
+def mover_rules(strategy_toml: dict[str, Any]) -> api.FastMoverRulesV1 | None:
+    """The `[spike]` thresholds of a parsed strategy.toml, or None when it has none.
+    ObserverError when the section is there but unreadable."""
+    spike = strategy_toml.get("spike")
+    if spike is None:
+        return None
+    try:
+        return api.FastMoverRulesV1(
+            int(spike["lookback_bars"]), _decimal(str(spike["min_volume_ratio"]), "spike"),
+            _decimal(str(spike["min_move_atr"]), "spike"),
+            _decimal(str(spike["min_dollar_volume_ratio"]), "spike"),
+            _decimal(str(spike["min_bar_dollar_volume_usd"]), "spike"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ObserverError(f"[spike] of the active strategy unreadable: {exc}") from exc

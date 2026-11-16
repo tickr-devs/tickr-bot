@@ -137,6 +137,7 @@ class _ChipState:
         self.latest: dict[str, ScreenerRow] = {}
         self.outcome: dict[str, str | None] = {}
         self.listed: dict[str, tuple[int, int]] = {}
+        self.ranks: dict[str, dict[ScreenerKind, int]] = {}
         self.passes = 0
 
     def copy(self) -> _ChipState:
@@ -144,6 +145,7 @@ class _ChipState:
         state.sources = {k: set(v) for k, v in self.sources.items()}
         state.latest, state.outcome = dict(self.latest), dict(self.outcome)
         state.listed, state.passes = dict(self.listed), self.passes
+        state.ranks = {k: dict(v) for k, v in self.ranks.items()}
         return state
 
     def fold(self, rows: Sequence[ScreenerRow], settings: DiscoverySettings) -> None:
@@ -158,6 +160,7 @@ class _ChipState:
         seen: set[str] = set()
         for position, row in enumerate(rows):
             self.sources.setdefault(row.symbol, set()).add(row.kind)
+            self.ranks.setdefault(row.symbol, {})[row.kind] = row.rank
             self.latest[row.symbol] = row
             self.outcome[row.symbol] = found.get(row.symbol, CONFLICTING)
             if row.symbol not in seen:
@@ -170,10 +173,11 @@ class _ChipState:
         result = []
         for symbol in order:
             change, cause = change_pct(self.latest[symbol], places)
+            sources = tuple(k for k in ScreenerKind if k in self.sources[symbol])
             result.append(api.FlowChipV1(
-                symbol=symbol,
-                sources=tuple(k for k in ScreenerKind if k in self.sources[symbol]),
-                change_pct=change, change_cause=cause, excluded_cause=self.outcome[symbol]))
+                symbol=symbol, sources=sources,
+                change_pct=change, change_cause=cause, excluded_cause=self.outcome[symbol],
+                ranks=tuple(api.SymbolSourceV1(k, self.ranks[symbol][k]) for k in sources)))
         return tuple(result)
 
 

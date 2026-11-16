@@ -1,0 +1,7 @@
+{
+  "day": "2026-11-16",
+  "rules": null,
+  "rules_cause": "the active strategy defines no fast movers ([spike] in its strategy.toml)",
+  "movers": [],
+  "api_version": 1
+}
