@@ -214,6 +214,16 @@ def test_a_status_written_before_a_key_was_added_still_reads():
         contract.from_jsonable(StatusV1, raw)
 
 
+def test_a_status_written_before_code_versions_reads_them_as_null():
+    raw = json.loads(EXAMPLE.read_text("utf-8"))
+    raw.pop("code_version")
+    for trade in raw["trades_today"]:
+        trade.pop("code_version")
+    parsed = contract.from_jsonable(StatusV1, raw)
+    assert parsed.code_version is None
+    assert all(t.code_version is None for t in parsed.trades_today)
+
+
 def test_a_field_default_does_not_make_its_key_optional():
     """`symbol: null` on a flatten means close everything, so a command file that lacks the
     key is refused, never read as that."""

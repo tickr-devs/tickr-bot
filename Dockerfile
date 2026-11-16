@@ -17,6 +17,13 @@ RUN groupadd --gid "$TICKR_GID" tickr \
     && useradd --uid "$TICKR_UID" --gid "$TICKR_GID" --no-create-home \
        --home-dir /app/data --shell /usr/sbin/nologin tickr
 
+# The code version every run and trade records (src/tickr/version.py): the image has no .git,
+# so the commit is baked in at build time with
+# --build-arg TICKR_CODE_VERSION=$(git rev-parse HEAD) (docs/deploy-server.md). Without it the
+# bot and preflight refuse to start.
+ARG TICKR_CODE_VERSION=""
+ENV TICKR_CODE_VERSION=$TICKR_CODE_VERSION
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

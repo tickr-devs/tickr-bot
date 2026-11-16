@@ -113,7 +113,8 @@ def _iso(text: str) -> datetime:
 def _status_trade(t: api.DayTrade) -> api.Trade:
     return api.Trade(t.symbol, t.quantity, t.entry_price, t.exit_price, t.opened_at,
                      t.closed_at, t.exit_reason, t.result_gross_usd, t.planned_loss_usd,
-                     t.stop_confirmed_after_seconds, t.entry, t.entry_cause, t.strategy)
+                     t.stop_confirmed_after_seconds, t.entry, t.entry_cause, t.strategy,
+                     t.code_version)
 
 
 def trades_today(engine: Engine, now: datetime) -> tuple[api.Trade, ...]:
@@ -731,7 +732,8 @@ class Service:
                        else api.Freshness(self.last_broker_read_at, None, api.StreamHealth.OFF)),
             recent_commands=self._recent_commands(),
             realized_loss_today_usd=loss, open_reservations_usd=reserved,
-            daily_room_usd=room, positions=positions)
+            daily_room_usd=room, positions=positions,
+            code_version=self.engine.store.run_code_version(self.engine.run_id))
 
     def write_status(self) -> None:
         api.write_status(self.paths.status, self.status())

@@ -327,6 +327,26 @@ def test_refused_symbol_is_not_asked_again_this_session_but_is_next_session():
     assert any("S02" in a for m, a in md.calls if m == "snapshot")
 
 
+def test_refused_symbol_is_asked_again_after_the_recheck_period():
+    md = Unknown(snapshot={"S02"})
+    five(md)
+    memory = RefusedSymbols()
+    recheck = timedelta(seconds=900)
+    discover(md, settings(refused_symbol_recheck=recheck), Screen(), OPEN, lambda: NOW, None,
+             memory)
+    md.calls.clear()
+    just_before = NOW + recheck - timedelta(seconds=1)
+    discover(md, settings(refused_symbol_recheck=recheck), Screen(), OPEN, lambda: just_before,
+             None, memory)
+    assert all("S02" not in a for _, a in md.calls)  # still remembered
+    md.calls.clear()
+    md.unknown["snapshot"] = set()  # the provider knows the symbol now
+    third = discover(md, settings(refused_symbol_recheck=recheck), Screen(), OPEN,
+                     lambda: NOW + recheck, None, memory)
+    assert any("S02" in a for m, a in md.calls if m == "snapshot")  # asked again
+    assert not [r for r in third.rejections if r.cause is Cause.SYMBOL_REFUSED]
+
+
 def test_budget_during_a_split_still_stops_the_pass_visibly():
     md = Unknown(snapshot={"S02"})
     five(md)

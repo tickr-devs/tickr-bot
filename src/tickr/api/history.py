@@ -37,6 +37,7 @@ from tickr.engine.core import (
 )
 from tickr.store import DATABASE_FILE, MIGRATIONS, Store
 from tickr.types import OrderState
+from tickr.version import recorded
 
 ZERO = Decimal(0)
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9./-]*$")
@@ -283,11 +284,14 @@ def closed_trades(store: Store, environment: str | None = None,
     database view). `closed_on` keeps only trades closed that New York date (checked before
     their orders are read, so the bot's per-step call stays cheap). Quantity is what was
     sold; prices are fill-weighted averages."""
+    # The code version is the opening run's own record (`runs.code_version`), never re-derived.
     if environment is None:
-        rows = store.query("SELECT * FROM trades WHERE closed_at IS NOT NULL "
-                           "ORDER BY closed_at, trade_id")
+        rows = store.query("SELECT t.*, r.code_version AS run_code_version FROM trades t "
+                           "LEFT JOIN runs r ON r.run_id = t.run_id "
+                           "WHERE t.closed_at IS NOT NULL ORDER BY t.closed_at, t.trade_id")
     else:
-        rows = store.query("SELECT t.* FROM trades t JOIN runs r ON r.run_id = t.run_id "
+        rows = store.query("SELECT t.*, r.code_version AS run_code_version FROM trades t "
+                           "JOIN runs r ON r.run_id = t.run_id "
                            "WHERE r.environment = ? AND t.closed_at IS NOT NULL "
                            "ORDER BY t.closed_at, t.trade_id", (environment,))
     result = []
@@ -316,7 +320,9 @@ def closed_trades(store: Store, environment: str | None = None,
             # daily-loss check and stays as it was.
             stop_confirmed_after_seconds=None, mae_usd=None, mfe_usd=None,
             entry=NO_ENTRY, entry_cause=NOT_READ, prices_after=(), prices_after_cause=NOT_READ,
-            overshoot_usd=None, overshoot_r=None, overshoot_cause=NOT_READ, strategy=None))
+            overshoot_usd=None, overshoot_r=None, overshoot_cause=NOT_READ, strategy=None,
+            code_version=(None if row["run_code_version"] is None
+                          else recorded(row["run_code_version"]))))
     return result
 
 

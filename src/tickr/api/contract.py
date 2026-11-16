@@ -259,6 +259,9 @@ class Trade:
     # The strategy whose decision opened the trade; null for a manual trade or one opened
     # before the bot journaled it. Added after version 1 shipped.
     strategy: StrategyId | None = _added_later(None)
+    # The bot code version (git commit, `-dirty` with changed tracked files) of the run that
+    # opened the trade, from `runs`; null for a run recorded before it was. Added later.
+    code_version: str | None = _added_later(None)
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
 
@@ -304,6 +307,9 @@ class StatusV1:
     open_reservations_usd: Decimal | None  # planned loss of every open trade
     daily_room_usd: Decimal | None  # ceiling - realized - reserved; may be negative
     positions: tuple[Position, ...]  # every open position the bot tracks
+    # The code version this run records (as `Trade.code_version`); null only for a run
+    # recorded before it was. Added after version 1 shipped.
+    code_version: str | None = _added_later(None)
     schema_version: int = _const(STATUS_SCHEMA_VERSION)
 
 
@@ -515,6 +521,8 @@ class DayTrade:
     # As in `Trade`: the strategy whose decision opened it, null when not journaled. Always
     # written; the default only spares paths that never show it (the daily-loss check).
     strategy: StrategyId | None = None
+    # As in `Trade`: the code version of the run that opened it. Added after version 1 shipped.
+    code_version: str | None = _added_later(None)
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
     prices_after_cause_codes: tuple[ReasonV1, ...] = _reasons_of("prices_after_cause")

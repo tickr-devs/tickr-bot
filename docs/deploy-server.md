@@ -58,8 +58,13 @@ alert channel is an owner decision (see "Open owner decisions").
    cd /srv/tickr/repo
    set -a; . /srv/tickr/etc/compose.env; set +a
    docker compose -f ops/docker/compose.yaml build \
-       --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g)
+       --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g) \
+       --build-arg TICKR_CODE_VERSION=$(git rev-parse HEAD)$(git diff --quiet HEAD || echo -dirty)
    ```
+   `TICKR_CODE_VERSION` is the commit the image is built from (`-dirty` when a tracked file
+   differs from it). The image has no `.git`, so this is how every run and trade records the
+   code it ran on; without it preflight fails with `code-version-unknown` and the bot refuses
+   to start. Rebuild after every `git pull`.
 5. Token folder in the data volume (name from `[environments.*] token_dir`), then preflight:
    ```sh
    C="docker compose -f ops/docker/compose.yaml --profile jobs"

@@ -556,6 +556,16 @@
                       }
                     ]
                   },
+                  "code_version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "entry_cause_codes": {
                     "type": "array",
                     "items": {
@@ -593,6 +603,7 @@
                   "entry",
                   "entry_cause",
                   "strategy",
+                  "code_version",
                   "entry_cause_codes"
                 ],
                 "additionalProperties": false
@@ -944,6 +955,16 @@
                 "additionalProperties": false
               }
             },
+            "code_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "schema_version": {
               "type": "integer",
               "const": 1
@@ -968,6 +989,7 @@
             "open_reservations_usd",
             "daily_room_usd",
             "positions",
+            "code_version",
             "schema_version"
           ],
           "additionalProperties": false

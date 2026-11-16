@@ -18,6 +18,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from tickr.version import recorded
+
 # Database file name inside [run] data_dir (structural: the bot, the CLI and the API all use it).
 DATABASE_FILE = "tickr.sqlite3"
 
@@ -336,6 +338,13 @@ class Store:
         names = ("run_id", "started_at", "environment", "strategy", "strategy_version",
                  "ended_at", "end_cause")
         return dict(zip(names, row, strict=True))
+
+    def run_code_version(self, run_id: str) -> str | None:
+        """The code version recorded on run `run_id`; None for an unknown run or one recorded
+        before the version was determined (`-`), never guessed."""
+        row = self._db.execute("SELECT code_version FROM runs WHERE run_id = ?",
+                               (run_id,)).fetchone()
+        return None if row is None else recorded(row[0])
 
     def run_count(self) -> int:
         return int(self._db.execute("SELECT COUNT(*) FROM runs").fetchone()[0])

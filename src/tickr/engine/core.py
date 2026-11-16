@@ -446,7 +446,8 @@ class Engine:
                 "stop_price": stop_price, "planned_loss_usd": planned_loss_usd,
                 "entry_low_price": entry_low_price,
                 **({} if strategy is None else {"strategy": strategy[0],
-                                                "strategy_version": strategy[1]})},
+                                                "strategy_version": strategy[1]}),
+                "code_version": self.store.run_code_version(self.run_id)},
                 key=trade_id, run_id=self.run_id)
             cid = self._write_intent(trade_id, Leg.ENTRY, symbol, Side.BUY, OrderType.LIMIT,
                                      quantity, limit_price=limit_price)

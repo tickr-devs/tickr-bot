@@ -8,7 +8,8 @@
 #   TICKR_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the build uid)
 #   TICKR_CONFIG_HOST    absolute path of the bot.toml to run with
 #   docker compose -f ops/docker/compose.yaml build \
-#     --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g)
+#     --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g) \
+#     --build-arg TICKR_CODE_VERSION=$(git rev-parse HEAD)$(git diff --quiet HEAD || echo -dirty)
 #
 # Jobs, matching the launchd jobs on the Mac (docs/operations.md, "Jobs"):
 #   api        always on, restarted by Docker (launchd KeepAlive)      -> `up -d api`

@@ -9,6 +9,9 @@ environment = "sandbox"
 data_dir = "data"
 # Seconds a database write waits for another connection's write lock before failing; read by the store.
 database_busy_timeout_seconds = 5
+# Seconds each git command that reads the running code version (commit, tracked changes) may take before the bot run
+# refuses to start; read by tickr.version (tickr run, the manual commands, preflight).
+code_version_timeout_seconds = 5
 # Daily verified database backup folder, relative to data_dir; one file per NY date, only the latest kept (spec 10); read by runtime.watch.
 backups_dir = "backups"
 # Closed sessions whose capture and decision folders `tickr maintain` leaves uncompressed (today is never touched);
@@ -342,6 +345,13 @@ stream_reserved_subscribe_requests = 10
 # Seconds candidates, or observer symbols, stay off the stream after their subscribe was refused (the position and
 # WATCH symbols are never affected); read by runtime.market.
 candidate_retry_seconds = 300
+# Seconds a symbol a market-data route refused as unknown (SymbolsRefused) stays refused without a request before
+# discovery asks for it again (also forgotten when the next regular session starts); read by data.discovery via
+# runtime.market.
+refused_symbol_recheck_seconds = 900
+# Most characters of an error's text kept in a `discovery-failed` journal row's `detail` (longer text is cut, and the
+# row says how long the whole text was); read by runtime.market.
+failure_detail_max_chars = 300
 # Seconds before the L1 stream connects again after its loop ended (failed resubscribe or SDK gave up); read by broker.webull stream.
 stream_reconnect_delay_seconds = 10
 # Most symbols on the L1 stream connection, count. Webull's limit is 100 per connection, cumulative (probe M3: the

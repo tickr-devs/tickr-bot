@@ -30,8 +30,10 @@ says so ("evaluated 140 of 200: bars budget"); nothing is cut silently.
 When a snapshot or bars read is refused whole because one requested symbol is unknown to the
 route (`SymbolsRefused`; Webull names it only in free text), the chunk is split in halves until
 each refused symbol is alone; those are refused as `SYMBOL_REFUSED` and the rest is read as
-usual. A refused symbol is remembered for the session (`RefusedSymbols`) and refused again
-without a request, so the split costs requests once per symbol and session, not every pass.
+usual. A refused symbol is remembered (`RefusedSymbols`) and refused again without a request
+for `[market_data] refused_symbol_recheck_seconds`, then asked again (a symbol the provider
+did not know yet, such as a new listing, comes back); the memory is also cleared when the next
+session starts. So the split costs requests once per symbol per recheck period, not every pass.
 
 Every screener row, snapshot quote and completed bar read is handed to the capture sink with the
 receipt time taken right after the call returned.
@@ -163,6 +165,7 @@ class DiscoverySettings:
     snapshot_symbols_per_request: int
     bars_symbols_per_request: int
     bars_per_symbol: int
+    refused_symbol_recheck: timedelta  # a symbol refused as unknown is asked again after this
     bars_budget_reserve: int
 
     @classmethod
@@ -177,6 +180,7 @@ class DiscoverySettings:
             snapshot_symbols_per_request=md.snapshot_symbols_per_request,
             bars_symbols_per_request=md.bars_symbols_per_request,
             bars_per_symbol=md.bars_per_symbol,
+            refused_symbol_recheck=timedelta(seconds=float(md.refused_symbol_recheck_seconds)),
             bars_budget_reserve=md.discovery_bars_reserve_requests,
         )
 
@@ -215,17 +219,25 @@ def _read_without_refused[T](read: Callable[[Sequence[str]], list[T]], symbols: 
 
 
 class RefusedSymbols:
-    """Symbols a market-data route refused as unknown, with the stage that refused them, kept
-    for one regular session (keyed by its open) and forgotten when the next session starts."""
+    """Symbols a market-data route refused as unknown, with the stage that refused them and
+    when. A refusal is forgotten `recheck` after it was recorded, so the symbol is asked again,
+    and every refusal is forgotten when the next regular session (keyed by its open) starts."""
 
     def __init__(self) -> None:
         self._session: datetime | None = None
-        self._stages: dict[str, Stage] = {}
+        self._refused: dict[str, tuple[Stage, datetime]] = {}
 
-    def of_session(self, session_open: datetime) -> dict[str, Stage]:
+    def active(self, session_open: datetime, now: datetime,
+               recheck: timedelta) -> dict[str, Stage]:
+        """The symbols still refused at `now` (expired ones are forgotten), by stage."""
         if self._session != session_open:
-            self._session, self._stages = session_open, {}
-        return self._stages
+            self._session, self._refused = session_open, {}
+        self._refused = {symbol: (stage, at) for symbol, (stage, at) in self._refused.items()
+                         if now < at + recheck}
+        return {symbol: stage for symbol, (stage, _) in self._refused.items()}
+
+    def remember(self, symbol: str, stage: Stage, now: datetime) -> None:
+        self._refused[symbol] = (stage, now)
 
 
 def merge(rows: Sequence[ScreenerRow]) -> tuple[list[Instrument], list[Rejection]]:
@@ -347,7 +359,8 @@ def discover(
     """Run one discovery pass with `screen` (the active strategy) as the liquidity rules.
     `clock` returns the aware current time. `refused_symbols` carries the symbols refused as
     unknown from pass to pass within the session (a fresh memory when None)."""
-    refused = (refused_symbols or RefusedSymbols()).of_session(session_open)
+    memory = refused_symbols if refused_symbols is not None else RefusedSymbols()
+    refused = memory.active(session_open, clock(), settings.refused_symbol_recheck)
 
     def refuse(instrument: Instrument, stage: Stage, earlier: bool) -> Rejection:
         when = "earlier this session" if earlier else "this pass"
@@ -399,7 +412,7 @@ def discover(
     quote_ok: list[tuple[Instrument, Quote]] = []
     def refused_by(stage: Stage, unknown: list[str]) -> Callable[[str], None]:
         def found(symbol: str) -> None:  # remembered at once: survives a budget stop
-            refused[symbol] = stage
+            memory.remember(symbol, stage, clock())
             unknown.append(symbol)
             rejections.append(refuse(by_symbol[symbol], stage, earlier=False))
         return found

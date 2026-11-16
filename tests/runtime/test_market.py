@@ -193,6 +193,21 @@ def test_discovery_failure_is_journaled_and_retried_next_interval(tmp_path):
     assert len(rig.store.journal(DISCOVERY)) == 1
 
 
+class Wordy(FakeMarketData):
+    def screener(self, kind):
+        raise MalformedResponse("screener: " + "x" * 5000)
+
+
+def test_discovery_failure_detail_is_capped(tmp_path):
+    rig = Rig(tmp_path, source=Wordy())
+    rig.market.tick()
+    (failed,) = rig.store.journal(DISCOVERY_FAILED)
+    cap = CFG.market_data.failure_detail_max_chars
+    assert len(failed.body["detail"]) == cap
+    assert failed.body["detail"].startswith("screener: x")
+    assert failed.body["detail_length"] == len("screener: ") + 5000
+
+
 def test_bot_adapters_share_one_transport_and_budget(monkeypatch):
     from tickr.broker import webull
 

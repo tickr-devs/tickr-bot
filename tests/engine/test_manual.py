@@ -140,6 +140,34 @@ def test_cli_trade_end_to_end(tmp_path, monkeypatch, capsys):
     assert cli.main(["--config", str(bot), "trade", "ABC", "--limit", "10.00"]) == 3
 
 
+def test_cli_trade_records_the_code_version_and_refuses_without_one(tmp_path, monkeypatch,
+                                                                    capsys,
+                                                                    code_version_in_environment):
+    TEST_CODE_VERSION = code_version_in_environment  # noqa: N806 - the fixture's value
+
+    bot = copy_config(tmp_path)
+    market = Market()
+    monkeypatch.setattr(cli, "BROKER_FACTORY", lambda cfg: market)
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    monkeypatch.setattr(cli, "SLEEP", lambda s: market.tick())
+    monkeypatch.setattr(cli.time, "monotonic", iter(range(0, 10**6, 5)).__next__)
+    assert cli.main(["--config", str(bot), "trade", "ABC", "--limit", "10.00"]) == 0
+    database, _ = cli.data_paths(config.load(bot))
+    store = Store.open(database, busy_timeout_seconds=0)
+    (opened,) = store.journal("trade-opened")
+    assert opened.body["code_version"] == TEST_CODE_VERSION
+    assert store.run_code_version(opened.run_id) == TEST_CODE_VERSION
+    runs = store.run_count()
+    store.close()
+
+    monkeypatch.delenv("TICKR_CODE_VERSION")
+    assert cli.main(["--config", str(bot), "trade", "ABC", "--limit", "10.00"]) == 3
+    assert "code version unknown" in capsys.readouterr().err
+    store = Store.open(database, busy_timeout_seconds=0)
+    assert store.run_count() == runs  # refused before a run was recorded
+    store.close()
+
+
 def test_cli_exit_closes_open_trade_after_restart(tmp_path, monkeypatch, capsys):
     bot = copy_config(tmp_path)
     cfg = config.load(bot)
@@ -159,6 +187,37 @@ def test_cli_exit_closes_open_trade_after_restart(tmp_path, monkeypatch, capsys)
     assert f"trade {t} ABC: closed (operator-exit)" in capsys.readouterr().out
     assert market.positions() == []
     assert cli.main(["--config", str(bot), "clear-fence", "unprotected:t1"]) == 1
+
+
+def test_cli_exit_closes_a_position_even_without_a_code_version(tmp_path, monkeypatch,
+                                                               capsys):
+    """Closing a position is never blocked by an unknown code version (only commands that can
+    open a trade refuse); the run is recorded without one and the cause is printed."""
+    bot = copy_config(tmp_path)
+    cfg = config.load(bot)
+    database, _ = cli.data_paths(cfg)
+    market = Market()
+    store = Store.open(database, busy_timeout_seconds=0)
+    engine = Engine(store, market, cfg, "crashed3", lambda: GateResult(True, "t"))
+    t = engine.open_trade("ABC", D(1), D(10), D("9.80"), D("0.2"))
+    market.tick()
+    engine.step()
+    store.close()
+
+    monkeypatch.delenv("TICKR_CODE_VERSION")
+    monkeypatch.setattr(cli, "BROKER_FACTORY", lambda cfg: market)
+    monkeypatch.setattr(cli, "SLEEP", lambda s: market.tick())
+    monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
+    assert cli.main(["--config", str(bot), "exit"]) == 0
+    out = capsys.readouterr()
+    assert f"trade {t} ABC: closed (operator-exit)" in out.out
+    assert "code version unknown" in out.err
+    assert market.positions() == []
+    store = Store.open(database, busy_timeout_seconds=0)
+    (run,) = [r for r in store.query("SELECT run_id, code_version FROM runs")
+              if r["run_id"] != "crashed3"]
+    assert run["code_version"] == "-" and store.run_code_version(run["run_id"]) is None
+    store.close()
 
 
 @pytest.mark.parametrize(("hour", "minute", "closed"), [(15, 57, True), (17, 0, False)])

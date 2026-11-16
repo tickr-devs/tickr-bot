@@ -67,6 +67,7 @@ class RunConfig:
     environment: str
     data_dir: str
     database_busy_timeout_seconds: Decimal
+    code_version_timeout_seconds: Decimal
     backups_dir: str
     maintain_keep_sessions: int
     maintain_archive_max_age_days: int
@@ -220,6 +221,8 @@ class MarketDataConfig:
     observer_resync_seconds: Decimal
     stream_reserved_subscribe_requests: int
     candidate_retry_seconds: Decimal
+    refused_symbol_recheck_seconds: Decimal
+    failure_detail_max_chars: int
     history_dir: str
     history_cache_max_age_days: int
     stream_reconnect_delay_seconds: Decimal
@@ -489,7 +492,13 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if run.maintain_archive_max_age_days < 0:
         raise ConfigError("[run] maintain_archive_max_age_days must be 0 (never delete archives) "
                           "or a number of days")
+    if run.code_version_timeout_seconds <= 0:
+        raise ConfigError("[run] code_version_timeout_seconds must be above 0")
     md: MarketDataConfig = built["market_data"]
+    if md.refused_symbol_recheck_seconds <= 0:
+        raise ConfigError("[market_data] refused_symbol_recheck_seconds must be above 0")
+    if md.failure_detail_max_chars < 1:
+        raise ConfigError("[market_data] failure_detail_max_chars must be at least 1")
     if md.history_cache_max_age_days < 1:
         raise ConfigError("[market_data] history_cache_max_age_days must be at least 1 (today's "
                           "cache is in use)")

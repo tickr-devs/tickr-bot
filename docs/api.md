@@ -237,6 +237,13 @@ and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE 
 decision opened the trade, as journaled in its `trade-opened` row; `null` for a manual trade, a
 trade opened before the bot journaled it, or a row it cannot read (display only, never guessed).
 In status it was added after version 1 shipped: a reader takes an entry without it as `null`.
+`code_version` (in `trades_today` and in `day-v1` `trades`) is the bot code version the trade was
+opened by: the full git commit SHA of the run that opened it, with `-dirty` when a tracked file
+differed from that commit (in the Docker image, the commit it was built from). It is read from
+that run's own record (`runs.code_version`, via the trade's `run_id`), never re-derived; `null`
+for a trade of a run recorded before the bot recorded its version. The status-v1 top-level
+`code_version` is the current run's (next to `run_id`). All three were added after version 1
+shipped: a reader takes a document without them as `null`.
 
 Every `positions` element (so also `position`) and every `trades_today` entry has `entry` and
 `entry_cause`, the first link of the protection chain (see "Entry send" below).

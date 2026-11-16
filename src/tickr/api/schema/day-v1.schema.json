@@ -354,6 +354,16 @@
               }
             ]
           },
+          "code_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "entry_cause_codes": {
             "type": "array",
             "items": {
@@ -444,6 +454,7 @@
           "overshoot_r",
           "overshoot_cause",
           "strategy",
+          "code_version",
           "entry_cause_codes",
           "prices_after_cause_codes",
           "overshoot_cause_codes"

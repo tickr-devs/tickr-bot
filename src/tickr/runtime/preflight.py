@@ -3,6 +3,9 @@
 Checks, all reported, the first failure is the single cause:
 1. config valid (loads, every key commented, active strategy file present and commented,
    launchd schedule valid);
+1b. the running code version is known (tickr/version.py: the git commit, or the image's
+   `TICKR_CODE_VERSION` without `.git`); without it the bot refuses to start, because every
+   run and trade is tagged with it;
 2. data folder present and free disk on it at least `[runtime] min_free_disk_mb`;
 3. calendar knows today (New York date); a weekend, a market closure or a disabled half day is
    "no session today", which is not a failure;
@@ -53,6 +56,7 @@ from tickr.store import (
     EnvironmentMismatch,
     Store,
 )
+from tickr.version import CodeVersionUnknown, running_code_version
 
 STRATEGY_FILE = "strategy.toml"
 STRATEGIES_DIR = "strategies"
@@ -70,6 +74,7 @@ class ExitCode(IntEnum):
 
 class PreflightCause(StrEnum):
     CONFIG_INVALID = "config-invalid"
+    CODE_VERSION_UNKNOWN = "code-version-unknown"
     DATA_DIR_MISSING = "data-dir-missing"
     DISK_LOW = "disk-low"
     CALENDAR_UNKNOWN = "calendar-unknown"
@@ -87,6 +92,7 @@ class PreflightCause(StrEnum):
 
 class CheckName(StrEnum):
     CONFIG = "config"
+    CODE_VERSION = "code-version"
     DISK = "disk"
     CALENDAR = "calendar"
     CREDENTIALS = "credentials"
@@ -185,6 +191,15 @@ def _load_config(path: Path) -> tuple[config_module.Config | None, Check]:
     if cfg.renamed_keys:
         detail += f"; old key names, rename them: {', '.join(cfg.renamed_keys)}"
     return cfg, Check(CheckName.CONFIG, True, detail)
+
+
+def _check_code_version(cfg: config_module.Config, environ: Mapping[str, str]) -> Check:
+    try:
+        version = running_code_version(environ, cfg.run.code_version_timeout_seconds)
+    except CodeVersionUnknown as exc:
+        return Check(CheckName.CODE_VERSION, False, str(exc),
+                     PreflightCause.CODE_VERSION_UNKNOWN)
+    return Check(CheckName.CODE_VERSION, True, version)
 
 
 def _check_disk(cfg: config_module.Config, disk_free: DiskFree) -> Check:
@@ -335,7 +350,8 @@ def run_preflight(
         return PreflightResult((config_check,), session_today=False, environment=None, config=None)
     disk = _check_disk(cfg, disk_free)
     calendar, session_today = _check_calendar(cfg, now)
-    checks = (config_check, disk, calendar, _check_credentials(cfg, environ),
+    checks = (config_check, _check_code_version(cfg, environ), disk, calendar,
+              _check_credentials(cfg, environ),
               _check_alert_channel(cfg, platform, environ), _check_alert_recipient(cfg, environ),
               _check_token_dir(cfg), _check_stop_marker(cfg), _check_database(cfg),
               _check_strategy(cfg))

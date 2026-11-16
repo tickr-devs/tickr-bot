@@ -136,7 +136,7 @@ def documents() -> dict[str, object]:
     minimal = status(entry_block=None, fences=(), position=None, trades_today=(),
                      recent_commands=(), run_id=None, result_today_gross_usd=Decimal("0"),
                      realized_loss_today_usd=None, open_reservations_usd=Decimal("0"),
-                     daily_room_usd=None, positions=())
+                     daily_room_usd=None, positions=(), code_version=None)
     mismatch = account(
         positions=(AccountPosition("ABCD", Decimal("10"), Decimal("12.34")),
                    AccountPosition("EFGH", Decimal("5"), None)),
@@ -211,7 +211,8 @@ def documents() -> dict[str, object]:
                          PriceAfterV1(60, T0 + timedelta(minutes=67), Decimal("5.21"),
                                       Decimal("0.19"), None)),
                      None, Decimal("0.24"), Decimal("0.0960"), None,
-                     StrategyId("price-action-v1", "1")),
+                     StrategyId("price-action-v1", "1"),
+                     "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6"),
             DayTrade("t-0002", "ABCD", Decimal("10"), Decimal("12.34"), Decimal("12.75"),
                      T0 + timedelta(minutes=20), T0 + timedelta(minutes=48), "strategy_exit",
                      None, Decimal("50"), Decimal("4.10"), None, None, None,

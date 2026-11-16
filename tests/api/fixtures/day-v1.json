@@ -76,6 +76,7 @@
         "name": "price-action-v1",
         "version": "1"
       },
+      "code_version": "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6",
       "entry_cause_codes": [],
       "prices_after_cause_codes": [],
       "overshoot_cause_codes": []
@@ -165,6 +166,7 @@
       "overshoot_r": null,
       "overshoot_cause": "the bars end at 2026-11-16T15:49:00.000Z, before 2026-11-16T16:48:00.000Z",
       "strategy": null,
+      "code_version": null,
       "entry_cause_codes": [
         {
           "code": "journal_unreadable",

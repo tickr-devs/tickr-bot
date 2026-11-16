@@ -16,6 +16,7 @@ from tickr.runtime.preflight import (
     run_preflight,
 )
 from tickr.store import DATABASE_FILE, Store
+from tickr.version import ENV_VARIABLE
 
 MONDAY = datetime(2026, 11, 16, 13, 30, tzinfo=UTC)  # 08:30 ET, a normal trading day
 SATURDAY = datetime(2026, 11, 14, 13, 30, tzinfo=UTC)
@@ -26,6 +27,7 @@ CANARY = "canary-secret-value-7f3a"
 PLENTY = 10**6 * BYTES_PER_MB
 MAC = "darwin"  # the owner's machine: notification and iMessage are available
 LINUX = "linux"  # a server or container: no alert channel today
+SHA = "0123456789abcdef0123456789abcdef01234567"  # the image's code version (no .git here)
 
 
 def _ready(config_path: Path) -> dict[str, str]:
@@ -34,7 +36,8 @@ def _ready(config_path: Path) -> dict[str, str]:
     (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True, mode=0o700)
     env = cfg.environment
     return {env.app_key_variable: CANARY, env.app_secret_variable: CANARY,
-            env.account_variable: CANARY, cfg.alerts.imessage_recipient_variable: CANARY}
+            env.account_variable: CANARY, cfg.alerts.imessage_recipient_variable: CANARY,
+            ENV_VARIABLE: SHA}
 
 
 def _run(config_path: Path, environ: dict[str, str], now: datetime = MONDAY, free: int = PLENTY,
@@ -47,6 +50,21 @@ def test_ready_on_a_trading_day(config_path):
     result = _run(config_path, _ready(config_path))
     assert result.exit_code is ExitCode.READY and result.cause is None
     assert result.session_today and all(c.passed for c in result.checks)
+
+
+def test_ready_reports_the_code_version(config_path):
+    result = _run(config_path, _ready(config_path))
+    (check,) = [c for c in result.checks if c.name.value == "code-version"]
+    assert check.passed and check.detail == SHA
+
+
+def test_unknown_code_version_fails_and_blocks_the_start(config_path):
+    environ = _ready(config_path)
+    del environ[ENV_VARIABLE]
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.CODE_VERSION_UNKNOWN
+    assert result.exit_code is ExitCode.FAILED and result.blocks_start
+    assert ENV_VARIABLE in result.summary()
 
 
 def test_secret_values_never_appear_in_result(config_path):
@@ -154,7 +172,7 @@ def test_low_disk(config_path):
 
 
 def test_missing_data_dir_is_first_cause_and_all_checks_reported(config_path):
-    result = _run(config_path, {})
+    result = _run(config_path, {ENV_VARIABLE: SHA})
     assert result.cause is PreflightCause.DATA_DIR_MISSING
     failed = [c.name.value for c in result.checks if not c.passed]
     assert failed == ["disk", "credentials", "alert-recipient", "token-dir"]

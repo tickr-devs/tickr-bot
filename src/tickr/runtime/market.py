@@ -350,11 +350,15 @@ class MarketRuntime:
                               self.now, self.capture, self._refused_symbols)
         except (MarketDataError, BrokerError) as exc:  # MalformedResponse is a BrokerError
             # `detail` is the error's own text: the route, HTTP status and provider error code
-            # for a failed read (never a body, credential or account id).
+            # for a failed read (never a body, credential or account id), cut to
+            # `failure_detail_max_chars`; a cut row also has the whole text's length.
+            detail = str(exc)
+            cap = self.config.market_data.failure_detail_max_chars
+            body: dict[str, object] = {"error": type(exc).__name__, "detail": detail[:cap]}
+            if len(detail) > cap:
+                body["detail_length"] = len(detail)
             with self.engine.store.transaction():
-                self.engine.store.append(DISCOVERY_FAILED,
-                                         {"error": type(exc).__name__, "detail": str(exc)},
-                                         run_id=self.engine.run_id)
+                self.engine.store.append(DISCOVERY_FAILED, body, run_id=self.engine.run_id)
             return  # tried again at the next interval
         self.discovery = DiscoveryState(now, result.summary(), result.candidates)
         with self.engine.store.transaction():

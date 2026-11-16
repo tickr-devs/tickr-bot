@@ -462,6 +462,23 @@ def test_day_trade_carries_its_entry_send(paths):
     assert trade.entry_cause is None
 
 
+@pytest.mark.parametrize(("recorded", "shown"), [
+    ("6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty",
+     "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty"),
+    ("-", None),  # a run recorded before the bot recorded its version: null, never guessed
+])
+def test_day_trade_carries_the_code_version_of_its_run(paths, recorded, shown):
+    store = _store(paths)
+    run_id = store.start_run(environment="sandbox", config_digest="d", strategy="s",
+                             strategy_version="1", code_version=recorded)
+    _trade(store, run_id, "t1", OPEN + timedelta(minutes=30))
+    store.close()
+    (trade,) = History(paths).day(DAY, LATER).trades
+    assert trade.code_version == shown
+    raw = json.loads(contract.dumps(History(paths).day(DAY, LATER)))
+    assert raw["trades"][0]["code_version"] == shown
+
+
 def test_day_trade_names_the_strategy_that_opened_it(paths):
     _journaled_trade(paths)
     store, _ = _timed_store(paths)

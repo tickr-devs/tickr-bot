@@ -4,6 +4,7 @@ import pytest
 
 import tickr.cli as cli
 import tickr.runtime.__main__ as runtime_main
+import tickr.version as version
 
 
 @pytest.fixture(autouse=True)
@@ -17,3 +18,24 @@ def no_real_alert_channels(monkeypatch):
     A test that needs channels builds them itself (tests/runtime/test_alerts.py)."""
     monkeypatch.setattr(cli, "NOTIFIER", lambda alerts: None)
     monkeypatch.setattr(runtime_main, "default_notifier", lambda *args, **kwargs: None)
+
+
+# The code version a test bot run records (tickr/version.py): tests run the code as if from a
+# folder with no `.git`, as in the Docker image, so it comes from the environment and does not
+# depend on the checkout's commit or uncommitted changes.
+TEST_CODE_VERSION = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.fixture(scope="session")
+def _no_git_code_root(tmp_path_factory):
+    return tmp_path_factory.mktemp("code-root")
+
+
+@pytest.fixture(autouse=True)
+def code_version_in_environment(monkeypatch, _no_git_code_root) -> str:
+    """Every bot run is tagged with a code version or refuses to start; tests that check the
+    refusal remove the variable themselves. Returns the version a test run records (request
+    this fixture by name to compare with it)."""
+    monkeypatch.setattr(version, "CODE_ROOT", _no_git_code_root)
+    monkeypatch.setenv("TICKR_CODE_VERSION", TEST_CODE_VERSION)
+    return TEST_CODE_VERSION

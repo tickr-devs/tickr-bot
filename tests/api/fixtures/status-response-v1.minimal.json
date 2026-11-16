@@ -31,6 +31,7 @@
     "open_reservations_usd": "0",
     "daily_room_usd": null,
     "positions": [],
+    "code_version": null,
     "schema_version": 1
   },
   "age_seconds": "0.250",
