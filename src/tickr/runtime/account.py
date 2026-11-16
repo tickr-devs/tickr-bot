@@ -332,6 +332,20 @@ def provisional_amount(order: OrderRow) -> Decimal | None:
     return -gross - order.fees_usd if order.side is Side.BUY else gross - order.fees_usd
 
 
+# The order history showed negative fees for one of our orders: not used (they prove nothing,
+# the order keeps the fees it has or waits for them). Once per order.
+HISTORY_FEES_NEGATIVE = "history-fees-negative"
+
+
+def _note_negative_fees(engine: Engine, order: OrderRow, fees: Decimal) -> None:
+    if engine.store.journal(HISTORY_FEES_NEGATIVE, order.client_order_id):
+        return
+    with engine.store.transaction():
+        engine.store.append(HISTORY_FEES_NEGATIVE, {
+            "history_fees": fees, "recorded_fees": order.fees_usd},
+            key=order.client_order_id, run_id=engine.run_id)
+
+
 def record_exact_fills(engine: Engine, snapshot: Balances) -> int:
     """On the loop thread (the display thread never writes): for each of our orders in the
     display reads' latest fills, record what the broker proves and is not recorded yet.
@@ -358,6 +372,8 @@ def record_exact_fills(engine: Engine, snapshot: Balances) -> int:
         if len(fills) != 1:
             continue  # the history lists the order twice: not one fill to prove
         fill, cid = fills[0], order.client_order_id
+        if fill.fees is not None and fill.fees < 0:
+            _note_negative_fees(engine, order, fill.fees)
         found = exact_fill(order, fill, snapshot)
         wrote = False
         if found is not None and fill.fees is not None:

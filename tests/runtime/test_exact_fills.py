@@ -307,3 +307,26 @@ def test_a_negative_history_fee_proves_nothing_and_never_stops_the_loop(tmp_path
     sell = filled(bot, t)[1]
     assert (sell.exact_fill_price, sell.net_cash_usd, sell.fees_usd) == (None, None, None)
     assert entries.realized_loss_today(bot.engine, bot.now) is None  # waits; fees-unknown alerts
+    (note,) = bot.engine.store.journal("history-fees-negative")  # once, however many passes
+    assert note.key == sell.client_order_id
+    assert note.body == {"history_fees": "-0.01", "recorded_fees": None}
+
+
+def test_negative_history_fees_beside_recorded_detail_fees_are_journaled_not_used(tmp_path):
+    bot, t, _, _ = setup(tmp_path)
+    sell = filled(bot, t)[1]  # Detail recorded 0
+
+    class Negative(Exact):
+        def fills_today(self, day):
+            return [replace(f, fees=D("-0.01")) if f.side == str(Side.SELL) else f
+                    for f in super().fills_today(day)]
+
+    cash = [both(bot)[0], CashTrade("ABC", "SELL", D("20.01"), bot.now)]
+    reads = AccountReads(Negative(bot, cash), float(CFG.orders.balance_read_seconds),
+                         lambda: bot.now)
+    record(bot, reads)
+    record(bot, reads)
+    assert filled(bot, t)[1].fees_usd == D(0)  # Detail's figure kept
+    (note,) = bot.engine.store.journal("history-fees-negative")
+    assert note.key == sell.client_order_id
+    assert note.body == {"history_fees": "-0.01", "recorded_fees": "0"}
