@@ -74,6 +74,7 @@ from tickr.data.base import (
 )
 from tickr.types import (
     Bar,
+    ComboRole,
     OrderDetail,
     OrderRequest,
     OrderType,
@@ -641,9 +642,11 @@ def _wire_decimal(value: Decimal) -> str:
     return format(value, "f")
 
 
-def build_order_body(request: OrderRequest, client_order_id_max_length: int) -> dict[str, Any]:
-    """OrderRequest -> one `new_orders[]` element. Raises Refused for requests Webull must
-    never see; the code names the rule, and nothing is sent."""
+def build_order_body(request: OrderRequest, client_order_id_max_length: int,
+                     combo_type: str = ORDER_COMBO_TYPE) -> dict[str, Any]:
+    """OrderRequest -> one `new_orders[]` element (`combo_type` NORMAL, or a combo leg's role).
+    Raises Refused for requests Webull must never see; the code names the rule, and nothing is
+    sent."""
     cid = request.client_order_id
     if not cid or len(cid) > client_order_id_max_length:
         raise Refused("LOCAL_CLIENT_ORDER_ID", "empty or longer than the broker limit")
@@ -661,7 +664,7 @@ def build_order_body(request: OrderRequest, client_order_id_max_length: int) -> 
             raise Refused("LOCAL_PRICE", "prices must be positive")
     body: dict[str, Any] = {
         "client_order_id": cid,
-        "combo_type": ORDER_COMBO_TYPE,
+        "combo_type": combo_type,
         "entrust_type": ORDER_ENTRUST_TYPE,
         "instrument_type": ORDER_INSTRUMENT_TYPE,
         "market": ORDER_MARKET,
@@ -909,6 +912,36 @@ class WebullBroker:
         if response.error_code in PLACE_REFUSAL_CODES:
             raise Refused(response.error_code or "", response.message)
         raise OutcomeUnknown(f"PLACE: HTTP {response.status} {response.error_code or ''}".strip())
+
+    def place_combo(self, combo_id: str,
+                    legs: Sequence[tuple[ComboRole, OrderRequest]]) -> Acknowledgement:
+        """One combo in one place request (Webull docs: `client_combo_order_id` and one
+        `new_orders[]` element per leg, each with its own `client_order_id` and its role as
+        `combo_type`). UNPROVEN: the attached-stop probe is its only caller. The
+        acknowledgement must echo the MASTER leg; any other success body is OutcomeUnknown,
+        with its top-level keys named so the probe's evidence records the shape."""
+        self._require_gate()
+        if not combo_id or len(combo_id) > self._client_order_id_max_length:
+            raise Refused("LOCAL_CLIENT_ORDER_ID", "combo id empty or longer than the limit")
+        masters = [r for role, r in legs if role is ComboRole.MASTER]
+        if len(masters) != 1 or len(legs) < 2:
+            raise Refused("LOCAL_COMBO", "a combo is one MASTER and at least one attached leg")
+        bodies = [build_order_body(r, self._client_order_id_max_length, role.value)
+                  for role, r in legs]
+        response = self._send(Route.PLACE, {"client_combo_order_id": combo_id,
+                                             "new_orders": bodies})
+        if response.ok:
+            try:
+                return read_acknowledgement(
+                    response.body, masters[0].client_order_id, self._transport.is_own_account)
+            except MalformedResponse as exc:
+                keys = sorted(response.body) if isinstance(response.body, Mapping) else []
+                raise OutcomeUnknown(
+                    f"PLACE combo: unreadable acknowledgement ({exc}); keys {keys}") from None
+        if response.error_code in PLACE_REFUSAL_CODES:
+            raise Refused(response.error_code or "", response.message)
+        raise OutcomeUnknown(
+            f"PLACE combo: HTTP {response.status} {response.error_code or ''}".strip())
 
     def can_place(self, count: int) -> bool:
         return self._budget.can_take(Route.PLACE.path, count)

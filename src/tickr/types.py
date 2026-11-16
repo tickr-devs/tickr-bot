@@ -59,6 +59,16 @@ class TradingSession(StrEnum):
     ALL = "ALL"
 
 
+class ComboRole(StrEnum):
+    """A leg's `combo_type` in a combo place request (Webull docs: MASTER with attached
+    STOP_PROFIT and/or STOP_LOSS legs). Sent only by the attached-stop probe
+    (engine/attached_probe.py) until it is answered."""
+
+    MASTER = "MASTER"
+    STOP_LOSS = "STOP_LOSS"
+    STOP_PROFIT = "STOP_PROFIT"
+
+
 class OrderState(StrEnum):
     """Internal order state derived only from broker Detail."""
 

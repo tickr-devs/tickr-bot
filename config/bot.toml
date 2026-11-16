@@ -198,6 +198,15 @@ extended_close_percent = 2
 # [orders] detail_poll_seconds, before a SELL, the close or the final verdict; still different = the probe stops and
 # exits 4; read by the probe-extended command.
 extended_position_agree_seconds = 15
+# probe-attached-stop (F8): the shape tests' MASTER LIMIT BUY sits this many percent below the bid (and a bracket's
+# STOP_PROFIT LIMIT SELL this many percent above the ask), so neither can fill; read by the probe-attached-stop command.
+attached_far_percent = 20
+# probe-attached-stop: seconds each combo leg is read by Detail before the MASTER is cancelled, and again after it for
+# its attached legs; read by the probe-attached-stop command.
+attached_observe_seconds = 9
+# probe-attached-stop: seconds the stop leg is read after the MASTER fills, until it is working for the filled
+# quantity and listed in the open orders; read by the probe-attached-stop command.
+attached_stop_wait_seconds = 30
 
 [api]
 # Local API bind address; loopback only; read by the api server.

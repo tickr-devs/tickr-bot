@@ -188,6 +188,8 @@ class Probe:
     sleep: Sleep
     out: Out
     run_tag: str
+    # The session of every order this run builds unless a step names one.
+    order_session: TradingSession = TradingSession.ALL
     # Net shares this run's orders filled, as Detail proved them (buys less sells).
     expected: Decimal = Decimal(0)
     _sequence: int = 0
@@ -330,11 +332,12 @@ class Probe:
         raise Unresolved(f"{name} order {cid} is {state} after its cancel")
 
     def request(self, cid: str, side: Side, order_type: OrderType, quantity: Decimal,
-                *, session: TradingSession = TradingSession.ALL, limit: Decimal | None = None,
+                *, session: TradingSession | None = None, limit: Decimal | None = None,
                 stop: Decimal | None = None) -> OrderRequest:
         return OrderRequest(client_order_id=cid, symbol=self.symbol, side=side,
                             order_type=order_type, quantity=quantity,
-                            time_in_force=TimeInForce.DAY, session=session,
+                            time_in_force=TimeInForce.DAY,
+                            session=self.order_session if session is None else session,
                             limit_price=limit, stop_price=stop)
 
     # -- steps ------------------------------------------------------------------------------
@@ -533,8 +536,8 @@ def run(config: Config, broker: Broker, market: MarketData, symbol: str, folder:
     return EXIT_ANSWERED
 
 
-def evidence_folder(config: Config, at: datetime) -> Path:
+def evidence_folder(config: Config, at: datetime, kind: str = "extended") -> Path:
     folder = (config.root / config.run.data_dir / config.probe.evidence_dir
-              / ny_date_of(at).isoformat() / f"extended-{at.astimezone(UTC):%H%M%S}")
+              / ny_date_of(at).isoformat() / f"{kind}-{at.astimezone(UTC):%H%M%S}")
     folder.mkdir(parents=True, exist_ok=False)
     return folder

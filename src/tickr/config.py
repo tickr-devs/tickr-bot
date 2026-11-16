@@ -156,6 +156,9 @@ class ProbeConfig:
     extended_trigger_seconds: int
     extended_close_percent: Decimal
     extended_position_agree_seconds: int
+    attached_far_percent: Decimal
+    attached_observe_seconds: int
+    attached_stop_wait_seconds: int
 
 
 @dataclass(frozen=True)

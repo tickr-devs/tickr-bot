@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
@@ -20,14 +21,14 @@ from tickr.broker.base import (
     Refused,
     ReplaceAck,
 )
-from tickr.types import OrderDetail, OrderRequest, OrderState, Position, Side
+from tickr.types import ComboRole, OrderDetail, OrderRequest, OrderState, Position, Side
 
 
 @dataclass
 class FakeBroker:
     """Scripted outcomes for `place`: "ack" (default), "refuse", "unknown", "unknown-lost",
-    "rate-limited". "unknown" means the order reached the broker but the reply was lost;
-    "unknown-lost" means it never arrived.
+    "rate-limited" (one outcome per `place_combo` too). "unknown" means the order reached the
+    broker but the reply was lost; "unknown-lost" means it never arrived.
 
     Scripted outcomes for `replace_stop_price` (`replace_outcomes`): "ack" (default: same id,
     new stop price), "new-id" (the old order is CANCELLED and a new one with id
@@ -42,6 +43,10 @@ class FakeBroker:
     sent: list[OrderRequest] = field(default_factory=list)
     replace_outcomes: deque[str] = field(default_factory=deque)
     replaced: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
+    # Combo legs by MASTER client order id (place_combo). Cancelling a MASTER cancels its
+    # working legs while `combo_cancels_legs` holds (what the broker does is UNPROVEN).
+    combos: dict[str, list[str]] = field(default_factory=dict)
+    combo_cancels_legs: bool = True
     _next_id: int = 1
     place_budget: int | None = None  # None = unlimited; else place requests can_place admits
     funds: AccountBalance | None = None  # what balance() returns; None = the read fails
@@ -91,6 +96,14 @@ class FakeBroker:
             raise Refused("REFUSED", "scripted refusal")
         if outcome == "unknown-lost":
             raise OutcomeUnknown("scripted: request lost")
+        self._book(request)
+        if outcome == "unknown":
+            raise OutcomeUnknown("scripted: reply lost after acceptance")
+        broker_id = f"fake-{self._next_id}"
+        self._next_id += 1
+        return Acknowledgement(request.client_order_id, broker_id)
+
+    def _book(self, request: OrderRequest) -> None:
         if request.client_order_id in self.orders:
             raise Refused("DUPLICATE", "client_order_id already used")
         self.orders[request.client_order_id] = OrderDetail(
@@ -106,11 +119,26 @@ class FakeBroker:
             stop_price=request.stop_price,
             limit_price=request.limit_price,
         )
+
+    def place_combo(self, combo_id: str,
+                    legs: Sequence[tuple[ComboRole, OrderRequest]]) -> Acknowledgement:
+        """Every leg becomes a working order at once; each leg is recorded in `sent`."""
+        outcome = self.outcomes.popleft() if self.outcomes else "ack"
+        self.sent.extend(r for _, r in legs)
+        if outcome == "rate-limited":
+            raise RateLimited("429")
+        if outcome == "refuse":
+            raise Refused("REFUSED", "scripted refusal")
+        if outcome == "unknown-lost":
+            raise OutcomeUnknown("scripted: request lost")
+        master = next(r for role, r in legs if role is ComboRole.MASTER)
+        for _, request in legs:
+            self._book(request)
+        self.combos[master.client_order_id] = [
+            r.client_order_id for role, r in legs if role is not ComboRole.MASTER]
         if outcome == "unknown":
             raise OutcomeUnknown("scripted: reply lost after acceptance")
-        broker_id = f"fake-{self._next_id}"
-        self._next_id += 1
-        return Acknowledgement(request.client_order_id, broker_id)
+        return Acknowledgement(master.client_order_id, f"fake-combo-{combo_id}")
 
     def replace_stop_price(self, client_order_id: str, quantity: Decimal,
                            stop_price: Decimal) -> ReplaceAck:
@@ -146,6 +174,10 @@ class FakeBroker:
             raise Refused("TERMINAL", "order already terminal")
         self.orders[client_order_id] = replace(order, state=OrderState.CANCELLED,
                                                raw_status="CANCELLED")
+        for leg in self.combos.get(client_order_id, []) if self.combo_cancels_legs else []:
+            if not self.orders[leg].state.terminal:
+                self.orders[leg] = replace(self.orders[leg], state=OrderState.CANCELLED,
+                                           raw_status="CANCELLED")
 
     # --- test controls -------------------------------------------------------------------
 

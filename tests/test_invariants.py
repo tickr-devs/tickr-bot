@@ -537,6 +537,16 @@ def test_only_engine_open_trade_creates_entries_and_only_the_engine_sends():
     assert sorted(set(senders)) == ["engine/core.py:_cancel", "engine/core.py:_send",
                                     "engine/session_probe.py:finish",
                                     "engine/session_probe.py:place"]
+    # Combo orders (an entry with attached legs): only the owner-run F8 probe sends them, under
+    # the same rules as the F7 probe (whose plumbing it reuses).
+    combo_senders = sorted({f"{path.relative_to(SRC).as_posix()}:{fn.name}"
+                            for path in SRC.rglob("*.py")
+                            for fn in ast.walk(parsed(path)) if isinstance(fn, ast.FunctionDef)
+                            for node in ast.walk(fn)
+                            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "place_combo"
+                            and "broker" in ast.unparse(node.func)})
+    assert combo_senders == ["engine/attached_probe.py:place_combo"]
     assert sorted(openers) == ["cli.py:_trade", "runtime/entries.py:on_decision"]
 
 

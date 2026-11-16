@@ -6,12 +6,13 @@ No other module may import a broker SDK. Implementations return typed results an
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
-from tickr.types import OrderDetail, OrderRequest, Position
+from tickr.types import ComboRole, OrderDetail, OrderRequest, Position
 
 
 class BrokerError(Exception):
@@ -130,6 +131,13 @@ class Broker(Protocol):
 
     def place(self, request: OrderRequest) -> Acknowledgement:
         """Send exactly once. Raises Refused (not created) or OutcomeUnknown (maybe created)."""
+        ...
+
+    def place_combo(self, combo_id: str,
+                    legs: Sequence[tuple[ComboRole, OrderRequest]]) -> Acknowledgement:
+        """Send one combo (a MASTER entry and its attached legs) exactly once, in one request.
+        UNPROVEN at the broker: only the attached-stop probe calls it. Raises Refused (nothing
+        created), RateLimited (nothing sent) or OutcomeUnknown (read every leg by Detail)."""
         ...
 
     def cancel(self, client_order_id: str) -> None:
