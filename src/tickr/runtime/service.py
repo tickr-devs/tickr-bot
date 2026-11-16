@@ -41,7 +41,7 @@ from tickr.engine.manual import flatten_deadline
 from tickr.risk.admission import Admission, AdmissionLimits, session_refusal
 from tickr.risk.causes import AdmissionCause
 from tickr.runtime import stopmarker
-from tickr.runtime.account import AccountReads, account_document, record_reconcile
+from tickr.runtime.account import AccountReads, account_document, exact_amount, record_reconcile
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.dayend import DayEnd
 from tickr.runtime.protection import LatencyLog, busy
@@ -74,6 +74,7 @@ ENTRY_SEND_FAILED = "entry-send-failed"  # one row per trade whose entry send is
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
+CENT = Decimal("0.01")  # one US cent (unit factor): the broker states money results in cents
 
 
 @dataclass(frozen=True)
@@ -667,8 +668,47 @@ class Service:
         return closed_trades(self.engine.store, closed_on=today)
 
     def _trades_today(self, closed: list[api.DayTrade]) -> tuple[api.Trade, ...]:
-        """For status only: today's trades with their stop confirmation time."""
-        return tuple(_status_trade(self._shown(t)) for t in closed)
+        """For status only: today's trades with their stop confirmation time and, once the
+        account's cash activities list every fill, their exact result."""
+        return tuple(replace(_status_trade(self._shown(t)), result_exact_usd=self._exact(t))
+                     for t in closed)
+
+    def _exact(self, trade: api.DayTrade) -> Decimal | None:
+        """The trade's exact result after fees from the display reads (display only): the sum
+        of the cash amounts of its filled orders' fills, to the cent as the broker shows it;
+        None while any fill or its cash activity is not listed, or lists another quantity
+        than the bot's records."""
+        if self.account_reads is None:
+            return None
+        snapshot = self.account_reads.snapshot()
+        fills = {f.client_order_id: f for f in snapshot.fills}
+        total = ZERO
+        filled = [o for o in self.engine.orders(trade.trade_id) if o.filled_quantity > 0]
+        for order in filled:
+            fill = fills.get(order.client_order_id)
+            if fill is None or fill.filled_quantity != order.filled_quantity:
+                return None
+            amount = exact_amount(fill, snapshot.cash, snapshot.fills)
+            if amount is None:
+                return None
+            total += amount
+        return total.quantize(CENT) if filled else None
+
+    def _broker_result_today(self, closed: list[api.DayTrade]) -> Decimal | None:
+        """Today's realized result as the broker counts it: its day profit or loss less the
+        unrealized part, from the display reads' latest balance read (display only). The
+        broker prices fills to the sub-cent and charges the fees, which the order rows do not
+        show exactly (sub-dollar fill prices come back rounded to cents, probe 2026-11-16).
+        None until a balance read made after the last of today's trades closed."""
+        if self.account_reads is None:
+            return None
+        snapshot = self.account_reads.snapshot()
+        balance, read_at = snapshot.balance, snapshot.read_at
+        if balance is None or read_at is None:
+            return None
+        if any(trade.closed_at > read_at for trade in closed):
+            return None
+        return balance.day_profit_loss - balance.unrealized_profit_loss
 
     def _broker_result_today(self, closed: list[api.DayTrade]) -> Decimal | None:
         """Today's realized result as the broker counts it: its day profit or loss less the

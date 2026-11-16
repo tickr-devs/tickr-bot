@@ -604,9 +604,12 @@ open_orders_max_pages = 20
 # Maximum pages of the order history read for today's fills (a display read on its own thread); more pages =
 # refuse as incomplete, keeping the last good list; read by the broker adapter.
 history_max_pages = 5
+# Maximum pages of the cash activities read for today's exact trade amounts (a display read on its own thread);
+# more pages = refuse as incomplete, keeping the last good list; read by the broker adapter.
+cash_activities_max_pages = 5
 # Route-specific limits "<route path>" = [requests, window seconds]; a route not listed uses requests_per_route_per_minute;
-# the order history (display only, today's fills) is kept well under the Sandbox 30 per 60 s; read by the request budget.
-route_limits = { "/trading/orders/historical-orders/list" = [10, 60] }
+# the order history and the cash activities (display only) are kept well under the Sandbox 30 per 60 s; read by the request budget.
+route_limits = { "/trading/orders/historical-orders/list" = [10, 60], "/trading/activities/cash-activities/list" = [10, 60] }
 
 [environments.production]
 # May this process send trading requests in this environment; false until the owner enables Production.
@@ -652,5 +655,8 @@ open_orders_max_pages = 20
 # Maximum pages of the order history read for today's fills (a display read on its own thread); more pages =
 # refuse as incomplete, keeping the last good list; read by the broker adapter.
 history_max_pages = 5
+# Maximum pages of the cash activities read for today's exact trade amounts (a display read on its own thread);
+# more pages = refuse as incomplete, keeping the last good list; read by the broker adapter.
+cash_activities_max_pages = 5
 # Route-specific limits "<route path>" = [requests, window seconds] (docs, unverified; never assume the looser value); read by the request budget.
-route_limits = { "/trading/accounts/list" = [10, 30], "/trading/orders/get" = [2, 2], "/trading/orders/open-orders/list" = [2, 2], "/trading/assets/positions/list" = [2, 2], "/trading/orders/historical-orders/list" = [1, 2], "/trading/orders/place" = [600, 60], "/trading/orders/cancel" = [600, 60], "/trading/orders/replace" = [600, 60] }
+route_limits = { "/trading/accounts/list" = [10, 30], "/trading/orders/get" = [2, 2], "/trading/orders/open-orders/list" = [2, 2], "/trading/assets/positions/list" = [2, 2], "/trading/orders/historical-orders/list" = [1, 2], "/trading/activities/cash-activities/list" = [1, 2], "/trading/orders/place" = [600, 60], "/trading/orders/cancel" = [600, 60], "/trading/orders/replace" = [600, 60] }

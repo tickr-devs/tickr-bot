@@ -53,7 +53,9 @@ Not usable for US accounts: per-execution list (HK only), position details (JP o
 ## Sub-dollar prices are rounded to cents in order rows (2026-11-16, CYAB)
 - The bot sent LIMIT BUY 918 CYAB at 0.2333 and STOP_LOSS SELL at 0.1815. Detail and history return `limit_price` "0.23", `stop_price` "0.18", `filled_price` "0.23" and "0.18". Fees on the filled sell: SEC_FEE 0.01, FINRA_FEE 0.18 (`actual_value` = `receivable_value`).
 - The account's cash and day P&L say the trade lost 42.23 after fees (day P&L −44.22 with TSCO's −1.99), not the 46.09 the rounded prices give: the broker holds sub-cent fill prices the API does not return.
-- UNPROVEN: whether Webull accepted the sub-cent stop (0.1815) or rounded it to 0.18 before it worked. Order prices for sub-dollar stocks are an open risk question (owner decision pending).
+- The exact amounts are in the cash activities (`GET /trading/activities/cash-activities/list`, SDK `trade/trade/activity.py` `list_activities`, "US only"; recorded `cash_activities_trades.json`): one TRADE row per fill with `activity_sub_type` (BUY/SELL), `symbol`, `trade_date`, `biz_time` (equal to the fill's `filled_time_at`) and `net_amount` to 4 decimals, fees included: CYAB BUY −208.5696 (918 × 0.2272), SELL +166.3352 (918 × 0.1814 − 0.19). The sell filled at 0.1814, above 0.18: the 0.1815 stop worked as sent. The entry filled at 0.2272 under the 0.2333 limit.
+- `GET /trading/orders/executions/list` (SDK: Webull HK only) answers 404 on this US account.
+- UNPROVEN: an order filled in several executions. Whether the cash activities then list one TRADE row per execution (each with its own `biz_time`) or one row per order is not recorded. Tickr takes a cash row as an order's exact amount only when it is the one row at the fill time and the price it implies, rounded to the cent, is the order row's `filled_price`; otherwise it keeps the order row's rounded price.
 
 ## Order vocabulary (SDK)
 - Types: MARKET, LIMIT, STOP_LOSS, STOP_LOSS_LIMIT, TRAILING_STOP_LOSS. Sides: BUY, SELL, SHORT. TIF: DAY, GTC, IOC. Entrust type: QTY, AMOUNT. Combo types exist (OTO, OCO, OTOCO): all UNPROVEN.

@@ -16,10 +16,17 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
 
 from tickr.api import contract as api
-from tickr.broker.base import AccountBalance, AccountSnapshot, BrokerError, BrokerFill
+from tickr.broker.base import (
+    AccountBalance,
+    AccountSnapshot,
+    BrokerError,
+    BrokerFill,
+    CashTrade,
+)
 from tickr.calendar import ny_date_of
 from tickr.engine.core import Engine, Fence
 from tickr.runtime.dayend import records_agree
@@ -28,6 +35,8 @@ from tickr.runtime.dayend import records_agree
 BALANCE_READ_FAILED = "balance-read-failed"
 # The same for the read of today's fills (order history).
 FILLS_READ_FAILED = "fills-read-failed"
+# The same for the read of today's trade cash activities (exact amounts).
+CASH_READ_FAILED = "cash-read-failed"
 # The same for an unexpected error in the display reads' own thread (it keeps running).
 ACCOUNT_READS_FAILED = "account-reads-failed"
 THREAD_NAME = "tickr-account-reads"
@@ -42,6 +51,8 @@ class DisplayReads(Protocol):
 
     def fills_today(self, day: date) -> list[BrokerFill]: ...
 
+    def cash_trades(self, day: date) -> list[CashTrade]: ...
+
 
 @dataclass(frozen=True)
 class Balances:
@@ -52,6 +63,7 @@ class Balances:
     label: str | None = None
     fills: tuple[BrokerFill, ...] = ()
     fills_read_at: datetime | None = None
+    cash: tuple[CashTrade, ...] = ()
 
 
 class AccountReads:
@@ -120,6 +132,13 @@ class AccountReads:
         else:
             self._recovered(FILLS_READ_FAILED)
             self._update(fills=tuple(fills), fills_read_at=now)
+        try:
+            cash = self._broker.cash_trades(ny_date_of(now))
+        except BrokerError as exc:
+            self._report(CASH_READ_FAILED, exc)
+        else:
+            self._recovered(CASH_READ_FAILED)
+            self._update(cash=tuple(cash))
 
     def _update(self, **changes: Any) -> None:
         with self._lock:
@@ -217,6 +236,46 @@ def record_reconcile(engine: Engine, disagreed_before: bool) -> bool:
     return disagree
 
 
+# One US cent (unit factor): the order rows state prices to the cent (probe 2026-11-16).
+CENT = Decimal("0.01")
+
+
+def exact_amount(fill: BrokerFill, cash: tuple[CashTrade, ...],
+                 fills: tuple[BrokerFill, ...]) -> Decimal | None:
+    """The exact signed cash amount of `fill` (fees included; a buy is negative): the one
+    TRADE cash activity of its symbol and side at its fill time (`biz_time` equals
+    `filled_time_at`, probe 2026-11-16), accepted only when the price it implies, to the
+    cent, is the order row's `filled_price`. None otherwise: before the activity is listed,
+    or when an order filled in several executions lists one cash row per execution (unproven)
+    and the row at the fill time covers only part of it. The order row's rounded price is
+    then all there is. Stricter still: the day's cash rows of the fill's symbol and side
+    must be as many as the day's filled orders of that symbol and side (`fills`), so a
+    missing part too small to move the price by a cent is caught as well."""
+    if fill.filled_at is None or fill.filled_price is None:
+        return None
+    rows = [c for c in cash if c.symbol == fill.symbol and c.side == fill.side]
+    orders = [f for f in fills if f.symbol == fill.symbol and f.side == fill.side]
+    if len(rows) != len(orders):
+        return None
+    found = [c for c in rows if c.at == fill.filled_at]
+    if len(found) != 1:
+        return None
+    price = exact_price(fill, found[0].net_amount)
+    if price is None or price.quantize(CENT, rounding=ROUND_HALF_UP) != fill.filled_price:
+        return None
+    return found[0].net_amount
+
+
+def exact_price(fill: BrokerFill, amount: Decimal | None) -> Decimal | None:
+    """The fill's average price from a cash amount and the fill's fees: |amount| less the
+    fees on a buy, plus them on a sell, over the filled quantity. None when either is
+    unknown."""
+    if amount is None or fill.fees is None or fill.filled_quantity <= 0:
+        return None
+    gross = -amount - fill.fees if amount < 0 else amount + fill.fees
+    return gross / fill.filled_quantity
+
+
 def account_document(engine: Engine, read_at: datetime,
                      balances: Balances | None) -> api.AccountV1 | None:
     """The document for the latest reconciliation, or None when it did not read the broker.
@@ -254,8 +313,13 @@ def account_document(engine: Engine, read_at: datetime,
         day_trades_left=None if b is None else b.day_trades_left,
         account_label=balances.label,
         fills_read_at=balances.fills_read_at,
-        fills=tuple(api.AccountFill(
-            client_order_id=f.client_order_id, symbol=f.symbol, side=f.side, type=f.order_type,
-            quantity=f.filled_quantity, price=f.filled_price, filled_at=f.filled_at,
-            fees_usd=f.fees, ours=f.client_order_id in ours) for f in balances.fills),
+        fills=tuple(_fill(f, balances, f.client_order_id in ours) for f in balances.fills),
     )
+
+
+def _fill(f: BrokerFill, balances: Balances, ours: bool) -> api.AccountFill:
+    amount = exact_amount(f, balances.cash, balances.fills)
+    return api.AccountFill(
+        client_order_id=f.client_order_id, symbol=f.symbol, side=f.side, type=f.order_type,
+        quantity=f.filled_quantity, price=f.filled_price, filled_at=f.filled_at,
+        fees_usd=f.fees, ours=ours, net_amount_usd=amount, exact_price=exact_price(f, amount))

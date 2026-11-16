@@ -47,6 +47,7 @@ from tickr.broker.base import (
     Acknowledgement,
     BrokerError,
     BrokerFill,
+    CashTrade,
     OrderNotFound,
     OutcomeUnknown,
     RateLimited,
@@ -116,6 +117,7 @@ class Route(Enum):
     ACCOUNTS = ("GET", "/trading/accounts/list", False)
     BALANCE = ("GET", "/trading/assets/balances/get", False)
     HISTORY = ("GET", "/trading/orders/historical-orders/list", False)
+    CASH_ACTIVITIES = ("GET", "/trading/activities/cash-activities/list", False)
     POSITIONS = ("GET", "/trading/assets/positions/list", False)
     OPEN_ORDERS = ("GET", "/trading/orders/open-orders/list", False)
     ORDER_DETAIL = ("GET", "/trading/orders/get", False)
@@ -478,6 +480,36 @@ def _fees(row: Mapping[str, Any], where: str) -> Decimal | None:
     return total
 
 
+# `activity_type` of a trade's settlement in the cash activities (probe 2026-11-16).
+CASH_ACTIVITY_TRADE = "TRADE"
+
+
+def read_cash_trades(body: Any, is_own: IsOwnAccount, day: date) -> list[CashTrade]:
+    """Cash activities page `{"data": [row...]}` (recorded 2026-11-16,
+    tests/fixtures/webull/cash_activities_trades.json) -> the TRADE rows of New York date
+    `day` (`trade_date`). Every field used is required: an exact amount we cannot read is
+    no amount."""
+    where = "cash_activities"
+    result: list[CashTrade] = []
+    for index, row in enumerate(_unwrap_list(body, where)):
+        here = f"{where}[{index}]"
+        _check_account(row, is_own, here)
+        if _require(row, "activity_type", here) != CASH_ACTIVITY_TRADE:
+            continue
+        if str(_require(row, "trade_date", here)) != day.isoformat():
+            continue
+        at = _display_time(row, "biz_time")
+        if at is None:
+            raise MalformedResponse(f"{here}: unreadable 'biz_time'")
+        result.append(CashTrade(
+            symbol=str(_require(row, "symbol", here)),
+            side=str(_require(row, "activity_sub_type", here)),
+            net_amount=_decimal_field(row, "net_amount", here),
+            at=at,
+        ))
+    return result
+
+
 def read_fills(body: Any, is_own: IsOwnAccount, day: date) -> list[BrokerFill]:
     """Order history page `{"data": [combo{..., "orders": [row...]}]}` (recorded,
     tests/fixtures/webull/historical_orders_fill_and_stop.json) -> the rows filled on New York
@@ -724,12 +756,16 @@ class WebullBroker:
         clock: Callable[[], float] = time.monotonic,
         *,
         history_max_pages: int,
+        cash_activities_max_pages: int,
     ) -> None:
         if open_orders_max_pages < 1:
             raise AdapterConfigError("open_orders_max_pages must be at least 1")
         if history_max_pages < 1:
             raise AdapterConfigError("history_max_pages must be at least 1")
         self._history_max_pages = history_max_pages
+        if cash_activities_max_pages < 1:
+            raise AdapterConfigError("cash_activities_max_pages must be at least 1")
+        self._cash_activities_max_pages = cash_activities_max_pages
         if not own_client_order_id_prefixes or not all(own_client_order_id_prefixes):
             raise AdapterConfigError("own client order id prefixes must be non-empty")
         self._own_prefixes = own_client_order_id_prefixes
@@ -780,6 +816,26 @@ class WebullBroker:
 
     def positions(self) -> list[Position]:
         return read_positions(self._read(Route.POSITIONS, {}), self._transport.is_own_account)
+
+    def cash_trades(self, day: date) -> list[CashTrade]:
+        """The cash activities' default window (no `start_time`; its format and the window
+        are unproven), every page by `pagination_key` (SDK `list_activities`) up to
+        `cash_activities_max_pages`, kept to the TRADE rows of `day`; a partial list refuses.
+        Display reads only, off the loop thread."""
+        trades: list[CashTrade] = []
+        params: dict[str, Any] = {}
+        seen_keys: set[str] = set()
+        for _page in range(self._cash_activities_max_pages):
+            body = self._read(Route.CASH_ACTIVITIES, params)
+            trades.extend(read_cash_trades(body, self._transport.is_own_account, day))
+            next_key = _optional(body, "pagination_key") if isinstance(body, Mapping) else None
+            if next_key is None:
+                return trades
+            if str(next_key) in seen_keys:
+                raise BrokerReadFailed(Route.CASH_ACTIVITIES.name, None, "PAGINATION_REPEATED")
+            seen_keys.add(str(next_key))
+            params = {"pagination_key": str(next_key)}
+        raise BrokerReadFailed(Route.CASH_ACTIVITIES.name, None, "PAGE_LIMIT_REACHED")
 
     def fills_today(self, day: date) -> list[BrokerFill]:
         """The history's default window (no `start_time`; its format is unproven), every page
@@ -2293,6 +2349,7 @@ def broker_from_config(config: Config, transport: Transport | None = None,
         (config.orders.client_order_id_prefix, config.orders.probe_client_order_id_prefix),
         gate=lambda: trading_gate(config),
         history_max_pages=config.environment.history_max_pages,
+        cash_activities_max_pages=config.environment.cash_activities_max_pages,
     )
 
 

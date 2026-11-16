@@ -13,6 +13,7 @@ from tickr.broker.base import (
     Acknowledgement,
     BrokerError,
     BrokerFill,
+    CashTrade,
     OrderNotFound,
     OutcomeUnknown,
     RateLimited,
@@ -44,6 +45,7 @@ class FakeBroker:
     _next_id: int = 1
     place_budget: int | None = None  # None = unlimited; else place requests can_place admits
     funds: AccountBalance | None = None  # what balance() returns; None = the read fails
+    cash: list[CashTrade] = field(default_factory=list)  # what cash_trades() returns
     account_label: str | None = None
     balance_reads: int = 0
 
@@ -57,6 +59,9 @@ class FakeBroker:
         return [BrokerFill(o.client_order_id, o.symbol, str(o.side), str(o.order_type),
                            o.filled_quantity, o.average_fill_price, None, None)
                 for o in self.orders.values() if o.filled_quantity > 0]
+
+    def cash_trades(self, day: date) -> list[CashTrade]:  # noqa: ARG002 - one fake day
+        return list(self.cash)
 
     def balance(self) -> AccountBalance:
         self.balance_reads += 1

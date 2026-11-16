@@ -231,6 +231,10 @@ unknown (a trade closed today has fills without a known price), never zero:
 room is below `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot
 tracks; `position` is its first element or `null`, kept for older clients.
 
+Each `trades_today` entry has `result_exact_usd`: the trade's result after fees from the cash
+amounts of all its fills, to the cent, `null` until every one is listed (display only; the
+apps show it in place of `result_gross_usd` once present).
+
 `result_today_gross_usd` sums today's closed trades before fees. `fees_today_usd` is the broker's
 actual fees on the fills of those trades, from the display reads' list of today's fills (the
 account file's `fills`), and `result_today_net_usd` = gross - fees, the figure the broker's day
@@ -280,7 +284,11 @@ the cause.
   thread with the balance and under the same rules (`fills_read_at`, `fills-read-failed` journaled once per stretch, never
   blocks anything). Each has the broker's `side` and `type`, the filled `quantity`, the
   average fill `price`, `filled_at`, `fees_usd` (the sum of the broker's actual fees, null when
-  one is unreadable) and `ours`.
+  one is unreadable) and `ours`. `net_amount_usd` is the fill's exact signed cash amount from the
+  account's cash activities (`GET /trading/activities/cash-activities/list`, TRADE rows of the
+  day, matched by symbol, side and the fill time; fees included; a buy is negative) and
+  `exact_price` the average price it gives; both null until that activity is listed or when it
+  does not match exactly one row (the order rows round sub-dollar prices to cents).
 - `orders`: every open order the broker listed. `side`, `type` and `status` are the bot's names
   (`BUY`/`SELL`; `MARKET`/`LIMIT`/`STOP_LOSS`; `ACCEPTED`, `PARTIALLY_FILLED`, ...). `ours` is
   true when the client order id is one of the bot's own. `limit_price` is the broker's, read on

@@ -392,3 +392,32 @@ def test_history_pages_until_no_key_and_refuses_a_repeated_key():
     b, _, _ = broker(WireResponse(200, first), WireResponse(200, first))
     with pytest.raises(BrokerReadFailed):
         b.fills_today(TRADE_DAY)
+
+
+# --- cash activities: the exact trade amounts (recorded 2026-11-16) ---------------------------
+
+
+def test_recorded_cash_trades_give_the_exact_sub_dollar_amounts():
+    b, t, _ = broker(load("cash_activities_trades.json"))
+    trades = b.cash_trades(TRADE_DAY)
+    assert [r for r, _ in t.sent] == [Route.CASH_ACTIVITIES]
+    cyab = {c.side: c for c in trades if c.symbol == "CYAB"}
+    assert cyab["BUY"].net_amount == D("-208.5696")  # 918 x 0.2272: the order row said 0.23
+    assert cyab["SELL"].net_amount == D("166.3352")  # 918 x 0.1814 less 0.19 fees
+    assert cyab["SELL"].at.isoformat().startswith("2026-11-16T17:37:58.901")
+
+
+def test_cash_trades_of_another_day_and_other_activities_are_left_out():
+    body = copy.deepcopy(load("cash_activities_trades.json").body)
+    body["data"][0]["trade_date"] = "2026-11-13"
+    body["data"][1]["activity_type"] = "DIVIDEND"
+    b, _, _ = broker(WireResponse(200, body))
+    assert len(b.cash_trades(TRADE_DAY)) == 2
+
+
+def test_a_cash_trade_without_its_amount_refuses():
+    body = copy.deepcopy(load("cash_activities_trades.json").body)
+    del body["data"][0]["net_amount"]
+    b, _, _ = broker(WireResponse(200, body))
+    with pytest.raises(MalformedResponse):
+        b.cash_trades(TRADE_DAY)

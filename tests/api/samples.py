@@ -65,7 +65,8 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
                                       SendOutcome.UNKNOWN, SendOutcome.ACKNOWLEDGED, 1,
                                       T0 + timedelta(seconds=4)),
                             None, StrategyId("price-action-v1", "1"),
-                            "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty"),),
+                            "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty",
+                            Decimal("-1.67")),),
         result_today_gross_usd=Decimal("-1.60"),
         freshness=Freshness(T0, None, StreamHealth.FRESH),
         recent_commands=(CommandRecord("0b6f7c1e-2f0a-4c55-9d1e-6a1d2f3e4b5c",
@@ -108,7 +109,7 @@ def account(read_at: datetime = T0, **overrides) -> AccountV1:
         fills_read_at=read_at - timedelta(seconds=20),
         fills=(AccountFill("ap-0000-x", "WXYZ", "SELL", "STOP_LOSS", Decimal("20"),
                            Decimal("5.02"), read_at - timedelta(minutes=40), Decimal("0.07"),
-                           True),
+                           True, Decimal("100.3228"), Decimal("5.01965")),
                AccountFill("ap-0001-e", "ABCD", "BUY", "LIMIT", Decimal("10"), Decimal("12.34"),
                            read_at - timedelta(minutes=12), Decimal("0"), True)),
     )

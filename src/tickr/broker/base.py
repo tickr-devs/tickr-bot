@@ -93,6 +93,18 @@ class BrokerFill:
     fees: Decimal | None
 
 
+@dataclass(frozen=True)
+class CashTrade:
+    """One trade's settlement in the account's cash activities: the exact signed amount the
+    trade moved (fees included; a buy is negative), which the order rows do not give for
+    sub-dollar prices (they round to cents, probe 2026-11-16)."""
+
+    symbol: str
+    side: str  # the broker's word (BUY, SELL, ...)
+    net_amount: Decimal
+    at: datetime  # `biz_time`: equal to the fill's `filled_time_at` (probe 2026-11-16)
+
+
 class Broker(Protocol):
     def account(self) -> AccountSnapshot: ...
 
@@ -103,6 +115,11 @@ class Broker(Protocol):
     def fills_today(self, day: date) -> list[BrokerFill]:
         """The orders filled on New York date `day`, oldest first. Raises BrokerError when
         they cannot be read in full."""
+        ...
+
+    def cash_trades(self, day: date) -> list[CashTrade]:
+        """The account's TRADE cash activities of New York date `day`. Raises BrokerError
+        when they cannot be read in full."""
         ...
 
     def positions(self) -> list[Position]: ...

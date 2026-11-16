@@ -262,6 +262,10 @@ class Trade:
     # The bot code version (git commit, `-dirty` with changed tracked files) of the run that
     # opened the trade, from `runs`; null for a run recorded before it was. Added later.
     code_version: str | None = _added_later(None)
+    # The trade's exact result after fees: the sum of its fills' cash amounts from the
+    # account's cash activities; null until every fill's activity is listed (display only;
+    # the daily loss rule reads `result_gross_usd`). Added after version 1 shipped.
+    result_exact_usd: Decimal | None = _added_later(None)
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
 
@@ -351,6 +355,11 @@ class AccountFill:
     filled_at: datetime | None
     fees_usd: Decimal | None  # sum of the broker's actual fees; null when unreadable
     ours: bool
+    # Added after v1 shipped (2026-11-16): the exact signed cash amount of the fill from the
+    # account's cash activities (fees included; a buy is negative) and the average price it
+    # gives; null until that activity is listed (the order rows round sub-dollar prices).
+    net_amount_usd: Decimal | None = _added_later(None)
+    exact_price: Decimal | None = _added_later(None)
 
 
 @dataclass(frozen=True)

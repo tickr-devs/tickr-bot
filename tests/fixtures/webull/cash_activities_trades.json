@@ -1,0 +1,52 @@
+{
+  "source": "sandbox 2026-11-16 18:2x UTC, GET /trading/activities/cash-activities/list (no params); the day's two bot trades; activity ids replaced and each row's account field removed",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "id": "2026-11-16_ACTIVITYID00000001",
+        "activity_type": "TRADE",
+        "activity_sub_type": "SELL",
+        "currency": "USD",
+        "market": "US",
+        "symbol": "CYAB",
+        "trade_date": "2026-11-16",
+        "net_amount": "166.3352",
+        "biz_time": "2026-11-16T17:37:58.901Z"
+      },
+      {
+        "id": "2026-11-16_ACTIVITYID00000002",
+        "activity_type": "TRADE",
+        "activity_sub_type": "BUY",
+        "currency": "USD",
+        "market": "US",
+        "symbol": "CYAB",
+        "trade_date": "2026-11-16",
+        "net_amount": "-208.5696",
+        "biz_time": "2026-11-16T17:36:03.926Z"
+      },
+      {
+        "id": "2026-11-16_ACTIVITYID00000003",
+        "activity_type": "TRADE",
+        "activity_sub_type": "SELL",
+        "currency": "USD",
+        "market": "US",
+        "symbol": "TSCO",
+        "trade_date": "2026-11-16",
+        "net_amount": "2458.17",
+        "biz_time": "2026-11-16T15:39:40.411Z"
+      },
+      {
+        "id": "2026-11-16_ACTIVITYID00000004",
+        "activity_type": "TRADE",
+        "activity_sub_type": "BUY",
+        "currency": "USD",
+        "market": "US",
+        "symbol": "TSCO",
+        "trade_date": "2026-11-16",
+        "net_amount": "-2460.16",
+        "biz_time": "2026-11-16T15:17:03.293Z"
+      }
+    ]
+  }
+}

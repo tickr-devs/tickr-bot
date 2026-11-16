@@ -323,7 +323,8 @@ def test_route_limits_parsed():
 
 
 # The Sandbox table's route_limits line in config/bot.toml, replaced by the tests below.
-SANDBOX_ROUTE_LIMITS = 'route_limits = { "/trading/orders/historical-orders/list" = [10, 60] }'
+SANDBOX_ROUTE_LIMITS = ('route_limits = { "/trading/orders/historical-orders/list" = [10, 60], '
+                        '"/trading/activities/cash-activities/list" = [10, 60] }')
 
 
 @pytest.mark.parametrize("bad", ["[0, 30]", "[10]", '["10", 30]', "[10, -1]", "5"])
