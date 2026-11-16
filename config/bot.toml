@@ -180,6 +180,10 @@ chart_client_interval_seconds = 30
 # probe-extended (F7): least minutes left in the pre-market or post-market when it starts, so all four steps and the close
 # fit before the session ends (about 8 minutes at worst); read by the probe-extended command.
 extended_end_margin_minutes = 15
+# probe-extended (F7): oldest snapshot quote, in seconds, it prices its orders from. Not [risk] max_quote_age_seconds:
+# after hours even active stocks' quotes were 9-700 s old on 2026-11-16 (a quote that has not changed is still the
+# market); its orders are 1 share and limit-priced; read by the probe-extended command.
+extended_max_quote_age_seconds = 300
 # probe-extended: acceptance-test BUY stops sit this many percent above the ask, so none can trigger; read by the probe-extended command.
 extended_far_stop_percent = 20
 # probe-extended: a STOP_LOSS_LIMIT's limit lies this many percent beyond its stop (above for a BUY, below for a SELL); read by the probe-extended command.

@@ -82,13 +82,16 @@ def read_quote(market: MarketData, symbol: str) -> Quote:
     return quotes[0]
 
 
-def stale_cause(config: Config, quote: Quote, now: datetime) -> tuple[Decimal, str | None]:
+def stale_cause(config: Config, quote: Quote, now: datetime,
+                max_age: Decimal | None = None) -> tuple[Decimal, str | None]:
     """The quote's age in seconds by our clock, and why it is too old (or from too far in the
-    future, beyond the clock skew allowance) to act on; None when it is fresh."""
+    future, beyond the clock skew allowance) to act on; None when it is fresh. `max_age`
+    replaces `[risk] max_quote_age_seconds` (the extended-hours probe's own limit)."""
     age = Decimal(str((now - quote.provider_time).total_seconds()))
     risk = config.risk
-    if age > risk.max_quote_age_seconds or age < -risk.max_clock_skew_seconds:
-        return age, f"quote is {age} s old (limit {risk.max_quote_age_seconds} s)"
+    limit = risk.max_quote_age_seconds if max_age is None else max_age
+    if age > limit or age < -risk.max_clock_skew_seconds:
+        return age, f"quote is {age} s old (limit {limit} s)"
     return age, None
 
 

@@ -130,7 +130,10 @@ by the probe's result (a few cents).
    `launchctl kickstart gui/$(id -u)/local.tickr.bot`.
 2. Pick a liquid common stock priced under `[probe] max_price_usd` that trades in this session
    (a top pre-market gainer or a large name), and check its quote: `tickr check-quote SYM`.
-   A STALE answer means snapshot quotes are not live in this session; that is a finding too.
+   `check-quote` applies the entry rule (`[risk] max_quote_age_seconds`); after hours even
+   active stocks' quotes are minutes old (2026-11-16: 9-700 s), so expect STALE there. The probe
+   uses its own limit, `[probe] extended_max_quote_age_seconds`: pick a stock whose age is
+   below it.
 3. `mkdir -p data/probe-extended && tickr probe-extended SYM 2>&1 | tee -i data/probe-extended/run.txt`.
    It takes about 5 minutes. It buys `[probe] quantity` share(s) at the ask and sells them again.
 4. Exit 0: answered. Exit 4: something is left; the OPERATOR line names it. Cancel the named

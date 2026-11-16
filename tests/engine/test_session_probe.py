@@ -201,7 +201,8 @@ def test_refuses_on_an_account_that_is_not_flat(tmp_path: Path) -> None:
 
 def test_refuses_on_a_stale_quote(tmp_path: Path) -> None:
     world = World(tmp_path)
-    world.at += timedelta(minutes=5)  # the quote stays at the old time
+    # The quote stays at the old time: past the probe's own limit.
+    world.at += timedelta(seconds=float(CFG.probe.extended_max_quote_age_seconds) + 1)
     _, summary = world.run()
     assert "not live" in summary["stopped"]
     assert world.broker.sent == []
@@ -324,3 +325,14 @@ def test_positions_lagging_a_triggered_stop_send_no_second_sell(tmp_path: Path) 
     assert summary["trigger-stop-limit-all"] == sp.NOT_TESTED
     assert len(_sells(world)) == 1
     assert code == sp.EXIT_ANSWERED
+
+
+def test_a_quote_older_than_the_entry_rule_but_within_the_probe_limit_is_used(
+        tmp_path: Path) -> None:
+    world = World(tmp_path)
+    old = float(CFG.risk.max_quote_age_seconds) + 1
+    assert old < float(CFG.probe.extended_max_quote_age_seconds)
+    world.at += timedelta(seconds=old)  # thin after-hours: the quote has not changed
+    _, summary = world.run()
+    assert "not live" not in str(summary.get("stopped"))
+    assert world.broker.sent  # the probe went ahead

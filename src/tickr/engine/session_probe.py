@@ -206,7 +206,10 @@ class Probe:
 
     def quote(self) -> Quote:
         quote = read_quote(self.market, self.symbol)
-        age, stale = stale_cause(self.config, quote, self.now())
+        # Outside the regular session quotes change rarely (minutes apart even for active
+        # names, 2026-11-16): the probe has its own age limit, not the entry rule's.
+        age, stale = stale_cause(self.config, quote, self.now(),
+                                 self.config.probe.extended_max_quote_age_seconds)
         self._log("quote", age_seconds=age, stale=stale, **quote_row(quote))
         if stale is not None:
             raise ManualRefused(f"{stale}: the snapshot quote is not live in this session")
