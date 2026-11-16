@@ -1075,6 +1075,14 @@ Each row:
   or the stopped pass's detail.
 - `verdict`, `setup`: of its latest decision that day (`null` without one); `at`: when the
   current state was recorded.
+- Added after v1 shipped (a reader takes a document without them as null or empty):
+  - `price`: the price in the latest screener row that listed it (also on the `/flow` chip).
+  - `reached`: every stage up to `furthest`, in pipeline order, as `{stage, at}`: when it first
+    got there (`screeners` the start of the first listing pass, a discovery stage the end of the
+    pass that judged it, `strategy` the pass that made it a candidate or its first decision,
+    `risk` its first taken entry). `at` is null for `order` and `stop`, which come from trades.
+  - `decided_at`, `strategy` (`name@version`) and `checks`: the active strategy's latest decision
+    on it and every check of that decision, rounded like `check`.
 
 `as_of` is the end of the latest pass; `null` with `as_of_cause` when none is recorded for the
 day. A malformed capture line is `503 unavailable`.

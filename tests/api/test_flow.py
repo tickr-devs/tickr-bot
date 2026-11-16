@@ -282,17 +282,19 @@ def test_flow_stages_on_a_fake_broker_day(api, cfg):
     assert body["chips"] == [
         {"symbol": "ABCD", "sources": ["GAINERS", "TOP_ACTIVES"], "change_pct": "12.40",
          "change_cause": None, "excluded_cause": None,
-         "ranks": [{"kind": "GAINERS", "rank": 1}, {"kind": "TOP_ACTIVES", "rank": 2}]},
+         "ranks": [{"kind": "GAINERS", "rank": 1}, {"kind": "TOP_ACTIVES", "rank": 2}],
+         "price": "11.24"},
         {"symbol": "SPY", "sources": ["GAINERS", "TOP_ACTIVES"], "change_pct": "10.00",
          "change_cause": None,
          "excluded_cause": "SECURITY_TYPE_NOT_ALLOWED: ETF",
-         "ranks": [{"kind": "GAINERS", "rank": 2}, {"kind": "TOP_ACTIVES", "rank": 1}]},
+         "ranks": [{"kind": "GAINERS", "rank": 2}, {"kind": "TOP_ACTIVES", "rank": 1}],
+         "price": "11.00"},
         {"symbol": "WXYZ", "sources": ["GAINERS"], "change_pct": None,
          "change_cause": "the captured row has no pre_close", "excluded_cause": None,
-         "ranks": [{"kind": "GAINERS", "rank": 2}]},
+         "ranks": [{"kind": "GAINERS", "rank": 2}], "price": "11.00"},
         {"symbol": "EFGH", "sources": ["LOSERS"], "change_pct": "-8.05",
          "change_cause": None, "excluded_cause": None,
-         "ranks": [{"kind": "LOSERS", "rank": 1}]}]
+         "ranks": [{"kind": "LOSERS", "rank": 1}], "price": "9.195"}]
     stages = {s["stage"]: (s["count"], s["symbols"]) for s in body["stages"]}
     assert [s["stage"] for s in body["stages"]] == [s.value for s in contract.FlowStage]
     assert stages == {

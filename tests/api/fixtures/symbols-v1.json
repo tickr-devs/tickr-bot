@@ -59,7 +59,62 @@
       "detail": null,
       "verdict": "ENTER",
       "setup": "breakout",
-      "at": "2026-11-16T15:00:00.000Z"
+      "at": "2026-11-16T15:00:00.000Z",
+      "price": "4.12",
+      "reached": [
+        {
+          "stage": "screeners",
+          "at": "2026-11-16T13:42:00.000Z"
+        },
+        {
+          "stage": "universe",
+          "at": "2026-11-16T13:52:00.000Z"
+        },
+        {
+          "stage": "quote",
+          "at": "2026-11-16T14:02:00.000Z"
+        },
+        {
+          "stage": "bars",
+          "at": "2026-11-16T14:12:00.000Z"
+        },
+        {
+          "stage": "strategy",
+          "at": "2026-11-16T14:22:00.000Z"
+        },
+        {
+          "stage": "risk",
+          "at": "2026-11-16T14:32:00.000Z"
+        },
+        {
+          "stage": "order",
+          "at": null
+        },
+        {
+          "stage": "stop",
+          "at": null
+        }
+      ],
+      "decided_at": "2026-11-16T14:52:00.000Z",
+      "strategy": "price-action-v3@3.0.0",
+      "checks": [
+        {
+          "rule": "close_above_vwap",
+          "measured": "4.12",
+          "operator": ">",
+          "threshold": "3.98",
+          "passed": true,
+          "note": ""
+        },
+        {
+          "rule": "relative_volume",
+          "measured": "2.4",
+          "operator": ">=",
+          "threshold": "2.0",
+          "passed": true,
+          "note": ""
+        }
+      ]
     },
     {
       "symbol": "QRST",
@@ -86,7 +141,42 @@
       "detail": null,
       "verdict": "IGNORE",
       "setup": null,
-      "at": "2026-11-16T15:00:00.000Z"
+      "at": "2026-11-16T15:00:00.000Z",
+      "price": "5.12",
+      "reached": [
+        {
+          "stage": "screeners",
+          "at": "2026-11-16T14:20:00.000Z"
+        },
+        {
+          "stage": "universe",
+          "at": "2026-11-16T14:25:00.000Z"
+        },
+        {
+          "stage": "quote",
+          "at": "2026-11-16T14:30:00.000Z"
+        },
+        {
+          "stage": "bars",
+          "at": "2026-11-16T14:35:00.000Z"
+        },
+        {
+          "stage": "strategy",
+          "at": "2026-11-16T14:40:00.000Z"
+        }
+      ],
+      "decided_at": "2026-11-16T15:00:00.000Z",
+      "strategy": "price-action-v3@3.0.0",
+      "checks": [
+        {
+          "rule": "close_above_vwap",
+          "measured": "5.12",
+          "operator": ">",
+          "threshold": "5.2",
+          "passed": false,
+          "note": ""
+        }
+      ]
     },
     {
       "symbol": "WXYZ",
@@ -113,7 +203,12 @@
       "detail": null,
       "verdict": null,
       "setup": null,
-      "at": "2026-11-16T15:00:00.000Z"
+      "at": "2026-11-16T15:00:00.000Z",
+      "price": null,
+      "reached": [],
+      "decided_at": null,
+      "strategy": null,
+      "checks": []
     },
     {
       "symbol": "SPY",
@@ -133,7 +228,12 @@
       "detail": "ETF (needs COMMON_STOCK)",
       "verdict": null,
       "setup": null,
-      "at": "2026-11-16T15:00:00.000Z"
+      "at": "2026-11-16T15:00:00.000Z",
+      "price": null,
+      "reached": [],
+      "decided_at": null,
+      "strategy": null,
+      "checks": []
     },
     {
       "symbol": "SLOW",
@@ -153,7 +253,12 @@
       "detail": "bars route window full",
       "verdict": null,
       "setup": null,
-      "at": "2026-11-16T15:00:00.000Z"
+      "at": "2026-11-16T15:00:00.000Z",
+      "price": null,
+      "reached": [],
+      "decided_at": null,
+      "strategy": null,
+      "checks": []
     }
   ],
   "api_version": 1

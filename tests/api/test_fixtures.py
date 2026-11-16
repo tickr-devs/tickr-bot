@@ -92,6 +92,7 @@ from tickr.api.contract import (
     SkippedV1,
     StatusResponseV1,
     StrategyId,
+    SymbolReachV1,
     SymbolRowV1,
     SymbolSourceV1,
     SymbolStage,
@@ -460,14 +461,14 @@ def documents() -> dict[str, object]:
             FlowChipV1("ABCD", (ScreenerKind.GAINERS, ScreenerKind.TOP_ACTIVES),
                        Decimal("12.40"), None, None, (
                            SymbolSourceV1(ScreenerKind.GAINERS, 3),
-                           SymbolSourceV1(ScreenerKind.TOP_ACTIVES, 11))),
+                           SymbolSourceV1(ScreenerKind.TOP_ACTIVES, 11)), Decimal("4.12")),
             FlowChipV1("SPY", (ScreenerKind.TOP_ACTIVES,), Decimal("0.31"), None,
                        "SECURITY_TYPE_NOT_ALLOWED: ETF",
                        (SymbolSourceV1(ScreenerKind.TOP_ACTIVES, 1),)),
             FlowChipV1("WXYZ", (ScreenerKind.GAINERS,), None, "the captured row has no "
                        "pre_close", None, (SymbolSourceV1(ScreenerKind.GAINERS, 7),)),
             FlowChipV1("EFGH", (ScreenerKind.LOSERS,), Decimal("-8.05"), None, None,
-                       (SymbolSourceV1(ScreenerKind.LOSERS, 2),))), (
+                       (SymbolSourceV1(ScreenerKind.LOSERS, 2),), Decimal("0.8125"))), (
             FlowStageV1(FlowStage.SCREENERS, 4, ("ABCD", "EFGH", "SPY", "WXYZ")),
             FlowStageV1(FlowStage.UNIVERSE, 3, ("ABCD", "EFGH", "WXYZ")),
             FlowStageV1(FlowStage.STRATEGY, 3, ("ABCD", "EFGH", "WXYZ")),
@@ -516,13 +517,32 @@ def documents() -> dict[str, object]:
                                  SymbolSourceV1(ScreenerKind.TOP_ACTIVES, 11)),
                         Decimal("18.20"), T0.replace(microsecond=0) - timedelta(minutes=78),
                         SymbolStage.STOP, SymbolStage.STOP, SymbolState.PASSED, None, None,
-                        None, Verdict.ENTER, "breakout", T0.replace(microsecond=0)),
+                        None, Verdict.ENTER, "breakout", T0.replace(microsecond=0),
+                        Decimal("4.12"), tuple(
+                            SymbolReachV1(stage, None if stage in (SymbolStage.ORDER,
+                                                                   SymbolStage.STOP)
+                                          else T0.replace(microsecond=0)
+                                          - timedelta(minutes=78 - 10 * index))
+                            for index, stage in enumerate(SymbolStage)),
+                        T0.replace(microsecond=0) - timedelta(minutes=8),
+                        "price-action-v3@3.0.0",
+                        (CheckV1("close_above_vwap", Decimal("4.12"), ">", Decimal("3.98"),
+                                 True, ""),
+                         CheckV1("relative_volume", Decimal("2.4"), ">=", Decimal("2.0"),
+                                 True, ""))),
             SymbolRowV1("QRST", (SymbolSourceV1(ScreenerKind.GAINERS, 9),), Decimal("6.10"),
                         T0.replace(microsecond=0) - timedelta(minutes=40),
                         SymbolStage.STRATEGY, SymbolStage.STRATEGY, SymbolState.DROPPED,
                         "IGNORE", CheckV1("close_above_vwap", Decimal("5.12"), ">",
                                           Decimal("5.2"), False, ""),
-                        None, Verdict.IGNORE, None, T0.replace(microsecond=0)),
+                        None, Verdict.IGNORE, None, T0.replace(microsecond=0),
+                        Decimal("5.12"), tuple(
+                            SymbolReachV1(stage, T0.replace(microsecond=0)
+                                          - timedelta(minutes=40 - 5 * index))
+                            for index, stage in enumerate(list(SymbolStage)[:5])),
+                        T0.replace(microsecond=0), "price-action-v3@3.0.0",
+                        (CheckV1("close_above_vwap", Decimal("5.12"), ">", Decimal("5.2"),
+                                 False, ""),)),
             SymbolRowV1("WXYZ", (SymbolSourceV1(ScreenerKind.TOP_ACTIVES, 4),), None,
                         T0.replace(microsecond=0) - timedelta(minutes=12),
                         SymbolStage.QUOTE, SymbolStage.QUOTE, SymbolState.DROPPED,

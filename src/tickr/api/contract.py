@@ -1600,6 +1600,8 @@ class FlowChipV1:
     excluded_cause: str | None
     ranks: tuple[SymbolSourceV1, ...] = _added_later(())
     """Each screener's rank of the symbol in its latest list that day, in `sources` order."""
+    price: Decimal | None = _added_later(None)
+    """The price in the latest captured row that listed it; null when that row has none."""
 
 
 @dataclass(frozen=True)
@@ -1842,6 +1844,16 @@ class SymbolState(StrEnum):
 
 
 @dataclass(frozen=True)
+class SymbolReachV1:
+    """When a symbol first got to `stage` that day: the end of the discovery pass, the time of
+    the decision, or, for `screeners`, the start of the first pass that listed it. Null where
+    no record says when (the order and stop stages, which come from trades)."""
+
+    stage: SymbolStage
+    at: datetime | None
+
+
+@dataclass(frozen=True)
 class SymbolRowV1:
     """One symbol seen on the day. `furthest`: the furthest stage it got to (judged or
     waiting there) at any time of the day, never before `stage`. `stage` and `state`: where
@@ -1867,6 +1879,16 @@ class SymbolRowV1:
     verdict: Verdict | None
     setup: str | None
     at: datetime | None
+    price: Decimal | None = _added_later(None)
+    """The price in the latest screener row that listed it (FlowChipV1.price)."""
+    reached: tuple[SymbolReachV1, ...] = _added_later(())
+    """Each stage up to `furthest`, in pipeline order, with when it was first reached."""
+    decided_at: datetime | None = _added_later(None)
+    """The time of the active strategy's latest decision on it; null without one."""
+    strategy: str | None = _added_later(None)
+    """That decision's strategy and version, `name@version`."""
+    checks: tuple[CheckV1, ...] = _added_later(())
+    """That decision's checks, in the strategy's order, rounded like every shown check."""
 
 
 @dataclass(frozen=True)

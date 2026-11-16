@@ -106,6 +106,16 @@ def read_passes(path: Path, *, open_tail: bool) -> list[list[ScreenerRow]]:
     return passes
 
 
+def row_price(row: ScreenerRow) -> Decimal | None:
+    """The provider row's price as recorded; None when it has none or it is not a positive
+    number."""
+    try:
+        price = Decimal(row.fields.get(PRICE) or "")
+    except InvalidOperation:
+        return None
+    return price if price.is_finite() and price > 0 else None
+
+
 def change_pct(row: ScreenerRow, places: int) -> tuple[Decimal | None, str | None]:
     """(price - pre_close) / pre_close x 100 of the provider row, rounded half-even to
     `places`; (None, cause) when the row cannot give it."""
@@ -177,7 +187,8 @@ class _ChipState:
             result.append(api.FlowChipV1(
                 symbol=symbol, sources=sources,
                 change_pct=change, change_cause=cause, excluded_cause=self.outcome[symbol],
-                ranks=tuple(api.SymbolSourceV1(k, self.ranks[symbol][k]) for k in sources)))
+                ranks=tuple(api.SymbolSourceV1(k, self.ranks[symbol][k]) for k in sources),
+                price=row_price(self.latest[symbol])))
         return tuple(result)
 
 

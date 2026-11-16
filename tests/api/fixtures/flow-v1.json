@@ -20,7 +20,8 @@
           "kind": "TOP_ACTIVES",
           "rank": 11
         }
-      ]
+      ],
+      "price": "4.12"
     },
     {
       "symbol": "SPY",
@@ -35,7 +36,8 @@
           "kind": "TOP_ACTIVES",
           "rank": 1
         }
-      ]
+      ],
+      "price": null
     },
     {
       "symbol": "WXYZ",
@@ -50,7 +52,8 @@
           "kind": "GAINERS",
           "rank": 7
         }
-      ]
+      ],
+      "price": null
     },
     {
       "symbol": "EFGH",
@@ -65,7 +68,8 @@
           "kind": "LOSERS",
           "rank": 2
         }
-      ]
+      ],
+      "price": "0.8125"
     }
   ],
   "stages": [

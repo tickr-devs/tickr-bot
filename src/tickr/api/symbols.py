@@ -120,6 +120,7 @@ class DiscoveryFolded:
 
     first_seen: dict[str, datetime] = field(default_factory=dict)
     furthest: dict[str, S] = field(default_factory=dict)
+    reached: dict[str, dict[S, datetime]] = field(default_factory=dict)  # first time per stage
     latest: dict[str, _Outcome] = field(default_factory=dict)
     movers: dict[str, _Mover] = field(default_factory=dict)
     measured: bool | None = None  # of the latest pass
@@ -132,6 +133,10 @@ class DiscoveryFolded:
         def reach(symbol: str, stage: S) -> None:
             self.first_seen.setdefault(symbol, started)
             self.furthest[symbol] = _later(self.furthest.get(symbol, S.SCREENERS), stage)
+            times = self.reached.setdefault(symbol, {})
+            times.setdefault(S.SCREENERS, started)
+            for passed in ORDER[1:ORDER.index(stage) + 1]:  # judged in this pass
+                times.setdefault(passed, finished)
 
         for instrument in raw["instruments"]:
             reach(instrument["symbol"], S.SCREENERS)
@@ -164,7 +169,8 @@ class DiscoveryFolded:
 
     def snapshot(self) -> DiscoveryFolded:
         """A copy whose maps a later fold never changes (their values are never mutated)."""
-        return DiscoveryFolded(dict(self.first_seen), dict(self.furthest), dict(self.latest),
+        return DiscoveryFolded(dict(self.first_seen), dict(self.furthest),
+                               {k: dict(v) for k, v in self.reached.items()}, dict(self.latest),
                                dict(self.movers), self.measured, self.as_of)
 
 
@@ -245,9 +251,15 @@ def symbols_document(day: date, folded: DiscoveryFolded, chips: Sequence[api.Flo
                      places: int) -> api.SymbolsV1:
     """`records`: the active strategy's records of `day`; `stops`: one per trade whose entry
     filled that day."""
-    latest_record = {r.symbol: r for r in sorted(records, key=lambda r: r.time)}
-    taken = {r.symbol for r in records
-             if r.decision.verdict is Verdict.ENTER and r.admission is Admission.TAKEN}
+    in_order = sorted(records, key=lambda r: r.time)
+    latest_record = {r.symbol: r for r in in_order}
+    first_record: dict[str, datetime] = {}
+    first_taken: dict[str, datetime] = {}
+    for r in in_order:
+        first_record.setdefault(r.symbol, r.time)
+        if r.decision.verdict is Verdict.ENTER and r.admission is Admission.TAKEN:
+            first_taken.setdefault(r.symbol, r.time)
+    taken = set(first_taken)
     stop_of = {s.symbol: s for s in stops}
     chip_of = {c.symbol: c for c in chips}
     symbols = sorted(set(chip_of) | set(folded.furthest) | set(latest_record) | set(stop_of))
@@ -278,6 +290,13 @@ def symbols_document(day: date, folded: DiscoveryFolded, chips: Sequence[api.Flo
             now = _Outcome(S.UNIVERSE, api.SymbolState.NOT_REACHED, None, NO_PASS)
         furthest = _later(furthest, now.stage)  # where it stands now, it got to
         chip = chip_of.get(symbol)
+        times = {**folded.reached.get(symbol, {})}
+        if symbol in first_record:
+            times.setdefault(S.STRATEGY, first_record[symbol])
+        if symbol in first_taken:
+            times.setdefault(S.RISK, first_taken[symbol])
+        reached = tuple(api.SymbolReachV1(stage, times.get(stage))
+                        for stage in ORDER[:ORDER.index(furthest) + 1])
         rows.append(api.SymbolRowV1(
             symbol=symbol, sources=chip.ranks if chip else (),
             change_pct=chip.change_pct if chip else None,
@@ -285,7 +304,13 @@ def symbols_document(day: date, folded: DiscoveryFolded, chips: Sequence[api.Flo
             state=now.state, cause=now.cause,
             check=None if now.check is None else api.shown_check(now.check, places),
             detail=now.detail, verdict=None if record is None else record.decision.verdict,
-            setup=None if record is None else record.decision.setup, at=now.at))
+            setup=None if record is None else record.decision.setup, at=now.at,
+            price=chip.price if chip else None, reached=reached,
+            decided_at=None if record is None else record.time,
+            strategy=None if record is None
+            else f"{record.decision.strategy}@{record.decision.version}",
+            checks=() if record is None
+            else tuple(api.shown_check(c, places) for c in record.decision.checks)))
     counts = tuple(api.SymbolStageCountV1(
         stage, sum(1 for r in rows if ORDER.index(r.furthest) >= ORDER.index(stage)))
         for stage in ORDER)

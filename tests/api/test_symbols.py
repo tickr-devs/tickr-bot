@@ -113,6 +113,16 @@ def test_every_symbol_with_its_furthest_stage_and_where_it_stands_now(api, cfg):
     assert where("SLOW") == ("bars", "bars", "not_reached", "bars budget")
     assert where("LATE") == ("quote", "quote", "dropped", "QUOTE_STALE")
     assert rows["LATE"]["first_seen"] == "2026-11-16T14:55:00.000Z"
+    # The detail panel: the price, when each stage was reached and the last decision's checks.
+    assert rows["ABCD"]["price"] == "11.24"  # the latest screener row
+    assert [(r["stage"], r["at"]) for r in rows["ABCD"]["reached"]] == [
+        ("screeners", "2026-11-16T14:55:00.000Z"), ("universe", "2026-11-16T14:55:20.000Z"),
+        ("quote", "2026-11-16T14:55:20.000Z"), ("bars", "2026-11-16T14:55:20.000Z"),
+        ("strategy", "2026-11-16T14:55:20.000Z")]  # a candidate: handed to the strategy
+    assert rows["ABCD"]["strategy"].startswith("price-action")
+    assert [c["rule"] for c in rows["ABCD"]["checks"]] == [PASS.rule, FAIL.rule]
+    assert rows["SPY"]["decided_at"] is None and rows["SPY"]["checks"] == []
+    assert [r["stage"] for r in rows["SPY"]["reached"]] == ["screeners", "universe"]
     counts = [(s["stage"], s["count"]) for s in body["stages"]]
     assert [stage for stage, _ in counts] == [s.value for s in contract.SymbolStage]
     assert dict(counts)["screeners"] == 7 and dict(counts)["strategy"] == 2
