@@ -15,6 +15,7 @@ Broker facts live in `docs/webull-facts.md`. Owner decisions live in `docs/decis
 7. **Refuse, never guess.** Unknown status, missing field, limit breach, unknown trading day: a typed refusal with one recorded cause. No silent defaults or clipping.
 8. **Strategies are swappable modules.** A strategy never sends orders and never loosens platform risk. It receives data and returns a decision with its reasons, tagged with its name and version.
 9. **Only `src/tickr/broker/webull.py` may import the Webull SDK.**
+10. **Never print the process environment; screenshot/test tools pass only named variables.** Its output holds credential values. Never run `env`, `printenv`, `export -p`, a bare `set`, `xctest --help` or `xcodebuild -showBuildSettings`, never trace a shell that sees a secret (`set -x`), never print, log, stringify or iterate `os.environ` whole, and in Swift read `ProcessInfo.processInfo.environment` one named variable at a time (never bind, print or forward the dictionary). Messages name a missing variable, never its value. `tests/test_no_env_dumps.py` enforces this for scripts, workflows and Python/Swift code; a real exception goes into its `ALLOWED` list with a reason.
 
 ## Swift code rules (apps/)
 
