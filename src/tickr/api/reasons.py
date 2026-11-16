@@ -168,6 +168,7 @@ _REFUSAL = {
     "OUTSIDE_REGULAR_SESSION": _shapes(
         ("", r"\S+ is outside (?P<open>[0-9]{2}:[0-9]{2}):[0-9]{2}-(?P<close>[0-9]{2}:[0-9]{2})"
          r":[0-9]{2} New York")),
+    "ENTRY_STOP_SET": _shapes(("", r"operator entry-stop is set")),
     "OWN_POSITION_OPEN": _shapes(("", r"(?P<count>[0-9]+) own position\(s\) open")),
     "OWN_ORDER_WORKING": _shapes(("", r"(?P<count>[0-9]+) own order\(s\) working")),
     "POSITION_LIMIT_REACHED": _shapes(
