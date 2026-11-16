@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
@@ -11,6 +12,7 @@ from tickr.broker.webull import MalformedResponse
 from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.config import GateResult
 from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow
+from tickr.data.capture import DISCOVERY_FILE, CaptureWriter
 from tickr.data.discovery import NoStrategy
 from tickr.data.health import StreamHealth
 from tickr.engine.core import Engine
@@ -689,3 +691,16 @@ def test_a_refused_subscribe_is_not_journaled_as_subscribed(tmp_path):
     rig.market.tick()
     assert rig.market.subscribed == set()
     assert rig.store.journal(STREAM_SUBSCRIPTIONS) == []
+
+
+def test_each_discovery_pass_is_appended_to_the_day_capture(tmp_path):
+    rig = Rig(tmp_path)
+    rig.market.capture = CaptureWriter(tmp_path / "capture", "fake")
+    rig.market.tick()
+    rig.advance(INTERVAL)
+    rig.market.tick()
+    rig.market.capture.close()
+    lines = (tmp_path / "capture" / "2026-11-16" / DISCOVERY_FILE).read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    assert len(records) == 2 and all(r["provider"] == "fake" for r in records)
+    assert records[0]["stopped"] is None and records[0]["not_reached"] == []

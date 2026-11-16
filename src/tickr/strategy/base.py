@@ -12,9 +12,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from tickr.types import Bar, Quote
+
+if TYPE_CHECKING:
+    from tickr.data.movers import Mover
 
 
 class Verdict(StrEnum):
@@ -109,6 +112,17 @@ class Liquidity(Protocol):
     def session_liquidity(self, session_bars: Sequence[Bar]) -> tuple[Check, ...]:
         """Rules on the current regular session's completed M1 bars, oldest first (at least
         one), such as the session dollar volume."""
+        ...
+
+
+@runtime_checkable
+class FastMovers(Protocol):
+    """A strategy that defines fast movers (`tickr.data.movers` with its own thresholds).
+    Discovery records the active strategy's fast movers each pass for the apps; a strategy
+    without this has none, and the list says so."""
+
+    def fast_mover(self, symbol: str, session_bars: Sequence[Bar]) -> Mover | None:
+        """The fast mover of the current session's completed bars (oldest first), or None."""
         ...
 
 

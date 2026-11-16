@@ -9,7 +9,7 @@ from md_helpers import NOW, OPEN, Screen, bars, quote, row, settings
 
 from tickr import config
 from tickr.data.base import FakeMarketData, ScreenerKind, StreamNotice
-from tickr.data.capture import CaptureError, CaptureWriter, export_replay_bars
+from tickr.data.capture import DISCOVERY_FILE, CaptureError, CaptureWriter, export_replay_bars
 from tickr.data.discovery import discover
 from tickr.data.health import FanOut, StreamHealth
 from tickr.replay.bars import load_bars
@@ -135,3 +135,15 @@ def test_discovery_writes_through_capture(tmp_path):
     assert len(lines(day / "screener.jsonl")) == 1
     assert len(lines(day / "quotes.jsonl")) == 1
     assert len(lines(day / "bars.jsonl")) == 30  # the minute in progress is not captured
+
+
+def test_discovery_pass_is_one_line_with_provider_and_end_time(tmp_path):
+    writer = CaptureWriter(tmp_path, "webull")
+    end = datetime(2026, 11, 13, 15, 0, 10, tzinfo=UTC)
+    writer.discovery({"candidates": ["AAA"]}, end)
+    writer.discovery({"candidates": []}, end)
+    writer.close()
+    lines = (tmp_path / "2026-11-13" / DISCOVERY_FILE).read_text().splitlines()
+    assert [json.loads(line) for line in lines] == [
+        {"candidates": ["AAA"], "provider": "webull", "receipt_time": "2026-11-13T15:00:10+00:00"},
+        {"candidates": [], "provider": "webull", "receipt_time": "2026-11-13T15:00:10+00:00"}]

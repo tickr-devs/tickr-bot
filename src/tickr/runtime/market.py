@@ -27,6 +27,7 @@ from tickr.data.discovery import (
     NoStrategy,
     RefusedSymbols,
     discover,
+    pass_record,
 )
 from tickr.data.health import FanOut, StreamHealth, StreamState
 from tickr.engine.core import Engine, Leg
@@ -361,6 +362,9 @@ class MarketRuntime:
                 self.engine.store.append(DISCOVERY_FAILED, body, run_id=self.engine.run_id)
             return  # tried again at the next interval
         self.discovery = DiscoveryState(now, result.summary(), result.candidates)
+        if self.capture is not None:
+            finished = self.now()
+            self.capture.discovery(pass_record(result, finished), finished)
         with self.engine.store.transaction():
             self.engine.store.append(DISCOVERY, {
                 "summary": result.summary(), "evaluated": result.evaluated,

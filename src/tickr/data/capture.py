@@ -12,6 +12,10 @@ are strings (never floats); times are ISO-8601 UTC. Every record carries `provid
   `export_replay_bars` turns a captured file into a file the replay tool loads.
 - quotes.jsonl: Quote fields plus `provider` and `source` ("snapshot" or "stream").
 - screener.jsonl: kind, rank, typed identity fields and the complete provider row `fields`.
+- discovery.jsonl: one line per discovery pass (`tickr.data.discovery.pass_record`): every
+  instrument's outcome (candidate, refused with cause and measured value, or not reached) and
+  the active strategy's fast movers, with `provider` and `receipt_time` (the pass's end). Read
+  by the api server for the funnel stages, the symbols screen and the fast-movers list.
 - notices.jsonl: stream status notices: `type` ("1001"), the integer counters `drop`, `rtt`,
   `sent` as received, `provider` and `receipt_time`. Read by `tickr.research latency`.
 
@@ -41,6 +45,7 @@ SCREENER_FILE = "screener.jsonl"
 BARS_FILE = "bars.jsonl"
 QUOTES_FILE = "quotes.jsonl"
 NOTICES_FILE = "notices.jsonl"
+DISCOVERY_FILE = "discovery.jsonl"
 NOTICE_STATUS_TYPE = "1001"
 STREAM_SOURCE = "stream"
 CAPTURE_KEYS = frozenset({"provider", "receipt_time"})
@@ -180,6 +185,13 @@ class CaptureWriter:
         with self._lock:
             for day, records in sorted(by_day.items()):
                 self._append(day, QUOTES_FILE, records)
+
+    def discovery(self, record: dict[str, Any], receipt_time: datetime) -> None:
+        """Append one discovery pass (`discovery.pass_record`) to the day of its end."""
+        day = _day(receipt_time)
+        line = {**record, "provider": self._provider, "receipt_time": _time(receipt_time)}
+        with self._lock:
+            self._append(day, DISCOVERY_FILE, [line])
 
     # -- QuoteListener (stream)
     def on_quote(self, quote: Quote) -> None:

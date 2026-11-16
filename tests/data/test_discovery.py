@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -18,7 +19,10 @@ from tickr.data.discovery import (
     completed_session_bars,
     discover,
     merge,
+    pass_record,
 )
+from tickr.data.movers import MoverSettings, measure
+from tickr.types import Bar
 
 G, L, A = ScreenerKind.GAINERS, ScreenerKind.LOSERS, ScreenerKind.TOP_ACTIVES
 ROOT = Path(__file__).resolve().parents[2]
@@ -376,3 +380,86 @@ def test_every_discovery_bars_read_leaves_the_configured_reserve():
     five(md)
     run(md, bars_symbols_per_request=2)
     assert md.bars_reserves == [3, 3, 3]
+
+
+# ---------------------------------------------------------------- outcomes and fast movers
+
+
+class MoverScreen(Screen):
+    """Screen plus the fast-mover rule of price-action-v3, with small test thresholds."""
+
+    def fast_mover(self, symbol, session_bars):
+        return measure(symbol, session_bars, MoverSettings(5, Decimal(3), Decimal(2),
+                                                           Decimal(3), Decimal(1)))
+
+
+def spiking(symbol: str) -> list:
+    """29 sideways minutes, then one heavy upward bar."""
+    out = []
+    for i in range(29):
+        close = Decimal("10.00") + Decimal("0.02") * (i % 2)
+        out.append(Bar(symbol, OPEN + timedelta(minutes=i), close, close + Decimal("0.05"),
+                       close - Decimal("0.05"), close, Decimal(20000)))
+    out.append(Bar(symbol, OPEN + timedelta(minutes=29), Decimal("10.02"), Decimal("10.60"),
+                   Decimal("10.00"), Decimal("10.50"), Decimal(200000)))
+    return out
+
+
+def test_symbols_a_stopped_pass_never_reached_are_named():
+    md = FakeMarketData()
+    symbols = [f"S{i:02d}" for i in range(5)]
+    md.set_screener(G, [row(G, i, s) for i, s in enumerate(symbols, 1)])
+    for s in symbols:
+        liquid(md, s)
+    md.limit("bars", 1)
+    result = run(md, bars_symbols_per_request=2)
+    assert result.not_reached == ("S02", "S03", "S04")
+    finished = run(FakeMarketData())
+    assert finished.not_reached == ()
+
+
+def test_instruments_keep_their_screeners():
+    md = FakeMarketData()
+    md.set_screener(G, [row(G, 1, "AAA")])
+    md.set_screener(A, [row(A, 1, "AAA"), row(A, 2, "BBB")])
+    result = run(md)
+    assert [(i.symbol, i.kinds) for i in result.instruments] == [("AAA", (G, A)), ("BBB", (A,))]
+
+
+def test_fast_movers_are_measured_on_the_bars_already_read():
+    md = FakeMarketData()
+    md.set_screener(G, [row(G, 1, "AAA"), row(G, 2, "BBB")])
+    md.set_quote(quote("AAA"))
+    md.set_quote(quote("BBB"))
+    md.add_bars(spiking("AAA"))
+    md.add_bars(bars("BBB", 30))
+    before = len(md.calls)
+    result = run(md, screen=MoverScreen("0.015", "1"))
+    assert [m.symbol for m in result.movers] == ["AAA"] and result.movers[0].spike_up
+    assert [m for m, _ in md.calls[before:]].count("bars") == 1  # no read of its own
+    plain = run(md, screen=Screen("0.015", "1"))  # a strategy without the rule
+    assert plain.movers == () and not plain.movers_measured
+
+
+def test_pass_record_is_plain_json_with_every_outcome():
+    md = FakeMarketData()
+    md.set_screener(G, [row(G, 1, "AAA"), row(G, 2, "ETF", security_type="ETF"),
+                        row(G, 3, "THIN")])
+    md.set_quote(quote("AAA"))
+    md.set_quote(quote("THIN"))
+    md.add_bars(spiking("AAA"))
+    md.add_bars(bars("THIN", 30, volume="1"))
+    result = run(md, screen=MoverScreen("0.015", "100000"))
+    record = json.loads(json.dumps(pass_record(result, NOW)))
+    assert record["finished_at"] == "2026-11-13T15:00:10+00:00"
+    assert record["candidates"] == ["AAA"] and record["not_reached"] == []
+    assert [i["kinds"] for i in record["instruments"]] == [["GAINERS"]] * 3
+    causes = {r["symbol"]: (r["cause"], r["check"]) for r in record["rejections"]}
+    stages = {r["symbol"]: r["stage"] for r in record["rejections"]}
+    assert causes["ETF"] == ("SECURITY_TYPE_NOT_ALLOWED", None) and stages["ETF"] == "screener"
+    assert causes["THIN"][0] == "STRATEGY_LIQUIDITY" and stages["THIN"] == "bars"
+    assert causes["THIN"][1]["rule"] == "dollar_volume_usd" and not causes["THIN"][1]["passed"]
+    assert record["movers_measured"] is True
+    mover = record["movers"][0]
+    assert mover["symbol"] == "AAA" and mover["spike_up"] is True
+    assert mover["volume_ratio"]["fired"] is True and mover["volume_ratio"]["threshold"] == "3"
