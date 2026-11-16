@@ -10,6 +10,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 import pytest
+from api.schema_check import errors  # tests/ is on the path: each test package sits in it
 
 from tickr.demo import record as rec
 from tickr.demo import run as demo
@@ -40,14 +41,90 @@ def answer(index: dict, pieces: list[bytes], key: str, frame: int) -> tuple[int,
     return status, body
 
 
-def test_the_committed_recording_is_current():
-    """The recording must be made again (`tickr demo --record`) whenever its inputs change: the
-    scenario, the demo code, the API contract the apps read or the strategies."""
-    index, _ = read(ROOT / rec.RECORDING)
-    current = demo.fixture_inputs(ROOT, load(ROOT / "config" / "demo.toml"))
-    assert index["inputs"] == current, (
-        "the apps' demo day is stale: run `tickr demo --record` and commit "
-        f"{rec.RECORDING} (docs/demo.md)")
+# Which committed schema (src/tickr/api/schema/) each recorded answer must match: a GET by its
+# path, a POST by its path; any answer that is not 2xx is an error document.
+GET_SCHEMAS = {
+    "/status": "status-response-v1", "/account": "account-response-v1", "/days": "days-v1",
+    "/bars": "bars-v1", "/chart": "chart-v1", "/decisions": "decisions-v1", "/flow": "flow-v1",
+    "/watching": "watching-v1", "/observers": "observers-v1", "/skipped": "skipped-v1",
+    "/jobs": "jobs-v1", "/journal": "journal-v1", "/settings": "settings-v1",
+    "/config": "config-v1", "/commands/pending": "pending-commands-v1",
+    "/performance": "performance-v1", "/advisor": "advisor-runs-v1",
+    "/lab/replay": "lab-replay-v1"}
+POST_SCHEMAS = {"/commands/start-bot": "bot-start-v1", "/lab/replay": "lab-replay-v1",
+                "/advisor/decision": "advisor-runs-v1"}
+COMMAND_SCHEMA = "command-accepted-v1"  # every other POST is a /commands/... route
+ERROR_SCHEMA = "error-v1"
+STALE = ("the apps' demo day no longer matches the API contract: run `tickr demo --record` and "
+         f"commit {rec.RECORDING} (docs/demo.md)")
+
+
+def committed_schema(name: str) -> dict:
+    return json.loads((ROOT / "src" / "tickr" / "api" / "schema" / f"{name}.schema.json")
+                      .read_text("utf-8"))
+
+
+def versions(index: dict, pieces: list[bytes], key: str) -> list[tuple[int, int, bytes]]:
+    """Every distinct answer of `key`: (frame, status, body) at each of its change points."""
+    return [(at, *answer(index, pieces, key, at)) for at, *_ in index["routes"][key]]
+
+
+def get_schema(key: str, status: int) -> str:
+    path = key.split("?")[0]
+    if not 200 <= status < 300:
+        return ERROR_SCHEMA
+    return "day-v1" if path.startswith("/days/") else GET_SCHEMAS[path]
+
+
+def post_schema(key: str, status: int) -> str:
+    path = key.split(" ")[0]
+    if not 200 <= status < 300:
+        return ERROR_SCHEMA
+    return POST_SCHEMAS.get(path, COMMAND_SCHEMA)
+
+
+def strategies_in(value: object) -> set[str]:
+    """Names of the strategies a document shows (every `strategy` object with a name)."""
+    if isinstance(value, list):
+        return set().union(*map(strategies_in, value))
+    if not isinstance(value, dict):
+        return set()
+    found = set().union(*map(strategies_in, value.values()))
+    strategy = value.get("strategy")
+    if isinstance(strategy, dict) and isinstance(strategy.get("name"), str):
+        found.add(strategy["name"])
+    return found
+
+
+def test_the_committed_recording_is_readable_with_todays_contract():
+    """The recording is a sample day for the apps: it need not be made again on every change of
+    the scenario, the demo code, the contract or the strategies, only when the apps could no
+    longer read it. Every distinct recorded answer (each change point of each route, and every
+    POST with the bot's outcome) must match today's committed schema; the file layout must be
+    the one DemoSource reads, and the strategies it shows must still exist."""
+    index, pieces = read(ROOT / rec.RECORDING)
+    assert index["format"] == rec.FORMAT, STALE
+    problems: list[str] = []
+    shown: set[str] = set()
+    for key in index["routes"]:
+        for frame, status, body in versions(index, pieces, key):
+            document = json.loads(body)
+            name = get_schema(key, status)
+            problems += [f"{key} @{frame} ({name}): {e}"
+                         for e in errors(committed_schema(name), document)]
+            shown |= strategies_in(document)
+    outcome_schema = committed_schema("status-v1")["properties"]["recent_commands"]["items"]
+    for key, (status, piece, outcome) in index["posts"].items():
+        name = post_schema(key, status)
+        problems += [f"POST {key} ({name}): {e}"
+                     for e in errors(committed_schema(name), json.loads(pieces[piece]))]
+        if outcome != rec.NONE:
+            problems += [f"POST {key} outcome (recent command): {e}"
+                         for e in errors(outcome_schema, json.loads(pieces[outcome]))]
+    gone = sorted(s for s in shown if not (ROOT / "strategies" / s / "strategy.toml").is_file())
+    if gone:
+        problems.append(f"strategies no longer in strategies/: {gone}")
+    assert not problems, STALE + "\n" + "\n".join(problems[:20])
 
 
 def test_the_committed_recording_holds_the_whole_cycle_and_every_screen():

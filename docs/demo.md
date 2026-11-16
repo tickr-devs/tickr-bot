@@ -184,11 +184,25 @@ trades), on the phone away from the Mac, with no `tickr demo` running and no net
   status answers, at the frame's time. So the confirmation (which says DEMO: nothing is sent),
   the "sent" toast and its outcome play as usual, and nothing reaches any bot. The recording
   itself does not change: the flatten does not close the recorded position.
-- **Kept current**: the file's `inputs` is the fixture digest (the scenario, the demo code, the API
-  contract, the strategies; "The fixture" above). `tests/demo/test_recording.py` fails while it
-  does not match, so a change of those inputs comes with `tickr demo --record` and the new file in
-  the same pull request. The Swift tests decode every recorded answer with the apps' live decoders
-  (`DemoSourceTests`), so a contract change the recording does not follow fails there too.
+- **Kept readable, not byte-current**: the recording is a sample day for the apps, so a change of
+  the scenario, the demo code, the API contract or the strategies does not call for a new one; its
+  `inputs` (the fixture digest, "The fixture" above) only says what it was made from.
+  `tests/demo/test_recording.py` (`..._is_readable_with_todays_contract`) decodes every distinct
+  recorded answer (each change point of each route, each POST and the bot's outcome of it) and
+  checks it against today's committed schema (`src/tickr/api/schema/`, error documents for
+  answers that are not 2xx), the file layout against `record.FORMAT`, and that the strategies it
+  shows still exist in `strategies/`. It fails only when the apps could no longer read the
+  recording (a new required field, a renamed or removed one, a changed type or enum); then run
+  `tickr demo --record` and commit the new file in that pull request. A new route the apps read
+  needs its schema in the test's table and a new recording too. The Swift tests decode every
+  recorded answer with the apps' live decoders (`DemoSourceTests`), so a contract change the
+  recording does not follow fails there too.
+- **Nightly re-record**: `.github/workflows/record-demo.yml` runs `tickr demo --record` on GitHub
+  every night at 06:30 UTC (outside US market hours; also by hand from the Actions tab) on the
+  latest `main`. Only when the file changed does it open a pull request, from the fixed
+  `demo-recording` branch: while that pull request is open, each later night updates it instead
+  of opening another. So the demo day keeps showing what today's bot does without any pull request
+  having to carry it.
 
 The bot's API no longer forwards `/demo/` and the `local.tickr.demo` launchd job is gone: the apps
 need neither. `tickr demo` stays for looking at the day served live (above).

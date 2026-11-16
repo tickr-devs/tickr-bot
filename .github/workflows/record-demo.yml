@@ -1,0 +1,49 @@
+name: record-demo
+# Records the demo day the apps carry again (`tickr demo --record`, docs/demo.md "The recording")
+# on the latest main, so it keeps showing what today's bot does without any pull request having to
+# carry the binary. Nightly at 06:30 UTC (outside US market hours) or by hand from the Actions
+# tab. When the file changed it opens one pull request from the fixed `demo-recording` branch, or
+# updates the one still open; nothing is pushed to main. The tests only require the recording to
+# stay readable (tests/demo/test_recording.py), so this job is for freshness, not for keeping main
+# green.
+# Needs the repository setting "Allow GitHub Actions to create and approve pull requests". A pull
+# request opened with GITHUB_TOKEN does not start other workflows: close and reopen it (or push to
+# its branch) so its checks run.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * *"
+# One run at a time; a second one waits instead of racing on the same branch.
+concurrency:
+  group: record-demo
+  cancel-in-progress: false
+# Writes only the `demo-recording` branch and its pull request.
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e .
+      - run: tickr demo --record
+      # Opens the pull request only when the recording changed; leaves no other file behind.
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: demo-recording
+          delete-branch: true
+          add-paths: apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz
+          commit-message: "Demo day recorded again on the latest main (nightly)"
+          title: "Demo day recorded again on the latest main (nightly)"
+          body: |
+            `tickr demo --record` on the latest `main` by `.github/workflows/record-demo.yml`
+            (docs/demo.md "The recording"). Only the recording the apps carry changes.
