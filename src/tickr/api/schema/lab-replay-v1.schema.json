@@ -529,11 +529,6 @@
     "finished_at",
     "cause",
     "summary",
-    "folder",
-    "day",
-    "compare",
-    "versions",
-    "days",
     "api_version"
   ],
   "additionalProperties": false

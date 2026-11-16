@@ -60,9 +60,7 @@
               },
               "required": [
                 "open",
-                "cause",
-                "code",
-                "params"
+                "cause"
               ],
               "additionalProperties": false
             },
@@ -108,9 +106,7 @@
                   },
                   "required": [
                     "cause",
-                    "text",
-                    "attention",
-                    "params"
+                    "text"
                   ],
                   "additionalProperties": false
                 },
@@ -147,9 +143,7 @@
                 "required": [
                   "kind",
                   "since",
-                  "text",
-                  "code",
-                  "params"
+                  "text"
                 ],
                 "additionalProperties": false
               }
@@ -359,8 +353,7 @@
                     "opened_at",
                     "stop",
                     "entry",
-                    "entry_cause",
-                    "entry_cause_codes"
+                    "entry_cause"
                   ],
                   "additionalProperties": false
                 },
@@ -601,10 +594,7 @@
                   "planned_loss_usd",
                   "stop_confirmed_after_seconds",
                   "entry",
-                  "entry_cause",
-                  "strategy",
-                  "code_version",
-                  "entry_cause_codes"
+                  "entry_cause"
                 ],
                 "additionalProperties": false
               }
@@ -949,8 +939,7 @@
                   "opened_at",
                   "stop",
                   "entry",
-                  "entry_cause",
-                  "entry_cause_codes"
+                  "entry_cause"
                 ],
                 "additionalProperties": false
               }
@@ -987,6 +976,17 @@
                 }
               ]
             },
+            "result_today_broker_usd": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "schema_version": {
               "type": "integer",
               "const": 1
@@ -1011,9 +1011,6 @@
             "open_reservations_usd",
             "daily_room_usd",
             "positions",
-            "code_version",
-            "fees_today_usd",
-            "result_today_net_usd",
             "schema_version"
           ],
           "additionalProperties": false

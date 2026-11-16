@@ -283,8 +283,7 @@
                 "at",
                 "price",
                 "change_usd",
-                "cause",
-                "cause_codes"
+                "cause"
               ],
               "additionalProperties": false
             }
@@ -453,11 +452,7 @@
           "overshoot_usd",
           "overshoot_r",
           "overshoot_cause",
-          "strategy",
-          "code_version",
-          "entry_cause_codes",
-          "prices_after_cause_codes",
-          "overshoot_cause_codes"
+          "strategy"
         ],
         "additionalProperties": false
       }

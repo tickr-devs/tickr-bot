@@ -479,3 +479,25 @@ def test_fees_stay_unknown_while_a_fill_is_missing_from_the_list(tmp_path):
     reads.read_once()
     status = bot.service.status()
     assert (status.fees_today_usd, status.result_today_net_usd) == (None, None)
+
+
+def test_status_carries_the_brokers_own_result_once_read_after_the_last_close(tmp_path):
+    bot = Bot(tmp_path)
+    closed_trade(bot)
+    reads = AccountReads(FakeBroker(funds=FUNDS), float(CFG.orders.balance_read_seconds),
+                         lambda: bot.now)
+    bot.service.account_reads = reads
+    assert bot.service.status().result_today_broker_usd is None  # not read yet
+    reads.read_once()
+    # Day P&L -1.10 less the unrealized 0.40: what the broker realized today.
+    assert bot.service.status().result_today_broker_usd == D("-1.50")
+
+
+def test_a_balance_read_before_the_last_close_is_not_todays_result(tmp_path):
+    bot = Bot(tmp_path)
+    reads = AccountReads(FakeBroker(funds=FUNDS), float(CFG.orders.balance_read_seconds),
+                         lambda: bot.now - timedelta(hours=1))
+    bot.service.account_reads = reads
+    reads.read_once()
+    closed_trade(bot)
+    assert bot.service.status().result_today_broker_usd is None

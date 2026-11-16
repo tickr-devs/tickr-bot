@@ -108,11 +108,7 @@
             "required": [
               "symbol",
               "quantity",
-              "avg_price",
-              "last_price",
-              "market_value_usd",
-              "unrealized_pl_usd",
-              "day_pl_usd"
+              "avg_price"
             ],
             "additionalProperties": false
           }
@@ -411,18 +407,6 @@
         "orders",
         "matches_records",
         "mismatch",
-        "balance_read_at",
-        "cash_usd",
-        "positions_value_usd",
-        "unrealized_pl_usd",
-        "day_pl_usd",
-        "overnight_buying_power_usd",
-        "maintenance_margin_usd",
-        "margin_calls",
-        "day_trades_left",
-        "account_label",
-        "fills_read_at",
-        "fills",
         "schema_version"
       ],
       "additionalProperties": false

@@ -200,9 +200,7 @@
           "closeness",
           "closeness_cause",
           "quote_age_seconds",
-          "quote_age_cause",
-          "closeness_cause_codes",
-          "quote_age_cause_codes"
+          "quote_age_cause"
         ],
         "additionalProperties": false
       }

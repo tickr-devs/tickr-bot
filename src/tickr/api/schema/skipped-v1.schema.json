@@ -299,8 +299,7 @@
                 "at",
                 "price",
                 "change_usd",
-                "cause",
-                "cause_codes"
+                "cause"
               ],
               "additionalProperties": false
             }
@@ -393,8 +392,7 @@
               "result_gross_usd",
               "result_r",
               "exit_reason",
-              "cause",
-              "cause_codes"
+              "cause"
             ],
             "additionalProperties": false
           },
@@ -433,8 +431,7 @@
           "checks",
           "prices_after",
           "prices_after_cause",
-          "what_if",
-          "prices_after_cause_codes"
+          "what_if"
         ],
         "additionalProperties": false
       }

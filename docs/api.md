@@ -233,8 +233,13 @@ tracks; `position` is its first element or `null`, kept for older clients.
 actual fees on the fills of those trades, from the display reads' list of today's fills (the
 account file's `fills`), and `result_today_net_usd` = gross - fees, the figure the broker's day
 P&L shows. Both are `null` until every filled order of today's closed trades is in that list
-with its filled quantity and readable fees. Display only: the daily loss rule above does not
-count fees.
+with its filled quantity and readable fees. `result_today_broker_usd` is the broker's own
+realized result for today: its day P&L less the unrealized part, from the latest balance read,
+`null` until a balance read made after the last of today's trades closed. It is exact where
+the order rows are not (Webull returns sub-dollar fill prices rounded to cents, 2026-11-16),
+and covers the whole account (manual trades too). The apps show it as today's result when
+present, else the net, else the gross. Display only: the daily loss rule above counts neither
+fees nor this figure.
 
 Each `trades_today` entry also has `planned_loss_usd` (1 R as recorded when the trade was opened)
 and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE are only in

@@ -315,6 +315,11 @@ class StatusV1:
     # counts); null while any of those fills or fees is not read yet.
     fees_today_usd: Decimal | None = _added_later(None)
     result_today_net_usd: Decimal | None = _added_later(None)
+    # Added after v1 shipped (2026-11-16), display only: the broker's own realized result for
+    # today (its day P&L less the unrealized part, from the latest balance read), exact where
+    # the order rows round sub-dollar fill prices; null until a balance read made after the
+    # last of today's trades closed. For the whole account, so it includes manual trades.
+    result_today_broker_usd: Decimal | None = _added_later(None)
     schema_version: int = _const(STATUS_SCHEMA_VERSION)
 
 
@@ -2097,7 +2102,10 @@ def _schema(hint: Any, meta: Any = None) -> dict[str, Any]:
         return {"type": "array", "items": _schema(item)}
     if is_dataclass(hint):
         hints = get_type_hints(hint)
-        names = [f.name for f in fields(hint)]
+        # A key added after version 1 shipped may be absent (from_jsonable reads it as its
+        # default), so the schema does not require it: a document from an older bot, such as
+        # the apps' recorded demo day, stays valid.
+        names = [f.name for f in fields(hint) if not f.metadata.get(ADDED_AFTER_V1)]
         return {
             "type": "object",
             "properties": {f.name: _schema(hints[f.name], f.metadata or None)

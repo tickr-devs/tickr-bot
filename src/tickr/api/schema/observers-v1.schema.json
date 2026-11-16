@@ -229,8 +229,7 @@
                     "exit_reason",
                     "result_gross_usd",
                     "result_r",
-                    "cause",
-                    "cause_codes"
+                    "cause"
                   ],
                   "additionalProperties": false
                 }
@@ -306,9 +305,7 @@
           "result_cause",
           "trades",
           "trades_cause",
-          "trades_truncated",
-          "result_cause_codes",
-          "trades_cause_codes"
+          "trades_truncated"
         ],
         "additionalProperties": false
       }

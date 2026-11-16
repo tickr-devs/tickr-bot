@@ -78,6 +78,7 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
         code_version="6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty",
         fees_today_usd=Decimal("0.07"),
         result_today_net_usd=Decimal("-1.67"),
+        result_today_broker_usd=Decimal("-1.64"),
     )
     values.update(overrides)
     return StatusV1(**values)

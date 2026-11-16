@@ -103,8 +103,7 @@
                   "required": [
                     "kind",
                     "text",
-                    "journal_seqs",
-                    "text_codes"
+                    "journal_seqs"
                   ],
                   "additionalProperties": false
                 }
@@ -174,8 +173,7 @@
               "reconcile_rows",
               "first_reconcile_at",
               "last_reconcile_at",
-              "day_end_seq",
-              "cause_codes"
+              "day_end_seq"
             ],
             "additionalProperties": false
           }
