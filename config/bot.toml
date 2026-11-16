@@ -453,6 +453,10 @@ forget_symbol_seconds = 600
 # others wait for a later pass (recorded as dropped), so the first passes of the day never send everything at once;
 # count; read by observers.runner.
 history_sends_per_pass = 30
+# Screener-signal observer folder under strategies/ (observers.ignition: paper trades only, signal from the screener rows,
+# exit on the L1 stream's observer tier and the discovery snapshots; records in <decisions_dir>/<environment>/<NY
+# date>/ignition.jsonl); "" = off; read by cli (run) and runtime.market.
+ignition = "early-thin-ignition-v1"
 
 [advisor]
 # NAME of the environment variable holding the Anthropic API key (the SDK reads it itself; only ANTHROPIC_API_KEY works);

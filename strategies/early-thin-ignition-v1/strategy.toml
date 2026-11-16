@@ -1,0 +1,42 @@
+# Observer "early-thin-ignition-v1" (owner 2026-11-16): a thin stock that suddenly runs to a new
+# session high, paper-traded with a wide trailing exit. Paper only: it never sends an order and
+# never reaches the safety layer (src/tickr/observers/ignition.py, docs/observers.md). The signal
+# is read from the screener rows discovery already reads every minute; after a signal the symbol
+# is followed on the L1 stream (observer tier) and the discovery snapshots. Changing any value
+# means a new `version`.
+
+[strategy]
+# Observer name; must equal this folder name; recorded with every signal and paper trade.
+name = "early-thin-ignition-v1"
+# Observer version; bump on any value change; recorded with every signal and paper trade.
+version = "1"
+
+[signal]
+# First minute after the regular open a signal may fire (5 = 09:35 ET), minutes. Read by observers.ignition.
+first_signal_minutes_after_open = 5
+# Last signal this many minutes before the regular close (30 = 15:30 ET on a full day), minutes. Read by observers.ignition.
+last_signal_minutes_before_close = 30
+# The price must be at least this many percent above the lowest price of the low window, percent. Read by observers.ignition.
+min_rise_percent = 10
+# Low window: the lowest price sampled (and any new day low seen) in the last this many minutes, minutes. Read by observers.ignition.
+low_window_minutes = 30
+# That low must have been set less than this many minutes ago (equal to low_window_minutes = no limit), minutes. Read by observers.ignition.
+low_max_age_minutes = 30
+# Session dollar volume so far must be below this, USD (estimated from the screener rows' cumulative volume times price). Read by observers.ignition.
+max_session_dollar_volume_usd = 5000000
+
+[exit]
+# The paper trade's exit: a bid this many percent below the highest bid since entry, percent. Read by observers.ignition.
+trail_percent = 20
+# Other trailing exits recorded for the same entry, percent each; they never decide re-entry. Read by observers.ignition.
+variant_trail_percents = [10, 30]
+# Every paper trade is closed at the bid of its first quote this many minutes before the regular close or later (6 = 15:54 ET), minutes. Read by observers.ignition.
+flat_minutes_before_close = 6
+# Seconds after the flat time a discovery pass ends a paper trade that saw no quote since then, at the last bid seen, seconds. Read by observers.ignition.
+flat_grace_seconds = 120
+# Notional of one paper trade for the dollar results, USD; every signal is taken, no cap on open trades (owner, 2026-11-16). Read by observers.ignition.
+paper_notional_usd = 1000
+
+[record]
+# A pause between two quotes of a paper trade at least this long is recorded as a gap (halt, quiet book or no stream slot), seconds. Read by observers.ignition.
+quote_gap_seconds = 60

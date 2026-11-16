@@ -134,6 +134,38 @@ Notes for both candidates (from the trading-core review of `strategy/simple.py`)
   trade per signal (`skipped_same_signal`); the `outcomes` research command still measures
   every ENTER record.
 
+## Screener-signal observer: early-thin-ignition-v1
+
+`strategies/early-thin-ignition-v1/` with `src/tickr/observers/ignition.py` (owner 2026-11-16),
+switched on by `[observers] ignition` in `config/bot.toml` ("" = off). Unlike the bar-based
+observers it does not run in the observer process and is not a `Strategy`: its signal comes from
+the screener rows discovery already reads every minute, so it costs no extra request.
+
+- **Signal** (on each discovery pass, universe symbols only, 09:35 to 30 minutes before the
+  close): the row's price is the day's high, at least `min_rise_percent` above the lowest price
+  of the last `low_window_minutes` (sampled prices, or a new day low seen in a row), that low
+  less than `low_max_age_minutes` old, and session dollar volume below
+  `max_session_dollar_volume_usd` (estimated: first row's volume x price, then each pass's
+  volume growth x price). The shipped values are the widest set (10%, 30 minutes, $5M): every
+  record carries the measured rise, minutes since the low, dollar volume, lists, spread and
+  sizes, so tighter thresholds are chosen later on records with no survivorship bias.
+- **Paper entry** at the ask of the same pass's snapshot quote. A signal with no valid quote, or
+  while the symbol's main paper trade is open, is recorded with its outcome and dies.
+- **Paper exit** on the bid: the symbol joins the L1 stream's observer tier first (open paper
+  trades are trimmed last within the tier; the tier keeps its cap, its priority below the
+  position, WATCH symbols and candidates, and its freeze while the bot trades), and each later
+  pass's snapshot quote is used too. Each trail (`trail_percent`, and `variant_trail_percents`
+  recorded for the same entry) exits at the first bid that far below the highest bid since
+  entry; the first quote at or after `flat_minutes_before_close` before the close ends the rest
+  (`flat_grace_seconds` later without one: the last bid seen). A pause of
+  `quote_gap_seconds` between two quotes is recorded as a gap (halt, quiet book or no slot).
+- **Records**: `<decisions_dir>/<environment>/<NY date>/ignition.jsonl`: `ignition-signal`,
+  (each entry also counts the paper trades open at that moment, for judging slot caps later),
+  `ignition-exit` (bid, ask, spread, result in percent and on `paper_notional_usd`, stream and
+  snapshot quote counts) and `ignition-gap`. A failure in a pass is journaled as
+  `ignition-failed`; discovery and trading go on. After a restart, open paper trades are taken
+  back from the file (their highest bid starts again at the entry bid).
+
 ## Where observers run
 
 The bot builds the observers again in a child process it owns (`ObserverSet(...,

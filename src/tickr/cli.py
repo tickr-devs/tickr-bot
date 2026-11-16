@@ -526,11 +526,17 @@ def _run(path: Path) -> int:
     from tickr.data.capture import BOT_START, BOT_STOP, CaptureError, CaptureWriter
     from tickr.data.health import StreamHealth
     from tickr.data.todaybars import TodayBars
+    from tickr.observers import ignition as ignition_module
     from tickr.observers.errors import ObserverError
     from tickr.runtime import service
     from tickr.runtime.account import AccountReads
     from tickr.runtime.alerts import Alerter, AlertKind, token_pending_text
-    from tickr.runtime.market import MarketRuntime, StreamInbox, journal_capture_failed
+    from tickr.runtime.market import (
+        IGNITION_NOT_LOADED,
+        MarketRuntime,
+        StreamInbox,
+        journal_capture_failed,
+    )
     from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
     from tickr.runtime.watch import ALERT, Watch
 
@@ -584,10 +590,17 @@ def _run(path: Path) -> int:
                 journal_capture_failed(store, run_id, BOT_START, exc,
                                        cfg.market_data.failure_detail_max_chars)
             today_bars = TodayBars()  # one bars read shared by discovery and evaluation
+            try:
+                ignition = ignition_module.from_config(cfg)
+            except ignition_module.IgnitionError as exc:  # trading goes on without it
+                ignition = None
+                with store.transaction():
+                    store.append(IGNITION_NOT_LOADED, {"cause": str(exc)}, run_id=run_id)
             market = MarketRuntime(engine, cfg, adapters.market,
                                    health=StreamHealth.from_config(cfg), inbox=inbox,
                                    capture=capture, calendar=calendar, today_bars=today_bars,
-                                   now=NOW, monotonic=MONOTONIC, spawn=DISCOVERY_SPAWN)
+                                   now=NOW, monotonic=MONOTONIC, spawn=DISCOVERY_SPAWN,
+                                   ignition=ignition)
             watch = Watch(engine, cfg, alerter, NOW)
 
             def observers_refused(cause: str) -> None:

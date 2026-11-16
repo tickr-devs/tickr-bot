@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
@@ -49,7 +50,7 @@ def in_place(run):
 class Rig:
     def __init__(self, tmp_path: Path, now: datetime = MONDAY_11,
                  source: FakeMarketData | None = None, spawn=in_place,
-                 capture=None) -> None:
+                 capture=None, ignition=None) -> None:
         self.broker = FakeBroker()
         self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
         self.engine = Engine(self.store, self.broker, CFG, "mkt00001",
@@ -62,7 +63,8 @@ class Rig:
                                     health=StreamHealth.from_config(CFG), inbox=self.inbox,
                                     capture=capture, calendar=CALENDAR,
                                     today_bars=TodayBars(), now=lambda: self.now,
-                                    monotonic=lambda: self.clock, spawn=spawn)
+                                    monotonic=lambda: self.clock, spawn=spawn,
+                                    ignition=ignition)
         self.market.screen = load_active(CFG).strategy  # set by the caller once loaded
 
     def advance(self, seconds: float) -> None:
@@ -854,6 +856,112 @@ def test_a_recorder_capture_not_written_is_journaled_and_the_round_not_used(tmp_
     (row,) = rig.store.journal(CAPTURE_FAILED)
     assert row.body == {"what": "screener-recorder", "error": "CaptureError",
                         "detail": "screener-recorded.jsonl: disk full"}
+
+
+# --- the screener-signal observer (observers.ignition) ----------------------------------------
+
+
+class Ignition:
+    """Records what the runtime hands it; `fail` makes the pass step raise."""
+
+    def __init__(self, paper=(), fail=False) -> None:
+        self.paper = set(paper)
+        self.fail = fail
+        self.rows, self.seen, self.passes, self.ticks = [], [], [], []
+
+    def watching(self):
+        return set(self.paper)
+
+    def screener(self, rows, provider, receipt_time):
+        self.rows.extend(rows)
+
+    def bars(self, bars, provider, receipt_time):
+        pass
+
+    def quotes(self, quotes, provider, source):
+        self.seen.extend(quotes)
+
+    def after_pass(self, day, universe, now):
+        if self.fail:
+            raise ValueError("scripted observer failure")
+        self.passes.append((day.regular_open, set(universe), now))
+
+    def on_quote(self, quote):
+        self.ticks.append(quote)
+
+    def on_notice(self, notice):
+        pass
+
+    def on_transport(self, up, at, detail):
+        pass
+
+
+def screened(symbol="THN"):
+    source = FakeMarketData()
+    source.set_screener(ScreenerKind.GAINERS, [ScreenerRow(
+        ScreenerKind.GAINERS, 1, f"id-{symbol}", symbol, "NSQ", "USD", "COMMON_STOCK",
+        {"price": "1.25", "high": "1.25", "low": "1.00", "volume": "100"})])
+    source.set_quote(Quote(symbol, D("1.24"), D("1.26"), D(1), D(1), MONDAY_11, MONDAY_11))
+    return source
+
+
+def test_each_discovery_pass_feeds_the_screener_observer_its_rows_and_quotes(tmp_path):
+    observer = Ignition()
+    rig = Rig(tmp_path, source=screened(), ignition=observer)
+    rig.market.tick()
+    assert [r.symbol for r in observer.rows] == ["THN"]
+    assert [q.symbol for q in observer.seen] == ["THN"]
+    [(session, universe, _)] = observer.passes
+    assert universe == {"THN"} and session == CALENDAR.day_at(MONDAY_11).regular_open
+    assert len(rig.store.journal(DISCOVERY)) == 1
+
+
+def test_a_failing_screener_observer_is_journaled_and_discovery_goes_on(tmp_path):
+    from tickr.runtime.market import IGNITION_FAILED
+
+    rig = Rig(tmp_path, source=screened(), ignition=Ignition(fail=True))
+    rig.market.tick()
+    [failed] = rig.store.journal(IGNITION_FAILED)
+    assert failed.body["error"] == "ValueError" and "scripted" in failed.body["detail"]
+    assert len(rig.store.journal(DISCOVERY)) == 1 and rig.store.journal(DISCOVERY_FAILED) == []
+
+
+def test_lists_skipped_for_budget_still_reach_capture_with_the_screener_observer_on(tmp_path):
+    from tickr.broker.base import RateLimited
+    from tickr.calendar import ny_date_of
+    from tickr.data.capture import EVENTS_FILE, SCREENER_SKIPPED
+
+    class Spent(FakeMarketData):
+        def screener(self, kind, *args, **kwargs):
+            raise RateLimited("budget spent")
+
+    source = Spent()
+    writer = CaptureWriter(tmp_path / "capture", source.provider)
+    rig = Rig(tmp_path, source=source, capture=writer, ignition=Ignition())
+    rig.market.tick()
+    lines = writer.path(ny_date_of(MONDAY_11), EVENTS_FILE).read_text("utf-8").splitlines()
+    skipped = [json.loads(x) for x in lines if SCREENER_SKIPPED in x]
+    assert {e["kind"] for e in skipped} == {k.value for k in ScreenerKind}
+    assert rig.store.journal(DISCOVERY_FAILED) == []
+
+
+def test_open_paper_trades_come_first_in_the_observer_tier_and_get_stream_quotes(tmp_path):
+    from tickr.runtime.market import DiscoveryState
+
+    observer = Ignition(paper={"PPR"})
+    rig = Rig(tmp_path, now=SATURDAY, ignition=observer)
+    rig.market.config = replace(CFG, market_data=replace(
+        CFG.market_data, candidate_subscriptions=1, observer_subscriptions=2))
+    rig.market.discovery = DiscoveryState(rig.now, "x", candidates("AAA"))  # type: ignore[arg-type]
+    rig.market.watch = {"WAT"}
+    rig.market.observer_watch = {"OB1", "OB2"}
+    rig.market.tick()
+    rig.source.transport(True, rig.now, "up")
+    rig.advance(RESYNC)
+    rig.market.tick()
+    assert rig.source.subscribed == {"WAT", "AAA", "PPR", "OB1"}
+    rig.source.push_quote(Quote("PPR", D(1), D("1.01"), D(1), D(1), rig.now, rig.now))
+    assert [q.symbol for q in observer.ticks] == ["PPR"]
 
 
 def test_a_discovery_pass_and_the_recorder_capture_the_listed_profiles(tmp_path):

@@ -11,7 +11,9 @@ data, appends capture records (`CaptureWriter`, one lock around every write) and
 `TodayBars` (one lock); the loop collects a finished pass on a later pass (`collect`, never
 waits) and does everything else itself: the journal, the discovery.jsonl pass record, the
 candidate list. Strategy evaluation is `runtime.evaluation`; the service copies its WATCH set
-into `watch`.
+into `watch`. The screener-signal observer (`observers.ignition`, optional) gets each pass's
+screener rows and snapshot quotes on the discovery thread and the stream's quotes on the
+provider's thread (it has its own lock); its open paper trades come first in the observer tier.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ from tickr.data.discovery import (
 from tickr.data.health import FanOut, StreamHealth, StreamState
 from tickr.data.todaybars import TodayBars
 from tickr.engine.core import Engine, Leg
+from tickr.observers.ignition import Ignition
 from tickr.runtime.profiles import ProfileRecorder
 from tickr.runtime.screeners import ScreenerRecorder
 from tickr.store import Store
@@ -63,6 +66,10 @@ DISCOVERY_FAILED = "discovery-failed"
 # A capture record outside discovery (the screener recorder's lists or a bot-start event) not
 # written: `what` names it; the run goes on without it.
 CAPTURE_FAILED = "capture-failed"
+# The screener-signal observer failed in a pass (discovery and trading go on).
+IGNITION_FAILED = "ignition-failed"
+# `[observers] ignition` could not be loaded at start (the bot runs without it).
+IGNITION_NOT_LOADED = "ignition-not-loaded"
 PROFILE_RECORDER = "profile-recorder"  # its `what` for the profile recorder after a pass
 # The day's discovery.jsonl could not seed the refused-symbol memory (the bot starts with it empty).
 REFUSED_SYMBOLS_UNREAD = "refused-symbols-unread"
@@ -176,6 +183,42 @@ class DiscoveryOutcome:
     seconds: float  # how long the pass took (monotonic clock)
     result: DiscoveryResult | None  # None when it failed
     error: Exception | None  # why it failed (any exception: never raised into the loop)
+    ignition_error: Exception | None = None  # the screener-signal observer's failure, if any
+
+
+class _Tee:
+    """Discovery's capture sink: the capture writer, then the screener-signal observer. An
+    observer failure is kept (journaled by the loop) and never reaches discovery."""
+
+    def __init__(self, capture: CaptureWriter | None, ignition: Ignition) -> None:
+        self.capture = capture
+        self.ignition = ignition
+        self.error: Exception | None = None
+
+    def _observe(self, call: Callable[[], None]) -> None:
+        try:
+            call()
+        except Exception as exc:  # noqa: BLE001 - an observer never stops discovery
+            self.error = self.error or exc
+
+    def screener(self, rows: Sequence[ScreenerRow], provider: str, receipt_time: datetime) -> None:
+        if self.capture is not None:
+            self.capture.screener(rows, provider, receipt_time)
+        self._observe(lambda: self.ignition.screener(rows, provider, receipt_time))
+
+    def screener_skipped(self, kinds: Sequence[ScreenerKind], cause: str, source: str,
+                         receipt_time: datetime) -> None:
+        if self.capture is not None:
+            self.capture.screener_skipped(kinds, cause, source, receipt_time)
+
+    def bars(self, bars: Sequence[Bar], provider: str, receipt_time: datetime) -> None:
+        if self.capture is not None:
+            self.capture.bars(bars, provider, receipt_time)
+
+    def quotes(self, quotes: Sequence[Quote], provider: str, source: str) -> None:
+        if self.capture is not None:
+            self.capture.quotes(quotes, provider, source)
+        self._observe(lambda: self.ignition.quotes(quotes, provider, source))
 
 
 Spawn = Callable[[Callable[[], None]], threading.Thread | None]
@@ -254,7 +297,7 @@ class MarketRuntime:
                  health: StreamHealth, inbox: StreamInbox, capture: CaptureWriter | None,
                  calendar: SessionCalendar | None, today_bars: TodayBars,
                  now: Callable[[], datetime], monotonic: Callable[[], float],
-                 spawn: Spawn = daemon_thread) -> None:
+                 spawn: Spawn = daemon_thread, ignition: Ignition | None = None) -> None:
         self.engine = engine
         self.config = config
         self.source = source
@@ -265,9 +308,12 @@ class MarketRuntime:
         self.today_bars = today_bars  # discovery's bars reads, shared with the evaluation
         self.now = now
         self.monotonic = monotonic
+        self.ignition = ignition
         listeners: list[QuoteListener] = [health, inbox]
         if capture is not None:
             listeners.append(capture)
+        if ignition is not None:
+            listeners.append(ignition)
         self.listener = FanOut(*listeners, on_error=inbox.on_listener_error)
         self.settings = DiscoverySettings.from_config(config)
         self.subscribed: set[str] = set()
@@ -388,9 +434,11 @@ class MarketRuntime:
         best = self.discovery.candidates[:self.config.market_data.candidate_subscriptions]
         return {c.instrument.symbol for c in best}
 
-    def _trim(self, symbols: set[str], room: int) -> set[str]:
-        """At most `room` of `symbols`, those already subscribed first, then by name."""
-        ordered = sorted(symbols, key=lambda s: (s not in self.subscribed, s))
+    def _trim(self, symbols: set[str], room: int,
+              first: frozenset[str] | set[str] = frozenset()) -> set[str]:
+        """At most `room` of `symbols`: those in `first`, then those already subscribed, then
+        by name."""
+        ordered = sorted(symbols, key=lambda s: (s not in first, s not in self.subscribed, s))
         return set(ordered[:max(room, 0)])
 
     def _observer_symbols(self, taken: set[str], trading: bool) -> set[str]:
@@ -402,7 +450,7 @@ class MarketRuntime:
         keep their slot. While `trading` (a position or a working entry) it is not changed
         except to give slots back: any failed (un)subscribe reconnects the whole stream,
         which must not happen to a position's quotes for an observer. Same live-transport
-        rule as candidates."""
+        rule as candidates. The screener-signal observer's open paper trades come first."""
         now = self.monotonic()
         if not self.health.transport.up:
             self._observers_applied = set()
@@ -415,8 +463,9 @@ class MarketRuntime:
             self._observers_next_sync = now + float(md.observer_resync_seconds)
             # A symbol a higher tier subscribed and is dropping leaves by that tier's path;
             # the observer tier may take it again on a later resync, optionally.
-            wanted = self.observer_watch - taken - (self.subscribed - self._optional)
-            self._observers_applied = self._trim(wanted, cap)
+            paper = set() if self.ignition is None else self.ignition.watching()
+            wanted = (self.observer_watch | paper) - taken - (self.subscribed - self._optional)
+            self._observers_applied = self._trim(wanted, cap, paper)
         else:
             # No new symbol while trading, in a retry pause or between resyncs: only what is
             # live stays, trimmed to the room left.
@@ -577,6 +626,8 @@ class MarketRuntime:
         regular, session_open = self._in_regular_session(now)
         if not regular or session_open is None:
             return
+        assert self.calendar is not None  # a regular session was found in it
+        day = self.calendar.day_at(now)
         if self._worker.busy():
             return
         startup = self._discovery_anchor is None and now - self._started < interval
@@ -584,7 +635,9 @@ class MarketRuntime:
         # Everything the thread uses is taken here; it never touches the store, the engine,
         # subscriptions or this object's state.
         source = _StopsBetweenRequests(self.source, self._worker.stopping)
-        settings, screen, capture = self.settings, self.screen, self.capture
+        settings, screen, ignition = self.settings, self.screen, self.ignition
+        tee = None if ignition is None else _Tee(self.capture, ignition)
+        capture = self.capture if tee is None else tee
         refused, today_bars, clock, monotonic = (self._refused_symbols, self.today_bars,
                                                  self.now, self.monotonic)
 
@@ -595,7 +648,14 @@ class MarketRuntime:
                                   refused, today_bars)
             except Exception as exc:  # noqa: BLE001 - collected and journaled by the loop
                 return DiscoveryOutcome(now, clock(), monotonic() - begun, None, exc)
-            return DiscoveryOutcome(now, clock(), monotonic() - begun, result, None)
+            failed: Exception | None = None
+            if tee is not None and ignition is not None:
+                failed = tee.error
+                try:
+                    ignition.after_pass(day, result.universe_symbols(), clock())
+                except Exception as exc:  # noqa: BLE001 - journaled by the loop
+                    failed = failed or exc
+            return DiscoveryOutcome(now, clock(), monotonic() - begun, result, None, failed)
 
         if self._worker.start(job):
             self._discovery_anchor = anchor
@@ -611,6 +671,13 @@ class MarketRuntime:
         outcome = self._worker.take()
         if outcome is None:
             return
+        if outcome.ignition_error is not None:
+            exc = outcome.ignition_error
+            with self.engine.store.transaction():
+                self.engine.store.append(IGNITION_FAILED, {
+                    "error": type(exc).__name__,
+                    "detail": str(exc)[:self.config.market_data.failure_detail_max_chars]},
+                    run_id=self.engine.run_id)
         result = outcome.result
         if result is None:
             assert outcome.error is not None

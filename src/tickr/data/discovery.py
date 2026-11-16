@@ -169,6 +169,11 @@ class DiscoveryResult:
     screened: tuple[ScreenerRow, ...] = ()
     """Every screener row the pass read, in list order (the profile recorder's input)."""
 
+    def universe_symbols(self) -> set[str]:
+        """The merged instruments that passed the universe rules (exchange, currency, type)."""
+        refused = {r.symbol for r in self.rejections if r.cause in _UNIVERSE_CAUSES}
+        return {i.symbol for i in self.instruments} - refused
+
     @property
     def evaluated(self) -> int:
         """Universe instruments whose liquidity evaluation finished (accepted or refused)."""
