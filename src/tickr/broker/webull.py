@@ -65,6 +65,7 @@ from tickr.data.base import (
     SessionBar,
     StreamNotice,
     SubscriptionLimit,
+    SymbolsRefused,
 )
 from tickr.types import (
     Bar,
@@ -164,11 +165,6 @@ class BrokerReadFailed(BrokerError):
         self.route = route
         self.http_status = http_status
         self.code = code
-
-
-class SymbolsRefused(BrokerReadFailed):
-    """A bars read was refused because a requested symbol is unknown to the bars route
-    (HTTP 417 INVALID_SYMBOL, seen 2026-11-14 for listed-but-odd symbols such as 1ESC011)."""
 
 
 class AdapterConfigError(BrokerError):
@@ -949,6 +945,8 @@ class WebullMarketData:
     def _read(self, route: Route, params: Mapping[str, Any]) -> Any:
         response = send_once(self._transport, self._budget, route, params, self._clock)
         if not response.ok:
+            if response.error_code == CODE_INVALID_SYMBOL:
+                raise SymbolsRefused(route.name, response.status, response.error_code)
             raise BrokerReadFailed(route.name, response.status, response.error_code)
         return response.body
 

@@ -23,6 +23,12 @@ Every refusal has one cause and the measured value. When the request budget refu
 (`RateLimited`) or the provider reports delayed data, the pass stops at that point and the result
 says so ("evaluated 140 of 200: bars budget"); nothing is cut silently.
 
+When a snapshot or bars read is refused whole because one requested symbol is unknown to the
+route (`SymbolsRefused`; Webull names it only in free text), the chunk is split in halves until
+each refused symbol is alone; those are refused as `SYMBOL_REFUSED` and the rest is read as
+usual. A refused symbol is remembered for the session (`RefusedSymbols`) and refused again
+without a request, so the split costs requests once per symbol and session, not every pass.
+
 Every screener row, snapshot quote and completed bar read is handed to the capture sink with the
 receipt time taken right after the call returned.
 """
@@ -37,7 +43,7 @@ from typing import Protocol
 
 from tickr.broker.base import RateLimited
 from tickr.config import Config
-from tickr.data.base import DelayedData, MarketData, ScreenerKind, ScreenerRow
+from tickr.data.base import DelayedData, MarketData, ScreenerKind, ScreenerRow, SymbolsRefused
 from tickr.strategy.base import Check, Liquidity
 from tickr.types import Bar, Quote
 
@@ -57,6 +63,7 @@ class Cause(StrEnum):
     QUOTE_FROM_FUTURE = "QUOTE_FROM_FUTURE"
     QUOTE_INVALID = "QUOTE_INVALID"
     NO_BARS = "NO_BARS"
+    SYMBOL_REFUSED = "SYMBOL_REFUSED"
     STRATEGY_LIQUIDITY = "STRATEGY_LIQUIDITY"
 
 
@@ -184,6 +191,37 @@ def _chunks(items: Sequence[str], size: int) -> list[Sequence[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+def _read_without_refused[T](read: Callable[[Sequence[str]], list[T]], symbols: Sequence[str],
+                             found: Callable[[str], None]) -> list[T]:
+    """`read(symbols)`; when the route refuses the request for an unknown symbol, the chunk is
+    split in halves until each refused symbol is alone, and `found(symbol)` is called for it at
+    once, so a split the budget interrupts still keeps what it isolated. Returns the rows read.
+    Every split is a new request; RateLimited and DelayedData propagate."""
+    try:
+        return read(symbols)
+    except SymbolsRefused:
+        if len(symbols) == 1:
+            found(symbols[0])
+            return []
+    middle = len(symbols) // 2
+    left = _read_without_refused(read, symbols[:middle], found)
+    return left + _read_without_refused(read, symbols[middle:], found)
+
+
+class RefusedSymbols:
+    """Symbols a market-data route refused as unknown, with the stage that refused them, kept
+    for one regular session (keyed by its open) and forgotten when the next session starts."""
+
+    def __init__(self) -> None:
+        self._session: datetime | None = None
+        self._stages: dict[str, Stage] = {}
+
+    def of_session(self, session_open: datetime) -> dict[str, Stage]:
+        if self._session != session_open:
+            self._session, self._stages = session_open, {}
+        return self._stages
+
+
 def merge(rows: Sequence[ScreenerRow]) -> tuple[list[Instrument], list[Rejection]]:
     """Merge screener rows by instrument_id. Conflicts are refused, never resolved."""
     order: list[str] = []
@@ -298,9 +336,18 @@ def discover(
     session_open: datetime,
     clock: Callable[[], datetime],
     capture: CaptureSink | None = None,
+    refused_symbols: RefusedSymbols | None = None,
 ) -> DiscoveryResult:
     """Run one discovery pass with `screen` (the active strategy) as the liquidity rules.
-    `clock` returns the aware current time."""
+    `clock` returns the aware current time. `refused_symbols` carries the symbols refused as
+    unknown from pass to pass within the session (a fresh memory when None)."""
+    refused = (refused_symbols or RefusedSymbols()).of_session(session_open)
+
+    def refuse(instrument: Instrument, stage: Stage, earlier: bool) -> Rejection:
+        when = "earlier this session" if earlier else "this pass"
+        return Rejection(instrument.instrument_id, instrument.symbol, Cause.SYMBOL_REFUSED,
+                         f"{stage} read refused the symbol as unknown {when}",
+                         "a symbol the market-data routes know")
     started = clock()
     provider = source.provider
     rows: list[ScreenerRow] = []
@@ -337,12 +384,28 @@ def discover(
 
     # Quote validity and the strategy's quote rules, from snapshot quotes.
     by_symbol = {i.symbol: i for i in universe}
+    asked: list[str] = []
+    for instrument in universe:
+        if instrument.symbol in refused:
+            rejections.append(refuse(instrument, refused[instrument.symbol], earlier=True))
+        else:
+            asked.append(instrument.symbol)
     quote_ok: list[tuple[Instrument, Quote]] = []
-    for chunk in _chunks([i.symbol for i in universe], settings.snapshot_symbols_per_request):
+    def refused_by(stage: Stage, unknown: list[str]) -> Callable[[str], None]:
+        def found(symbol: str) -> None:  # remembered at once: survives a budget stop
+            refused[symbol] = stage
+            unknown.append(symbol)
+            rejections.append(refuse(by_symbol[symbol], stage, earlier=False))
+        return found
+
+    for chunk in _chunks(asked, settings.snapshot_symbols_per_request):
+        unknown: list[str] = []
         try:
-            quotes = source.snapshot(chunk)
+            quotes = _read_without_refused(source.snapshot, chunk,
+                                           refused_by(Stage.SNAPSHOT, unknown))
         except RateLimited as exc:
             return result([], Stopped(Stage.SNAPSHOT, StopCause.BUDGET, str(exc)))
+        chunk = [s for s in chunk if s not in unknown]
         quotes = [q for q in quotes if q.symbol in by_symbol]
         if capture is not None:
             capture.quotes(quotes, provider, SNAPSHOT_SOURCE)
@@ -360,12 +423,16 @@ def discover(
     candidates: list[Candidate] = []
     entries = {i.symbol: (i, q) for i, q in quote_ok}
     for chunk in _chunks([i.symbol for i, _ in quote_ok], settings.bars_symbols_per_request):
+        unknown = []
         try:
-            bars = source.bars(chunk, settings.bars_per_symbol)
+            bars = _read_without_refused(
+                lambda symbols: source.bars(symbols, settings.bars_per_symbol), chunk,
+                refused_by(Stage.BARS, unknown))
         except RateLimited as exc:
             return result(candidates, Stopped(Stage.BARS, StopCause.BUDGET, str(exc)))
         except DelayedData as exc:
             return result(candidates, Stopped(Stage.BARS, StopCause.DELAYED_DATA, str(exc)))
+        chunk = [s for s in chunk if s not in unknown]
         now = clock()
         completed = [b for b in bars if b.symbol in entries and b.start + BAR_LENGTH <= now]
         if capture is not None:

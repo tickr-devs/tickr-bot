@@ -98,7 +98,7 @@ def test_minute_bars_refuse_stray_symbols():
 
 
 def test_invalid_symbol_is_a_typed_refusal():
-    from tickr.broker.webull import SymbolsRefused
+    from tickr.data.base import SymbolsRefused
 
     h, _ = history(WireResponse(417, {"error_code": "INVALID_SYMBOL", "message": "x"}))
     with pytest.raises(SymbolsRefused):

@@ -116,6 +116,12 @@ Fixtures:
 - `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json` — 12 representative bars of a 1200-bar all-sessions response; `_meta.trimmed` says so.
 - **How Tickr uses it:** `WebullMarketData.bars_before` sends `end_time` only (never `start_time`, so the extra bar never arrives) and omits `trading_sessions` (RTH only; any other session is refused). `data.history` pages back with `end_time` = oldest bar start; its INCOMPLETE and NO_PROGRESS refusals remain as guards should the behaviour change.
 
+## M5 — a screener symbol the snapshot and bars routes refuse (seen live 2026-11-16, Sandbox, read-only)
+
+- From 09:31 ET the losers screener listed DJT (instrument_id 950188431, NMS, USD). The instrument profile of DJT answered 200 with the same instrument_id, exchange NMS, category US_STOCK, status OC, type COMMON_STOCK. Yet the snapshot and the M1 bars routes, with the same `category`, answered HTTP `417`, `INVALID_SYMBOL`, "The symbols does not exist in the category. [DJT]." both for DJT alone and for any request holding it: the whole request is refused, not just that symbol. Our request matches the profile, so the gap is on the provider side (why Webull refuses this one symbol is unknown; not seen on earlier days, DJT was not on the screeners then). The same code was seen 2026-11-14 for the bars of odd symbols such as 1ESC011 (backtest).
+- The symbol is named only in the free-text message, so callers find it by splitting the request in halves (`data.discovery`, `backtest.fetch`), never by parsing the message.
+- **How Tickr uses it:** `WebullMarketData` and `WebullHistory` raise `SymbolsRefused` (data.base) on `INVALID_SYMBOL`; discovery refuses the symbol as `SYMBOL_REFUSED`, reads the rest of the chunk, and remembers the symbol for the session so it costs the split once. Before this, one such symbol failed every discovery pass (2026-11-16 09:30-10:5x ET: no candidates).
+
 ## M3 — L1 QUOTE subscription capacity per stream connection (probed 2026-11-14, Sandbox, read-only, market closed)
 
 One MQTT session; QUOTE subscribes via `POST /market-data/streaming/subscribe` (SDK `MarketDataStreaming.subscribe`), each request carrying only new symbols (never more than 100 in one request), cumulative 5 → 10 → 20 → 40 → 80 → 100 → 150.

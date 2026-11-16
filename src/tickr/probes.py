@@ -53,7 +53,7 @@ from tickr.broker.webull import (
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.cli import data_paths
 from tickr.config import Config, ConfigError
-from tickr.data.base import BarSpan, MarketData, MarketDataError
+from tickr.data.base import BarSpan, MarketData, MarketDataError, SymbolsRefused
 from tickr.engine.core import Fence
 from tickr.lock import recorded_holder
 
@@ -96,7 +96,7 @@ def read_once(market: MarketData, symbol: str, now: datetime) -> dict[str, Any]:
         return {"outcome": NOT_SENT, "cause": exc.cause}
     except RateLimited:
         return {"outcome": HTTP_429}
-    except BrokerReadFailed as exc:
+    except (BrokerReadFailed, SymbolsRefused) as exc:
         return {"outcome": READ_FAILED, "http_status": exc.http_status, "code": exc.code}
     except (BrokerError, MarketDataError) as exc:
         return {"outcome": ERROR, "type": type(exc).__name__}

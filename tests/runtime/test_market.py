@@ -187,7 +187,7 @@ def test_discovery_failure_is_journaled_and_retried_next_interval(tmp_path):
     rig = Rig(tmp_path, source=Malformed())
     rig.market.tick()
     (failed,) = rig.store.journal(DISCOVERY_FAILED)
-    assert failed.body == {"error": "MalformedResponse"}
+    assert failed.body == {"error": "MalformedResponse", "detail": "screener: missing field"}
     rig.advance(INTERVAL)
     rig.market.tick()
     assert len(rig.store.journal(DISCOVERY)) == 1

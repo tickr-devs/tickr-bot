@@ -21,7 +21,13 @@ from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import Config
 from tickr.data.base import MarketData, MarketDataError, QuoteListener, StreamNotice
 from tickr.data.capture import CaptureWriter
-from tickr.data.discovery import Candidate, DiscoverySettings, NoStrategy, discover
+from tickr.data.discovery import (
+    Candidate,
+    DiscoverySettings,
+    NoStrategy,
+    RefusedSymbols,
+    discover,
+)
 from tickr.data.health import FanOut, StreamHealth, StreamState
 from tickr.engine.core import Engine, Leg
 from tickr.strategy.base import Liquidity
@@ -118,6 +124,7 @@ class MarketRuntime:
         # Observers' WATCH and ENTER symbols, set by the service; lowest priority on the stream
         self.observer_watch: set[str] = set()
         self.discovery: DiscoveryState | None = None
+        self._refused_symbols = RefusedSymbols()  # unknown to a route, kept for the session
         # The active strategy's liquidity rules, set by the caller once the strategy is loaded;
         # until then discovery still captures screeners and quotes but keeps no candidate.
         self.screen: Liquidity = NoStrategy()
@@ -340,10 +347,13 @@ class MarketRuntime:
                                 + float(self.config.market_data.discovery_interval_seconds))
         try:
             result = discover(self.source, self.settings, self.screen, session_open,
-                              self.now, self.capture)
+                              self.now, self.capture, self._refused_symbols)
         except (MarketDataError, BrokerError) as exc:  # MalformedResponse is a BrokerError
+            # `detail` is the error's own text: the route, HTTP status and provider error code
+            # for a failed read (never a body, credential or account id).
             with self.engine.store.transaction():
-                self.engine.store.append(DISCOVERY_FAILED, {"error": type(exc).__name__},
+                self.engine.store.append(DISCOVERY_FAILED,
+                                         {"error": type(exc).__name__, "detail": str(exc)},
                                          run_id=self.engine.run_id)
             return  # tried again at the next interval
         self.discovery = DiscoveryState(now, result.summary(), result.candidates)

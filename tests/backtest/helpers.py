@@ -10,8 +10,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from tickr import config
-from tickr.broker.webull import DailyBar, InstrumentPage, InstrumentRow, SymbolsRefused
+from tickr.broker.webull import DailyBar, InstrumentPage, InstrumentRow
 from tickr.calendar import SessionCalendar
+from tickr.data.base import SymbolsRefused
 from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]

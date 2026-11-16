@@ -8,10 +8,11 @@ import pytest
 from md_helpers import NOW, OPEN, Screen, bars, quote, row, settings
 
 from tickr import config
-from tickr.data.base import FakeMarketData, ScreenerKind
+from tickr.data.base import FakeMarketData, ScreenerKind, SymbolsRefused
 from tickr.data.discovery import (
     Cause,
     DiscoverySettings,
+    RefusedSymbols,
     Stage,
     StopCause,
     completed_session_bars,
@@ -258,3 +259,93 @@ def test_every_shipped_strategy_screens_like_the_former_platform_limits(name):
     refused = {r.symbol: (r.cause, r.check.rule if r.check else None) for r in result.rejections}
     assert refused == {"WIDE": (Cause.STRATEGY_LIQUIDITY, "spread_ratio"),
                        "LOW": (Cause.STRATEGY_LIQUIDITY, "dollar_volume_usd")}
+
+
+class Unknown(FakeMarketData):
+    """A route refuses the whole read when it holds a symbol it does not know (Webull HTTP 417
+    INVALID_SYMBOL, 2026-11-16: the snapshot of a chunk holding DJT)."""
+
+    def __init__(self, snapshot: set[str] = frozenset(), bars: set[str] = frozenset()) -> None:
+        super().__init__()
+        self.unknown = {"snapshot": set(snapshot), "bars": set(bars)}
+
+    def snapshot(self, symbols):
+        quotes = super().snapshot(symbols)
+        if self.unknown["snapshot"] & set(symbols):
+            raise SymbolsRefused("SNAPSHOT", 417, "INVALID_SYMBOL")
+        return quotes
+
+    def bars(self, symbols, count):
+        got = super().bars(symbols, count)
+        if self.unknown["bars"] & set(symbols):
+            raise SymbolsRefused("BARS", 417, "INVALID_SYMBOL")
+        return got
+
+
+def five(md: FakeMarketData) -> list[str]:
+    symbols = [f"S{i:02d}" for i in range(5)]
+    md.set_screener(G, [row(G, i, s) for i, s in enumerate(symbols, 1)])
+    for s in symbols:
+        liquid(md, s)
+    return symbols
+
+
+def test_symbol_unknown_to_snapshot_is_refused_alone_and_the_rest_is_read():
+    md = Unknown(snapshot={"S02"})
+    five(md)
+    result = run(md)
+    assert [c.instrument.symbol for c in result.candidates] == ["S00", "S01", "S03", "S04"]
+    (refusal,) = [r for r in result.rejections if r.cause is Cause.SYMBOL_REFUSED]
+    assert refusal.symbol == "S02" and "snapshot" in refusal.measured
+    assert result.stopped is None and result.summary() == "evaluated 5 of 5"
+    assert all("S02" not in a for m, a in md.calls if m == "bars")
+
+
+def test_symbol_unknown_to_bars_is_refused_alone_and_the_rest_is_read():
+    md = Unknown(bars={"S04"})
+    five(md)
+    result = run(md, bars_symbols_per_request=3)
+    assert [c.instrument.symbol for c in result.candidates] == ["S00", "S01", "S02", "S03"]
+    (refusal,) = [r for r in result.rejections if r.cause is Cause.SYMBOL_REFUSED]
+    assert refusal.symbol == "S04" and "bars" in refusal.measured
+    assert result.stopped is None
+
+
+def test_refused_symbol_is_not_asked_again_this_session_but_is_next_session():
+    md = Unknown(snapshot={"S02"})
+    five(md)
+    memory = RefusedSymbols()
+    discover(md, settings(), Screen(), OPEN, lambda: NOW, None, memory)
+    md.calls.clear()
+    second = discover(md, settings(), Screen(), OPEN, lambda: NOW, None, memory)
+    assert [len(a) for m, a in md.calls if m == "snapshot"] == [4]  # one request, no split
+    assert all("S02" not in a for _, a in md.calls)
+    (refusal,) = [r for r in second.rejections if r.cause is Cause.SYMBOL_REFUSED]
+    assert "earlier this session" in refusal.measured
+    md.calls.clear()
+    discover(md, settings(), Screen(), OPEN + timedelta(days=1), lambda: NOW, None, memory)
+    assert any("S02" in a for m, a in md.calls if m == "snapshot")
+
+
+def test_budget_during_a_split_still_stops_the_pass_visibly():
+    md = Unknown(snapshot={"S02"})
+    five(md)
+    md.limit("snapshot", 1)
+    result = run(md)
+    assert result.stopped is not None
+    assert (result.stopped.stage, result.stopped.cause) == (Stage.SNAPSHOT, StopCause.BUDGET)
+
+
+def test_symbols_isolated_before_a_budget_stop_are_kept_so_the_next_pass_progresses():
+    md = Unknown(snapshot={"S01", "S02", "S03"})
+    five(md)
+    md.limit("snapshot", 4)
+    memory = RefusedSymbols()
+    first = discover(md, settings(), Screen(), OPEN, lambda: NOW, None, memory)
+    assert first.stopped is not None and first.stopped.stage is Stage.SNAPSHOT
+    kept = {r.symbol for r in first.rejections if r.cause is Cause.SYMBOL_REFUSED}
+    assert kept  # what the split isolated before the budget stopped it
+    md.limit("snapshot", 1000)
+    second = discover(md, settings(), Screen(), OPEN, lambda: NOW, None, memory)
+    assert second.stopped is None
+    assert [c.instrument.symbol for c in second.candidates] == ["S00", "S04"]

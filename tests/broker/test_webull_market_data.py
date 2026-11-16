@@ -326,6 +326,22 @@ def test_http_error_is_a_typed_read_failure():
         md.snapshot(["A"])
 
 
+def test_unknown_symbol_is_a_typed_symbols_refused():
+    """2026-11-16 live: the snapshot of a chunk holding DJT answered HTTP 417 INVALID_SYMBOL."""
+    from tickr.data.base import SymbolsRefused
+
+    body = {"error_code": "INVALID_SYMBOL",
+            "message": "The symbols does not exist in the category. [DJT]."}
+    md, _ = adapter(WireResponse(417, body))
+    with pytest.raises(SymbolsRefused) as caught:
+        md.snapshot(["A", "DJT"])
+    assert (caught.value.route, caught.value.http_status, caught.value.code) == (
+        "SNAPSHOT", 417, "INVALID_SYMBOL")
+    md, _ = adapter(WireResponse(417, body))
+    with pytest.raises(SymbolsRefused):
+        md.bars(["A", "DJT"], 5)
+
+
 def test_stream_not_implemented_is_refused():
     md, _ = adapter()
     with pytest.raises(MarketDataError):

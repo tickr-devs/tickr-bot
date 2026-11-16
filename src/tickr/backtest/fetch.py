@@ -26,9 +26,9 @@ from tickr.backtest.sessions import ONE_DAY, sessions_before, sessions_between
 from tickr.backtest.settings import BacktestSettings
 from tickr.broker.base import RateLimited
 from tickr.broker.budget import BudgetExhausted
-from tickr.broker.webull import SymbolsRefused
 from tickr.calendar import NEW_YORK, MarketDay, SessionCalendar, ny_date_of
 from tickr.config import Config
+from tickr.data.base import SymbolsRefused
 from tickr.data.capture import bar_record
 from tickr.types import Bar
 

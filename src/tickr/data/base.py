@@ -81,6 +81,19 @@ class DelayedData(MarketDataError):
         self.delay_minutes = delay_minutes
 
 
+class SymbolsRefused(MarketDataError):
+    """A read was refused whole because a requested symbol is unknown to that route (Webull:
+    HTTP 417 INVALID_SYMBOL, seen 2026-11-14 for bars of listed-but-odd symbols such as 1ESC011
+    and 2026-11-16 for the snapshot of DJT, a symbol the provider's own screener listed). The
+    response names no symbol in a structured field, so the caller finds it by splitting."""
+
+    def __init__(self, route: str, http_status: int | None, code: str | None) -> None:
+        super().__init__(f"{route}: http_status={http_status} code={code}")
+        self.route = route
+        self.http_status = http_status
+        self.code = code
+
+
 class SubscriptionLimit(MarketDataError):
     """A stream subscribe was refused for the per-connection symbol limit. The symbols already
     subscribed stay subscribed (probe M3); the refused ones were not added."""
