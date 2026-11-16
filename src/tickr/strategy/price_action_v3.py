@@ -12,10 +12,12 @@ the `[spike]` values; the apps' fast-movers list uses the same detector and valu
 1. v1 runs first and its decision stands unless it is IGNORE: a position (HOLD), an armed
    continuation or breakout (WATCH or ENTER), and every refusal before the setups (bars out of
    order, too little history) are v1's.
-2. Otherwise, when the latest bar is an upward spike (`Mover.spike_up`: volume ratio at least
+2. Otherwise, when one of the last `signal_valid_bars` completed session bars is an upward
+   spike (`Mover.spike_up` measured on the session up to that bar: volume ratio at least
    `min_volume_ratio`, close above the previous close by at least `min_move_atr` mean true
-   ranges, bar dollar volume at least `min_bar_dollar_volume_usd`), the spike setup is armed
-   with trigger = the spike bar's close and invalidation = its low. v1's filters on cumulative
+   ranges, bar dollar volume at least `min_bar_dollar_volume_usd`) and no bar after it traded
+   below its low, the spike setup is armed with trigger = that bar's close and invalidation =
+   its low (the newest such spike when there are several). v1's filters on cumulative
    volume, VWAP and the EMAs are not applied to it: a spike is by nature early, before the day's
    volume has built. Everything from the quote on is v1's unchanged: spread, bid above the
    invalidation, ask above the trigger (else WATCH), the price window of
@@ -23,17 +25,22 @@ the `[spike]` values; the apps' fast-movers list uses the same detector and valu
    rules and the sizing.
 3. Not a spike: v1's IGNORE as it was.
 
-The setup is armed only while the spike bar is the latest completed bar: the next minute it is
-gone unless that minute spikes again.
+Why a window: the bot evaluates once per completed minute, and a thin symbol only becomes a
+candidate in the discovery pass after the spike bar completes, then gets a stream quote only
+once the strategy says WATCH. A setup armed for the spike minute alone would almost never meet
+a quote. Within `signal_valid_bars` the symbol is evaluated (WATCH without a quote, which puts
+it on the stream), and the next minute's quote can enter; the price window still refuses an
+entry the move has run away from, and a trade below the spike low ends the signal.
 
 Liquidity: discovery admits a symbol whose session dollar volume is below
-`min_dollar_volume_usd` when its latest bar is an upward spike (check `fast_mover_spike`), so
+`min_dollar_volume_usd` while it has a valid spike (as in rule 2; check `fast_mover_spike`), so
 a fast mover reaches the strategy before its day's volume has built. The spread rule is v1's.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from typing import Any
 
 from tickr.data.movers import Mover, MoverSettings, measure
@@ -53,11 +60,13 @@ _RULES = {
         "min_move_atr": v1._positive,
         "min_dollar_volume_ratio": v1._positive,
         "min_bar_dollar_volume_usd": v1._positive,
+        "signal_valid_bars": v1._positive_int,
     },
 }
+VALIDITY = "signal_valid_bars"  # a rule of the setup, not of the detector
 
 
-def parse_settings(values: Mapping[str, Any]) -> tuple[v1.Settings, MoverSettings]:
+def parse_settings(values: Mapping[str, Any]) -> tuple[v1.Settings, MoverSettings, int]:
     if not isinstance(values, Mapping):
         raise ValueError("strategy values must be a table")
     flat: dict[str, Any] = {}
@@ -74,11 +83,17 @@ def parse_settings(values: Mapping[str, Any]) -> tuple[v1.Settings, MoverSetting
             except ValueError as exc:
                 raise ValueError(f"[{section}] {key} {exc}") from None
     base = {k: v for k, v in values.items() if k not in _RULES}
-    return v1.parse_settings(base, NAME), MoverSettings(**flat)
+    valid = flat.pop(VALIDITY)
+    return v1.parse_settings(base, NAME), MoverSettings(**flat), valid
 
 
-def spike_checks(mover: Mover) -> tuple[Check, ...]:
-    """The armed spike as checks, in the order the detector reads them."""
+def spike_checks(mover: Mover, age: int, valid: int, low_since: Decimal | None
+                 ) -> tuple[Check, ...]:
+    """The armed spike as checks: its signals, its age in bars after it, and that nothing after
+    it traded below its low (`low_since`: the lowest low after it, None right after it)."""
+    held = () if low_since is None else (
+        v1._check("spike_low_held", low_since, ">=", mover.low,
+                  "lowest low since the spike bar, against its low"),)
     return (
         v1._check("spike_volume_ratio", mover.volume_ratio.value, ">=",
                   mover.volume_ratio.threshold, "latest bar volume / mean of the lookback"),
@@ -86,27 +101,46 @@ def spike_checks(mover: Mover) -> tuple[Check, ...]:
                   "close - previous close, in mean true ranges of the lookback"),
         v1._check("spike_invalidation_below_trigger", mover.low, "<", mover.close,
                   "spike bar low below its close"),
+        v1._check("spike_age_bars", Decimal(age), "<", Decimal(valid),
+                  "completed bars after the spike bar"),
+        *held,
     )
 
 
 class PriceActionV3(v1.PriceActionV1):
-    def __init__(self, settings: v1.Settings, movers: MoverSettings) -> None:
+    def __init__(self, settings: v1.Settings, movers: MoverSettings, valid: int) -> None:
         super().__init__(settings)
         self.movers = movers
+        self.valid = valid
 
     def fast_mover(self, symbol: str, session_bars: Sequence[Bar]) -> Mover | None:
         """The fast mover of `session_bars` by this strategy's `[spike]` values, or None."""
         return measure(symbol, session_bars, self.movers)
 
+    def spike(self, symbol: str, session_bars: Sequence[Bar]
+              ) -> tuple[Mover, int, Decimal | None] | None:
+        """The newest upward spike among the last `signal_valid_bars` bars whose low no later
+        bar traded below: (the mover, bars after it, lowest low after it or None)."""
+        for age in range(min(self.valid, len(session_bars))):
+            end = len(session_bars) - age
+            mover = self.fast_mover(symbol, session_bars[:end])
+            if mover is None or not mover.spike_up:
+                continue
+            after = session_bars[end:]
+            low_since = min((b.low for b in after), default=None)
+            if low_since is not None and low_since < mover.low:
+                return None  # the newest spike failed: an older one is not taken instead
+            return mover, age, low_since
+        return None
+
     def session_liquidity(self, session_bars: Sequence[Bar]) -> tuple[Check, ...]:
         volume = v1.dollar_volume_check(session_bars, self.settings.min_dollar_volume_usd)
         if volume.passed or not session_bars:
             return (volume,)
-        mover = self.fast_mover(session_bars[-1].symbol, session_bars)
-        spike = mover is not None and mover.spike_up
+        spike = self.spike(session_bars[-1].symbol, session_bars) is not None
         return (v1._flag(SPIKE_RULE, spike,
                          f"session dollar volume {volume.measured} below {volume.threshold}: "
-                         "admitted only while the latest bar is an upward spike"),)
+                         "admitted only while it has a valid upward spike"),)
 
     def evaluate(self, context: SymbolContext) -> Decision:
         decision = super().evaluate(context)
@@ -116,10 +150,11 @@ class PriceActionV3(v1.PriceActionV1):
         if not (consistent.passed and history.passed):
             return decision
         bars = context.bars
-        mover = self.fast_mover(context.symbol, ind.current_session(bars))
-        if mover is None or not mover.spike_up:
+        found = self.spike(context.symbol, ind.current_session(bars))
+        if found is None:
             return decision
-        checks = [consistent, history, *spike_checks(mover)]
+        mover, age, low_since = found
+        checks = [consistent, history, *spike_checks(mover, age, self.valid, low_since)]
         if not all(c.passed for c in checks):
             return decision
         atr = ind.atr_series(bars, self.settings.atr_period)[-1]

@@ -6,7 +6,7 @@
 # Strategy name; must equal this folder name; recorded with every decision.
 name = "price-action-v3"
 # Strategy version; bump on any value change; recorded with every decision and trade.
-version = "1"
+version = "2"
 
 [indicators]
 # Fast exponential moving average length in completed M1 closes.
@@ -90,3 +90,7 @@ min_move_atr = 2.0
 min_dollar_volume_ratio = 5.0
 # Least close x volume of the latest bar, USD, for it to count as a fast mover at all (no spike on a few shares).
 min_bar_dollar_volume_usd = 250000
+# Completed bars a spike stays tradable, counting the spike bar (3 = it and the next 2), while no later bar trades below
+# its low. The bot evaluates once per completed minute and a thin symbol becomes a candidate and gets a stream quote
+# only after the spike bar, so one minute is too short to meet a quote. Read by price_action_v3.
+signal_valid_bars = 3

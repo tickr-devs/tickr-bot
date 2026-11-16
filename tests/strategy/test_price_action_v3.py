@@ -110,7 +110,7 @@ def test_v1_ignores_the_spike_and_v3_arms_it():
     assert (decision.trigger, decision.invalidation) == (d("20.5"), d("20.0"))
     assert [c.rule for c in decision.checks] == [
         "bars_consistent", "history_bars", "spike_volume_ratio", "spike_move_atr",
-        "spike_invalidation_below_trigger", "atr"]
+        "spike_invalidation_below_trigger", "spike_age_bars", "atr"]
 
 
 def test_spike_enters_inside_the_window_with_v1_quote_rules():
@@ -160,7 +160,8 @@ def test_fast_mover_uses_the_strategy_values():
 
 
 @pytest.mark.parametrize("key", ["lookback_bars", "min_volume_ratio", "min_move_atr",
-                                 "min_dollar_volume_ratio", "min_bar_dollar_volume_usd"])
+                                 "min_dollar_volume_ratio", "min_bar_dollar_volume_usd",
+                                 "signal_valid_bars"])
 def test_every_spike_key_is_required(key):
     vals = values("price-action-v3")
     del vals["spike"][key]
@@ -179,3 +180,42 @@ def test_v3_is_registered_and_loads():
     cfg = config.load(ROOT / "config" / "bot.toml")
     loaded = load_strategy(ROOT, "price-action-v3", parse_modules(cfg.observers.strategy_modules))
     assert loaded.strategy.name == v3.NAME
+
+
+def after(bars, *closes_and_lows):
+    """`bars` plus quiet minutes, each (close, low), on normal volume."""
+    out = list(bars)
+    for close, low in closes_and_lows:
+        i = len(out)
+        out.append(bar(TODAY, i, out[-1].close, max(close, float(out[-1].close)) + 0.02, low, close,
+                       3_000))
+    return out
+
+
+def test_a_spike_stays_armed_for_its_window_while_its_low_holds():
+    one = after(spiked(), (20.55, 20.40))
+    decision = make().evaluate(ctx(one))
+    assert decision.verdict is Verdict.WATCH and decision.setup == v3.SPIKE
+    assert decision.trigger == d("20.5") and decision.invalidation == d("20.0")
+    checks = {c.rule: c for c in decision.checks}
+    assert checks["spike_age_bars"].measured == 1 and checks["spike_low_held"].passed
+    entered = make().evaluate(ctx(after(spiked(), (20.55, 20.40), (20.56, 20.45)),
+                                  quote("20.55", "20.56")))
+    assert entered.verdict is Verdict.ENTER and entered.setup == v3.SPIKE
+
+
+def test_a_spike_past_its_window_or_below_its_low_is_gone():
+    late = after(spiked(), (20.55, 20.40), (20.56, 20.45), (20.57, 20.50))
+    assert make().evaluate(ctx(late)).setup != v3.SPIKE
+    broken = after(spiked(), (19.98, 19.90))
+    assert make().evaluate(ctx(broken)).setup != v3.SPIKE
+    assert make().spike(SYMBOL, broken) is None
+
+
+def test_discovery_admits_a_thin_symbol_through_the_window():
+    strategy = make()
+    held = after(spiked(), (20.55, 20.40))
+    assert [c.passed for c in strategy.session_liquidity(held)] == [True]
+    late = after(held, (20.56, 20.45), (20.57, 20.50))
+    assert [c.passed for c in strategy.session_liquidity(late)] == [False]
+

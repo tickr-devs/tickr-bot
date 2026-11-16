@@ -116,7 +116,9 @@ Platform checks (old group B):
 - **T8** Tradability and halts: instrument profile `status` and trade-instrument
   `trade_policy`/`forbid_reason` (CLOSE_ONLY, DENIED, HALTED) refuse entries with a typed cause and
   never block exits; probe first how a halt and the LULD band show in snapshot, profile and stream
-  (old #158). Depends on Q2.
+  (old #158). Depends on Q2. Before Production it also gates price-action-v3's spike setup, which
+  enters right after a sharp move, where LULD pauses are most likely (Fable review of #476,
+  2026-11-16).
 - **T9** Money in the account as an admission check: buying power, settled cash, intraday margin
   (the account file shows the broker's buying power since 2026-11-16, display only). The pattern day trader rule is being replaced
   by an intraday margin standard (FINRA 4210 amendments effective 2026-06-04, broker phase-in to
