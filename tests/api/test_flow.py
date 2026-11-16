@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -350,18 +351,18 @@ def test_flow_reads_a_half_written_last_line_later_and_refuses_a_malformed_one(a
     assert "capture file unreadable" in doc(payload)["cause"]
 
 
-def test_flow_parses_the_screener_capture_again_only_when_it_changed(api, cfg, monkeypatch):
+def test_flow_reads_the_screener_capture_again_only_when_it_changed(api, cfg, monkeypatch):
     from tickr.api import flow
 
     _capture(cfg)
     reads = []
-    original = flow.read_passes
+    original = flow.ScreenerChips._read
 
-    def counted(path, *, open_tail):
+    def counted(self, path, open_tail):
         reads.append(open_tail)
-        return original(path, open_tail=open_tail)
+        return original(self, path, open_tail)
 
-    monkeypatch.setattr(flow, "read_passes", counted)
+    monkeypatch.setattr(flow.ScreenerChips, "_read", counted)
     first = _get(api, "/flow", "flow-v1")["chips"]
     assert _get(api, "/flow", "flow-v1")["chips"] == first
     assert reads == [True]
@@ -434,3 +435,48 @@ def test_stop_never_seen_on_a_past_day_is_never_verified(tmp_path):
         ("closed", "never_verified"), ("open", "never_verified"), ("seen", "verified")]
     assert _states(history, later, later) == [("after", "pending")]
     assert _states(history, HDAY - timedelta(days=1), later) == [("before", "never_verified")]
+
+
+def _capture_lines(tmp_path) -> str:
+    """Six passes over a rotating set of symbols, as the bot captures them."""
+    writer = CaptureWriter(tmp_path / "w", "webull")
+    g, lo, act = ScreenerKind.GAINERS, ScreenerKind.LOSERS, ScreenerKind.TOP_ACTIVES
+    names = ["AAA", "BBB", "CCC", "DDD", "EEE", "SPY"]
+    at = BAR - timedelta(minutes=30)
+    for number in range(6):
+        turn = names[number:] + names[:number]
+        for offset, kind in enumerate((g, lo, act)):
+            rows = [_row(kind, rank, symbol, security="ETF" if symbol == "SPY" else
+                         "COMMON_STOCK", price=f"1{number}.0{rank}")
+                    for rank, symbol in enumerate(turn[offset:offset + 3], start=1)]
+            writer.screener(rows, "webull", at + timedelta(minutes=number, seconds=offset))
+    writer.close()
+    (found,) = (tmp_path / "w").rglob("screener.jsonl")
+    return found.read_text("utf-8")
+
+
+def test_flow_parses_only_what_was_appended_and_matches_a_full_read(tmp_path):
+    """2026-11-16: reparsing the whole day's capture on every change took seconds by mid
+    morning; the incremental reader must give exactly what a full read gives."""
+    from tickr.api import flow
+    from tickr.config import load
+    from tickr.data.discovery import DiscoverySettings
+
+    bot = Path(__file__).resolve().parents[2] / "config" / "bot.toml"
+    settings = DiscoverySettings.from_config(load(bot))
+    source = _capture_lines(tmp_path)
+    path = tmp_path / "screener.jsonl"
+    reader = flow.ScreenerChips(settings, 2)
+    written = ""
+    for cut in range(0, len(source) + 1, max(1, len(source) // 7)):
+        written = source[:cut]
+        path.write_text(written, "utf-8")
+        got = reader.chips(path, open_tail=True)
+        expected = flow.chips(flow.read_passes(path, open_tail=True), settings, 2)
+        assert got == expected, cut
+    path.write_text(source, "utf-8")
+    assert reader.chips(path, open_tail=True) == flow.chips(
+        flow.read_passes(path, open_tail=True), settings, 2)
+    path.write_text(source[: len(source) // 2], "utf-8")  # rewritten shorter: read anew
+    assert reader.chips(path, open_tail=True) == flow.chips(
+        flow.read_passes(path, open_tail=True), settings, 2)

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from tickr.api import contract as api
-from tickr.archive import existing, open_text
+from tickr.archive import GZ_SUFFIX, existing, open_text
 from tickr.calendar import ny_date_of
 from tickr.data.base import ScreenerKind, ScreenerRow
 from tickr.data.capture import SCREENER_FILE, CaptureError
@@ -62,30 +62,47 @@ def _row(raw: Any) -> tuple[datetime, ScreenerRow]:
                            raw["security_type"], fields)
 
 
+class _Passes:
+    """Splits captured screener lines into discovery passes as they arrive. The rows of one
+    screener read share a receipt time, and a pass reads the screeners in `ScreenerKind`
+    order, so a pass starts at a read whose kind does not come after the previous read's."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lines = 0  # lines consumed, for error messages
+        self._previous: tuple[ScreenerKind, datetime] | None = None
+
+    def add(self, text: str, passes: list[list[ScreenerRow]]) -> bool:
+        """Parse one line into `passes`; True when it opened a new pass. Raises CaptureError."""
+        self.lines += 1
+        if not text.strip():
+            return False
+        try:
+            at, row = _row(json.loads(text))
+        except (ValueError, TypeError) as exc:  # JSONDecodeError is a ValueError
+            raise CaptureError(f"{self.path}:{self.lines}: {exc}") from exc
+        read = (row.kind, at)
+        previous = self._previous
+        opened = previous is None or (read != previous
+                                      and _KIND_ORDER[row.kind] <= _KIND_ORDER[previous[0]])
+        if opened:
+            passes.append([])
+        passes[-1].append(row)
+        self._previous = read
+        return opened
+
+
 def read_passes(path: Path, *, open_tail: bool) -> list[list[ScreenerRow]]:
-    """The discovery passes of a captured screener.jsonl, oldest first. The rows of one
-    screener read share a receipt time, and a pass reads the screeners in `ScreenerKind` order,
-    so a pass starts at a read whose kind does not come after the previous read's. With
+    """The discovery passes of a captured screener.jsonl, oldest first (see `_Passes`). With
     `open_tail` a last line without its newline is not read yet. Raises CaptureError."""
     with open_text(path) as handle:  # plain or archived (.gz)
         lines = handle.readlines()
     if open_tail and lines and not lines[-1].endswith("\n"):
         lines.pop()
     passes: list[list[ScreenerRow]] = []
-    previous: tuple[ScreenerKind, datetime] | None = None
-    for number, text in enumerate(lines, start=1):
-        if not text.strip():
-            continue
-        try:
-            at, row = _row(json.loads(text))
-        except (ValueError, TypeError) as exc:  # JSONDecodeError is a ValueError
-            raise CaptureError(f"{path}:{number}: {exc}") from exc
-        read = (row.kind, at)
-        if previous is None or (read != previous
-                                and _KIND_ORDER[row.kind] <= _KIND_ORDER[previous[0]]):
-            passes.append([])
-        passes[-1].append(row)
-        previous = read
+    splitter = _Passes(path)
+    for text in lines:
+        splitter.add(text, passes)
     return passes
 
 
@@ -110,15 +127,26 @@ def change_pct(row: ScreenerRow, places: int) -> tuple[Decimal | None, str | Non
     return ((price - pre_close) / pre_close * PERCENT).quantize(Decimal(1).scaleb(-places)), None
 
 
-def chips(passes: Sequence[Sequence[ScreenerRow]], settings: DiscoverySettings,
-          places: int) -> tuple[api.FlowChipV1, ...]:
-    """One chip per symbol listed that day, most recently listed first (within a pass in read
-    order: screener, then rank). The universe outcome and the change come from the latest
-    pass and row that listed the symbol; `sources` from every pass."""
-    sources: dict[str, set[ScreenerKind]] = {}
-    latest: dict[str, ScreenerRow] = {}
-    outcome: dict[str, str | None] = {}
-    for rows in passes:
+class _ChipState:
+    """What `chips` needs from the passes folded so far: per symbol its screeners, its latest
+    row, the universe outcome of its latest pass, and where it was last listed (pass number,
+    first position in that pass) for the most-recently-listed-first order."""
+
+    def __init__(self) -> None:
+        self.sources: dict[str, set[ScreenerKind]] = {}
+        self.latest: dict[str, ScreenerRow] = {}
+        self.outcome: dict[str, str | None] = {}
+        self.listed: dict[str, tuple[int, int]] = {}
+        self.passes = 0
+
+    def copy(self) -> _ChipState:
+        state = _ChipState()
+        state.sources = {k: set(v) for k, v in self.sources.items()}
+        state.latest, state.outcome = dict(self.latest), dict(self.outcome)
+        state.listed, state.passes = dict(self.listed), self.passes
+        return state
+
+    def fold(self, rows: Sequence[ScreenerRow], settings: DiscoverySettings) -> None:
         instruments, rejections = merge(rows)
         found: dict[str, str | None] = {r.symbol: f"{r.cause}: {r.measured}"
                                         for r in rejections}
@@ -126,49 +154,112 @@ def chips(passes: Sequence[Sequence[ScreenerRow]], settings: DiscoverySettings,
             refusal = universe_cause(instrument, settings)
             found[instrument.symbol] = (None if refusal is None
                                         else f"{refusal.cause}: {refusal.measured}")
-        for row in rows:
-            sources.setdefault(row.symbol, set()).add(row.kind)
-            latest[row.symbol] = row
-            outcome[row.symbol] = found.get(row.symbol, CONFLICTING)
-    order = dict.fromkeys(row.symbol for rows in reversed(passes) for row in rows)
-    result = []
-    for symbol in order:
-        change, cause = change_pct(latest[symbol], places)
-        result.append(api.FlowChipV1(
-            symbol=symbol, sources=tuple(k for k in ScreenerKind if k in sources[symbol]),
-            change_pct=change, change_cause=cause, excluded_cause=outcome[symbol]))
-    return tuple(result)
+        number = self.passes
+        seen: set[str] = set()
+        for position, row in enumerate(rows):
+            self.sources.setdefault(row.symbol, set()).add(row.kind)
+            self.latest[row.symbol] = row
+            self.outcome[row.symbol] = found.get(row.symbol, CONFLICTING)
+            if row.symbol not in seen:
+                seen.add(row.symbol)
+                self.listed[row.symbol] = (number, position)
+        self.passes += 1
+
+    def chips(self, places: int) -> tuple[api.FlowChipV1, ...]:
+        order = sorted(self.listed, key=lambda s: (-self.listed[s][0], self.listed[s][1]))
+        result = []
+        for symbol in order:
+            change, cause = change_pct(self.latest[symbol], places)
+            result.append(api.FlowChipV1(
+                symbol=symbol,
+                sources=tuple(k for k in ScreenerKind if k in self.sources[symbol]),
+                change_pct=change, change_cause=cause, excluded_cause=self.outcome[symbol]))
+        return tuple(result)
+
+
+def chips(passes: Sequence[Sequence[ScreenerRow]], settings: DiscoverySettings,
+          places: int) -> tuple[api.FlowChipV1, ...]:
+    """One chip per symbol listed that day, most recently listed first (within a pass in read
+    order: screener, then rank). The universe outcome and the change come from the latest
+    pass and row that listed the symbol; `sources` from every pass."""
+    state = _ChipState()
+    for rows in passes:
+        state.fold(rows, settings)
+    return state.chips(places)
 
 
 class ScreenerChips:
-    """`chips` of one day's captured screeners, kept until that file changes. The bot appends a
-    pass about once a minute while the apps read GET /flow every few seconds; without this every
-    read parsed the whole day's capture again. Keyed by the file's path, size and mtime, as the
-    other API caches (observer_results.stamp), so an archived or rewritten file is read anew."""
+    """`chips` of one day's captured screeners, read incrementally. The bot appends a pass
+    about once a minute while the apps read GET /flow every few seconds; parsing and folding
+    the whole day's capture on every change grew with the day (2026-11-16: 18 MB by 10:15 ET,
+    seconds per read, GET /flow timing out under load). Now only the bytes appended since the
+    last read are parsed and only finished passes are folded; the open last pass is folded on
+    a copy. A file that is replaced, shrinks or is archived (its .gz twin) is read anew from
+    the start. Raises CaptureError like `read_passes`."""
 
     def __init__(self, settings: DiscoverySettings, places: int) -> None:
         self.settings = settings
         self.places = places
         self._lock = threading.Lock()
+        self._reset(None)
+
+    def _reset(self, identity: tuple[object, ...] | None) -> None:
+        self._identity = identity
+        self._offset = 0  # bytes of the file consumed (complete lines only)
+        self._state = _ChipState()  # finished passes
+        self._open: list[list[ScreenerRow]] = []  # the last pass, still being written
+        self._splitter: _Passes | None = None
         self._key: tuple[object, ...] | None = None
         self._chips: tuple[api.FlowChipV1, ...] = ()
 
     def chips(self, path: Path | None, open_tail: bool) -> tuple[api.FlowChipV1, ...]:
-        """Raises CaptureError (also for an unreadable file) like `read_passes`."""
         if path is None:
             return chips([], self.settings, self.places)
         with self._lock:
             try:
                 path = existing(path) or path  # archived meanwhile: its .gz twin
                 stat = path.stat()
-                key = (str(path), stat.st_mtime_ns, stat.st_size, open_tail)
+                identity = (str(path), stat.st_dev, stat.st_ino, open_tail)
+                if identity != self._identity or stat.st_size < self._offset:
+                    self._reset(identity)
+                key = (stat.st_mtime_ns, stat.st_size)
                 if key != self._key:
-                    self._chips = chips(read_passes(path, open_tail=open_tail), self.settings,
-                                        self.places)
+                    self._read(path, open_tail)
+                    state = self._state.copy() if self._open else self._state
+                    for rows in self._open:
+                        state.fold(rows, self.settings)
+                    self._chips = state.chips(self.places)
                     self._key = key
             except OSError as exc:
                 raise CaptureError(str(exc)) from exc
+            except CaptureError:
+                self._reset(None)  # read the file anew next time
+                raise
             return self._chips
+
+    def _read(self, path: Path, open_tail: bool) -> None:
+        if self._splitter is None:
+            self._splitter = _Passes(path)
+        if path.name.endswith(GZ_SUFFIX):  # archived: read once, never appended to
+            if self._offset:
+                return
+            with open_text(path) as handle:
+                lines = handle.readlines()
+            self._offset = path.stat().st_size
+        else:
+            with open(path, "rb") as handle:
+                handle.seek(self._offset)
+                data = handle.read()
+            complete = data if not open_tail else data[:data.rfind(b"\n") + 1]
+            try:
+                lines = complete.decode("utf-8").splitlines(keepends=True)
+            except UnicodeDecodeError as exc:
+                raise CaptureError(f"{path}: {exc}") from exc
+            self._offset += len(complete)
+        for text in lines:
+            if self._splitter.add(text, self._open) and len(self._open) > 1:
+                finished = self._open.pop(0)
+                self._state.fold(finished, self.settings)
 
 
 def reconcile(day: date, today: date, status_path: Path,
