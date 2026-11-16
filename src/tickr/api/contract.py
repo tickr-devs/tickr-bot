@@ -1756,7 +1756,10 @@ class WatchingRowV1:
     """The latest decision of one symbol. `decisive_check`: the first failed check, the one
     standing between the symbol and an ENTER (null when every recorded check passed).
     `closeness`: how near that check is to passing, 0..1 (see `closeness`), null with
-    `closeness_cause`. `quote_age_seconds`: null with `quote_age_cause` (not recorded)."""
+    `closeness_cause`. `quote_age_seconds`: null with `quote_age_cause` (not recorded).
+    `trigger` / `invalidation`: the decision's recorded levels (null when it recorded none).
+    `against_trigger`: the decisive check's threshold is the recorded trigger, so measured and
+    threshold are prices and `closeness` runs from the invalidation (0) to the trigger (1)."""
 
     symbol: str
     at: datetime
@@ -1767,6 +1770,9 @@ class WatchingRowV1:
     closeness_cause: str | None
     quote_age_seconds: Decimal | None
     quote_age_cause: str | None
+    trigger: Decimal | None = _added_later(None)
+    invalidation: Decimal | None = _added_later(None)
+    against_trigger: bool = _added_later(False)
 
     closeness_cause_codes: tuple[ReasonV1, ...] = _reasons_of("closeness_cause")
     quote_age_cause_codes: tuple[ReasonV1, ...] = _reasons_of("quote_age_cause")
@@ -1819,27 +1825,42 @@ BINDING_NOT_RECORDED = ("not proven by the record: the planned loss, the notiona
                         "the daily room")
 
 
-def closeness(check: Check | None, places: int) -> tuple[Decimal | None, str | None]:
+def closeness(check: Check | None, places: int, trigger: Decimal | None = None,
+              invalidation: Decimal | None = None) -> tuple[Decimal | None, str | None]:
     """(closeness, None) or (None, cause) for the decisive (failed) check, rounded down to
-    `places`: `>` `>=`: measured / threshold (needs threshold > 0 and measured >= 0);
-    `<` `<=`: threshold / measured (needs measured > 0 and threshold >= 0). 1 is at the
-    threshold; a value outside 0..1 means the record contradicts itself and is refused."""
+    `places`. A check whose threshold is the decision's `trigger` compares prices: closeness
+    is where measured sits from the `invalidation` (0) to the trigger (1),
+    (measured - invalidation) / (trigger - invalidation), with the invalidation on the side
+    the check moves away from (below the trigger for `>` `>=`, above it for `<` `<=`). Any
+    other check is measured from zero: `>` `>=`: measured / threshold (needs threshold > 0
+    and measured >= 0); `<` `<=`: threshold / measured (needs measured > 0 and threshold >= 0).
+    1 is at the threshold; a value above 1 means the record contradicts itself and is
+    refused."""
     if check is None:
         return None, ALL_CHECKS_PASSED
     measured, threshold = check.measured, check.threshold
     if measured is None or threshold is None:
         return None, f"{check.rule}: a yes/no check has no measured value"
-    if check.operator in _RISE:
+    if check.operator not in _RISE + _FALL:
+        return None, f"{check.rule}: operator {check.operator!r} has no direction"
+    if trigger is not None and threshold == trigger:
+        if invalidation is None:
+            return None, f"{check.rule}: no invalidation recorded to measure the trigger from"
+        span = trigger - invalidation
+        if span == 0 or (span > 0) != (check.operator in _RISE):
+            return None, f"{check.rule}: the invalidation is not on the far side of the trigger"
+        value = (measured - invalidation) / span
+        if value < 0:
+            return None, f"{check.rule}: measured is past the invalidation"
+    elif check.operator in _RISE:
         if threshold <= 0 or measured < 0:
             return None, f"{check.rule}: needs threshold > 0 and measured >= 0"
         value = measured / threshold
-    elif check.operator in _FALL:
+    else:
         if measured <= 0 or threshold < 0:
             return None, f"{check.rule}: needs measured > 0 and threshold >= 0"
         value = threshold / measured
-    else:
-        return None, f"{check.rule}: operator {check.operator!r} has no direction"
-    if not 0 <= value <= 1:
+    if value > 1:
         return None, f"{check.rule}: recorded as failed but measured meets the threshold"
     return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_DOWN), None
 
@@ -1881,13 +1902,16 @@ def watching_document(day: date, records: tuple[DecisionRecord, ...], places: in
         if d.verdict is not Verdict.WATCH:
             continue
         decisive = d.decisive
-        value, cause = closeness(decisive, places)
+        value, cause = closeness(decisive, places, d.trigger, d.invalidation)
         rows.append(WatchingRowV1(
             symbol=r.symbol, at=r.bar_start, strategy=StrategyId(d.strategy, d.version),
             verdict=d.verdict,
             decisive_check=None if decisive is None else shown_check(decisive, check_places),
             closeness=value, closeness_cause=cause, quote_age_seconds=None,
-            quote_age_cause=QUOTE_AGE_NOT_RECORDED))
+            quote_age_cause=QUOTE_AGE_NOT_RECORDED, trigger=d.trigger,
+            invalidation=d.invalidation,
+            against_trigger=(decisive is not None and d.trigger is not None
+                             and decisive.threshold == d.trigger)))
     rows.sort(key=lambda w: (w.closeness is None, -(w.closeness or 0), w.symbol))
     return WatchingV1(day=day, total=len(rows), rows=tuple(rows),
                       latest_size=latest_size(records))

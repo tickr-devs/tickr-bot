@@ -328,6 +328,11 @@ _PROSE = _shapes(
     ("no_direction", r"(?P<rule>\S+): operator '(?P<operator>[^']*)' has no direction"),
     ("check_contradicts_record",
      r"(?P<rule>\S+): recorded as failed but measured meets the threshold"),
+    ("no_invalidation",
+     r"(?P<rule>\S+): no invalidation recorded to measure the trigger from"),
+    ("invalidation_wrong_side",
+     r"(?P<rule>\S+): the invalidation is not on the far side of the trigger"),
+    ("past_invalidation", r"(?P<rule>\S+): measured is past the invalidation"),
     # performance (api/performance.py)
     ("planned_loss_not_positive_r", r"planned loss is not positive: no 1 R to divide by"),
     ("no_trades", r"no counted trades in the range"),

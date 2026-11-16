@@ -18,10 +18,13 @@
         "passed": false,
         "note": ""
       },
-      "closeness": "0.9983",
+      "closeness": "0.9200",
       "closeness_cause": null,
       "quote_age_seconds": null,
       "quote_age_cause": "not recorded: decision records hold no quote time",
+      "trigger": "12.35",
+      "invalidation": "12.10",
+      "against_trigger": true,
       "closeness_cause_codes": [],
       "quote_age_cause_codes": [
         {
@@ -50,6 +53,9 @@
       "closeness_cause": null,
       "quote_age_seconds": null,
       "quote_age_cause": "not recorded: decision records hold no quote time",
+      "trigger": null,
+      "invalidation": null,
+      "against_trigger": false,
       "closeness_cause_codes": [],
       "quote_age_cause_codes": [
         {
@@ -78,6 +84,9 @@
       "closeness_cause": "quote_valid: a yes/no check has no measured value",
       "quote_age_seconds": null,
       "quote_age_cause": "not recorded: decision records hold no quote time",
+      "trigger": null,
+      "invalidation": null,
+      "against_trigger": false,
       "closeness_cause_codes": [
         {
           "code": "yes_no_check",

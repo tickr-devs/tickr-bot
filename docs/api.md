@@ -223,7 +223,8 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
   {outcome};
 - watching: `all_checks_passed`, `quote_age_not_recorded`, `yes_no_check` {rule},
   `needs_positive_threshold` {rule}, `needs_positive_measured` {rule}, `no_direction` {rule,
-  operator}, `check_contradicts_record` {rule};
+  operator}, `check_contradicts_record` {rule}, `no_invalidation` {rule},
+  `invalidation_wrong_side` {rule}, `past_invalidation` {rule};
 - performance: `planned_loss_not_positive_r`, `no_trades`, `no_wins`, `no_losses`;
 - the Lab's replay and another version on a trade: `outside_session_only` {until},
   `replay_running`, `api_without_config`, `no_backtest_data`, `not_a_data_day` {day},
@@ -1091,7 +1092,11 @@ is `WATCH`: the strategy is waiting for its setup. A symbol whose latest verdict
 (explain-v1 enum), `decisive_check` (explain-v1 check shape: the first failed check in the
 order evaluated, the same as explain-v1 `first_failed_check`; `null` when every recorded check
 passed, as for a `WATCH` made without a quote), `closeness`, `closeness_cause`,
-`quote_age_seconds` and `quote_age_cause`.
+`quote_age_seconds`, `quote_age_cause`, and (added later, absent from older documents)
+`trigger` and `invalidation` (the decision's recorded levels as recorded, `null` when it
+recorded none) and `against_trigger` (`true` when the decisive check's threshold is the
+recorded trigger: measured and threshold are then prices, and the apps say which side of the
+trigger the check needs from its operator).
 
 Check values are rounded the same way in every document that shows checks (`/watching`,
 `/explain`, `/decisions`, `/skipped`): `measured` and `threshold` go to `[api]
@@ -1102,13 +1107,20 @@ recorded, and yes/no checks keep their nulls. `closeness` uses the recorded valu
 
 `closeness` (0..1, rounded down to `[api] watching_closeness_decimal_places`) says how near the
 decisive check is to passing:
-- operator `>` or `>=` (passes once measured rises to the threshold): `measured / threshold`,
+- a check against the trigger (`against_trigger`): where measured sits on the way from the
+  invalidation (0) to the trigger (1), `(measured - invalidation) / (trigger - invalidation)`,
+  defined when the invalidation lies on the side the check moves away from (below the trigger
+  for `>` `>=`, above it for `<` `<=`) and measured is not past it. A price is never scaled
+  from zero: 57.10 against a trigger of 57.11 is 0.9998 of the trigger but, with the
+  invalidation at 56.80, 0.9677 of the way;
+- any other operator `>` or `>=` (passes once measured rises to the threshold): `measured / threshold`,
   defined for `threshold > 0` and `measured >= 0`;
 - operator `<` or `<=` (passes once measured falls to the threshold):
   `threshold / measured`, defined for `measured > 0` and `threshold >= 0`.
 1 is at the threshold. It is `null` and `closeness_cause` says why for a yes/no check
 (operator `is`, nothing measured), an operator without a direction, values outside the domain
-above, a record whose failed check already meets its threshold, or no failed check
+above, a check against the trigger without an invalidation on its far side or with measured
+past it, a record whose failed check already meets its threshold, or no failed check
 (`every recorded check passed`).
 
 `quote_age_seconds` is always `null` with `quote_age_cause`

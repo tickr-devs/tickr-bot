@@ -146,6 +146,31 @@
               }
             ]
           },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invalidation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "against_trigger": {
+            "type": "boolean"
+          },
           "closeness_cause_codes": {
             "type": "array",
             "items": {
