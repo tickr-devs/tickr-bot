@@ -213,7 +213,8 @@ def test_history_shorter_than_the_strategy_needs_fails_but_does_not_block_start(
 
 
 def test_unbuildable_strategy_fails_the_strategy_check(config_path, repo):
-    strategy = repo / "strategies" / "price-action-v1" / "strategy.toml"
+    active = config_module.load(config_path).strategy.active
+    strategy = repo / "strategies" / active / "strategy.toml"
     strategy.write_text(strategy.read_text("utf-8").replace(
         "relative_volume_sessions = 5", "relative_volume_sessions = -5"), "utf-8")
     assert _run(config_path, _ready(config_path)).cause is PreflightCause.STRATEGY_REFUSED

@@ -3,7 +3,7 @@
 Trades are opened, filled and closed through a real Engine and Store on the fake broker
 (spec 13), with the store's clock moved to each close time. Then the room the platform
 computes (`daily_loss_room`), the loss budget it hands the strategy (`Evaluator._loss_budget`),
-the quantity the real price-action-v1 strategy sizes into it, and the admission of that
+the quantity the real active strategy sizes into it, and the admission of that
 decision by the EntryDesk are checked against a plain model of the owner decisions of
 2026-11-14: net realized result of the New York day (wins offset losses), 300 USD ceiling,
 size down near it, no entries below `min_daily_room_usd`, 30-minute pause per symbol after a
@@ -39,9 +39,10 @@ from tickr.runtime.entries import (
 )
 from tickr.runtime.evaluation import Evaluator
 from tickr.store import Store
-from tickr.strategy import price_action_v1 as pa
-from tickr.strategy.base import SymbolContext, Verdict
+from tickr.strategy.base import Strategy, SymbolContext, Verdict
 from tickr.types import Bar, Quote
+
+from .conftest import active_module
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -170,12 +171,12 @@ def random_history(rig: Rig, rng: random.Random, yesterday: date, today: date,
 # ---------------------------------------------------------------- the real strategy
 
 
-def _strategy() -> pa.PriceActionV1:
-    values = tomllib.loads((ROOT / "strategies" / "price-action-v1" / "strategy.toml")
+def _strategy() -> Strategy:
+    values = tomllib.loads((ROOT / "strategies" / CFG.strategy.active / "strategy.toml")
                            .read_text())
     values = copy.deepcopy(values)
     values["indicators"]["warmup_period_multiple"] = 1  # short generated sessions suffice
-    return pa.create(values)
+    return active_module().create(values)
 
 
 STRATEGY = _strategy()

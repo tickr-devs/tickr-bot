@@ -77,7 +77,9 @@ def spawner():
 def cfg(tmp_path):
     shutil.copytree(ROOT / "config" / "calendar", tmp_path / "config" / "calendar")
     shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
-    return config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    # The versions and runs below are price-action-v1's, so it is the active one here.
+    return replace(cfg, strategy=replace(cfg.strategy, active="price-action-v1"))
 
 
 def _lab(cfg, now, spawn, config_path=ROOT / "config" / "bot.toml"):

@@ -20,7 +20,7 @@ from tickr.advisor.proposal import IDEA_KEYS, parse_reply
 from tickr.advisor.run import TUNING_FILE, Status, run_backtest_advisor
 from tickr.replay.settings import load_settings
 
-from .test_advisor import BASE, FakeClient, answer
+from .test_advisor import BASE, FakeClient, answer, pin_active
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 NOW = datetime(2026, 11, 18, 1, 0, tzinfo=UTC)
@@ -97,7 +97,7 @@ def make_root(tmp_path, min_trades=4):
     bot = tmp_path / "config" / "bot.toml"
     text = bot.read_text().replace("backtest_min_fitting_trades = 30",
                                    f"backtest_min_fitting_trades = {min_trades}")
-    bot.write_text(text)
+    bot.write_text(pin_active(text))
     return config_module.load(bot)
 
 

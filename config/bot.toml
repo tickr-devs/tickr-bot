@@ -24,7 +24,7 @@ maintain_archive_max_age_days = 0
 
 [strategy]
 # Active strategy name = folder under strategies/; its decisions may reach the safety layer.
-active = "price-action-v1"
+active = "price-action-v3"
 # Observer strategy names: they decide on the same data but never trade (empty in v1); read by runtime.
 observers = []
 

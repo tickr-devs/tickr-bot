@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+import importlib
 import shutil
+import tomllib
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
+from tickr import config
+from tickr.observers.loader import parse_modules
+
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def active_module() -> ModuleType:
+    """The module of the repo config's active strategy: tests build or break the real one."""
+    cfg = config.load(ROOT / "config" / "bot.toml")
+    values = tomllib.loads((ROOT / "strategies" / cfg.strategy.active / "strategy.toml")
+                           .read_text("utf-8"))
+    modules = parse_modules(cfg.observers.strategy_modules)
+    return importlib.import_module(modules[values["strategy"]["name"]])
 
 
 @pytest.fixture
@@ -37,10 +52,8 @@ _MISSING = object()
 
 
 def broken_create(kind):
-    """A replacement create(values) for price_action_v1 that misbehaves in one way."""
-    from tickr.strategy import price_action_v1
-
-    real_create = price_action_v1.create
+    """A replacement create(values) for the active strategy that misbehaves in one way."""
+    real_create = active_module().create
 
     def create(values):
         if kind == "raises":
@@ -54,10 +67,10 @@ def broken_create(kind):
 
 @pytest.fixture
 def break_strategy(monkeypatch):
-    """Replace price_action_v1.create with one that misbehaves in the named way."""
-    from tickr.strategy import price_action_v1
+    """Replace the active strategy's create with one that misbehaves in the named way."""
+    module = active_module()
 
     def apply(kind):
-        monkeypatch.setattr(price_action_v1, "create", broken_create(kind))
+        monkeypatch.setattr(module, "create", broken_create(kind))
 
     return apply

@@ -16,7 +16,7 @@ v1 is done when the bot, started by launchd on a trading day, finds setups with 
 In v1:
 - One Webull account, Sandbox environment. Production code path exists but is closed by the gate (section 8).
 - US common stocks only, regular session (09:30-16:00 ET) only, long only, at most one open position.
-- One active strategy (`price-action-v1`), loaded as a swappable module.
+- One active strategy (`price-action-v3` since 2026-11-16: `price-action-v1` plus a spike setup on fast movers), loaded as a swappable module.
 - Broker-side STOP_LOSS protection; exit by the resting stop, by strategy EXIT, or by session flatten.
 - Recording of every decision and all market inputs for later analysis.
 - A small local API with state and operator commands, and a minimal status screen on top of it.

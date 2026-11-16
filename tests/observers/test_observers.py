@@ -193,8 +193,10 @@ def _config(tmp_path, observers=(), modules=None, max_observers=None):
         obs = replace(obs, strategy_modules=tuple(modules))
     if max_observers is not None:
         obs = replace(obs, max_observers=max_observers)
+    # The variants below are of price-action-v1, so it is the active one here.
     return replace(cfg, root=tmp_path, observers=obs,
-                   strategy=replace(cfg.strategy, observers=tuple(observers)))
+                   strategy=replace(cfg.strategy, active="price-action-v1",
+                                    observers=tuple(observers)))
 
 
 def _variant(tmp_path, folder, version, change=("lookback_bars = 5", "lookback_bars = 8")):

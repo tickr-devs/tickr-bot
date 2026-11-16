@@ -30,7 +30,7 @@ def limits() -> AdmissionLimits:
 
 def decision(**changes) -> Decision:
     base = Decision(
-        strategy="price-action-v1", version="1", symbol="ABCD", verdict=Verdict.ENTER,
+        strategy=CONFIG.strategy.active, version="1", symbol="ABCD", verdict=Verdict.ENTER,
         checks=(), trigger=D("10.00"), entry_low=D("10.00"), entry_high=D("10.20"),
         stop=D("9.80"), quantity=D("100"),
     )

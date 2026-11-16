@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tomllib
 from contextlib import contextmanager
@@ -68,11 +69,17 @@ def _bar(symbol, start, price):
                volume=Decimal(1000))
 
 
+def pin_active(bot_toml: str) -> str:
+    """The config text with price-action-v1 active: the records and answers here are its."""
+    return re.sub(r'(?m)^active = "[^"]*"$', 'active = "price-action-v1"', bot_toml)
+
+
 def make_root(tmp_path, min_days=2, extra=""):
     shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
     shutil.copytree(ROOT / "config", tmp_path / "config")
     bot = tmp_path / "config" / "bot.toml"
     text = bot.read_text().replace("min_days = 5", f"min_days = {min_days}")
+    text = pin_active(text)
     bot.write_text(text + extra)
     cfg = config_module.load(bot)
     log = DecisionLog(tmp_path / cfg.run.data_dir / cfg.observers.decisions_dir

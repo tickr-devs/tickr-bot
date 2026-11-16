@@ -34,7 +34,7 @@ def test_limits_come_from_config(lim):
     assert lim.max_open_positions == 1
     assert lim.max_quote_age_seconds == D(5)
     assert lim.max_clock_skew_seconds == D(1)
-    assert lim.active_strategy == "price-action-v1"
+    assert lim.active_strategy == "price-action-v3"
     assert lim.symbol_cooldown_minutes_after_loss == 30
 
 
