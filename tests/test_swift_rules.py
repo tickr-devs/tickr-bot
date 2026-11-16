@@ -508,3 +508,111 @@ def test_truncation_rule_flags_modifiers_that_cut_or_shrink_text(tmp_path):
     )
     found = load().truncation_violations(write(tmp_path, source))
     assert [line for line, _ in found] == [1, 2, 3, 4, 5]
+
+
+def test_apps_have_no_control_look_of_their_own(tmp_path):
+    source = (
+        "struct TitleBarButtonStyle: ButtonStyle {\n"
+        "private struct Press: PrimitiveButtonStyle {\n"
+        "struct Switchy: ToggleStyle {\n"
+        "struct Tight<T>: LabelStyle where T: View {\n"
+        "extension Wide: ButtonStyle {}\n"
+        "// struct Commented: ButtonStyle {\n"
+        "extension ButtonStyle where Self == ActionButtonStyle {\n"
+        ".buttonStyle(.action(.ghost))\n"
+    )
+    found = load().style_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5]
+
+
+def test_apps_use_no_system_button_look(tmp_path):
+    source = (
+        ".buttonStyle(.borderless)\n"
+        ".buttonStyle(.bordered)\n"
+        ".buttonStyle( .borderedProminent )\n"
+        ".buttonStyle(.link)\n"
+        ".buttonStyle(BorderlessButtonStyle())\n"
+        ".buttonBorderShape(.capsule)\n"
+        ".buttonStyle(.plain)\n"
+        ".buttonStyle(.glyph)\n"
+        ".buttonStyle(.action(.secondary, size: .compact))\n"
+        "// .buttonStyle(.borderless)\n"
+    )
+    found = load().system_button_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5, 6]
+
+
+def test_one_symbol_per_meaning(tmp_path):
+    source = (
+        'static let previousSymbol = "chevron.left"\n'
+        'Image(systemName: "chevron.right")\n'
+        'Label { Text(title) } icon: { Image(systemName: "exclamationmark.triangle") }\n'
+        'static let refused = "xmark.octagon.fill"\n'
+        'Image(systemName: Symbols.previous)\n'
+        'Image(systemName: "exclamationmark.triangle.fill")\n'
+        '// Image(systemName: "chevron.left")\n'
+    )
+    found = load().symbol_violations(write(tmp_path, source))
+    assert found == [
+        (1, "chevron.left -> Symbols.previous"),
+        (2, "chevron.right -> Symbols.next"),
+        (3, "exclamationmark.triangle -> Symbols.failure"),
+        (4, "xmark.octagon.fill -> Symbols.failed"),
+    ]
+
+
+def test_competing_symbols_point_at_shared_ones():
+    module = load()
+    shared = (ROOT / "apps/shared/Sources/TickrDesign/Symbols.swift").read_text(encoding="utf-8")
+    for replacement in module.COMPETING_SYMBOLS.values():
+        name = replacement.removeprefix("Symbols.")
+        assert f"public static let {name} = " in shared, replacement
+    # A shared symbol never competes with itself.
+    values = [line.split('"')[1] for line in shared.splitlines() if "public static let" in line]
+    assert not set(values) & set(module.COMPETING_SYMBOLS)
+
+
+def app_file(module, tmp_path: Path, app: str, name: str, source: str) -> Path:
+    folder = tmp_path / "apps" / app / "Tickr"
+    folder.mkdir(parents=True, exist_ok=True)
+    return write(folder, source, name)
+
+
+def test_a_component_written_in_both_apps_fails(tmp_path, monkeypatch):
+    module = load()
+    monkeypatch.setattr(module, "REPO", tmp_path)
+    files = [
+        app_file(module, tmp_path, "macos", "Rows.swift",
+                 "struct StatusRow: View {\nstruct SettingsView: View {\nstruct Dot: View {\n"),
+        app_file(module, tmp_path, "ios", "Rows.swift",
+                 "private struct StatusRow<Value: View>: View {\nstruct SettingsView: View {\n"
+                 "struct Spot: View {\nstruct Model: Identifiable {\n"),
+    ]
+    found = module.twin_violations(files)
+    assert found == {"apps/macos/Tickr/Rows.swift": [(1, "StatusRow")],
+                     "apps/ios/Tickr/Rows.swift": [(1, "StatusRow")]}
+
+
+def test_app_rules_skip_the_shared_package(tmp_path, monkeypatch):
+    module = load()
+    monkeypatch.setattr(module, "REPO", tmp_path)
+    shared = tmp_path / "apps" / "shared" / "Sources" / "TickrDesign"
+    shared.mkdir(parents=True)
+    write(shared, "public struct ChipStyle: ButtonStyle {\n}\n", "Chip.swift")
+    app = app_file(module, tmp_path, "ios", "Chip.swift", "struct ChipStyle: ButtonStyle {\n}\n")
+    monkeypatch.setattr(module, "ROOTS", ("apps/shared", "apps/ios"))
+    found = module.collect()["styles"]
+    assert list(found) == [app.relative_to(tmp_path).as_posix()]
+
+
+def test_known_twins_are_still_written_twice():
+    module = load()
+    files = module.swift_files()
+    declared = {app: set() for app in module.APPS}
+    for path in files:
+        relative = path.relative_to(module.REPO).as_posix()
+        for app in module.APPS:
+            if relative.startswith(app + "/"):
+                declared[app] |= set(module.component_names(path))
+    # A pair that moved into TickrDesign leaves the list in the same change.
+    assert module.KNOWN_TWINS <= declared["apps/macos"] & declared["apps/ios"]
