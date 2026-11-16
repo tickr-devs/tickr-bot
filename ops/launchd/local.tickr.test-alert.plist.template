@@ -4,19 +4,22 @@
      It sends one test alert the same way the bot and watchdog jobs do (sh sources the env file,
      then exec python), so macOS asks for the Automation permission for Messages for the same
      program the jobs use. See docs/operations.md, "Alerts from launchd".
+     It runs the release its folder argument resolves to at the start (cd -P), so a
+     release switch never changes the code under a running job (runtime/release.py).
      Rendered by `python -m tickr.runtime render-launchd`; see docs/operations.md. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>local.tickr.test-alert</string>
   <key>WorkingDirectory</key>
-  <string>{{REPO}}</string>
+  <string>{{RELEASE}}</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>set -a; . "$0"; set +a; exec "$1" -m tickr.runtime --config "$2" alert preflight-failed "test alert from launchd"</string>
+    <string>set -a; . "$0"; set +a; cd -P "$1" || exit; exec "$PWD/$2" -m tickr.runtime --config "$PWD/$3" alert preflight-failed "test alert from launchd"</string>
     <string>{{ENV_FILE}}</string>
+    <string>{{RELEASE}}</string>
     <string>{{PYTHON}}</string>
     <string>{{CONFIG}}</string>
   </array>

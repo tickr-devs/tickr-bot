@@ -7,19 +7,22 @@
      caffeinate -i -s -w holds a no-sleep assertion for exactly as long as this job's process
      lives (exec keeps the shell's pid); it is a side process, so SIGTERM from launchd still
      reaches the supervisor directly. See docs/operations.md for its limits.
+     It runs the release its folder argument resolves to at the start (cd -P), so a
+     release switch never changes the code under a running job (runtime/release.py).
      Rendered by `python -m tickr.runtime render-launchd`; see docs/operations.md. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>local.tickr.bot</string>
   <key>WorkingDirectory</key>
-  <string>{{REPO}}</string>
+  <string>{{RELEASE}}</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>set -a; . "$0"; set +a; /usr/bin/caffeinate -i -s -w $$ &gt;/dev/null 2&gt;&amp;1 &amp; exec "$1" -m tickr.runtime --config "$2" run-bot -- "$1" -m tickr.cli --config "$2" run</string>
+    <string>set -a; . "$0"; set +a; cd -P "$1" || exit; /usr/bin/caffeinate -i -s -w $$ &gt;/dev/null 2&gt;&amp;1 &amp; exec "$PWD/$2" -m tickr.runtime --config "$PWD/$3" run-bot -- "$PWD/$2" -m tickr.cli --config "$PWD/$3" run</string>
     <string>{{ENV_FILE}}</string>
+    <string>{{RELEASE}}</string>
     <string>{{PYTHON}}</string>
     <string>{{CONFIG}}</string>
   </array>

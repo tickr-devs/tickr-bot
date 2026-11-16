@@ -8,19 +8,22 @@
      so the bot itself flattens a trade it left open.
      Its record is data_dir/[runtime] watchdog_journal_file and this job's log.
      caffeinate keeps the Mac awake while it runs (see the bot job and docs/operations.md).
+     It runs the release its folder argument resolves to at the start (cd -P), so a
+     release switch never changes the code under a running job (runtime/release.py).
      Rendered by `python -m tickr.runtime render-launchd`; see docs/operations.md. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>local.tickr.watchdog</string>
   <key>WorkingDirectory</key>
-  <string>{{REPO}}</string>
+  <string>{{RELEASE}}</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>set -a; . "$0"; set +a; /usr/bin/caffeinate -i -s -w $$ &gt;/dev/null 2&gt;&amp;1 &amp; exec "$1" -m tickr.runtime --config "$2" watchdog</string>
+    <string>set -a; . "$0"; set +a; cd -P "$1" || exit; /usr/bin/caffeinate -i -s -w $$ &gt;/dev/null 2&gt;&amp;1 &amp; exec "$PWD/$2" -m tickr.runtime --config "$PWD/$3" watchdog</string>
     <string>{{ENV_FILE}}</string>
+    <string>{{RELEASE}}</string>
     <string>{{PYTHON}}</string>
     <string>{{CONFIG}}</string>
   </array>

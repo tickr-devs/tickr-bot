@@ -3,6 +3,12 @@
 Nothing is installed by this code: it writes plists into an output folder; the owner copies them
 to ~/Library/LaunchAgents and loads them (docs/operations.md). Templates use `{{NAME}}`
 placeholders; every value is XML-escaped; an unknown or unfilled placeholder is refused.
+
+Every job runs from one folder, `{{RELEASE}}`: on the Mac the stable link `<releases>/live` that
+`python -m tickr.runtime release` switches (runtime/release.py). A job resolves it once at its
+start (`cd -P`) and runs the interpreter and config inside the folder it resolved to, by their
+paths relative to it (`{{PYTHON}}`, `{{CONFIG}}`): a switch of the link never changes the code
+under a process that already runs.
 """
 
 from __future__ import annotations
@@ -189,27 +195,39 @@ def check_env_file(path: Path) -> None:
         raise ConfigError(f"env file {path} is readable by other accounts (run: chmod 600 {path})")
 
 
+# The interpreter of a release (or checkout), relative to its root: the environment `uv sync`
+# creates there (runtime/release.py) or the one-time setup's venv (docs/operations.md).
+VENV_PYTHON = Path(".venv") / "bin" / "python"
+
+
 @dataclass(frozen=True)
 class Paths:
-    """Owner machine paths that go into the plists (absolute)."""
+    """Owner machine paths that go into the plists: `release`, `env_file` and `log_dir` are
+    absolute; `config` is relative to the release folder (the config of the code that runs)."""
 
-    repo: Path
-    python: Path
+    release: Path
     config: Path
     env_file: Path
     log_dir: Path
 
 
+def _inside(name: str, path: Path) -> str:
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise ConfigError(f"launchd path {name} must be relative to the release folder, "
+                          f"got {path}")
+    return escape(path.as_posix())
+
+
 def values(runtime: RuntimeConfig, paths: Paths) -> dict[str, str]:
     """Placeholder values, already XML-safe."""
     sched = schedule(runtime)
-    for name, path in vars(paths).items():
-        if not Path(path).is_absolute():
-            raise ConfigError(f"launchd path {name} must be absolute, got {path}")
+    for name in ("release", "env_file", "log_dir"):
+        if not Path(getattr(paths, name)).is_absolute():
+            raise ConfigError(f"launchd path {name} must be absolute, got {getattr(paths, name)}")
     return {
-        "REPO": escape(str(paths.repo)),
-        "PYTHON": escape(str(paths.python)),
-        "CONFIG": escape(str(paths.config)),
+        "RELEASE": escape(str(paths.release)),
+        "PYTHON": _inside("python", VENV_PYTHON),
+        "CONFIG": _inside("config", paths.config),
         "ENV_FILE": escape(str(paths.env_file)),
         "LOG_DIR": escape(str(paths.log_dir)),
         "PREFLIGHT_CALENDAR": _calendar_xml(sched.preflight, sched.weekdays),

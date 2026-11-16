@@ -12,7 +12,9 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
 
 ## Sunday evening, or Monday before 08:30 Mac time
 
-1. Update the code, flat and with the bot not running:
+1. Update the code, flat and with the bot not running. (After the pinned-release switch-over,
+   operations.md "Releases", this step is one `release` command instead: it restarts the API
+   and the other jobs together, and a `git pull` here no longer changes what runs.)
    ```sh
    cd ~/Development/Tickr && git status --short && git pull
    .venv/bin/pip install -q -e ".[webull]"

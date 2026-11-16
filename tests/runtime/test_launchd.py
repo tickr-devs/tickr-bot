@@ -9,9 +9,8 @@ import pytest
 from tickr import config as config_module
 from tickr.runtime import launchd
 
-PATHS = launchd.Paths(repo=Path("/Users/o/Tickr"),
-                      python=Path("/Users/o/Tickr/.venv/bin/python"),
-                      config=Path("/Users/o/Tickr/config/bot.toml"),
+PATHS = launchd.Paths(release=Path("/Users/o/Tickr-releases/live"),
+                      config=Path("config/bot.toml"),
                       env_file=Path("/Users/o/.config/tickr/env & more"),
                       log_dir=Path("/Users/o/Library/Logs/Tickr"))
 
@@ -30,7 +29,18 @@ def test_templates_render_to_valid_plists(config_path, repo, tmp_path):
                          "local.tickr.test-alert.plist", "local.tickr.nightly-fetch.plist",
                          "local.tickr.demo.plist"}
     for job in jobs.values():
-        assert job["WorkingDirectory"] == str(PATHS.repo)
+        assert job["WorkingDirectory"] == str(PATHS.release)
+        # Every job resolves the release link once at its start and runs the interpreter and
+        # config inside the folder it resolved to: a later switch never changes its code.
+        args = job["ProgramArguments"]
+        assert args[:2] == ["/bin/sh", "-c"]
+        script = args[2]
+        first = 1 if 'cd -P "$1"' in script else 0  # $0 is the env file when one is sourced
+        assert f'cd -P "${first}" || exit;' in script
+        assert args[3 + first:6 + first] == [str(PATHS.release), ".venv/bin/python",
+                                             "config/bot.toml"]
+        assert f'exec "$PWD/${first + 1}"' in script.replace("exec nice", "exec")
+        assert f'--config "$PWD/${first + 2}"' in script
 
 
 def test_bot_is_never_relaunched_and_gets_exit_time(config_path, repo, tmp_path):
@@ -60,7 +70,7 @@ def test_demo_day_runs_at_login_and_restarts_only_after_a_clean_exit(config_path
     job = _render(config_path, repo, tmp_path / "out")["local.tickr.demo.plist"]
     assert job["RunAtLoad"] is True
     assert job["KeepAlive"] == {"SuccessfulExit": True}  # a refusal is not retried in a loop
-    assert job["ProgramArguments"][1:] == ["-m", "tickr.cli", "--config", str(PATHS.config), "demo"]
+    assert job["ProgramArguments"][2].endswith('-m tickr.cli --config "$PWD/$2" demo')
     assert job["ProcessType"] == "Background"
     assert "ENV_FILE" not in str(job) and str(PATHS.env_file) not in str(job)
 
@@ -103,8 +113,17 @@ def test_unknown_placeholder_refused():
 
 def test_relative_path_refused(config_path):
     cfg = config_module.load(config_path)
-    bad = launchd.Paths(**{**vars(PATHS), "log_dir": Path("logs")})
-    with pytest.raises(config_module.ConfigError, match="absolute"):
+    for name in ("log_dir", "release"):
+        bad = launchd.Paths(**{**vars(PATHS), name: Path("logs")})
+        with pytest.raises(config_module.ConfigError, match="absolute"):
+            launchd.values(cfg.runtime, bad)
+
+
+@pytest.mark.parametrize("config", ["/Users/o/Tickr/config/bot.toml", "../config/bot.toml"])
+def test_config_outside_the_release_refused(config_path, config):
+    cfg = config_module.load(config_path)
+    bad = launchd.Paths(**{**vars(PATHS), "config": Path(config)})
+    with pytest.raises(config_module.ConfigError, match="relative to the release"):
         launchd.values(cfg.runtime, bad)
 
 
@@ -177,13 +196,13 @@ def test_watchdog_job_scheduled_and_both_long_jobs_keep_the_mac_awake(config_pat
     hour, minute = map(int, cfg.runtime.watchdog_start_local.split(":"))
     assert dog["StartCalendarInterval"] == [
         {"Weekday": d, "Hour": hour, "Minute": minute} for d in cfg.runtime.launch_weekdays]
-    assert dog["ProgramArguments"][2].endswith('--config "$2" watchdog')
-    assert '--config "$2" run-bot' in jobs["local.tickr.bot.plist"]["ProgramArguments"][2]
+    assert dog["ProgramArguments"][2].endswith('--config "$PWD/$3" watchdog')
+    assert '--config "$PWD/$3" run-bot' in jobs["local.tickr.bot.plist"]["ProgramArguments"][2]
     for name in ("local.tickr.bot.plist", "local.tickr.watchdog.plist"):
         script = jobs[name]["ProgramArguments"][2]
         # A side process waiting on the job's own pid; the job's process is still exec'd, so
         # launchd's SIGTERM reaches the supervisor directly.
-        assert '/usr/bin/caffeinate -i -s -w $$ >/dev/null 2>&1 & exec "$1"' in script
+        assert '/usr/bin/caffeinate -i -s -w $$ >/dev/null 2>&1 & exec "$PWD/$2"' in script
     assert "caffeinate" not in str(jobs["local.tickr.preflight.plist"])
     test = jobs["local.tickr.test-alert.plist"]  # runs only on a manual kickstart
     assert test["RunAtLoad"] is False and test["KeepAlive"] is False

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import plistlib
 import sys
 
 import pytest
@@ -55,7 +56,7 @@ def _ready_preflight(monkeypatch, config_path):
     cfg = config_module.load(config_path)
     check = Check(CheckName.CONFIG, True, "ok")
     result = PreflightResult((check,), session_today=True, environment=cfg.environment_name,
-                             config=cfg)
+                             config=cfg, config_path=config_path)
     monkeypatch.setattr(runtime_main, "run_preflight", lambda *a, **k: result)
 
 
@@ -84,7 +85,7 @@ def test_run_bot_starts_when_only_the_strategy_is_refused(config_path, monkeypat
               Check(CheckName.STRATEGY, False, "needs 5 prior sessions",
                     PreflightCause.STRATEGY_REFUSED))
     result = PreflightResult(checks, session_today=True, environment=cfg.environment_name,
-                             config=cfg)
+                             config=cfg, config_path=config_path)
     monkeypatch.setattr(runtime_main, "run_preflight", lambda *a, **k: result)
     marker = tmp_path / "started"
     assert main(["--config", str(config_path), "run-bot", "--", sys.executable, "-c",
@@ -108,7 +109,7 @@ def _env_file(tmp_path, mode):
 
 
 def _render(config_path, env, out):
-    return main(["--config", str(config_path), "render-launchd", "--python", "/x/python",
+    return main(["--config", str(config_path), "render-launchd", "--release", "/x/live",
                  "--env-file", str(env), "--log-dir", "/x/logs", "--out", str(out)])
 
 
@@ -116,6 +117,9 @@ def test_render_launchd(config_path, repo, tmp_path, capsys):
     out = tmp_path / "plists"
     assert _render(config_path, _env_file(tmp_path, 0o600), out) == 0
     assert len(list(out.glob("*.plist"))) == 7  # the seven jobs
+    bot = plistlib.loads((out / "local.tickr.bot.plist").read_bytes())
+    # The link is written as given (the job resolves it), the config relative to it.
+    assert bot["ProgramArguments"][4:] == ["/x/live", ".venv/bin/python", "config/bot.toml"]
 
 
 @pytest.mark.parametrize("mode", [0o640, 0o604, 0o644])

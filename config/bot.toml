@@ -492,6 +492,15 @@ evaluation_budget_seconds = 3
 # Stop marker the bot writes when it obeys a stop-bot command, relative to data_dir; while it exists preflight fails and
 # `tickr run` refuses, until `tickr clear-stop`; read by runtime.stopmarker (bot, preflight, cli).
 stop_marker_file = "stopped-by-operator.json"
+# Seconds one outside step of `python -m tickr.runtime release` may take (git fetch and worktree, `uv sync`, the new
+# release's preflight, which may wait [environments.*] token_check_duration_seconds for the token); must be above that
+# wait; read by runtime.release.
+release_step_timeout_seconds = 900
+# Seconds `release` waits for a stopped job (bot, watchdog, api) to end before it reports the restart failed; must be
+# above bot_exit_timeout_seconds, when launchd kills the bot job; read by runtime.release.
+release_stop_wait_seconds = 150
+# Seconds between `release` checks that a stopped job has ended; read by runtime.release.
+release_poll_seconds = 1
 
 [alerts]
 # Same alert (kind + text) repeated within this many seconds is not shown again (still returned for the journal); read by runtime.alerts.

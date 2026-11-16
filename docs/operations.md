@@ -120,7 +120,8 @@ All checks are reported; the first failure is the recorded cause.
 
 ## One-time setup
 
-1. Clone the repo and create the venv:
+1. Clone the repo and create the venv (the developer checkout; launchd runs releases, see
+   "Releases"):
    ```sh
    cd ~/Development/Tickr
    python3.12 -m venv .venv && .venv/bin/pip install -e ".[webull]"
@@ -161,11 +162,17 @@ All checks are reported; the first failure is the recorded cause.
 
 ## Install the jobs
 
+The jobs run from one folder, given as `--release`: the link `~/Development/Tickr-releases/live`
+that `release` switches (see "Releases" below; make the first release before installing). Each
+job resolves the link once when it starts (`cd -P`) and runs that folder's `.venv/bin/python`
+and its `config/bot.toml`, so a switch never changes the code under a running job, and a
+developer `git pull` in `~/Development/Tickr` never reaches a job at all.
+
 ```sh
 cd ~/Development/Tickr
 mkdir -p ~/Library/Logs/Tickr
 .venv/bin/python -m tickr.runtime render-launchd \
-    --python "$PWD/.venv/bin/python" \
+    --release ~/Development/Tickr-releases/live \
     --env-file ~/.config/tickr/env \
     --log-dir ~/Library/Logs/Tickr \
     --out data/launchd
@@ -195,8 +202,140 @@ cp data/launchd/local.tickr.nightly-fetch.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.nightly-fetch.plist
 ```
 
-After changing `[runtime]` values, render again, then
-`launchctl bootout gui/$(id -u)/local.tickr.<job>` and `bootstrap` the changed jobs.
+After a release that changed `[runtime]` times or `ops/launchd/` (the release prints the
+`git diff --stat` of both), render again, then `launchctl bootout gui/$(id -u)/local.tickr.<job>`
+and `bootstrap` the changed jobs.
+
+## Releases
+
+What launchd runs is a **pinned release**: a detached git worktree of one exact commit of
+`origin/main`, with its own environment, never the developer checkout.
+
+```
+~/Development/Tickr-releases/<sha>/      worktree at <sha>; .venv from `uv sync --frozen --extra webull`
+                                         (tickr is imported from <sha>/src); data -> ~/Development/Tickr/data
+~/Development/Tickr-releases/live        -> <sha>   what every job runs
+~/Development/Tickr-releases/previous    -> <sha>   the release before (rollback)
+```
+
+- **One data folder.** Every release's `data` is a link to `~/Development/Tickr/data` (the folder
+  the `--config` given to `release` resolves): the same database, capture, decisions, history,
+  token folder, remote hosts, pairing, status and account files. It is the Docker layout (the
+  data volume mounted at `<root>/data`) done with a link; the code still addresses data only as
+  `<root>/[run] data_dir`. `release` refuses a data folder without `tickr.sqlite3`, so a release
+  never starts on a new, empty one, and it never copies data.
+- **Config.** A release reads its own committed `config/bot.toml`: a config change is a commit
+  on `origin/main`, tagged by its digest on every run. Changes made only in the checkout never
+  reach the bot; `release` refuses while the checkout it runs from has uncommitted changes under
+  `config/`. It prints the running and the new config (path and SHA-256) and the `git diff --stat`
+  of `config/` and `ops/launchd/` between the two commits; preflight's JSON line names
+  `config_path`, `config_digest` and `data_dir` (resolved).
+- **Code version.** `src/tickr/version.py` reads the commit of the folder above `src/`, the
+  release worktree (its `.git` is a file): the exact `<sha>`, never `-dirty` (the data link is
+  untracked and does not count).
+
+Make a release, after the close or on a non-trading day, flat (it refuses otherwise):
+
+```sh
+cd ~/Development/Tickr
+.venv/bin/python -m tickr.runtime --config config/bot.toml release \
+    --releases ~/Development/Tickr-releases --env-file ~/.config/tickr/env   # [--commit <sha>]
+```
+
+Each step is printed. In order, and a refusal at any step before the switch leaves the running
+release, the links and the jobs exactly as they were (exit 1, `refused: ...`):
+
+1. Refuses when `live` exists and its `data` resolves to another folder than the data folder of
+   the `--config` given (a command started from another checkout would check flatness in, and
+   switch the bot onto, another database). Then refuses early on an open trade in the database,
+   or when the bot's account file is at most `[orders] broker_read_max_age_seconds` old and
+   shows a position. The account file never proves flat (it is refreshed only by a running bot).
+2. Refuses on uncommitted config changes in the checkout; fetches `origin`; refuses unless the
+   commit (default `origin/main`) is on `origin/main`.
+3. Prepares `<sha>/` (worktree, data link, `uv sync`) and runs its own preflight exactly as the
+   preflight job does (the env file sourced by `sh`); refuses unless it passes or says no session
+   today, with code version `<sha>`, the release's config and the shared data folder. On a
+   trading day this preflight checks the Webull token like the 08:30 run. On failure only the
+   exit code of that step is printed, never the shell's error text (it could quote the
+   credentials file).
+   **Stop marker:** while the bot is stopped by the operator (`stopped-by-operator`), preflight
+   fails and so does `release`; it is not passed over on purpose, because a release cannot
+   prove the code it would start. To deploy then: after the close, `tickr clear-stop`, release,
+   and, if the bot must stay stopped tomorrow, send stop-bot again from the apps once it runs
+   (or `launchctl kill TERM` it and keep the scheduled start in mind).
+4. Proves flat with a fresh read: `python -m tickr.runtime broker-flat` of the new release, run
+   like a job (env file sourced by `sh`), reads positions and open orders once through the
+   release's Webull adapter, read-only (never an order). Refuses when the broker shows any
+   position or open order, when the database has an open trade, or when the read fails (the
+   cause is printed). Then points `previous` at the running release and switches `live` (an
+   atomic rename of a new link).
+5. Restarts the jobs that run: stops the watchdog first (so it never sees the stopping bot
+   missing), then the bot, then the API, each with SIGTERM (`launchctl kill TERM`) and waited
+   for (at most `[runtime] release_stop_wait_seconds`); then starts the bot, the API and the
+   watchdog (`launchctl kickstart`). A job that is not running is left to its schedule, which
+   starts the new release; one that did not stop is not started and is reported (exit 1). If
+   the link rename itself fails, nothing is restarted and the message names where `live` and
+   `previous` point.
+6. Removes every release folder other than `live` and `previous` (keep only the latest backup),
+   except one a running process still runs from (removed by the next release): its data link is
+   unlinked first, then `git worktree remove` without force. The data folder is never touched.
+
+`rollback` (same arguments, no `--commit`) switches back to `previous` the same way, flat only,
+and needs no GitHub: it does not fetch (it still reads the broker in step 4), it verifies the folder (HEAD at its commit, no changes
+to tracked files, its `data` link naming the data folder, its `.venv` present) and runs its
+preflight. `live` and `previous` swap, so a rollback can itself be rolled back.
+
+### Emergency: the owner switches back by hand
+
+Only for the owner, only when `rollback` cannot run: it refuses while not flat, and flatness is
+read from files that only a running bot refreshes, so a new release that opened a trade and
+then cannot start blocks it even after the position is closed by hand in the Webull app.
+
+1. In the Webull app: close the position and cancel every open order; check both are gone.
+2. Stop the jobs, the watchdog first, and wait for each to end (`launchctl list <label>` shows
+   no `"PID"`):
+   ```sh
+   for job in watchdog bot api; do launchctl kill TERM gui/$(id -u)/local.tickr.$job; done
+   ```
+3. Repoint `live` at the previous release by hand (`R=~/Development/Tickr-releases`):
+   ```sh
+   cd $R && old=$(readlink live) && back=$(readlink previous)
+   ln -sfh "$back" live && ln -sfh "$old" previous   # -h: replace the link, never write into its folder
+   readlink live   # the previous commit
+   ```
+4. Run its preflight (`$R/live/.venv/bin/python -m tickr.runtime --config
+   $R/live/config/bot.toml preflight` with the env file sourced), then start the jobs:
+   `launchctl kickstart gui/$(id -u)/local.tickr.api`, then the bot (only if wanted today), then
+   the watchdog. The bot's start reconciles with the broker and rewrites its account file.
+
+### One-time switch-over (the coordinator, after the close, flat)
+
+Today the jobs run from `~/Development/Tickr` and its pip venv. Once, after the market close
+with the bot flat and stopped:
+
+1. `cd ~/Development/Tickr && git status --short config/ && git pull --ff-only`: no config
+   changes left in the checkout (commit them first).
+2. Make the first release (the command above). It creates `live`, but the installed plists
+   still name the checkout, so every job (and the API it restarts) still runs the checkout until
+   step 4.
+3. Check it: `readlink ~/Development/Tickr-releases/live` is the commit;
+   `~/Development/Tickr-releases/live/.venv/bin/python -m tickr.runtime --config
+   ~/Development/Tickr-releases/live/config/bot.toml preflight` prints `"config_path"` under
+   `Tickr-releases/<sha>/`, `"data_dir": ".../Tickr/data"` and code version `<sha>`.
+4. Render from the release itself, so its templates and `[runtime]` times are used:
+   ```sh
+   L=~/Development/Tickr-releases/live
+   $L/.venv/bin/python -m tickr.runtime --config $L/config/bot.toml render-launchd \
+       --release $L --env-file ~/.config/tickr/env --log-dir ~/Library/Logs/Tickr \
+       --out ~/Development/Tickr/data/launchd
+   ```
+   Read the files, then for each installed job `launchctl bootout gui/$(id -u)/local.tickr.<job>`, copy
+   the new plist to `~/Library/LaunchAgents/` and `launchctl bootstrap` it (bot last, and only
+   when it is not running).
+5. `launchctl kickstart gui/$(id -u)/local.tickr.test-alert`: the alert arrives (the job's
+   program chain changed, so the Messages permission may ask again; allow it).
+6. From now on deploy only with `release`; a `git pull` in the checkout changes nothing that
+   runs. To go back to the old setup: render with `--release ~/Development/Tickr` and reinstall.
 
 ### Alerts from launchd (do this once, at the Mac)
 

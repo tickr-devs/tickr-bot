@@ -119,6 +119,7 @@ class PreflightResult:
     session_today: bool
     environment: str | None
     config: config_module.Config | None
+    config_path: Path  # the config file asked for, as given (journaled resolved)
 
     @property
     def cause(self) -> PreflightCause | None:
@@ -146,11 +147,18 @@ class PreflightResult:
                    for c in self.checks)
 
     def journal_body(self) -> dict[str, object]:
+        """Also names the config it used (resolved path and full digest) and the data folder
+        it checked (resolved): under a release (runtime/release.py) that is the release's own
+        config and the one shared data folder its link names."""
+        cfg = self.config
         return {
             "exit_code": int(self.exit_code),
             "cause": self.cause.value if self.cause else None,
             "environment": self.environment,
             "session_today": self.session_today,
+            "config_path": str(self.config_path.resolve()),
+            "config_digest": cfg.digest if cfg is not None else None,
+            "data_dir": str((cfg.root / cfg.run.data_dir).resolve()) if cfg is not None else None,
             "checks": [
                 {"name": c.name.value, "passed": c.passed, "detail": c.detail} for c in self.checks
             ],
@@ -187,7 +195,7 @@ def _load_config(path: Path) -> tuple[config_module.Config | None, Check]:
         check_timings(cfg)
     except (OSError, UnicodeDecodeError, config_module.ConfigError) as exc:
         return None, Check(CheckName.CONFIG, False, str(exc), PreflightCause.CONFIG_INVALID)
-    detail = f"{path} digest {cfg.digest[:12]}"
+    detail = f"{path.resolve()} digest {cfg.digest}"
     if cfg.renamed_keys:
         detail += f"; old key names, rename them: {', '.join(cfg.renamed_keys)}"
     return cfg, Check(CheckName.CONFIG, True, detail)
@@ -347,7 +355,8 @@ def run_preflight(
     Without `token_probe` the token check is not run. `platform` picks the alert channels."""
     cfg, config_check = _load_config(config_path)
     if cfg is None:
-        return PreflightResult((config_check,), session_today=False, environment=None, config=None)
+        return PreflightResult((config_check,), session_today=False, environment=None, config=None,
+                               config_path=config_path)
     disk = _check_disk(cfg, disk_free)
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, _check_code_version(cfg, environ), disk, calendar,
@@ -361,4 +370,4 @@ def run_preflight(
         cause = token_probe(cfg)
         checks += (Check(CheckName.TOKEN, True, "usable") if cause is None else
                    Check(CheckName.TOKEN, False, cause, PreflightCause.TOKEN_UNUSABLE),)
-    return PreflightResult(checks, session_today, cfg.environment_name, cfg)
+    return PreflightResult(checks, session_today, cfg.environment_name, cfg, config_path)

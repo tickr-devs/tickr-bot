@@ -6,21 +6,23 @@
      [api] demo_port; the real API forwards /demo/ there. At [demo] live_until it exits 0 and
      launchd starts a fresh day (KeepAlive on a clean exit only: a refusal, such as a busy port,
      is not retried in a loop). Background priority, so it never competes with the bot.
+     It runs the release its folder argument resolves to at the start (cd -P), so a
+     release switch never changes the code under a running job (runtime/release.py).
      Rendered by `python -m tickr.runtime render-launchd`; see docs/operations.md. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>local.tickr.demo</string>
   <key>WorkingDirectory</key>
-  <string>{{REPO}}</string>
+  <string>{{RELEASE}}</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>cd -P "$0" || exit; exec "$PWD/$1" -m tickr.cli --config "$PWD/$2" demo</string>
+    <string>{{RELEASE}}</string>
     <string>{{PYTHON}}</string>
-    <string>-m</string>
-    <string>tickr.cli</string>
-    <string>--config</string>
     <string>{{CONFIG}}</string>
-    <string>demo</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
