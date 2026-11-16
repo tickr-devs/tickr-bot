@@ -265,7 +265,12 @@ release, the links and the jobs exactly as they were (exit 1, `refused: ...`):
    like a job (env file sourced by `sh`), reads positions and open orders once through the
    release's Webull adapter, read-only (never an order). Refuses when the broker shows any
    position or open order, when the database has an open trade, or when the read fails (the
-   cause is printed). Then points `previous` at the running release and switches `live` (an
+   cause is printed). Then takes a verified backup of the database,
+   `<data>/<[run] backups_dir>/pre-release-<UTC time>-<sha12>.sqlite3` (SQLite online backup
+   from a read-only connection, schema-agnostic, `integrity_check` ok; a release removes older
+   `pre-release-*`, a rollback removes none, so the backup from before the release it rolls
+   back survives; the daily `tickr-<date>` backup is left alone) and refuses if the backup or
+   a removal fails. Then points `previous` at the running release and switches `live` (an
    atomic rename of a new link).
 5. Restarts the jobs that run: stops the watchdog first (so it never sees the stopping bot
    missing), then the bot, then the API, each with SIGTERM (`launchctl kill TERM`) and waited

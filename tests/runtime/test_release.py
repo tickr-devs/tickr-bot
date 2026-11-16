@@ -529,3 +529,87 @@ def test_broker_flat_command_reports_a_failed_read(world, monkeypatch, capsys):
     assert main(["--config", str(world.config_path), release.BROKER_FLAT]) == 1
     row = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert row["error"] == "request budget exhausted"
+
+
+def test_a_release_takes_a_verified_backup_before_the_switch_and_keeps_only_the_latest(world):
+    """2026-11-16: the operator's backup ran through code older than the database and refused;
+    the release itself now backs up schema-agnostically, after the flat proof."""
+    import sqlite3
+
+    backups = world.data / world.cfg.run.backups_dir
+    backups.mkdir(exist_ok=True)
+    stale = backups / "pre-release-20261115T000000Z-aaaaaaaaaaaa.sqlite3"
+    stale.write_bytes(b"old")
+    daily = backups / "tickr-2026-11-16.sqlite3"
+    daily.write_bytes(b"daily")
+    release.release(world.context(), "origin/main")
+    (made,) = backups.glob("pre-release-*.sqlite3")
+    assert made.name.endswith(world.first[:12] + ".sqlite3")
+    check = sqlite3.connect(made)
+    assert check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    check.close()
+    assert daily.exists() and not stale.exists()  # the daily backup is not this tool's
+    lines = "\n".join(world.lines)
+    assert lines.index("backup ") < lines.index("live -> ")
+
+
+def test_a_failed_backup_refuses_before_any_link_moves(world, monkeypatch):
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    import sqlite3
+
+    real = sqlite3.connect
+
+    def connect(target, *args, **kwargs):
+        if str(target).startswith("file:"):
+            return real(target, *args, **kwargs)
+        broken()
+
+    monkeypatch.setattr(release.sqlite3, "connect", connect)
+    with pytest.raises(release.ReleaseRefused, match="pre-release backup failed"):
+        release.release(world.context(), "origin/main")
+    assert world.live() is None
+    backups = world.data / world.cfg.run.backups_dir
+    assert not list(backups.glob("*.sqlite3")) and not list(backups.glob(".tmp-*"))
+
+
+def test_a_rollback_keeps_the_backup_from_before_the_release_it_rolls_back(world):
+    """Release A, release B (its backup is the database before B), B's bot migrates, rollback:
+    the backup from before B must survive the rollback's own backup."""
+    import sqlite3
+
+    release.release(world.context(), release.DEFAULT_COMMIT)
+    second = _commit(world.repo, "second")
+    release.release(world.context(), release.DEFAULT_COMMIT)
+    backups = world.data / world.cfg.run.backups_dir
+    (before_b,) = backups.glob("pre-release-*.sqlite3")
+    assert before_b.name.endswith(second[:12] + ".sqlite3")
+    db = sqlite3.connect(world.data / DATABASE_FILE)  # B's bot migrates the database
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    db.execute(f"PRAGMA user_version = {version + 1}")
+    db.close()
+    release.rollback(world.context())
+    names = sorted(p.name for p in backups.glob("pre-release-*.sqlite3"))
+    assert before_b.name in names and len(names) == 2
+    check = sqlite3.connect(before_b)
+    assert check.execute("PRAGMA user_version").fetchone()[0] == version  # the pre-B state
+    check.close()
+
+
+def test_a_failing_removal_of_an_older_backup_refuses_before_the_switch(world, monkeypatch):
+    backups = world.data / world.cfg.run.backups_dir
+    backups.mkdir(exist_ok=True)
+    old = backups / "pre-release-20261115T000000Z-aaaaaaaaaaaa.sqlite3"
+    old.write_bytes(b"old")
+    real_unlink = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        if self == old:
+            raise PermissionError("read-only")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    with pytest.raises(release.ReleaseRefused, match="removing the older backup"):
+        release.release(world.context(), release.DEFAULT_COMMIT)
+    assert world.live() is None and old.exists()
