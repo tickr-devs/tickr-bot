@@ -159,6 +159,12 @@ class ProbeConfig:
     attached_far_percent: Decimal
     attached_observe_seconds: int
     attached_stop_wait_seconds: int
+    trailing_wide_percent: Decimal
+    trailing_tight_percent: Decimal
+    trailing_observe_seconds: int
+    trailing_trigger_seconds: int
+    trailing_close_percent: Decimal
+    trailing_unit_factor: Decimal
 
 
 @dataclass(frozen=True)
@@ -559,6 +565,14 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "
                           "turn the cooldown off set symbol_cooldown_after_loss_enabled = false")
+    probe: ProbeConfig = built["probe"]
+    if (probe.trailing_wide_percent <= 0 or probe.trailing_tight_percent <= 0
+            or probe.trailing_close_percent <= 0 or probe.trailing_observe_seconds <= 0
+            or probe.trailing_trigger_seconds <= 0 or probe.trailing_unit_factor <= 1):
+        raise ConfigError("[probe] trailing_* values must be above 0 and "
+                          "trailing_unit_factor above 1")
+    if probe.trailing_tight_percent >= probe.trailing_wide_percent:
+        raise ConfigError("[probe] trailing_tight_percent must be below trailing_wide_percent")
     if not 1 <= risk.max_open_positions <= md.stream_reserved_symbols:
         raise ConfigError("[risk] max_open_positions must be at least 1 and at most "
                           "[market_data] stream_reserved_symbols (a stream slot per position)")

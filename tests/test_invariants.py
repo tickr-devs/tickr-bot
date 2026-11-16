@@ -532,8 +532,9 @@ def test_only_engine_open_trade_creates_entries_and_only_the_engine_sends():
                 elif name == "open_trade":
                     openers.append(f"{rel}:{fn.name}")
     assert entry_writers == ["engine/core.py:open_trade"]
-    # The one other sender: the owner-run F7 probe, which holds the bot's lock (no engine runs
-    # next to it), records every order before sending it and never resends.
+    # The one other sender: the owner-run probes' shared plumbing (F7, and the trailing probe
+    # through it), which hold the bot's lock (no engine runs next to them), record every order
+    # before sending it and never resend.
     assert sorted(set(senders)) == ["engine/core.py:_cancel", "engine/core.py:_send",
                                     "engine/session_probe.py:finish",
                                     "engine/session_probe.py:place"]
@@ -793,3 +794,13 @@ def test_only_the_f7_probe_builds_stop_limit_orders():
                            and ast.unparse(n.value) == "OrderType"
                            for n in ast.walk(parsed(path)))})
     assert users == ["broker/webull.py", "engine/session_probe.py"]
+
+
+def test_only_the_trailing_probe_builds_trailing_stops():
+    """Structural: OrderType.TRAILING_STOP_LOSS is sent only by the trailing-stop probe; the
+    broker adapter only shapes and reads it. The engine never builds one until T1-T6 answer."""
+    users = sorted({path.relative_to(SRC).as_posix() for path in SRC.rglob("*.py")
+                    if any(isinstance(n, ast.Attribute) and n.attr == "TRAILING_STOP_LOSS"
+                           and ast.unparse(n.value) == "OrderType"
+                           for n in ast.walk(parsed(path)))})
+    assert users == ["broker/webull.py", "engine/trailing_probe.py"]

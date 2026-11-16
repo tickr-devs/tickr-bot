@@ -400,6 +400,31 @@ def _probe_attached_stop(args: argparse.Namespace) -> int:
         return code
 
 
+def _probe_trailing(args: argparse.Namespace) -> int:
+    """Probe T in the regular session: does Webull's trailing stop work as the broker stop for
+    several positions (engine/trailing_probe.py)? Exit 0 answered, 3 refused, 4 the operator
+    must close a leftover position in the Webull app."""
+    from tickr.engine import session_probe, trailing_probe
+
+    cfg = config_module.load(args.config)
+    gate = config_module.trading_gate(cfg)
+    if not gate.open:
+        raise ManualRefused(f"trading gate closed: {gate.cause}")
+    if not session_probe.SYMBOL.match(args.symbol):
+        raise ManualRefused(f"{args.symbol!r} is not a ticker")
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    check_window(cfg, calendar, NOW())
+    _, lock_path = data_paths(cfg)
+    with SingleInstanceLock(lock_path):
+        broker, market = PROBE_ADAPTERS(cfg)
+        folder = session_probe.evidence_folder(cfg, NOW(), "trailing")
+        print(f"probe-trailing {args.symbol}; evidence in {folder}")
+        code = trailing_probe.run(cfg, broker, market, args.symbol, folder, now=NOW,
+                                  sleep=SLEEP, out=print)
+        print(f"summary: {folder / 'summary.json'}")
+        return code
+
+
 def _check_quote(args: argparse.Namespace) -> int:
     """Read-only: one snapshot quote through the probes' market-data path, and whether its age
     passes the check `probe-replace-stop` applies. Sends no orders. Exit 0 fresh, 3 not."""
@@ -745,6 +770,10 @@ def main(argv: list[str] | None = None) -> int:
                               "bot stopped, account flat: does an entry's attached stop protect "
                               "its fill at once")
     attached.add_argument("symbol")
+    trailing = sub.add_parser("probe-trailing", help="probe T in the regular session, bot "
+                              "stopped, account flat: does Webull's trailing stop work as "
+                              "the broker stop")
+    trailing.add_argument("symbol")
     sub.add_parser("run", help="the bot service (launchd): protect, obey commands, drain on "
                    "SIGTERM")
     sub.add_parser("resume", help="recover after a crash and keep protecting open trades")
@@ -787,6 +816,8 @@ def main(argv: list[str] | None = None) -> int:
             return _probe_extended(args)
         if args.command == "probe-attached-stop":
             return _probe_attached_stop(args)
+        if args.command == "probe-trailing":
+            return _probe_trailing(args)
         if args.command == "check-quote":
             return _check_quote(args)
         if args.command == "explain":

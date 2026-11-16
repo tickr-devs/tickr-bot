@@ -120,7 +120,7 @@ def test_fill_price_is_decimal():
         {"total_quantity": None},
         {"status": None},
         {"side": "SHORT"},
-        {"order_type": "TRAILING_STOP_LOSS"},
+        {"order_type": "TRAILING_STOP_LOSS_LIMIT"},
         {"filled_quantity": 0.0},
         {"account_id": "SOMEONE-ELSE"},
     ],
@@ -176,7 +176,7 @@ def row(**changes) -> dict:
 def test_foreign_unsupported_order_does_not_hide_our_stop():
     our_stop = row(client_order_id="ap-stop-1", side="SELL", order_type="STOP_LOSS",
                    status="SUBMITTED", stop_price="95.00", limit_price=None)
-    manual_trailing = row(client_order_id="app-manual", order_type="TRAILING_STOP_LOSS",
+    manual_trailing = row(client_order_id="app-manual", order_type="TRAILING_STOP_LOSS_LIMIT",
                           side="SELL", status="SUBMITTED")
     manual_short = row(client_order_id="", side="SHORT", status="SUBMITTED")
     b, _, _ = broker(open_orders_page(our_stop, manual_trailing, manual_short))
@@ -195,7 +195,7 @@ def test_readable_foreign_order_is_returned():
 
 
 def test_own_malformed_row_still_fails_the_read():
-    broken = row(client_order_id="ap-1", order_type="TRAILING_STOP_LOSS")
+    broken = row(client_order_id="ap-1", order_type="TRAILING_STOP_LOSS_LIMIT")
     b, _, _ = broker(open_orders_page(broken))
     with pytest.raises(MalformedResponse):
         b.open_orders()

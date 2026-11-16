@@ -201,7 +201,7 @@ extended_trigger_seconds = 180
 extended_close_percent = 2
 # probe-extended: seconds the positions read may take to agree with the fills Detail proved, read once per
 # [orders] detail_poll_seconds, before a SELL, the close or the final verdict; still different = the probe stops and
-# exits 4; read by the probe-extended command.
+# exits 4; read by the probe-extended and probe-trailing commands.
 extended_position_agree_seconds = 15
 # probe-attached-stop (F8): the shape tests' MASTER LIMIT BUY sits this many percent below the bid (and a bracket's
 # STOP_PROFIT LIMIT SELL this many percent above the ask), so neither can fill; read by the probe-attached-stop command.
@@ -212,6 +212,26 @@ attached_observe_seconds = 9
 # probe-attached-stop: seconds the stop leg is read after the MASTER fills, until it is working for the filled
 # quantity and listed in the open orders; read by the probe-attached-stop command.
 attached_stop_wait_seconds = 30
+# probe-trailing: the wide trailing stop's distance, percent (the rollout guide's 20 % trail for several positions); sent as
+# trailing_stop_step = this / 100, the SDK sample's ratio form, and the stop price Detail shows says which unit Webull
+# reads; read by the probe-trailing command.
+trailing_wide_percent = 20
+# probe-trailing: the tight trailing stop's distance, percent, so it triggers within trailing_trigger_seconds on an active
+# stock; sent only once the wide stop proved the unit; read by the probe-trailing command.
+trailing_tight_percent = 0.5
+# probe-trailing: seconds the wide trailing stop is watched (Detail and a quote each [orders] detail_poll_seconds) for
+# its stop price and whether it rises with the price, before it is cancelled; read by the probe-trailing command.
+trailing_observe_seconds = 120
+# probe-trailing: seconds the tight trailing stop is watched for a trigger before it is cancelled; read by the
+# probe-trailing command.
+trailing_trigger_seconds = 300
+# probe-trailing: the closing SELL LIMIT lies this many percent below the bid, so it fills at once; read by the
+# probe-trailing command.
+trailing_close_percent = 1
+# probe-trailing: T2 picks the unit (ratio or percent) whose distance is within this factor of the stop distance Detail
+# shows; the two candidates differ a hundredfold and the stop follows the high, not the bid read with it, so cents do
+# not decide; a ratio; read by the probe-trailing command.
+trailing_unit_factor = 3
 
 [api]
 # Local API bind address; loopback only; read by the api server.

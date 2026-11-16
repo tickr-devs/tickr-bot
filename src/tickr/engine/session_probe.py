@@ -163,7 +163,7 @@ def detail_row(d: OrderDetail) -> dict[str, Any]:
             "side": d.side, "type": d.order_type, "status": d.raw_status, "state": d.state,
             "quantity": d.quantity, "filled": d.filled_quantity,
             "fill_price": d.average_fill_price, "stop_price": d.stop_price,
-            "limit_price": d.limit_price}
+            "limit_price": d.limit_price, "trailing_stop_step": d.trailing_stop_step}
 
 
 def quote_row(q: Quote) -> dict[str, Any]:
@@ -257,7 +257,7 @@ class Probe:
         self._log("intent", case=name, client_order_id=request.client_order_id,
                   side=request.side, type=request.order_type, session=request.session,
                   quantity=request.quantity, limit_price=request.limit_price,
-                  stop_price=request.stop_price)
+                  stop_price=request.stop_price, trailing_stop_step=request.trailing_stop_step)
         try:
             ack = self.broker.place(request)
         except Refused as exc:
@@ -333,12 +333,14 @@ class Probe:
 
     def request(self, cid: str, side: Side, order_type: OrderType, quantity: Decimal,
                 *, session: TradingSession | None = None, limit: Decimal | None = None,
-                stop: Decimal | None = None) -> OrderRequest:
+                stop: Decimal | None = None,
+                trailing_step: Decimal | None = None) -> OrderRequest:
         return OrderRequest(client_order_id=cid, symbol=self.symbol, side=side,
                             order_type=order_type, quantity=quantity,
                             time_in_force=TimeInForce.DAY,
                             session=self.order_session if session is None else session,
-                            limit_price=limit, stop_price=stop)
+                            limit_price=limit, stop_price=stop,
+                            trailing_stop_step=trailing_step)
 
     # -- steps ------------------------------------------------------------------------------
 
