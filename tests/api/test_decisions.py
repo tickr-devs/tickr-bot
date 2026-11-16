@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import threading
 from dataclasses import replace
@@ -24,6 +25,8 @@ from .schema_check import errors
 from .test_server import Clock, doc, request
 
 ROOT = Path(__file__).resolve().parents[2]
+# The `[strategy] observers` line of config/bot.toml, whatever it ships with.
+OBSERVERS_LINE = re.compile(r"(?m)^observers = \[.*\]$")
 BAR = T0.replace(microsecond=0)
 DAY = BAR.date()  # 10:00 in New York: the same date
 M1 = timedelta(minutes=1)
@@ -60,9 +63,10 @@ def _write(log: DecisionLog, *records: DecisionRecord, tail: str = "", day=DAY) 
 def _cfg(tmp_path, observers: str):
     (tmp_path / "config").mkdir()
     text = (ROOT / "config" / "bot.toml").read_text("utf-8")
-    assert text.count("\nobservers = []\n") == 1
+    text, count = OBSERVERS_LINE.subn(f"observers = {observers}", text)
+    assert count == 1
     path = tmp_path / "config" / "bot.toml"
-    path.write_text(text.replace("\nobservers = []\n", f"\nobservers = {observers}\n"), "utf-8")
+    path.write_text(text, "utf-8")
     shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
     return config.load(path)
 

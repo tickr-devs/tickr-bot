@@ -111,11 +111,14 @@ class Rehearsal:
     def status(self) -> api.StatusV1:
         return api.read_status(self.paths.status)
 
-    def decisions(self) -> list[dict[str, Any]]:
+    def decisions(self, role: str = "active") -> list[dict[str, Any]]:
+        """The day's recorded decisions of one role: the active strategy by default; the
+        shipped observers (config/bot.toml) write theirs to the same file."""
         folder = (self.config.root / self.config.run.data_dir / self.config.observers.decisions_dir
                   / self.config.environment_name / DAY.isoformat())
         path = folder / "decisions.jsonl"
-        return [json.loads(line) for line in path.read_text("utf-8").splitlines()]
+        rows = [json.loads(line) for line in path.read_text("utf-8").splitlines()]
+        return [row for row in rows if row["role"] == role]
 
     def fills(self, symbol: str) -> list[tuple[datetime, str, str, Decimal, Decimal]]:
         return [(at, side, kind, qty, price) for at, s, side, kind, qty, price

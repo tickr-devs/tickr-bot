@@ -28,6 +28,16 @@ version). Every identity (name + version) must be distinct, the active one inclu
 problems are refused with one cause (`ObserverError`): missing folder, unknown module, values
 refused by the strategy, duplicate identity, more than `max_observers`.
 
+## Shipped observers: relative-volume variants of price-action-v3
+
+`config/bot.toml` ships with two observers, `strategies/price-action-v3-relvol-1.5` and
+`price-action-v3-relvol-1.75`: full copies of the active `price-action-v3` with only
+`[indicators] minimum_relative_volume` lowered from 2.0 (and their own `version`), so the apps
+show live, on the same data, what a looser relative-volume filter would have done (owner
+2026-11-16; most active decisions are refused by that check). `tests/observers` checks that each
+differs from the active strategy in that value and the version only. When the active strategy
+changes, these folders must follow it or be replaced.
+
 ## Candidate: price-action-v2
 
 `strategies/price-action-v2/` is price-action-v1 (same values) plus two backlog rules, in

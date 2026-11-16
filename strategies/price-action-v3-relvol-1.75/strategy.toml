@@ -1,0 +1,96 @@
+# Observer variant of "price-action-v3" v2 (owner 2026-11-16): every value equal to strategies/price-action-v3
+# except [indicators] minimum_relative_volume = 1.75 (active: 2.0), to see live what a looser relative-volume
+# filter would trade. Same strategy module; it never trades (docs/observers.md). Changing any value means a new `version`.
+
+[strategy]
+# Strategy name (the module this variant uses, see [observers] strategy_modules); recorded with every decision.
+name = "price-action-v3"
+# Strategy version; bump on any value change; recorded with every decision and trade.
+version = "2-relvol-1.75"
+
+[indicators]
+# Fast exponential moving average length in completed M1 closes.
+fast_ema_period = 9
+# Slow exponential moving average length in completed M1 closes.
+slow_ema_period = 20
+# Average true range (Wilder) length in completed M1 bars.
+atr_period = 14
+# Number of prior sessions averaged for relative cumulative volume.
+relative_volume_sessions = 5
+# Minimum relative cumulative volume (current / average of prior sessions at the same minute).
+minimum_relative_volume = 1.75
+# Missing prior-session history for relative volume: true = refuse with a cause.
+refuse_when_relative_volume_unavailable = true
+# Warm-up: EMA and ATR need this many periods of completed M1 bars (prior sessions included)
+# before any decision, so the first-value EMA seed has decayed. Multiple of each period.
+# Read by price_action_v1 (through v3) (history check). ATR spans overnight gaps between sessions.
+warmup_period_multiple = 10
+
+[breakout]
+# Prior completed M1 bars whose highest high must be broken; trigger = that high, invalidation = their lowest low.
+lookback_bars = 5
+
+[continuation]
+# Impulse bars before the base.
+impulse_bars = 2
+# Base bars after the impulse.
+base_bars = 3
+# Minimum impulse size in ATR multiples.
+minimum_impulse_atr = 1.0
+# Maximum base high-low range in ATR multiples.
+maximum_base_range_atr = 1.0
+# Maximum distance of the last close below the trigger, in ATR multiples, to arm a setup before
+# the break. Read by BOTH setups: continuation (below the base high) and breakout (below the
+# lookback high).
+maximum_pre_breakout_distance_atr = 1.0
+
+[entry]
+# Price window above the trigger in ATR multiples; beyond it the entry is missed, never chased.
+entry_extension_max_atr = 1.0
+# Cost rule: round trip (2 x spread) divided by ATR must not exceed this.
+max_round_trip_atr_ratio = 0.25
+# Cost rule: round trip divided by per-share structural risk must not exceed this.
+max_round_trip_risk_ratio = 0.20
+# Minimum stop distance in spreads (the larger of this and the percent rule applies).
+minimum_stop_spreads = 3
+# Minimum stop distance in percent of price.
+minimum_stop_percent = 0.5
+# Slippage reserve per side per leg in ATR multiples, added to per-share risk for sizing.
+slippage_reserve_atr = 0.05
+
+[liquidity]
+# The strategy owns every liquidity threshold (owner 2026-11-15): discovery applies these to the
+# active strategy's candidates, and evaluate applies them again. Read by price_action_v1 (through v3).
+# Regular session: maximum (ask - bid) / mid, ratio.
+max_spread_ratio = 0.015
+# Regular session: minimum current-session dollar volume (sum of close x volume of completed minutes), USD.
+min_dollar_volume_usd = 5000000
+
+[sizing]
+# Planned loss per trade the quantity is sized for, USD. Read by price_action_v1 (through v3):
+# quantity = floor(planned_loss_usd / risk per share). Must not exceed the platform limit in
+# config/bot.toml [risk]; the platform refuses a decision that breaches its limits.
+planned_loss_usd = 50
+# Maximum position notional the quantity is capped at, USD (quantity x top of entry window).
+# Read by price_action_v1 (through v3). Must not exceed the platform notional cap in config/bot.toml [risk].
+max_position_notional_usd = 2500
+
+[spike]
+# The fast-mover detector (tickr.data.movers) on the latest completed bar of the session. Read by price_action_v3 for
+# the spike setup and its discovery admission, and by the bot's fast-movers list for the apps. Provisional values.
+# Completed session bars before the latest one it is compared with, count (the setup needs this many + 2 session bars).
+lookback_bars = 10
+# Latest bar volume / mean volume of the lookback bars, ratio; at least this fires the volume signal.
+min_volume_ratio = 5.0
+# (Latest close - previous close) / mean true range of the lookback bars; at least this size fires the move signal
+# (either way for the list; the setup trades only an upward move).
+min_move_atr = 2.0
+# Latest bar close x volume / mean close x volume of the lookback bars, ratio; at least this fires the dollar-volume
+# signal (shown in the list; the setup does not read it).
+min_dollar_volume_ratio = 5.0
+# Least close x volume of the latest bar, USD, for it to count as a fast mover at all (no spike on a few shares).
+min_bar_dollar_volume_usd = 250000
+# Completed bars a spike stays tradable, counting the spike bar (3 = it and the next 2), while no later bar trades below
+# its low. The bot evaluates once per completed minute and a thin symbol becomes a candidate and gets a stream quote
+# only after the spike bar, so one minute is too short to meet a quote. Read by price_action_v3.
+signal_valid_bars = 3

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import signal
 from datetime import datetime, timedelta
 from decimal import Decimal as D
@@ -21,6 +23,8 @@ from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
+# The `[strategy] observers` line config/bot.toml ships with.
+SHIPPED_OBSERVERS = "observers = " + json.dumps(list(CFG.strategy.observers))
 MONDAY_11 = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
 
@@ -301,7 +305,8 @@ def test_sigterm_drain_leaves_the_stop_resting_and_cancels_the_entry(tmp_path):
 
 
 def copy_config(tmp_path: Path) -> Path:
-    for rel in ("config/bot.toml", f"strategies/{CFG.strategy.active}/strategy.toml"):
+    shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
+    for rel in ("config/bot.toml",):
         target = tmp_path / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / rel).read_bytes())
@@ -376,7 +381,7 @@ def test_cli_run_with_too_little_history_protects_but_never_enters(tmp_path, mon
 
 def test_cli_run_with_a_broken_observer_keeps_entries_on(tmp_path, monkeypatch):
     bot_toml = copy_config(tmp_path)
-    bot_toml.write_text(bot_toml.read_text().replace("observers = []",
+    bot_toml.write_text(bot_toml.read_text().replace(SHIPPED_OBSERVERS,
                                                      'observers = ["missing-folder"]', 1))
     monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(
         FakeBroker(), FakeMarketData(), lambda: None, lambda: None))

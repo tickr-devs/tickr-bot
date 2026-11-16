@@ -45,6 +45,8 @@ from tickr.types import OrderRequest, OrderType, Quote, Side, TimeInForce, Tradi
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "tickr"
 CFG = config.load(ROOT / "config" / "bot.toml")
+# The `[strategy] observers` line config/bot.toml ships with.
+SHIPPED_OBSERVERS = "observers = " + json.dumps(list(CFG.strategy.observers))
 MONDAY_11 = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)  # a regular session, in the probe window
 
 
@@ -326,7 +328,7 @@ def test_no_credential_value_reaches_output_logs_files_or_the_database(
 
     caplog.set_level(logging.DEBUG)
     bot_toml = repo_copy(tmp_path, replacements=(
-        ("observers = []", 'observers = ["missing-observer"]'),))
+        (SHIPPED_OBSERVERS, 'observers = ["missing-observer"]'),))
     cfg = config.load(bot_toml)
     if not config.trading_gate(cfg).open:
         pytest.skip("the configured environment's trading gate is closed")

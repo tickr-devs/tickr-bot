@@ -32,6 +32,7 @@ from .test_decisions import (
     FAIL,
     M1,
     OBSERVER,
+    OBSERVERS_LINE,
     PASS,
     ROOT,
     _get,
@@ -53,9 +54,9 @@ def cfg(tmp_path):
     shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
     path = tmp_path / "config" / "bot.toml"
     text = path.read_text("utf-8")
-    assert text.count("\nobservers = []\n") == 1
-    path.write_text(text.replace("\nobservers = []\n", '\nobservers = ["price-action-v2"]\n'),
-                    "utf-8")
+    text, count = OBSERVERS_LINE.subn('observers = ["price-action-v2"]', text)
+    assert count == 1
+    path.write_text(text, "utf-8")
     return config.load(path)
 
 
