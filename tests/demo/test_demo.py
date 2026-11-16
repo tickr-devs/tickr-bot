@@ -282,7 +282,7 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
         assert flow["reconcile"]["agreement"] == "match"
         watching = _get(server, "/watching")
         assert 0 < len(watching["rows"]) == watching["total"]
-        assert all(r["verdict"] in ("WATCH", "IGNORE") for r in watching["rows"])
+        assert all(r["verdict"] == "WATCH" for r in watching["rows"])
         observers = _get(server, "/observers")["observers"]
         assert [(o["name"], o["result_cause"]) for o in observers] == [
             ("price-action-v2", None)]

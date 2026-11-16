@@ -101,7 +101,7 @@ def _watch(symbol, minute, *checks, verdict=Verdict.WATCH, **kw):
     return _record(symbol=symbol, minute=minute, checks=checks, verdict=verdict, **kw)
 
 
-def test_watching_latest_per_symbol_closest_first_without_enters_or_observers(api, cfg):
+def test_watching_lists_only_latest_watch_per_symbol_closest_first(api, cfg):
     near = check("12.33", ">", "12.35", "ask_above_trigger")
     _write(DecisionLog.from_config(cfg),
            _watch("ABCD", 0, PASS, check("1", ">=", "2")),
@@ -109,17 +109,17 @@ def test_watching_latest_per_symbol_closest_first_without_enters_or_observers(ap
            _watch("WXYZ", 1, FAIL, verdict=Verdict.IGNORE),
            _watch("FLAG", 2, FLAG, verdict=Verdict.IGNORE),
            _watch("PASS", 3, PASS),  # a WATCH without a quote: nothing failed
+           _watch("WENT", 0, near),
+           _watch("WENT", 6, FAIL, verdict=Verdict.IGNORE),  # latest IGNORE: left out
            _watch("GONE", 1, near),
            _watch("GONE", 5, PASS, verdict=Verdict.ENTER, admission=Admission.TAKEN),
            _watch("HELD", 6, PASS, verdict=Verdict.HOLD),
            _observer(symbol="SHADOW", minute=7, checks=(check("9", ">", "10"),)))
     body = _get(api, "/watching", "watching-v1")
-    assert body["day"] == DAY.isoformat() and body["total"] == 4
+    assert body["day"] == DAY.isoformat() and body["total"] == 2
     assert [(r["symbol"], r["verdict"], r["closeness"], r["closeness_cause"])
             for r in body["rows"]] == [
         ("ABCD", "WATCH", "0.9983", None),
-        ("WXYZ", "IGNORE", "0.6451", None),
-        ("FLAG", "IGNORE", None, "bars_consistent: a yes/no check has no measured value"),
         ("PASS", "WATCH", None, "every recorded check passed")]
     first = body["rows"][0]
     assert first["decisive_check"] == {"rule": "ask_above_trigger", "measured": "12.33",
@@ -128,7 +128,7 @@ def test_watching_latest_per_symbol_closest_first_without_enters_or_observers(ap
     assert first["at"] == "2026-11-16T15:04:00.000Z"
     assert first["strategy"] == {"name": ACTIVE[0], "version": ACTIVE[1]}
     assert (first["quote_age_seconds"], first["quote_age_cause"]) == (None, NOT_RECORDED)
-    assert body["rows"][3]["decisive_check"] is None
+    assert body["rows"][1]["decisive_check"] is None
 
 
 def test_watching_lists_every_symbol_and_ties_go_by_symbol():

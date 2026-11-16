@@ -1682,7 +1682,6 @@ ALL_CHECKS_PASSED = "every recorded check passed"
 QUOTE_AGE_NOT_RECORDED = "not recorded: decision records hold no quote time"
 _RISE = (">", ">=")  # passes once measured rises to the threshold
 _FALL = ("<", "<=")  # passes once measured falls to the threshold
-_NOT_WATCHING = (Verdict.ENTER, Verdict.HOLD, Verdict.EXIT)
 # Rule names the strategies record for their sizing (strategy/price_action_v1.py, simple.py).
 QUANTITY_RULE = "quantity"
 DAILY_ROOM_RULE = "daily_loss_budget_usd"
@@ -1743,13 +1742,14 @@ def shown_check(check: Check, places: int) -> CheckV1:
 
 def watching_document(day: date, records: tuple[DecisionRecord, ...], places: int,
                       check_places: int) -> WatchingV1:
-    """`records`: active-strategy records of `day`. The latest decision per symbol unless it is
-    ENTER, HOLD or EXIT (entering or in a position); closest first, then by symbol."""
+    """`records`: active-strategy records of `day`. The symbols whose latest decision is WATCH
+    (the strategy is waiting for its setup); IGNORE, ENTER, HOLD and EXIT are left out. Closest
+    first, then by symbol."""
     latest = {r.symbol: r for r in _oldest_first(records)}
     rows = []
     for r in latest.values():
         d = r.decision
-        if d.verdict in _NOT_WATCHING:
+        if d.verdict is not Verdict.WATCH:
             continue
         decisive = d.decisive
         value, cause = closeness(decisive, places)

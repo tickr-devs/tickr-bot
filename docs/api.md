@@ -978,9 +978,9 @@ is an unreadable database.
 ### GET /watching (read-only)
 
 `/watching?date=` (date optional, default today in New York) is "Watching closely": from the
-decision file, the latest record per symbol of the active strategy (role `active`) that day,
-left out when its verdict is `ENTER`, `HOLD` or `EXIT` (entering, or in a position), so a past
-day shows the state at the close. Each row: `symbol`, `at` (bar start), `strategy`, `verdict`
+decision file, the symbols whose latest record of the active strategy (role `active`) that day
+is `WATCH`: the strategy is waiting for its setup. A symbol whose latest verdict is `IGNORE`,
+`ENTER`, `HOLD` or `EXIT` is left out. A past day shows the state at the close. Each row: `symbol`, `at` (bar start), `strategy`, `verdict`
 (explain-v1 enum), `decisive_check` (explain-v1 check shape: the first failed check in the
 order evaluated, the same as explain-v1 `first_failed_check`; `null` when every recorded check
 passed, as for a `WATCH` made without a quote), `closeness`, `closeness_cause`,
