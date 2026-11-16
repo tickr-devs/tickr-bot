@@ -286,7 +286,8 @@ def _trade(row: Any) -> TradeRow:
 def _detail_priority(row: OrderRow, poll_seconds: float) -> float:
     """Oldest read attempt first, so no order can starve the others; the class only gives a
     bounded head start of up to three poll intervals: unknown sends, then unverified stops,
-    then entries and exits, then verified stops and rechecks of orders given up on."""
+    then entries and exits, then verified stops and rechecks of orders given up on. (A stop
+    whose cancel waits for Detail goes before all of these: `Engine._observe`.)"""
     if row.send_state is SendState.ABSENT:
         boost = 0  # a recheck is a fallback: an unexplained position is usually stale Detail
     elif row.send_state is SendState.UNKNOWN:
@@ -373,6 +374,11 @@ class Engine:
         # Orders whose latest Detail read in this process was answered. The exit cancels a stop
         # only when it is in here, so after a restart a stop is read once before its cancel.
         self._detail_answered_ids: set[str] = set()
+        # Per symbol with an open trade: (held, Detail quantity) as the latest positions read
+        # and our records disagreed, and when that disagreement was first seen (engine clock).
+        # The symbol's live orders not read since then go to the head of the Detail queue
+        # (`_observe`), once each per new disagreement. Memory only.
+        self._moved: dict[str, tuple[Decimal, Decimal, float]] = {}
 
     # --- fences ----------------------------------------------------------------------------
 
@@ -557,8 +563,13 @@ class Engine:
         fences = self.entry_fences(symbol)
         if fences:
             raise EntryRefused("entries fenced: " + ", ".join(sorted(fences)))
-        if len(self.trades()) >= self.config.risk.max_open_positions:
+        trades = self.trades()
+        if len(trades) >= self.config.risk.max_open_positions:
             raise EntryRefused("open position limit reached")
+        if any(t.symbol == symbol for t in trades):
+            # One trade per symbol: trades in one symbol would share the broker position that
+            # each trade's stop, exit and reconciliation are sized against.
+            raise EntryRefused(f"a trade in {symbol} is already open")
         if quantity <= 0 or quantity != quantity.to_integral_value():
             raise EntryRefused("quantity must be a positive whole number")
         if not ZERO < stop_price < limit_price:
@@ -1177,8 +1188,9 @@ class Engine:
                and (o.broker_state is None or not o.broker_state.terminal)]
         if held is not None:
             due += self._lost_fill_suspects(held)
+            self._note_moved(held)
         poll = float(self.config.orders.detail_poll_seconds)
-        due.sort(key=lambda row: _detail_priority(row, poll))
+        due.sort(key=lambda row: (self._read_first(row), _detail_priority(row, poll)))
         for row in due[:self.config.orders.detail_reads_per_step]:
             try:
                 if row.send_state is SendState.ABSENT:
@@ -1189,6 +1201,35 @@ class Engine:
                 self._set_fence(Fence.DETAIL_BUDGET, "", "Detail reads refused by the budget")
                 return
         self._clear_fence(Fence.DETAIL_BUDGET)
+
+    def _note_moved(self, held: dict[str, Decimal]) -> None:
+        """Record each open trade's symbol whose broker position differs from what Detail
+        says we hold (a fill or a stop-out Detail has not shown yet, usually), keeping the
+        time a disagreement was first seen while it stays the same."""
+        moved = {}
+        for symbol in {t.symbol for t in self.trades()}:
+            pair = (held.get(symbol, ZERO), self._expected_in(symbol))
+            if pair[0] == pair[1]:
+                continue
+            last = self._moved.get(symbol)
+            moved[symbol] = last if last is not None and last[:2] == pair else (
+                *pair, self.clock())
+        self._moved = moved
+
+    def _read_first(self, row: OrderRow) -> int:
+        """Where this order's Detail read goes, so the delay from a fill or a stop-out to its
+        Detail does not grow with the number of open orders: 0, first, a stop whose cancel
+        waits for Detail, not read since that cancel (its position may have no stop until the
+        read confirms it, and its close waits for it); 1, a live order in a symbol whose
+        broker position moved away from Detail, not read since that was first seen; 2, the
+        common queue. Once each per event: after that read the order is back in the common
+        queue, so a lasting disagreement (shares bought by hand) never starves the others."""
+        last = row.last_detail_at or 0.0
+        if (row.leg is Leg.STOP and row.cancel_state in _CANCEL_AWAITING
+                and row.cancel_at is not None and last < row.cancel_at):
+            return 0
+        moved = self._moved.get(row.symbol)
+        return 1 if moved is not None and row.live and last < moved[2] else 2
 
     def _lost_fill_suspects(self, held: dict[str, Decimal]) -> list[OrderRow]:
         """Orders we gave up on whose fill would explain the position: any in a symbol
@@ -1558,6 +1599,12 @@ class Engine:
             return
         if self._replace_blocks(trade, stops):
             return  # keep our stops; a sale could add to an untracked stop of the replace
+        if self._other_teardown(trade):
+            # One position at a time loses its stop: with several closing at once (session
+            # flatten, emergency), each keeps its stop until the one before it has its close
+            # sent, so no position waits stopless for other positions' Detail reads.
+            self._protect(trade, stops, expected)
+            return
         live_stops = [s for s in stops if s.live]
         for stop in live_stops:
             if stop.client_order_id not in self._detail_answered_ids:
@@ -1577,6 +1624,16 @@ class Engine:
             cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
                                      OrderType.MARKET, uncovered)
         self._send(cid)
+
+    def _other_teardown(self, trade: TradeRow) -> bool:
+        """Whether another trade has a stop whose cancel waits for Detail (its position may be
+        without a stop until its close is sent), so this trade keeps its own stops for now. A
+        trade already cancelling its own stops goes on. A stop whose Detail reads keep failing
+        (the detail-unreadable fence alerts) does not hold the others back."""
+        if any(s.cancelling for s in self.orders(trade.trade_id) if s.leg is Leg.STOP):
+            return False
+        return any(o.leg is Leg.STOP and o.trade_id != trade.trade_id and o.live
+                   and o.cancelling and not self._detail_lost(o) for o in self.orders())
 
     def _may_close(self, trade: TradeRow, held: Decimal | None, expected: Decimal) -> bool:
         """Whether a close of this trade's own Detail quantity may be sent (owner decision

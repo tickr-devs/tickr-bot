@@ -571,9 +571,9 @@ class Service:
 
     def _ordinary_block(self) -> api.EntryBlock | None:
         """Why admission refuses every entry right now although nothing is wrong: no session,
-        outside the entry window, or a trade of our own is already open. Reported with
-        `attention = False` so the apps can say "not now" without a warning. The answers are
-        admission's own (its session check and its counts of our positions and orders), so
+        outside the entry window, or our own open trades take every position slot. Reported
+        with `attention = False` so the apps can say "not now" without a warning. The answers
+        are admission's own (its session check and its count of slots in use), so
         the status cannot say "allowed" while admission refuses. A calendar that cannot
         answer is a real block."""
         from tickr.runtime import entries  # entries imports this module
@@ -583,7 +583,7 @@ class Service:
         refused = session_refusal(day, now, AdmissionLimits.from_config(self.config))
         if refused is not None:
             return self._session_block(day, refused)
-        if any(entries.own_exposure(self.engine)):
+        if entries.slots_in_use(self.engine) >= self.config.risk.max_open_positions:
             return api.EntryBlock(api.OWN_TRADE_OPEN, "The bot already has a trade open.",
                                   attention=False)
         return None

@@ -118,8 +118,9 @@ def check_timings(config: Config) -> None:
     0 < watchdog_restart_before_flatten_seconds
       < (last_entry_minutes_before_close - flatten_minutes_before_close) in seconds,
     with a restart command and a positive timeout for it;
-    and unless the session flatten can still send its close:
-    0 <= [session] close_order_cutoff_seconds < flatten_minutes_before_close (in seconds)."""
+    and unless the session flatten can still send its close, for every slot:
+    0 <= [session] close_order_cutoff_seconds < flatten_minutes_before_close (in seconds) and
+    max_open_positions x 2 x detail_poll_seconds <= that time minus the cutoff."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -152,6 +153,14 @@ def check_timings(config: Config) -> None:
     if not 0 <= cutoff < window:
         raise ConfigError(f"[session] close_order_cutoff_seconds ({cutoff}) must be from 0 to "
                           f"below the flatten-to-close time ({window} s)")
+    # The session flatten closes one position at a time, two Detail reads each (the stop's
+    # cancel, then the close goes out): every slot must be closed before the cutoff.
+    flatten = config.risk.max_open_positions * 2 * config.orders.detail_poll_seconds
+    if flatten > window - cutoff:
+        raise ConfigError(
+            f"[risk] max_open_positions x 2 x [orders] detail_poll_seconds ({flatten} s) must "
+            f"fit between the flatten and [session] close_order_cutoff_seconds "
+            f"({window - cutoff} s)")
     restart = runtime.watchdog_restart_before_flatten_seconds
     entry_gap = (config.session.last_entry_minutes_before_close
                  - config.session.flatten_minutes_before_close) * SECONDS_PER_MINUTE

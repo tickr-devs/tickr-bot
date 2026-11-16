@@ -194,17 +194,25 @@ def last_loss_at(engine: Engine, symbol: str, now: datetime) -> datetime | None:
     return max(closes, default=None)
 
 
-def own_exposure(engine: Engine) -> tuple[int, int]:
-    """Our own open positions and our own working orders other than stops, as admission
-    counts them. The status document reads the same counts."""
+def own_exposure(engine: Engine, symbol: str | None = None) -> tuple[int, int]:
+    """Our own open positions and our own working orders other than stops, in `symbol` (as
+    admission counts them for a decision in it) or in every symbol (None)."""
     own_positions = 0
     working = 0
     for trade in engine.trades():
+        if symbol is not None and trade.symbol != symbol:
+            continue
         orders = engine.orders(trade.trade_id)
         if engine.expected_quantity(orders) > 0:
             own_positions += 1
         working += sum(1 for o in orders if o.live and o.leg is not Leg.STOP)
     return own_positions, working
+
+
+def slots_in_use(engine: Engine) -> int:
+    """Open own trades in any symbol (a position, a working entry or an exit in progress):
+    each takes one of `[risk] max_open_positions`, as `Engine.open_trade` counts them."""
+    return len(engine.trades())
 
 
 def session_at(calendar: SessionCalendar | None, now: datetime) -> MarketDay | CalendarRefused:
@@ -238,7 +246,7 @@ class EntryDesk:
     def _inputs(self, decision: Decision, quote: Quote | None, now: datetime) -> AdmissionInputs:
         engine = self.engine
         fences = [name.split(":", 1)[0] for name in engine.fences()]
-        own_positions, working = own_exposure(engine)
+        own_positions, working = own_exposure(engine, decision.symbol)
         # Manual trades are ignored (owner 2026-11-16): a foreign position or order blocks only
         # an entry in its own symbol, and does not count toward the position limit. A foreign
         # order whose symbol is not known blocks every entry (refuse, never guess).
@@ -259,7 +267,7 @@ class EntryDesk:
             now=now,
             own_open_positions=own_positions,
             own_working_orders=working,
-            open_positions=own_positions,
+            open_positions=slots_in_use(engine),
             symbol_last_loss_at=last_loss_at(engine, decision.symbol, now),
             decision=decision,
             limit_price=limit,

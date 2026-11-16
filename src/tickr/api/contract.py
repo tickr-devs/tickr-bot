@@ -191,7 +191,7 @@ class StrategyId:
     version: str
 
 
-# EntryBlock cause while a position or a working order of the bot's own exists.
+# EntryBlock cause while the bot's own open trades take every slot of `[risk] max_open_positions`.
 OWN_TRADE_OPEN = "own_trade_open"
 
 

@@ -40,7 +40,12 @@ max_daily_loss_usd = 300
 # (owner 2026-11-14), but below this room entries stop and status says "daily ceiling" (a smaller trade is not worth
 # its costs; owner confirmed 2026-11-14); read by runtime.entries (strategy loss budget and status).
 min_daily_room_usd = 10
-# Maximum simultaneous open positions (v1 supports 1); read by safety.
+# Position slots: most open trades at once, count; a trade (working entry, position or exit in progress) takes one slot,
+# at most one trade per symbol, every trade has its own broker stop and all share the daily loss ceiling (their planned
+# losses are reserved against it). 1 until the owner enables several positions (backlog X1); at most
+# [market_data] stream_reserved_symbols (each position keeps a stream slot), and the session flatten (one position at a
+# time, two [orders] detail_poll_seconds each) must fit before [session] close_order_cutoff_seconds (checked by the
+# start-time checks, runtime.launchd.check_timings); read by safety, the engine and the status.
 max_open_positions = 1
 # Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.
 max_quote_age_seconds = 5

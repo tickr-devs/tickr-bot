@@ -263,7 +263,7 @@ def test_demo_day_runs_the_real_bot_and_the_api_serves_it(tmp_path):
         assert all(s["prices_after"][0]["price"] and s["what_if"]["result_gross_usd"]
                    and s["what_if"]["cause"] is None for s in skipped["signals"])
         assert {s["refusal"]["code"] for s in skipped["signals"]} == {
-            "SYMBOL_COOLDOWN", "OWN_POSITION_OPEN"}
+            "SYMBOL_COOLDOWN", "POSITION_LIMIT_REACHED"}
         # The cooldown refusal carries its times: 30 minutes from AAA's stop-out.
         cooldown = next(s["refusal"] for s in skipped["signals"]
                         if s["refusal"]["code"] == "SYMBOL_COOLDOWN")
@@ -548,7 +548,7 @@ def test_live_loop_makes_the_real_bot_trade_and_refuse_every_cycle(tmp_path):
     refused = {json.loads(line)["refusal_cause"].split(":")[0]
                for line in decisions.read_text("utf-8").splitlines()
                if json.loads(line)["admission"] == "refused"}
-    assert {"OWN_POSITION_OPEN", "ENTRY_STOP_SET"} <= refused
+    assert {"POSITION_LIMIT_REACHED", "ENTRY_STOP_SET"} <= refused
 
 
 def test_symbols_only_the_loop_moves_are_listed_shortly_before_the_clock():

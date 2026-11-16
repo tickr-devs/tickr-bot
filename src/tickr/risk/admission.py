@@ -97,10 +97,14 @@ class AdmissionInputs:
     """Calendar answer for the New York date of `now`."""
     now: datetime
     own_open_positions: int
+    """The bot's own positions in the decision's symbol (one trade per symbol at a time)."""
     own_working_orders: int
+    """The bot's own working orders other than stops (entries, exits) in the decision's
+    symbol."""
     open_positions: int
-    """Positions counted against the position limit: the bot's own (manual trades are ignored,
-    owner 2026-11-16)."""
+    """Slots in use against `max_open_positions`: the bot's open trades in any symbol (a
+    position, a working entry or an exit in progress), as `Engine.open_trade` counts them.
+    Manual trades are ignored (owner 2026-11-16)."""
     symbol_last_loss_at: datetime | None
     """When the latest trade in the decision's symbol that closed today (New York date) at a
     loss, or with an unknown result, closed; None = no such trade today."""
@@ -208,6 +212,8 @@ def _check_own_state(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | No
     for name, value in counts.items():
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return _refuse(C.COUNT_INVALID, f"{name} {value!r} is not a count")
+    # One trade per symbol: a second trade in a held symbol would share its broker position,
+    # and the stop, the exit and reconciliation of each trade are sized per symbol.
     if i.own_open_positions:
         return _refuse(C.OWN_POSITION_OPEN, f"{i.own_open_positions} own position(s) open")
     if i.own_working_orders:
