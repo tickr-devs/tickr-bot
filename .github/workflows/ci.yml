@@ -37,8 +37,11 @@ jobs:
           fi
           # Its own command, so a failing diff stops the job instead of reading as "no changes".
           files=$(git diff --name-only --no-renames "$BASE...$HEAD")
+          # apps/ is never skipped: the Python suite reads app sources (Palette and Tokens for the
+          # brand assets, every Swift file for the Swift rules, the String Catalogs, the demo
+          # recording), so an app-only change can break it (main went red after #486).
           others=$(printf '%s\n' "$files" | grep -Ev \
-            '^(docs/|apps/(ios|macos|shared)/|Tickr\.xcworkspace/|README\.md$|CLAUDE\.md$|\.github/workflows/(ios|macos)-app\.yml$)' \
+            '^(docs/|Tickr\.xcworkspace/|README\.md$|CLAUDE\.md$|\.github/workflows/(ios|macos)-app\.yml$)' \
             || true)
           if [ -n "$others" ]; then echo "python=true"; else echo "python=false"; fi >> "$GITHUB_OUTPUT"
   test:
@@ -53,7 +56,7 @@ jobs:
           echo "The changed-files check failed."
           exit 1
       - if: needs.changes.outputs.python != 'true'
-        run: echo "Only docs or app sources changed; Python checks skipped."
+        run: echo "Only docs or Xcode workspace files changed; Python checks skipped."
       - if: needs.changes.outputs.python == 'true'
         uses: actions/checkout@v4
       - if: needs.changes.outputs.python == 'true'
