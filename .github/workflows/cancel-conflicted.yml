@@ -1,0 +1,55 @@
+name: cancel-conflicted
+# Stops the checks of pull requests that a merge to main has just put in conflict. GitHub starts no
+# new pull request run while a pull request conflicts with its base, but runs already going or
+# waiting when the conflict appears carry on, and their result is never used: the conflict must be
+# resolved with a new commit, which starts the checks again. On macOS runners (five at once for the
+# whole account) those runs keep other pull requests waiting. After every push to main this job
+# asks GitHub which open pull requests into main now conflict and cancels their unfinished pull
+# request runs. Linux only; it checks out no code.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+# The newest push to main supersedes an earlier pass that is still waiting for GitHub's answer.
+concurrency:
+  group: cancel-conflicted
+  cancel-in-progress: true
+# Cancelling a run needs `actions: write`; the pull requests are only read.
+permissions:
+  actions: write
+  pull-requests: read
+jobs:
+  conflicted-runs-cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      # GitHub works out whether a pull request still merges only after it is asked, so the first
+      # answers after a push are UNKNOWN: ask up to this many times, this many seconds apart.
+      ATTEMPTS: 10
+      WAIT_SECONDS: 6
+      # The most open pull requests and runs per pull request read in one pass.
+      PAGE: 100
+    steps:
+      - name: Cancel the unfinished runs of pull requests that now conflict with main
+        run: |
+          for attempt in $(seq "$ATTEMPTS"); do
+            prs=$(gh pr list --state open --base main --limit "$PAGE" --json number,mergeable,headRefOid)
+            unknown=$(jq '[.[] | select(.mergeable == "UNKNOWN")] | length' <<<"$prs")
+            echo "attempt $attempt: $unknown pull request(s) not worked out yet"
+            [ "$unknown" = "0" ] && break
+            sleep "$WAIT_SECONDS"
+          done
+          # A pull request still UNKNOWN after the last attempt is left alone: only a known conflict
+          # cancels anything.
+          jq -r '.[] | select(.mergeable == "CONFLICTING") | "\(.number) \(.headRefOid)"' <<<"$prs" |
+          while read -r number sha; do
+            gh api "repos/$GH_REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=$PAGE" \
+              --jq '.workflow_runs[] | select(.status != "completed") | "\(.id) \(.name)"' |
+            while read -r run workflow; do
+              echo "pull request #$number conflicts with main: cancelling $workflow run $run"
+              # A run that finished in the meantime cannot be cancelled; that is not a failure.
+              gh run cancel "$run" || echo "run $run was not cancelled (already finished?)"
+            done
+          done

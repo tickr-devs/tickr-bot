@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-xdist>=3", "ruff>=0.6"]
 # Webull OpenAPI SDK, imported only by src/tickr/broker/webull.py.
 webull = ["webull-openapi-python-sdk==3.0.3"]
 # Anthropic SDK, imported only by src/tickr/advisor/client.py (the offline advisor, never the bot).

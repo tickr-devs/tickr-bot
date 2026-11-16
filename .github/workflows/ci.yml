@@ -1,29 +1,35 @@
 name: ci
-# Python tests. The `test` job always reports, because it is a required check and a workflow
-# skipped by path filters never reports it. Its steps (and the docker job) are skipped when a pull
-# request touches only docs/, the root README/CLAUDE.md or app (Swift) sources; markdown under tests/ is
-# scanned for account ids, so it always counts. Pushes to main always run everything. The Swift
-# code rules that the Python suite also checks run in swift-rules on every pull request.
+# Python tests. The `python-tests` job always reports, because it is a required check and a workflow
+# skipped by path filters never reports it. Its steps (and the demo-fixture and docker-image jobs) are
+# skipped when a pull request touches only docs/, the root README/CLAUDE.md or the Xcode workspace;
+# markdown under tests/ is scanned for account ids, so it always counts. App sources (apps/) and the
+# workflows always count: the suite reads them (tests/test_workflows.py checks the job names).
+# Pushes to main and the merge queue always run everything.
 on:
   pull_request:
+  # The merge queue: the required checks run again on the queued change on top of the newest main
+  # (and of the changes queued ahead of it), so two separately green pull requests cannot break main.
+  merge_group:
   push:
     branches: [main]
-# One run per branch: a new push cancels the run still going for the previous one.
+# One run per pull request: a new push cancels the run still going for the previous one. Runs on
+# main are never cancelled (a later merge used to cancel the earlier commit's run, so a commit that
+# broke main went unnoticed): each merged commit gets its own run, in its own group.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 # The workflow only reads the repository: its token can change nothing.
 permissions:
   contents: read
 jobs:
-  changes:
+  python-changes:
     # Says whether this change touches anything the Python suite or the image depends on.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       python: ${{ steps.diff.outputs.python }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: diff
@@ -40,63 +46,83 @@ jobs:
           # apps/ is never skipped: the Python suite reads app sources (Palette and Tokens for the
           # brand assets, every Swift file for the Swift rules, the String Catalogs, the demo
           # recording), so an app-only change can break it (main went red after #486).
+          # Workflows are never skipped either: tests/test_workflows.py reads them.
           others=$(printf '%s\n' "$files" | grep -Ev \
-            '^(docs/|Tickr\.xcworkspace/|README\.md$|CLAUDE\.md$|\.github/workflows/(ios|macos)-app\.yml$)' \
+            '^(docs/|Tickr\.xcworkspace/|README\.md$|CLAUDE\.md$)' \
             || true)
           if [ -n "$others" ]; then echo "python=true"; else echo "python=false"; fi >> "$GITHUB_OUTPUT"
-  test:
-    needs: changes
-    # Runs even when `changes` failed, so the required check fails instead of being skipped.
+  python-tests:
+    needs: python-changes
+    # Runs even when `python-changes` failed, so the required check fails instead of being skipped.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - if: needs.changes.result != 'success'
+      - if: needs.python-changes.result != 'success'
         run: |
           echo "The changed-files check failed."
           exit 1
-      - if: needs.changes.outputs.python != 'true'
+      - if: needs.python-changes.outputs.python != 'true'
         run: echo "Only docs or Xcode workspace files changed; Python checks skipped."
-      - if: needs.changes.outputs.python == 'true'
-        uses: actions/checkout@v4
-      - if: needs.changes.outputs.python == 'true'
-        uses: actions/setup-python@v5
+      - if: needs.python-changes.outputs.python == 'true'
+        uses: actions/checkout@v7
+      # uv installs exactly what uv.lock pins (ruff and pytest included), so a new release of a
+      # dependency cannot fail an unrelated pull request. Action pinned by commit: it has no major tag.
+      - if: needs.python-changes.outputs.python == 'true'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.11.32"
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - if: needs.changes.outputs.python == 'true'
-        run: pip install -e ".[dev,webull]"
-      - if: needs.changes.outputs.python == 'true'
-        run: ruff check .
-      - if: needs.changes.outputs.python == 'true'
-        run: pytest -q
+          enable-cache: true
+      - if: needs.python-changes.outputs.python == 'true'
+        run: uv sync --frozen --extra dev --extra webull
+      - if: needs.python-changes.outputs.python == 'true'
+        run: uv run --no-sync ruff check .
+      # One pytest process per core (pytest-xdist): the suite's tests share no state.
+      - if: needs.python-changes.outputs.python == 'true'
+        run: uv run --no-sync pytest -q -n auto
+  # The old name of `python-tests`, kept until main's required checks list the new names: it only
+  # repeats that job's result (a skipped job counts as passed, as it does for the requirement).
+  # Remove this job once the ruleset no longer names `test`.
+  test:
+    needs: python-tests
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.python-tests.result }}
+        run: |
+          echo "python-tests: $RESULT"
+          [ "$RESULT" = "success" ] || [ "$RESULT" = "skipped" ]
   demo-fixture:
     # Builds the real demo fixture from the committed inputs (docs/demo.md): the fixture is never
     # committed, every Mac builds its own, so a change that breaks the build (the demo day not flat
-    # at [demo] clock, the bot failing) fails here instead of on the Mac. Runs beside `test`.
-    needs: changes
-    if: needs.changes.outputs.python == 'true'
+    # at [demo] clock, the bot failing) fails here instead of on the Mac. Runs beside `python-tests`.
+    needs: python-changes
+    if: needs.python-changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      # uv installs exactly what uv.lock pins (ruff and pytest included), so a new release of a
+      # dependency cannot fail an unrelated pull request. Action pinned by commit: it has no major tag.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.11.32"
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: pip install -e .
-      - run: tickr demo --build-fixture
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run --no-sync tickr demo --build-fixture
       - run: ls -l demo-fixture
-  docker:
+  docker-image:
     # Builds the server image and checks the compose example (docs/deploy-server.md); never pushes.
-    needs: changes
-    if: needs.changes.outputs.python == 'true'
+    needs: python-changes
+    if: needs.python-changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -t tickr:ci .
       - run: docker compose -f ops/docker/compose.yaml --profile jobs config -q
         env:

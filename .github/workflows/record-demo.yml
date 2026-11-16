@@ -22,22 +22,24 @@ permissions:
   contents: write
   pull-requests: write
 jobs:
-  record:
+  demo-recording:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
-      - uses: actions/setup-python@v5
+      # uv installs exactly what uv.lock pins (ruff and pytest included), so a new release of a
+      # dependency cannot fail an unrelated pull request. Action pinned by commit: it has no major tag.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.11.32"
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: pip install -e .
-      - run: tickr demo --record
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run --no-sync tickr demo --record
       # Opens the pull request only when the recording changed; leaves no other file behind.
-      - uses: peter-evans/create-pull-request@v7
+      - uses: peter-evans/create-pull-request@v8
         with:
           branch: demo-recording
           delete-branch: true

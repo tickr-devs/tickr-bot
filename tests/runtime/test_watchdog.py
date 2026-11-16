@@ -228,7 +228,9 @@ def test_running_bot_with_fresh_status_stays_silent(cfg, tmp_path):
 AT = datetime(2026, 11, 16, 18, tzinfo=UTC)  # 13:00 ET, in the session
 
 
-@pytest.mark.parametrize("pid", [1, os.getpid()])
+# Fixed ids: the default id of the second case is the process id, which differs in every
+# pytest-xdist worker, and workers must collect the same test names.
+@pytest.mark.parametrize("pid", [1, os.getpid()], ids=["pid 1", "this process"])
 def test_alive_pid_with_stale_status_is_bot_down(cfg, tmp_path, pid):
     database, lock_path = data_paths(cfg)
     database.parent.mkdir(parents=True)
