@@ -258,3 +258,75 @@ def test_many_unknown_parts_stay_linear():
     started = time.monotonic()
     assert len(reasons.prose_reasons(text)) == 5000
     assert time.monotonic() - started < 2  # pair-wise only, never every run of parts
+
+
+# ---------------------------------------------------------------- refusals the apps show
+
+API = Path(reasons.__file__).resolve().parent
+REFUSALS = {"LabReplayRefused", "TradeWhatIfRefused", "StartRefused"}
+# One example of every refusal the Lab's replay, another version on a trade and the Start button
+# can answer, as the bot writes it (each `raise` below must have one: see the next test).
+REFUSAL_SAMPLES = (
+    "a replay is already running",
+    "the API was started without its config file path",
+    "no fetched backtest data: pool.csv is missing in [api] lab_replay_data_dir",
+    "2026-11-13 is not a day of the fetched data",
+    "compare names the same version twice",
+    "[observers] strategy_modules entry is not name=module: 'x'",
+    "[observers] strategy_modules lists 'x' twice",
+    "no strategy folder 'x' under strategies/",
+    "my-idea: strategy.toml has no [strategy] name",
+    "my-idea: unreadable",
+    "no module for strategy 'x' in [observers] strategy_modules",
+    "[observers] strategy_modules is malformed",
+    "calendar: 2026-11-16 is not in the calendar",
+    "calendar unreadable: [Errno 2] No such file",
+    "refused during the regular session until 2026-11-16T21:00:00.000Z "
+    "([api] lab_replay_outside_session_only)",
+    "refused during the regular session until 2026-11-16T21:00:00.000Z "
+    "([api] trade_whatif_outside_session_only)",
+    "no start command is configured on this machine ([api] start_bot_command is empty): start "
+    "the bot where it runs",
+    "the bot is running: nothing to start",
+    "the bot's lock file could not be read (PermissionError): nothing was started",
+    "a bot process (pid 42) still holds the lock: wait for it to end, then start again",
+    "the operator stop could not be cleared (PermissionError): nothing was started",
+    "the start command did not return within 10 s",
+    "the start command failed (FileNotFoundError)",
+    "the start command exited 1 (the operator stop was cleared, so the next scheduled start runs)",
+)
+
+
+def _raised_texts() -> list[tuple[str, str]]:
+    """(file, leading literal text) of each refusal raised in the API with a written cause."""
+    import ast
+    found = []
+    for path in sorted(API.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+            if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+                continue
+            func = node.exc.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name not in REFUSALS or not node.exc.args:
+                continue
+            arg = node.exc.args[-1]
+            parts = arg.values if isinstance(arg, ast.JoinedStr) else [arg]
+            if parts and isinstance(parts[0], ast.Constant) and isinstance(parts[0].value, str):
+                found.append((path.name, parts[0].value))
+    return found
+
+
+def test_every_written_refusal_has_a_sample():
+    raised = _raised_texts()
+    assert raised
+    missing = [(f, text) for f, text in raised
+               if not any(sample.startswith(text) or f": {text}" in sample or text in sample
+                          for sample in REFUSAL_SAMPLES)]
+    assert missing == []
+
+
+@pytest.mark.parametrize("text", REFUSAL_SAMPLES)
+def test_every_refusal_the_apps_show_has_a_code(text):
+    """So the apps say it in the person's language (apps/scripts/kit_reason_strings.py gives
+    every code an English and a Russian sentence: tests/test_api_codes.py)."""
+    assert [r.code for r in reasons.prose_reasons(text)] != [reasons.UNRECOGNIZED]

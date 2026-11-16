@@ -85,8 +85,9 @@ def refuse_in_session(settings: TradeWhatIfSettings, now: datetime) -> None:
             return
         raise TradeWhatIfRefused(f"calendar: {exc}") from exc
     if today.in_regular_session(now):
-        raise TradeWhatIfRefused("refused during the regular session "
-                                 "([api] trade_whatif_outside_session_only)")
+        raise TradeWhatIfRefused(f"refused during the regular session until "
+                                 f"{api.format_time(today.regular_close)} "
+                                 f"([api] trade_whatif_outside_session_only)")
 
 
 def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,

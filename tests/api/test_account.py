@@ -58,7 +58,8 @@ def test_missing_account_file_is_unavailable(served):
     assert resp.status == 503
     assert doc(payload) == {"error": "unavailable",
                             "cause": "the bot has not written an account file",
-                            "api_version": 1}
+                            "api_version": 1,
+                            "cause_codes": [{"code": "no_account_file", "params": {}}]}
 
 
 @pytest.mark.parametrize("text", ["{", '{"read_at": "2026-11-16T15:00:00.123Z"}'])

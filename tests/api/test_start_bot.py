@@ -179,17 +179,21 @@ def test_a_hanging_start_never_holds_back_queued_commands(api):
         assert request(server, "POST", "/commands/entry-stop", {"state": "on"})[0].status == 202
 
 
-@pytest.mark.parametrize(("runner", "cause"), [
-    (Runner(code=113), "the start command exited 113"),
-    (Runner(raises=FileNotFoundError("launchctl")), "the start command failed (FileNotFoundError)"),
+@pytest.mark.parametrize(("runner", "cause", "code"), [
+    (Runner(code=113), "the start command exited 113",
+     {"code": "start_exited", "params": {"code": "113"}}),
+    (Runner(raises=FileNotFoundError("launchctl")), "the start command failed (FileNotFoundError)",
+     {"code": "start_failed", "params": {"error": "FileNotFoundError"}}),
     (Runner(raises=subprocess.TimeoutExpired("launchctl", 10)),
-     "the start command did not return within 10 s"),
+     "the start command did not return within 10 s",
+     {"code": "start_timeout", "params": {"seconds": "10"}}),
 ])
-def test_failed_command_is_unavailable_with_its_cause(api, runner, cause):
+def test_failed_command_is_unavailable_with_its_cause(api, runner, cause, code):
     server, _ = api
     resp, body = _start(server, runner)
     assert resp.status == 503 and body == {"error": "unavailable", "cause": cause,
-                                           "api_version": contract.API_VERSION}
+                                           "api_version": contract.API_VERSION,
+                                           "cause_codes": [code]}
 
 
 def test_failure_after_clearing_the_marker_says_so(api, settings):
@@ -201,6 +205,7 @@ def test_failure_after_clearing_the_marker_says_so(api, settings):
     assert resp.status == 503
     assert body["cause"] == ("the start command exited 1 (the operator stop was cleared, so the "
                              "next scheduled start runs)")
+    assert body["cause_codes"] == [{"code": "start_exited_cleared", "params": {"code": "1"}}]
 
 
 def test_no_command_configured_is_unavailable(api):

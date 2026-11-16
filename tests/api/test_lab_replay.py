@@ -112,11 +112,20 @@ def test_idle_get_and_refusals_answer_409_with_one_cause(cfg):
         body = doc(payload)
         assert resp.status == 200 and body["state"] == "idle" and body["sessions"] == 20
         assert errors(contract.json_schema(contract.LabReplayV1), body) == []
+        # In the session the document says when a start is allowed again, before any POST.
+        assert body["available_at"] == "2026-11-16T21:00:00.000Z"
         resp, payload = request(server, "POST", "/lab/replay", {})
-        assert resp.status == 409 and "regular session" in doc(payload)["cause"]
+        refusal = doc(payload)
+        assert resp.status == 409 and refusal["cause"] == (
+            "refused during the regular session until 2026-11-16T21:00:00.000Z "
+            "([api] lab_replay_outside_session_only)")
+        assert refusal["cause_codes"] == [
+            {"code": "outside_session_only", "params": {"until": "16:00"}}]
         clock.now = SATURDAY
+        assert doc(request(server, "GET", "/lab/replay")[1])["available_at"] is None
         resp, payload = request(server, "POST", "/lab/replay", {})
         assert resp.status == 409 and "pool.csv is missing" in doc(payload)["cause"]
+        assert doc(payload)["cause_codes"] == [{"code": "no_backtest_data", "params": {}}]
         assert request(server, "POST", "/lab/replay", {"sessions": 5})[0].status == 400
         assert request(server, "POST", "/lab/replay")[0].status == 415
     finally:
@@ -165,7 +174,7 @@ def test_a_refused_backtest_fails_with_its_cause_without_the_home_folder(cfg, sp
     _wait_for_exit(lab)
     failed = lab.state()
     assert failed.state is contract.LabReplayState.FAILED
-    assert failed.cause == "data/backtest/minutes is missing"
+    assert failed.cause == "backtest refused: data/backtest/minutes is missing"
     # The next start keeps only its own run folder (and never touches other folders).
     keep = results.parent.parent / "notes"
     keep.mkdir()
@@ -351,7 +360,9 @@ def test_refused_without_config_path_or_strategy_module(cfg, spawner):
 def test_in_session_allowed_when_the_switch_is_off(cfg, spawner):
     _pool(cfg)
     anytime = replace(cfg, api=replace(cfg.api, lab_replay_outside_session_only=False))
-    assert _lab(anytime, T0, spawner()).start().state is contract.LabReplayState.RUNNING
+    lab = _lab(anytime, T0, spawner())
+    assert lab.state().available_at is None
+    assert lab.start().state is contract.LabReplayState.RUNNING
 
 
 def test_both_listeners_share_one_replay(cfg):

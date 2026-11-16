@@ -39,5 +39,6 @@
   "result_r": "0.2642",
   "result_gross_usd": null,
   "cause": null,
-  "api_version": 1
+  "api_version": 1,
+  "cause_codes": []
 }

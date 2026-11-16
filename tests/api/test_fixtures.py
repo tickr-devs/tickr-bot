@@ -328,7 +328,8 @@ def documents() -> dict[str, object]:
         "lab-replay-v1.failed": LabReplayV1(
             LabReplayState.FAILED, "3f0c9a1e5b7d4c2a8e6f1b0d9c7a5e3f", "price-action-v1", "1",
             20, T0 + timedelta(days=5), T0 + timedelta(days=5, seconds=2),
-            "backtest/minutes is missing: run fetch first", None, folder="price-action-v1",
+            "backtest refused: backtest/minutes is missing: run fetch first", None,
+            folder="price-action-v1",
             versions=LAB_VERSIONS, days=LAB_DAYS),
         # Trades "Another strategy…": price-action-v2 on ABCD's day, SIMULATED.
         "trade-whatif-v1": TradeWhatIfV1(

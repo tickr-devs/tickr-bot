@@ -123,7 +123,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | POST | `/commands/emergency` | Body `{}`. Entry-stop on, cancel own orders, flatten all. `202` `command-accepted-v1`. |
 | POST | `/commands/start-bot` | Body `{}`. Starts the bot job through launchd (not a bot command, see "Start-bot"). `202` `bot-start-v1`; `409 conflict` while a fresh status says the bot is starting, running or stopping, or a live process holds the bot's lock; `503 unavailable` when no start command is configured, the stop marker cannot be removed, or the command fails. |
 
-Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
+Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1, "cause_codes": [...]}`
+(`cause_codes`, added after version 1 shipped, as under "Reason codes" below):
 `forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
 `unauthorized` 401 (remote request without the paired token),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
@@ -194,7 +195,7 @@ every build, so the two always agree; a reader of a document without it rebuilds
 way. Siblings: `entry_cause_codes` (positions, `trades_today`, day-v1 `trades`),
 `prices_after_cause_codes`, `overshoot_cause_codes` (day-v1 trades, skipped signals),
 `cause_codes` (each `prices_after` point, `what_if`, observer `trades`, `clean`, performance
-`exclusions`), `text_codes` (`clean.causes[]`), `result_cause_codes` / `trades_cause_codes`
+`exclusions`, error-v1, lab-replay-v1 and its `compare` and `versions`, trade-whatif-v1), `text_codes` (`clean.causes[]`), `result_cause_codes` / `trades_cause_codes`
 (observers), `closeness_cause_codes` / `quote_age_cause_codes` (watching), and one per
 performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` New York):
 - entry send: `entry_orders_count` {count}, `no_intent_row`, `never_attempted`, `no_fill_row`,
@@ -218,6 +219,27 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
   `needs_positive_threshold` {rule}, `needs_positive_measured` {rule}, `no_direction` {rule,
   operator}, `check_contradicts_record` {rule};
 - performance: `planned_loss_not_positive_r`, `no_trades`, `no_wins`, `no_losses`;
+- the Lab's replay and another version on a trade: `outside_session_only` {until},
+  `replay_running`, `api_without_config`, `no_backtest_data`, `not_a_data_day` {day},
+  `compare_same_version`, `no_strategy_folder` {folder}, `strategy_unreadable` {folder},
+  `strategy_file_unreadable` {folder, detail}, `strategy_without_name` {folder},
+  `strategy_without_version` {folder}, `modules_malformed`, `module_entry_malformed` {detail},
+  `module_listed_twice` {strategy}, `no_module` {strategy}, `backtest_refused` {detail},
+  `run_without_report`, `version_never_started`, `run_file_unreadable` {file, error},
+  `calendar_file_unreadable` {detail}, `no_bars_for_symbol_on` {symbol, day},
+  `no_cached_history` {symbol, day}, `cached_history_refused` {detail}, `cached_history_empty`
+  {symbol}, `cached_history_overlaps`, `history_sessions_differ` {replay, bot},
+  `simulation_failed` {error, detail}, `strategy_without_module` {folder, strategy},
+  `module_not_importable` {folder, module, detail}, `module_without_create` {folder, module},
+  `values_refused` {folder, module, detail}, `identity_differs` {folder}, `no_history_need`
+  {folder}, `history_too_short` {folder, need, bot};
+- the Start button and reads the bot has not written: `no_account_file`, `no_start_command`,
+  `bot_not_stopped` {state}, `lock_unreadable` {error}, `lock_held` {pid}, `stop_not_cleared`
+  {error}, `start_timeout` {seconds}, `start_failed` {error}, `start_exited` {code}, and the
+  same three with `_cleared` (the operator stop was cleared, so the next scheduled start runs);
+- guard and pairing: `host_not_allowed` {host}, `origin_not_allowed` {origin},
+  `no_phone_paired`, `token_required`, `token_not_paired`, `no_pairing_waiting`,
+  `pairing_expired`, `pairing_code_wrong`;
 - any of them: `display_failed` {error, detail} (a display part failed unexpectedly).
 `{detail}` is untranslated text (an error message, a calendar's own words). A check's `note` is
 the strategy's own fixed text per rule and has no code: translate it by `rule` and the exact
@@ -638,13 +660,19 @@ writing into `[api] lab_replay_results_dir`; a comparison starts the second chil
 ends, never both at once. The bot reads nothing of it. One run at a time, shared by both
 listeners; each start deletes the previous run. It is refused (`409 conflict`, one cause) while a
 run is going, during the regular session of a trading day when
-`[api] lab_replay_outside_session_only = true`, without fetched data (`pool.csv`), for a day that
+`[api] lab_replay_outside_session_only = true` (the cause names the regular close it waits for:
+"refused during the regular session until <time> (...)"), without fetched data (`pool.csv`), for a day that
 is not in it, for a folder that is missing, unreadable or has no module, when `compare` names the
 first version again, or when the API was started without its config file path (the demo). Any
 other key or a non-string value is `400 bad_request`.
 
 - `state`: `idle` (no run yet), `running`, `done` (with `summary`) or `failed` (with `cause`:
-  the backtest's own refusal, paths relative to the repo).
+  the backtest's own refusal line, `backtest refused: ...`, paths relative to the repo).
+- `available_at`: while `[api] lab_replay_outside_session_only` refuses a start because the
+  regular session is open, the regular close (when a start is allowed again); null when the
+  session rule allows a start now or the calendar cannot say (a start then refuses with the
+  calendar's cause). The apps rest the start button with this time instead of finding out by a
+  refused POST. Added after version 1 shipped: a reader takes a document without it as null.
 - `strategy`, `version`, `folder`: the first version replayed; `sessions`: the number asked for
   (1 for one day); `day`: the one day replayed, null for the last sessions.
 - `compare`: null, or the second version (`folder`, `strategy`, `version`, its own `state`,

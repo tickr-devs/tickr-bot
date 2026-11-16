@@ -30,7 +30,7 @@ import sys
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -166,6 +166,22 @@ class LabReplay:
     # ------------------------------------------------------------ reading
 
     def state(self) -> api.LabReplayV1:
+        """The latest run, with what a run may ask for and when a start is next allowed."""
+        return replace(self._read(), available_at=self.available_at(self.clock()))
+
+    def available_at(self, now: datetime) -> datetime | None:
+        """The regular close a start waits for while `[api] lab_replay_outside_session_only`
+        refuses it in the regular session; None when the session rule allows a start now (or
+        the calendar cannot say: a start then refuses with the calendar's own cause)."""
+        if not self.settings.outside_session_only:
+            return None
+        try:
+            day = SessionCalendar.load(self.settings.calendar).day_at(now)
+        except (CalendarRefused, OSError):
+            return None
+        return day.regular_close if day.in_regular_session(now) else None
+
+    def _read(self) -> api.LabReplayV1:
         versions, days = self.versions(), self.pool_days()[:self.settings.sessions]
         try:
             current = self._current()
@@ -265,7 +281,7 @@ class LabReplay:
         refused = [line for line in lines if line.startswith(REFUSED_PREFIX)]
         if not refused:
             return ENDED_WITHOUT_REPORT
-        return self._relative(refused[-1].removeprefix(REFUSED_PREFIX))
+        return self._relative(refused[-1])
 
     def _relative(self, text: str) -> str:
         """`text` with the repo root taken out of its paths: no home folder leaves the Mac."""
@@ -394,8 +410,9 @@ class LabReplay:
                 return
             raise LabReplayRefused(f"calendar: {exc}") from exc
         if day.in_regular_session(now):
-            raise LabReplayRefused("refused during the regular session "
-                                   "([api] lab_replay_outside_session_only)")
+            raise LabReplayRefused(f"refused during the regular session until "
+                                   f"{api.format_time(day.regular_close)} "
+                                   f"([api] lab_replay_outside_session_only)")
 
     def _wait(self, run: Path, current: dict[str, Any], child: Any,
               later: list[Callable[[], Any]]) -> None:

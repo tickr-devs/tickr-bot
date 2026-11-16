@@ -243,6 +243,8 @@ def refusal_params(code: str, detail: str, since: datetime | None,
 
 _WIRE = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
 _ERROR = r"[A-Z][A-Za-z]*(?:Error|Exception|Refused|Unavailable|Journal)"
+# The Start button's note that it cleared the operator stop (api/botstart.py).
+_STOP_CLEARED = r" \(the operator stop was cleared, so the next scheduled start runs\)"
 
 # Causes the API writes itself (api/history, after, observer_results, cleanday, performance,
 # contract closeness). Wire times in them are given as HH:MM New York.
@@ -322,6 +324,80 @@ _PROSE = _shapes(
     ("no_trades", r"no counted trades in the range"),
     ("no_wins", r"no winning trades in the range"),
     ("no_losses", r"no losing trades in the range"),
+    # the Lab's replay and another version on one trade (api/lab_replay.py, api/trade_whatif.py)
+    ("outside_session_only", r"refused during the regular session until (?P<until>" + _WIRE
+     + r") \(\[api\] (?:lab_replay|trade_whatif)_outside_session_only\)"),
+    ("replay_running", r"a replay is already running"),
+    ("api_without_config", r"the API was started without its config file path"),
+    ("no_backtest_data",
+     r"no fetched backtest data: pool\.csv is missing in \[api\] lab_replay_data_dir"),
+    ("not_a_data_day", r"(?P<day>" + _DAY + r") is not a day of the fetched data"),
+    ("compare_same_version", r"compare names the same version twice"),
+    ("no_strategy_folder", r"no strategy folder '(?P<folder>[^']*)' under strategies/"),
+    ("strategy_unreadable", r"(?P<folder>\S+): unreadable"),
+    ("strategy_file_unreadable", r"(?P<folder>\S+): cannot read \S+: (?P<detail>.+)"),
+    ("strategy_without_name", r"(?P<folder>\S+): strategy\.toml has no \[strategy\] name"),
+    ("strategy_without_version",
+     r"(?P<folder>\S+): strategy\.toml has no \[strategy\] version string"),
+    ("modules_malformed", r"\[observers\] strategy_modules is malformed"),
+    ("module_entry_malformed",
+     r"\[observers\] strategy_modules entry is not name=module: (?P<detail>.+)"),
+    ("module_listed_twice", r"\[observers\] strategy_modules lists '(?P<strategy>[^']*)' twice"),
+    ("no_module", r"no module for strategy '(?P<strategy>[^']*)' in \[observers\] "
+                  r"strategy_modules"),
+    ("backtest_refused", r"backtest refused: (?P<detail>.+)"),
+    ("run_without_report", r"the run ended without a report"),
+    ("version_never_started", r"the API stopped before this version started"),
+    ("run_file_unreadable", r"(?P<file>current|report)\.json unreadable \((?P<error>\w+)\)"),
+    ("calendar_file_unreadable", r"calendar unreadable: (?P<detail>.+)"),
+    ("no_bars_for_symbol_on", r"no captured bars for (?P<symbol>\S+) on (?P<day>" + _DAY + ")"),
+    ("no_cached_history", r"no cached prior sessions for (?P<symbol>\S+) on (?P<day>" + _DAY
+     + ")"),
+    ("cached_history_refused", r"cached prior sessions refused: (?P<detail>.+)"),
+    ("cached_history_empty", r"cached prior sessions hold no bar of (?P<symbol>\S+)"),
+    ("cached_history_overlaps", r"cached prior sessions overlap the day's bars"),
+    ("history_sessions_differ",
+     r"replay settings history_sessions (?P<replay>[0-9]+) differ from \[market_data\] "
+     r"history_sessions (?P<bot>[0-9]+): the version would not see the history the bot cached"),
+    ("simulation_failed", r"simulation failed: (?P<error>\w+): (?P<detail>.*)"),
+    ("strategy_without_module",
+     r"(?P<folder>\S+): no module for strategy '(?P<strategy>[^']*)' in strategy_modules"),
+    ("module_not_importable", r"(?P<folder>\S+): module (?P<module>\S+) cannot be imported: "
+                              r"(?P<detail>.+)"),
+    ("module_without_create", r"(?P<folder>\S+): module (?P<module>\S+) has no create\(values\)"),
+    ("values_refused", r"(?P<folder>\S+): values refused by (?P<module>\S+): (?P<detail>.+)"),
+    ("identity_differs", r"(?P<folder>\S+): strategy reports .+, file says .+"),
+    ("no_history_need", r"(?P<folder>\S+): .+ declares no valid prior_sessions_needed \(got .*\)"),
+    ("history_too_short", r"(?P<folder>\S+): .+ needs (?P<need>[0-9]+) prior sessions, "
+                          r"\[market_data\] history_sessions = (?P<bot>[0-9]+)"),
+    # the API's guard and pairing refusals (api/server.py)
+    ("host_not_allowed", r"Host (?P<host>.+) is not allowed"),
+    ("origin_not_allowed", r"Origin (?P<origin>.+) is not allowed"),
+    ("no_phone_paired", r"no phone is paired; run `python -m tickr\.api pair`"),
+    ("token_required", r"a bearer token is required"),
+    ("token_not_paired", r"the bearer token is not the paired one"),
+    ("no_pairing_waiting", r"no pairing is waiting; run `python -m tickr\.api pair` on the Mac"),
+    ("pairing_expired",
+     r"the pairing code has expired; run `python -m tickr\.api pair` on the Mac again"),
+    ("pairing_code_wrong", r"the pairing code is not the waiting one"),
+    # reads the bot has not written yet, and the Start button (api/server.py, api/botstart.py)
+    ("no_account_file", r"the bot has not written an account file"),
+    ("no_start_command", r"no start command is configured on this machine \(\[api\] "
+                         r"start_bot_command is empty\): start the bot where it runs"),
+    ("bot_not_stopped", r"the bot is (?P<state>\w+): nothing to start"),
+    ("lock_unreadable",
+     r"the bot's lock file could not be read \((?P<error>\w+)\): nothing was started"),
+    ("lock_held", r"a bot process \(pid (?P<pid>[0-9]+)\) still holds the lock: wait for it to "
+                  r"end, then start again"),
+    ("stop_not_cleared",
+     r"the operator stop could not be cleared \((?P<error>\w+)\): nothing was started"),
+    ("start_timeout_cleared", r"the start command did not return within (?P<seconds>" + _NUM
+     + r") s" + _STOP_CLEARED),
+    ("start_timeout", r"the start command did not return within (?P<seconds>" + _NUM + r") s"),
+    ("start_failed_cleared", r"the start command failed \((?P<error>\w+)\)" + _STOP_CLEARED),
+    ("start_failed", r"the start command failed \((?P<error>\w+)\)"),
+    ("start_exited_cleared", r"the start command exited (?P<code>-?[0-9]+)" + _STOP_CLEARED),
+    ("start_exited", r"the start command exited (?P<code>-?[0-9]+)"),
     # a display part that failed unexpectedly: `TypeName: message`
     ("display_failed", r"(?P<error>" + _ERROR + r"): (?P<detail>.*)"),
 )

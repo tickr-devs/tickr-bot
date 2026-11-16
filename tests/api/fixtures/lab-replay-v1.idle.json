@@ -17,28 +17,39 @@
       "strategy": "price-action-v1",
       "version": "1",
       "role": "active",
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "folder": "price-action-v2",
       "strategy": "price-action-v2",
       "version": "2",
       "role": "observer",
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "folder": "volume-shock-v1",
       "strategy": "volume-shock-v1",
       "version": "1",
       "role": "candidate",
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "folder": "my-idea",
       "strategy": null,
       "version": null,
       "role": "candidate",
-      "cause": "my-idea: strategy.toml has no [strategy] name"
+      "cause": "my-idea: strategy.toml has no [strategy] name",
+      "cause_codes": [
+        {
+          "code": "strategy_without_name",
+          "params": {
+            "folder": "my-idea"
+          }
+        }
+      ]
     }
   ],
   "days": [
@@ -50,5 +61,7 @@
     "2026-11-06",
     "2026-11-05"
   ],
-  "api_version": 1
+  "available_at": null,
+  "api_version": 1,
+  "cause_codes": []
 }

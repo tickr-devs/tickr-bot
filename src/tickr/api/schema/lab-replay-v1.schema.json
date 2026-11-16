@@ -433,6 +433,28 @@
                   "type": "null"
                 }
               ]
+            },
+            "cause_codes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "code",
+                  "params"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -495,6 +517,28 @@
                 "type": "null"
               }
             ]
+          },
+          "cause_codes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "params"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -514,9 +558,42 @@
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
       }
     },
+    "available_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "api_version": {
       "type": "integer",
       "const": 1
+    },
+    "cause_codes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "params"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

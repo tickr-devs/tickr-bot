@@ -165,6 +165,8 @@ def test_route_queries_and_refusal(cfg):
         clock.now = T0
         resp, payload = request(server, "GET", path)
         assert resp.status == 409 and "regular session" in doc(payload)["cause"]
+        assert doc(payload)["cause_codes"] == [
+            {"code": "outside_session_only", "params": {"until": "16:00"}}]
     finally:
         server.shutdown()
         server.server_close()
