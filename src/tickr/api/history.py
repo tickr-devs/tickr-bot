@@ -49,11 +49,14 @@ class HistoryUnavailable(Exception):
 
 
 def average_fill_price(orders: list[OrderRow]) -> Decimal | None:
-    filled = [o for o in orders if o.filled_quantity > 0 and o.average_fill_price is not None]
-    quantity = sum((o.filled_quantity for o in filled), ZERO)
+    """Fill-weighted average of the orders' fill prices, each the exact one when recorded
+    (`OrderRow.fill_price`)."""
+    filled = [(o.filled_quantity, o.fill_price) for o in orders if o.filled_quantity > 0]
+    priced = [(quantity, price) for quantity, price in filled if price is not None]
+    quantity = sum((q for q, _ in priced), ZERO)
     if quantity == 0:
         return None
-    return sum((o.filled_quantity * o.average_fill_price for o in filled), ZERO) / quantity
+    return sum((q * price for q, price in priced), ZERO) / quantity
 
 
 # The journal row that confirms a stop: a Detail read (`order-observed`) of one of the trade's
@@ -189,8 +192,8 @@ def trade_metrics(store: Store, trade: api.DayTrade,
                  else api.seconds_between(times.first_fill, times.stop_confirmed))
     mae = mfe = None
     if bars is not None:
-        exits = [o.average_fill_price for o in orders if o.leg is not Leg.ENTRY
-                 and o.filled_quantity > 0 and o.average_fill_price is not None]
+        exits = [o.fill_price for o in orders if o.leg is not Leg.ENTRY
+                 and o.filled_quantity > 0 and o.fill_price is not None]
         mae, mfe = excursions(bars, trade.entry_price, trade.quantity, exits, times)
     return replace(trade, stop_confirmed_after_seconds=confirmed, mae_usd=mae, mfe_usd=mfe)
 

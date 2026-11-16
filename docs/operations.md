@@ -281,6 +281,23 @@ and needs no GitHub: it does not fetch (it still reads the broker in step 4), it
 to tracked files, its `data` link naming the data folder, its `.venv` present) and runs its
 preflight. `live` and `previous` swap, so a rollback can itself be rolled back.
 
+### Database migrations are one way
+
+A release whose code adds a database migration (`MIGRATIONS` in `src/tickr/store.py`) upgrades
+the shared database the first time its bot opens it, after a verified backup
+`tickr.pre-v<N>.sqlite3` next to it. There is no downgrade:
+
+- **Rollback past a migration is refused.** An older release's preflight refuses a database
+  newer than its code (`... has schema 5, this code knows 4: update the code`), so `rollback` and the
+  emergency switch-back fail. Going back means restoring the `pre-v<N>` backup by hand, which
+  loses everything the newer bot recorded since; ask the owner first.
+- **Install it together with the bot restart.** Until the new bot has migrated the database,
+  the API of the new release reads the old schema and refuses history (`database schema v4,
+  this API reads v5`); an old API on a migrated database refuses the same way. `release`
+  restarts bot and API together; a hand restart must do both.
+- Migration v5 (2026-11-16) adds `orders.exact_fill_price` (exact fill prices from the
+  account's cash activities, read by the realized loss): one way like every migration.
+
 ### Emergency: the owner switches back by hand
 
 Only for the owner, only when `rollback` cannot run: it refuses while not flat, and flatness is

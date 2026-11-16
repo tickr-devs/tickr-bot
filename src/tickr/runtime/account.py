@@ -28,8 +28,9 @@ from tickr.broker.base import (
     CashTrade,
 )
 from tickr.calendar import ny_date_of
-from tickr.engine.core import Engine, Fence
+from tickr.engine.core import Engine, Fence, OrderRow, order_from_row
 from tickr.runtime.dayend import records_agree
+from tickr.types import Side
 
 # Journal row when a balance read fails: one per stretch of failures (the next success ends it).
 BALANCE_READ_FAILED = "balance-read-failed"
@@ -274,6 +275,60 @@ def exact_price(fill: BrokerFill, amount: Decimal | None) -> Decimal | None:
         return None
     gross = -amount - fill.fees if amount < 0 else amount + fill.fees
     return gross / fill.filled_quantity
+
+
+def exact_fill(order: OrderRow, fill: BrokerFill, snapshot: Balances,
+               ) -> tuple[Decimal, dict[str, Any]] | None:
+    """The exact average fill price of our finished `order` and the evidence for it, or None
+    while it cannot be proven. `fill` is the order history's row with the order's client order
+    id. Proven only when: the order is finished at the broker (no more fills can come); the
+    history row shows the bot's filled quantity; `exact_amount` accepts a cash activity for it
+    against the snapshot's cash rows and fills (one row at the fill time, as many rows of the
+    symbol and side as filled orders, implied price to the cent = the history row's price),
+    with the sign of the order's side; its fees are known; and the derived price, to the
+    cent, is also the order's own recorded average fill price. So a cash row that is only one
+    of several executions (unproven whether Webull writes one row per execution) is never
+    taken for the whole fill."""
+    if (order.broker_state is None or not order.broker_state.terminal
+            or order.filled_quantity <= 0 or order.average_fill_price is None
+            or fill.filled_quantity != order.filled_quantity
+            or fill.side != str(order.side)):
+        return None
+    amount = exact_amount(fill, snapshot.cash, snapshot.fills)
+    if amount is None or (amount < 0) != (order.side is Side.BUY) or amount == 0:
+        return None
+    price = exact_price(fill, amount)
+    if (price is None or price <= 0
+            or price.quantize(CENT, rounding=ROUND_HALF_UP) != order.average_fill_price):
+        return None
+    return price, {"net_amount": amount, "fees": fill.fees,
+                   "filled_quantity": fill.filled_quantity,
+                   "average_fill_price": order.average_fill_price, "cash_at": fill.filled_at}
+
+
+def record_exact_fills(engine: Engine, snapshot: Balances) -> int:
+    """On the loop thread (the display thread never writes): record the exact fill price of
+    each of our orders in the display reads' latest fills that has none yet and can be proven
+    (`exact_fill`). An order whose cash activity is late is tried again on a later snapshot;
+    one never proven keeps its rounded price. Returns how many were recorded."""
+    by_id: dict[str, list[BrokerFill]] = {}
+    for fill in snapshot.fills:
+        if fill.client_order_id is not None:
+            by_id.setdefault(fill.client_order_id, []).append(fill)
+    if not by_id:
+        return 0
+    marks = ", ".join("?" for _ in by_id)
+    rows = engine.store.query(f"SELECT * FROM orders WHERE client_order_id IN ({marks}) "
+                              "AND exact_fill_price IS NULL", tuple(by_id))
+    recorded = 0
+    for order in map(order_from_row, rows):
+        fills = by_id[order.client_order_id]
+        if len(fills) != 1:
+            continue  # the history lists the order twice: not one fill to prove
+        found = exact_fill(order, fills[0], snapshot)
+        if found is not None and engine.record_exact_fill_price(order.client_order_id, *found):
+            recorded += 1
+    return recorded
 
 
 def account_document(engine: Engine, read_at: datetime,

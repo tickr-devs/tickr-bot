@@ -88,14 +88,15 @@ def guard_entries(engine: Engine, config: Config, calendar: SessionCalendar | No
 
 def realized_loss_today(engine: Engine, now: datetime) -> Decimal | None:
     """Today's net realized loss as a non-negative amount: wins offset losses (owner
-    decision 2026-11-14); None if a trade closed today has fills whose prices are unknown."""
+    decision 2026-11-14), each fill at its exact price when recorded (`OrderRow.fill_price`),
+    fees left out; None if a trade closed today has fills whose prices are unknown."""
     today = now.astimezone(NEW_YORK).date()
     for row in engine.store.query(
             "SELECT trade_id, closed_at FROM trades WHERE closed_at IS NOT NULL"):
         if datetime.fromisoformat(row["closed_at"]).astimezone(NEW_YORK).date() != today:
             continue
         for order in engine.orders(row["trade_id"]):
-            if order.filled_quantity > 0 and order.average_fill_price is None:
+            if order.filled_quantity > 0 and order.fill_price is None:
                 return None
     net = sum((t.result_gross_usd for t in trades_today(engine, now)), ZERO)
     return max(-net, ZERO)
@@ -122,7 +123,7 @@ def last_loss_at(engine: Engine, symbol: str, now: datetime) -> datetime | None:
                                   "WHERE closed_at IS NOT NULL AND symbol = ?", (symbol,)):
         closed = datetime.fromisoformat(row["closed_at"])
         if closed.astimezone(NEW_YORK).date() == today and any(
-                o.filled_quantity > 0 and o.average_fill_price is None
+                o.filled_quantity > 0 and o.fill_price is None
                 for o in engine.orders(row["trade_id"])):
             closes.append(closed)
     return max(closes, default=None)

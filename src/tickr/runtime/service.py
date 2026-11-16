@@ -41,7 +41,13 @@ from tickr.engine.manual import flatten_deadline
 from tickr.risk.admission import Admission, AdmissionLimits, session_refusal
 from tickr.risk.causes import AdmissionCause
 from tickr.runtime import stopmarker
-from tickr.runtime.account import AccountReads, account_document, exact_amount, record_reconcile
+from tickr.runtime.account import (
+    AccountReads,
+    account_document,
+    exact_amount,
+    record_exact_fills,
+    record_reconcile,
+)
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.dayend import DayEnd
 from tickr.runtime.protection import LatencyLog, busy
@@ -710,22 +716,6 @@ class Service:
             return None
         return balance.day_profit_loss - balance.unrealized_profit_loss
 
-    def _broker_result_today(self, closed: list[api.DayTrade]) -> Decimal | None:
-        """Today's realized result as the broker counts it: its day profit or loss less the
-        unrealized part, from the display reads' latest balance read (display only). The
-        broker prices fills to the sub-cent and charges the fees, which the order rows do not
-        show exactly (sub-dollar fill prices come back rounded to cents, probe 2026-11-16).
-        None until a balance read made after the last of today's trades closed."""
-        if self.account_reads is None:
-            return None
-        snapshot = self.account_reads.snapshot()
-        balance, read_at = snapshot.balance, snapshot.read_at
-        if balance is None or read_at is None:
-            return None
-        if any(trade.closed_at > read_at for trade in closed):
-            return None
-        return balance.day_profit_loss - balance.unrealized_profit_loss
-
     def _fees_today(self, closed: list[api.DayTrade]) -> Decimal | None:
         """The broker's fees on the fills of today's closed trades, from the display reads'
         latest list of today's fills (display only). None (unknown) until every filled order
@@ -861,11 +851,18 @@ class Service:
             self.engine.step()
         elif ok:
             self._disagreed = record_reconcile(self.engine, self._disagreed)
+            self._record_exact_fills()
             self.write_account()
         else:
             self._disagreed = False  # a failed read: the next two must agree again
         if ok and not self._broker_read_failing():
             self.last_broker_read_at = self.now()
+
+    def _record_exact_fills(self) -> None:
+        """After a successful reconciliation: our finished orders' exact fill prices from the
+        display reads' latest snapshot (read on their thread, written here on the loop's)."""
+        if self.account_reads is not None:
+            record_exact_fills(self.engine, self.account_reads.snapshot())
 
     def _broker_read_failing(self) -> bool:
         """A positions or open-orders read is failing (the fence, plain or keyed)."""
@@ -884,6 +881,7 @@ class Service:
         self._disagreed = record_reconcile(self.engine, False)
         if not self._broker_read_failing():
             self.last_broker_read_at = self.now()
+            self._record_exact_fills()
             self.write_account()
         self.state = api.BotState.RUNNING
         last_reconcile = monotonic()

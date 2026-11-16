@@ -121,6 +121,9 @@ ORDER_HELD = "order-held"
 # (`detail-unreadable` fence) survives a restart.
 DETAIL_FAILED = "detail-read-failed"
 DETAIL_ANSWERED = "detail-read-answered"
+# A filled order's exact average fill price, recorded once from the account's cash activity of
+# the fill (runtime/account.py, `record_exact_fills`); the body is the evidence it came from.
+EXACT_FILL_PRICE = "exact-fill-price"
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
 _WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
 # Cancel states after which a later Detail read decides whether the cancel took.
@@ -155,6 +158,16 @@ class OrderRow:
     cancel_at: float | None
     absent_reads: int
     last_detail_at: float | None
+    # The exact average fill price from the fill's cash activity (None: not known yet or never).
+    exact_fill_price: Decimal | None = None
+
+    @property
+    def fill_price(self) -> Decimal | None:
+        """The average price the order filled at, as results count it: the exact price when
+        recorded, else the broker's order row (rounded to cents for sub-dollar prices)."""
+        if self.exact_fill_price is not None:
+            return self.exact_fill_price
+        return self.average_fill_price
 
     @property
     def live(self) -> bool:
@@ -207,6 +220,7 @@ def order_from_row(row: Any) -> OrderRow:
         average_fill_price=_dec(row["average_fill_price"]), cancel_state=row["cancel_state"],
         cancel_attempts=row["cancel_attempts"], cancel_at=row["cancel_at"],
         absent_reads=row["absent_reads"], last_detail_at=row["last_detail_at"],
+        exact_fill_price=_dec(row["exact_fill_price"]),
     )
 
 
@@ -620,6 +634,23 @@ class Engine:
                             f"no cancel could be sent for {waited:.0f} s (request budget)")
 
     # --- observation -----------------------------------------------------------------------
+
+    def record_exact_fill_price(self, client_order_id: str, price: Decimal,
+                                evidence: dict[str, Any]) -> bool:
+        """Record a finished order's exact average fill price with its evidence (one journal
+        row), once: a price already recorded is never overwritten. Returns whether it was
+        written. Raises ValueError for a price that is not positive."""
+        if price <= 0:
+            raise ValueError(f"exact fill price {price} is not positive")
+        with self.store.transaction():
+            written = self.store.execute(
+                "UPDATE orders SET exact_fill_price = ? WHERE client_order_id = ? "
+                "AND exact_fill_price IS NULL", (str(price), client_order_id))
+            if written != 1:
+                return False
+            self.store.append(EXACT_FILL_PRICE, {"exact_fill_price": price, **evidence},
+                              key=client_order_id, run_id=self.run_id)
+        return True
 
     def _apply_detail(self, row: OrderRow, detail: OrderDetail, *, resurrected: bool) -> None:
         """Inside a transaction: record a Detail read."""
