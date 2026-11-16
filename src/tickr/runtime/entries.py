@@ -79,8 +79,9 @@ def entry_block_cause(engine: Engine, config: Config, trade: TradeRow,
                       now: datetime) -> str | None:
     """Why a working entry must not stay open for a platform reason: the state in which a new
     entry would be refused (hard rule 1: a conflict blocks new entries, and a fill of an entry
-    still working is a new position). The trading gate closed, any fence (operator pause,
-    startup reconcile, broker read, reconcile disagreement, foreign exposure, another trade's
+    still working is a new position). The trading gate closed, any fence that blocks an entry
+    in this symbol (`Engine.entry_fences`: operator pause, startup reconcile, broker read,
+    reconcile disagreement, foreign exposure in this symbol or of unknown symbol, another trade's
     trouble, ...) except the fences about this trade itself or its own orders (the engine
     already acts on those: its stop, its unknown status, its cancel; cancelling the entry for
     them would only add a cancel of an order whose state is the open question), or today's
@@ -90,7 +91,7 @@ def entry_block_cause(engine: Engine, config: Config, trade: TradeRow,
     if not gate.open:
         return f"trading gate closed: {gate.cause}"
     own = {trade.trade_id, *(o.client_order_id for o in engine.orders(trade.trade_id))}
-    fences = sorted(name for name in engine.fences()
+    fences = sorted(name for name in engine.entry_fences(trade.symbol)
                     if name.partition(":")[2] not in own)
     if fences:
         return "entries fenced: " + ", ".join(fences)
@@ -235,7 +236,10 @@ class EntryDesk:
         engine = self.engine
         fences = [name.split(":", 1)[0] for name in engine.fences()]
         own_positions, working = own_exposure(engine)
-        foreign_positions = sum(1 for f in fences if f == Fence.FOREIGN_POSITION)
+        # Manual trades are ignored (owner 2026-11-16): a foreign position or order blocks only
+        # an entry in its own symbol, and does not count toward the position limit. A foreign
+        # order whose symbol is not known blocks every entry (refuse, never guess).
+        foreign = engine.foreign_symbols()
         session = session_at(self.calendar, now)
         limit = None if decision.entry_high is None else round_to_tick(decision.entry_high)
         stop = None if decision.stop is None else round_to_tick(decision.stop)
@@ -245,14 +249,14 @@ class EntryDesk:
             reconciliation=Reconciliation(
                 startup_done=Fence.STARTUP_RECONCILE not in fences,
                 last_broker_read_at=None if Fence.BROKER_READ in fences else last_read,
-                foreign_exposure=any(f in FOREIGN for f in fences),
+                foreign_exposure=foreign is None or decision.symbol in foreign,
                 unresolved_exposure=any(f not in NOT_EXPOSURE for f in fences)),
             entry_stop=Fence.ENTRY_STOP in fences,
             session=session,
             now=now,
             own_open_positions=own_positions,
             own_working_orders=working,
-            open_positions=own_positions + foreign_positions,
+            open_positions=own_positions,
             symbol_last_loss_at=last_loss_at(engine, decision.symbol, now),
             decision=decision,
             limit_price=limit,

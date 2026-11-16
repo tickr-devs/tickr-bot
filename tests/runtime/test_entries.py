@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
@@ -22,7 +23,7 @@ from tickr.runtime.entries import (
 )
 from tickr.store import Store
 from tickr.strategy.base import Check, Decision, Verdict
-from tickr.types import Quote
+from tickr.types import OrderDetail, OrderState, OrderType, Quote, Side
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -99,7 +100,9 @@ def test_every_decision_is_recorded_in_the_research_format(tmp_path):
 
 @pytest.mark.parametrize("setup, cause", [
     (lambda d: _entry_stop(d), "ENTRY_STOP_SET"),
-    (lambda d: d.broker.add_foreign_position("XYZ", D(1), D(5)) or d.engine.step(),
+    (lambda d: d.broker.add_foreign_position("ABC", D(1), D(5)) or d.engine.step(),
+     "FOREIGN_EXPOSURE"),
+    (lambda d: _foreign_order(d, "XYZ") or setattr(d.engine, "broker_view", None),
      "FOREIGN_EXPOSURE"),
     (lambda d: setattr(d, "read_at", NOW - timedelta(hours=1)), "BROKER_READ_STALE"),
     (lambda d: setattr(d.broker, "place_budget", 1), "STOP_BUDGET_UNAVAILABLE"),
@@ -112,6 +115,36 @@ def test_refusals_carry_one_cause_and_send_nothing(tmp_path, setup, cause):
     record = desk.decide(decision())
     assert record.admission == "refused" and record.refusal_cause.startswith(cause)
     assert len(desk.broker.sent) == sent
+
+
+def _foreign_order(desk: Desk, symbol: str) -> None:
+    """A manual order the bot does not own, seen by a reconcile."""
+    desk.broker.orders["manual-1"] = OrderDetail(
+        client_order_id="manual-1", symbol=symbol, side=Side.BUY, order_type=OrderType.LIMIT,
+        quantity=D(1), filled_quantity=D(0), average_fill_price=None, state=OrderState.ACCEPTED,
+        raw_status="SUBMITTED", limit_price=D(5))
+    assert desk.engine.reconcile()
+
+
+@pytest.mark.parametrize("setup", [
+    lambda d: d.broker.add_foreign_position("XYZ", D(1), D(5)) or d.engine.step(),
+    lambda d: _foreign_order(d, "XYZ"),
+])
+def test_manual_trades_in_other_symbols_are_ignored(tmp_path, setup):
+    """Owner 2026-11-16: a foreign position or order in another symbol neither blocks the
+    entry nor counts toward the position limit; its fence (and alert) stays."""
+    desk = Desk(tmp_path)
+    setup(desk)
+    assert any(n.startswith(("foreign-position", "foreign-order")) for n in desk.engine.fences())
+    record = desk.decide(decision())
+    assert record.admission == "taken" and record.refusal_cause is None
+
+
+def test_a_manual_order_in_the_same_symbol_blocks_the_entry(tmp_path):
+    desk = Desk(tmp_path)
+    _foreign_order(desk, "ABC")
+    record = desk.decide(decision())
+    assert record.admission == "refused" and record.refusal_cause.startswith("FOREIGN_EXPOSURE")
 
 
 def _entry_stop(desk: Desk) -> None:
@@ -345,3 +378,34 @@ def test_cooldown_is_built_from_the_store_across_a_restart(tmp_path):
     # The 30-minute pause after the 10:41 loss ends at 11:11 exactly.
     assert decide(at(16, 11, 10)).refusal_cause.startswith("SYMBOL_COOLDOWN")
     assert decide(at(16, 11, 11)).admission == "taken"
+
+
+# --- manual trades are ignored (owner 2026-11-16): one rule for admission and the guard ------
+
+
+def test_an_entry_beside_a_foreign_position_keeps_working(tmp_path):
+    """Fable review of #539: the guard used every fence, so the entry admitted beside a
+    foreign XYZ position was cancelled on the next pass."""
+    desk = Desk(tmp_path)
+    desk.broker.add_foreign_position("XYZ", D(1), D(5))
+    desk.engine.step()
+    opened(desk)
+    assert guard(desk, quote()) == []
+    assert desk.engine.trades()[0].trade_id and desk.engine.fences()
+
+
+def test_manual_orders_without_an_id_are_all_seen(tmp_path, monkeypatch):
+    """Fable review of #539: manual orders without a client order id share one fence; the
+    symbols come from every foreign open order of the reconcile, so ABC is refused."""
+    desk = Desk(tmp_path)
+    manual = [OrderDetail(client_order_id="", symbol=s, side=Side.BUY,
+                          order_type=OrderType.LIMIT, quantity=D(1), filled_quantity=D(0),
+                          average_fill_price=None, state=OrderState.ACCEPTED,
+                          raw_status="SUBMITTED", limit_price=D(5)) for s in ("ABC", "XYZ")]
+    monkeypatch.setattr(desk.broker, "open_orders", lambda: list(manual))
+    assert desk.engine.reconcile()
+    assert desk.engine.foreign_symbols() == {"ABC", "XYZ"}
+    record = desk.decide(decision())
+    assert record.admission == "refused" and record.refusal_cause.startswith("FOREIGN_EXPOSURE")
+    other = desk.decide(decision(symbol="QQQ"), replace(quote(), symbol="QQQ"))
+    assert other.admission == "taken", other.refusal_cause

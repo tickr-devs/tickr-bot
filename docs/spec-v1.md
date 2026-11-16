@@ -81,7 +81,7 @@ Numbers in `config/bot.toml` `[risk]`: planned loss 50 USD per trade; notional c
 
 Admission (all must hold; the first failure is the single recorded cause):
 1. Trading gate open for the active environment.
-2. Startup reconciliation done; latest broker read fresh; no unresolved or foreign exposure; entry-stop flag clear.
+2. Startup reconciliation done; latest broker read fresh; no unresolved exposure; no foreign exposure in the entry's symbol (or of unknown symbol); entry-stop flag clear.
 3. Regular session, calendar known for today, not a half day, before last-entry time.
 4. No own position or working order; open positions below the limit; no trade in the symbol closed at a loss today (New York date, as for the daily rule) within the last `symbol_cooldown_minutes_after_loss` (`SYMBOL_COOLDOWN`; an entry exactly at the end is allowed; a closed trade whose fill prices are unknown counts as a loss; turned off by `symbol_cooldown_after_loss_enabled = false`).
 5. Executable quote fresh; setup still valid; price inside the window.
@@ -114,7 +114,7 @@ Order sequence:
 - Session flatten: working entries cancelled at last-entry time; position closed by the flatten time (market in regular session). No closing MARKET order is sent outside the regular session (from `[session] close_order_cutoff_seconds` before the calendar's close, early close on a half day, until the next open): a bot started after the close keeps the broker stop, sets the operator fence `market-closed:<trade>` and alerts `flatten-after-close`; the operator flatten and emergency are refused then too.
 - A trade is closed only when the broker is flat, the stop is CANCELLED or FILLED, and no own open order remains.
 
-Reconciliation: positions and open orders every `reconcile_interval_seconds`; startup always reconciles first. Foreign exposure blocks entries and is never touched. Quantity mismatch: broker wins, entries blocked until explained (fence and alert); stops stay sized on the Detail quantity. When the broker holds more than Detail explains (foreign shares, e.g. bought by hand), an exit or the session flatten sells exactly the bot's own Detail quantity and never the extra shares, and not while an entry in that symbol is still working; when it holds fewer, nothing is sold and the Detail quantity stays protected.
+Reconciliation: positions and open orders every `reconcile_interval_seconds`; startup always reconciles first. Foreign exposure (manual trades) is never touched and alerts; it blocks only entries in its own symbol, or every entry while a foreign order's symbol is unknown, and does not count toward the position limit (owner 2026-11-16). Quantity mismatch: broker wins, entries blocked until explained (fence and alert); stops stay sized on the Detail quantity. When the broker holds more than Detail explains (foreign shares, e.g. bought by hand), an exit or the session flatten sells exactly the bot's own Detail quantity and never the extra shares, and not while an entry in that symbol is still working; when it holds fewer, nothing is sold and the Detail quantity stays protected.
 
 ## 10. Persistence
 

@@ -16,7 +16,7 @@ from tickr.risk.admission import AdmissionLimits
 from tickr.runtime import entries
 from tickr.strategy.base import Verdict
 
-from .test_entries import BAR, CFG, GATE_OPEN, NOW, Desk, decision, guard, quote
+from .test_entries import BAR, CFG, GATE_OPEN, NOW, Desk, _foreign_order, decision, guard, quote
 
 pytestmark = pytest.mark.skipif(not GATE_OPEN, reason="the configured trading gate is closed")
 REST = 5
@@ -158,8 +158,9 @@ def _pause(desk: Desk) -> None:
 
 
 def _foreign(desk: Desk) -> None:
-    desk.broker.add_foreign_position("XYZ", D(1), D(5))
-    desk.engine.step()
+    """A manual order in the entry's own symbol (owner 2026-11-16: manual trades block only
+    their own symbol)."""
+    _foreign_order(desk, "ABC")
 
 
 def _gate(desk: Desk) -> None:
@@ -168,7 +169,7 @@ def _gate(desk: Desk) -> None:
 
 @pytest.mark.parametrize(("block", "cause"), [
     (_pause, "entries fenced: entry-stop"),
-    (_foreign, "entries fenced: foreign-position"),
+    (_foreign, "entries fenced: foreign-order"),
     (_gate, "trading gate closed: owner closed it"),
 ])
 def test_a_resting_entry_is_cancelled_once_new_entries_are_blocked(tmp_path, block, cause):
@@ -181,6 +182,16 @@ def test_a_resting_entry_is_cancelled_once_new_entries_are_blocked(tmp_path, blo
     assert journaled.startswith(cause)
     (entry,) = desk.engine.orders(trade_id)
     assert entry.cancel_state == "sent"
+
+
+def test_a_resting_entry_keeps_working_beside_a_manual_trade_in_another_symbol(tmp_path):
+    desk = Desk(tmp_path)
+    opened(desk)
+    desk.broker.add_foreign_position("XYZ", D(1), D(5))
+    desk.engine.step()
+    _foreign_order(desk, "XYZ")
+    later = NOW + 3 * M1
+    assert guard(desk, at("10.40", later), later) == []
 
 
 def test_a_resting_entry_is_cancelled_when_another_trade_uses_up_the_daily_loss(tmp_path,

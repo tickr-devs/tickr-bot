@@ -233,7 +233,9 @@ def test_intent_without_attempt_is_never_sent(store):
     assert e.trade("t9").state is TradeState.CLOSED
 
 
-def test_foreign_position_and_order_fence_entries(store):
+def test_foreign_position_and_order_fence_entries_in_their_symbol(store):
+    """Manual trades are ignored (owner 2026-11-16): fenced and alerted, never touched; they
+    block only an entry in their own symbol."""
     b = FakeBroker()
     b.add_foreign_position("XYZ", D(5), D(3))
     b.place(OrderRequest("manual-1", "XYZ", Side.SELL, OrderType.LIMIT, D(5), TimeInForce.DAY,
@@ -244,12 +246,18 @@ def test_foreign_position_and_order_fence_entries(store):
     assert f"{Fence.FOREIGN_POSITION}:XYZ" in names
     assert f"{Fence.FOREIGN_ORDER}:manual-1" in names
     assert f"{Fence.STARTUP_RECONCILE}" not in names
-    with pytest.raises(EntryRefused):
+    assert e.foreign_symbols() == {"XYZ"}
+    with pytest.raises(EntryRefused, match="foreign"):
+        e.open_trade("XYZ", D(1), D(10), D(9), D(1))
+    e.broker_view = None  # a foreign order whose symbol is not known blocks every symbol
+    with pytest.raises(EntryRefused, match="foreign"):
         enter(e)
+    e.reconcile()
+    enter(e)  # another symbol: allowed
     b.cancel("manual-1")
     del b.holdings["XYZ"]
     e.reconcile()
-    assert e.fences() == {}
+    assert not any(n.startswith("foreign") for n in e.fences())
 
 
 def test_gate_closed_refuses_entry(store):

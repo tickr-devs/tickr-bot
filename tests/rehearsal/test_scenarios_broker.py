@@ -198,10 +198,10 @@ def test_detail_cannot_find_the_filled_entry_for_a_while(tmp_path, monkeypatch):
     records_agree(r, ex, flat=False)
 
 
-def test_a_foreign_position_mid_day_blocks_entries_and_is_never_touched(tmp_path, monkeypatch):
-    """Someone buys 10 ZZZ by hand at 09:50 and sells them at 10:02. Meanwhile AAA's stop
-    keeps working, BBB's signals are refused, the operator is alerted, and nothing is ever
-    sent for ZZZ; once it is gone BBB is bought."""
+def test_a_foreign_position_mid_day_is_ignored_and_never_touched(tmp_path, monkeypatch):
+    """Someone buys 10 ZZZ by hand at 09:50 and sells them at 10:02. Manual trades are
+    ignored (owner 2026-11-16): AAA's stop keeps working, BBB is bought on its own signal
+    while ZZZ is held, the operator is alerted, and nothing is ever sent for ZZZ."""
     r = Rehearsal(tmp_path, monkeypatch, start="09:43")
     ex = scripted(r)
     add(r, "AAA", "20", breakout("09:30", "09:45", "24.50"), ("09:52", "09:53", D(21), D(30000)))
@@ -214,12 +214,12 @@ def test_a_foreign_position_mid_day_blocks_entries_and_is_never_touched(tmp_path
 
     aaa, bbb = r.trades()
     assert aaa["close_cause"] == "stopped-out"  # protected by its own stop meanwhile
-    assert bbb["symbol"] == "BBB" and bbb["opened_at"] >= at("10:02").isoformat()
+    assert bbb["symbol"] == "BBB" and bbb["opened_at"] < at("10:02").isoformat()
     assert ex.of("ZZZ") == []
     assert "foreign-exposure" in alert_kinds(r)
     block = seen["foreign"].entry_block
-    assert block is not None and block.cause == "foreign_position"
-    refused = [d for d in r.decisions() if d["symbol"] == "BBB" and d["admission"] == "refused"]
-    assert refused and all(d["refusal_cause"].startswith("FOREIGN_EXPOSURE") for d in refused)
+    assert block is None or block.cause != "foreign_position"
+    assert not any(d["refusal_cause"] and d["refusal_cause"].startswith("FOREIGN_EXPOSURE")
+                   for d in r.decisions())
     assert not any(n.startswith("foreign-position") for n in fence_names(r))
     records_agree(r, ex, flat=False)

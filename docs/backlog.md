@@ -244,8 +244,9 @@ Exit: P7 passes.
 Open: none.
 
 Answered (recorded in `docs/decisions.md`):
-- **Q1** Manual trades in the bot's account are ignored: no fence, the bot keeps trading and never
-  touches shares it does not own (2026-11-16, with 2026-11-15).
+- **Q1** Manual trades in the bot's account are ignored: still fenced and alerted, never touched;
+  they block entries only in their own symbol (or every symbol while a foreign order's symbol is
+  unknown) and do not count toward the position limit (2026-11-16, with 2026-11-15).
 - **Q2** A halt, or a position that cannot close: keep the resting stop, alert, send no order into the
   halted book, close at the first chance once trading resumes, the next morning if forced
   (2026-11-16).

@@ -465,13 +465,18 @@ class Chaos:
             if self.last_reconcile_ok is not None and self.last_reconcile_ok > since and \
                     f"foreign-order:{cid}" not in fences:
                 self.fail(f"foreign order {cid} without its fence after a reconcile")
-        if fences:
+        # Foreign positions and orders block only their own symbol, or every entry while a
+        # foreign order's symbol is unknown (owner 2026-11-16, manual trades are ignored).
+        foreign_known = e.foreign_symbols() is not None and SYMBOL not in e.foreign_symbols()
+        blocking = [n for n in fences if not (foreign_known and n.partition(":")[0] in
+                                              ("foreign-position", "foreign-order"))]
+        if blocking:
             try:
                 e.open_trade(SYMBOL, D(1), LIMIT, STOP, D(5))
                 self.fail("open_trade accepted while fenced")
             except EntryRefused:
                 pass
-        elif not e.trades() and positions_read:
+        elif not fences and not e.trades() and positions_read:
             own = self.own_working()
             if b.holdings or own:
                 self.fail(f"no fence and no trade, but broker holds {b.holdings}, "
