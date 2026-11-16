@@ -11,6 +11,10 @@ import fcntl
 import os
 from pathlib import Path
 
+LOCK_FILE = "tickr.lock"  # the bot's lock file under [run] data_dir
+# Lock file name of the code before the rename to Tickr; a bot holding it blocks every start.
+LEGACY_LOCK_FILE = "aperture.lock"  # rename-keep
+
 
 class AlreadyRunning(RuntimeError):
     """Another process holds the lock."""

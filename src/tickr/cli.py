@@ -29,7 +29,13 @@ from tickr.engine.manual import (
     plan_probe,
     run_until_closed,
 )
-from tickr.lock import AlreadyRunning, SingleInstanceLock, recorded_holder
+from tickr.lock import (
+    LEGACY_LOCK_FILE,
+    LOCK_FILE,
+    AlreadyRunning,
+    SingleInstanceLock,
+    recorded_holder,
+)
 from tickr.runtime import stopmarker
 from tickr.store import DATABASE_FILE, MIGRATIONS, EnvironmentMismatch, Store
 
@@ -37,10 +43,6 @@ if TYPE_CHECKING:
     from tickr.observers.runner import ObserverSet
     from tickr.runtime.evaluation import Evaluator
     from tickr.runtime.market import StreamInbox
-
-LOCK_FILE = "tickr.lock"
-# Lock file name of the code before the rename to Tickr; a bot holding it blocks every start.
-LEGACY_LOCK_FILE = "aperture.lock"  # rename-keep
 
 
 def data_paths(cfg: config_module.Config) -> tuple[Path, Path]:

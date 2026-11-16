@@ -409,6 +409,17 @@ class CommandAcceptedV1:
 
 
 @dataclass(frozen=True)
+class BotStartV1:
+    """POST /commands/start-bot: launchd accepted the start of the bot job (its exit code was 0).
+    The bot itself is not running yet: its preflight runs first and may still refuse; follow
+    GET /status. `stop_marker_cleared` says an operator stop-bot marker was removed first."""
+
+    requested_at: datetime
+    stop_marker_cleared: bool
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
 class PendingCommandsV1:
     """GET /commands/pending: commands written but not yet consumed by the bot."""
 
@@ -1797,6 +1808,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "command-v1": CommandV1,
     "status-response-v1": StatusResponseV1,
     "command-accepted-v1": CommandAcceptedV1,
+    "bot-start-v1": BotStartV1,
     "paired-v1": PairedV1,
     "pending-commands-v1": PendingCommandsV1,
     "error-v1": ErrorV1,

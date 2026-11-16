@@ -119,6 +119,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
 | POST | `/commands/stop-bot` | Body `{}`. Graceful stop that sticks. `202` `command-accepted-v1`. |
 | POST | `/commands/emergency` | Body `{}`. Entry-stop on, cancel own orders, flatten all. `202` `command-accepted-v1`. |
+| POST | `/commands/start-bot` | Body `{}`. Starts the bot job through launchd (not a bot command, see "Start-bot"). `202` `bot-start-v1`; `409 conflict` while a fresh status says the bot is starting, running or stopping, or a live process holds the bot's lock; `503 unavailable` when no start command is configured, the stop marker cannot be removed, or the command fails. |
 | GET, POST | `/demo/<route>` | The demo day (docs/demo.md): the request goes to the demo's own API on `[api] demo_port` of this loopback host, path after `/demo`, query, body, `Content-Type` and `Idempotency-Key` only (with a `Content-Length` of the body actually sent; a GET forwards no body headers), and its answer comes back as it came (an HTML page with this API's own page headers: CSP, `X-Frame-Options`, `Referrer-Policy`). This API's checks run first (Host guard; the paired token on the remote port), and the token, cookies and every other header stay here. Nothing under `/demo/` is handled by this API's own routes: a command there reaches the demo's inbox, never the bot's. A path with a `.` or `..` segment or an encoded separator, decoded as often as it decodes (`%2e%2e`, `%252e`, `%2f`, `%5c`), is refused with `400 bad_request`, never forwarded or normalised. `404` when `demo_port` is 0, `503 unavailable` when the demo is not answering within `[api] demo_timeout_seconds`. |
 
 Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1}`:
@@ -1043,6 +1044,40 @@ preconditions to every command.
   bot reads the command again and runs only the steps not yet journaled; if by then it is
   older than `[api] command_max_age_seconds`, nothing more is run and the command is recorded
   `refused` with the steps done and the steps not run.
+
+#### Start-bot
+
+`POST /commands/start-bot` is the one command the bot does not read: a stopped bot cannot.
+The API runs `[api] start_bot_command` (shipped: `launchctl kickstart gui/<uid>/local.tickr.bot`,
+without `-k`, so a job that already runs is never restarted) and answers `202 bot-start-v1`
+(`requested_at`, `stop_marker_cleared`) when it exits 0. The bot job then runs exactly as a
+scheduled start: preflight first, which may still refuse (no session today, token, disk);
+follow `GET /status` and the job log. Nothing runs inside the API process, and nothing talks
+to the broker.
+
+- Refused `409 conflict` (nothing changed) while a fresh status says the bot is `starting`,
+  `running` or `stopping`. A stale or missing status proves nothing, so the start goes ahead;
+  for a job that does run, the kickstart does nothing.
+- Refused `409 conflict` (nothing changed) while a live process is recorded in the bot's lock
+  file (`tickr.lock` under `data_dir`): a fresh `stopped` is written before the process has
+  ended, and `tickr trade` holds the same lock. The kickstart would do nothing, or the job
+  would end on `AlreadyRunning`, with the owner's stop already gone.
+  A crashed bot leaves its pid in the file; should macOS reuse that pid for another process,
+  Start answers `409` until that process ends. A lock file that cannot be read is `503`.
+- The operator stop marker left by stop-bot is removed first (pressing Start is the decision
+  to trade again, as `tickr clear-stop`), because preflight refuses while it exists. If the
+  command then fails (`503`, cause with the exit code, the exception or the timeout
+  `[api] start_bot_timeout_seconds`), the marker stays removed and the cause says so: the next
+  scheduled start runs. A marker that cannot be removed is `503` with that cause, and nothing
+  runs. Removing it is written to the API log (`api.log` under launchd) with the time.
+- Starts run one at a time across both listeners, under their own lock, so a slow start
+  command never holds back a queued command such as emergency or flatten.
+- `503 unavailable` without running anything when `start_bot_command` is empty (Docker, the
+  demo, which sets it empty so it can never start the real bot job).
+- An `Idempotency-Key` is checked for its form only: a repeat is harmless.
+
+Stopping stays `POST /commands/stop-bot`: the bot drains itself and is refused while any trade
+is not closed, which a launchd SIGTERM would not check.
 
 #### Idempotency-Key
 

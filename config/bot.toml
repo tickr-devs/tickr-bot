@@ -224,6 +224,12 @@ observer_trades_max_rows = 100
 watching_max_rows = 8
 # Latest journal rows GET /journal returns (oldest first; `last_seq` is the newest row's number); read by the api server.
 journal_rows = 40
+# Command POST /commands/start-bot runs to start the bot job through launchd ("{uid}" = this user's id); kickstart
+# without -k never restarts a job that is already running. Empty = start-bot answers 503 (no launchd: Docker, the
+# demo); read by the api server.
+start_bot_command = ["/bin/launchctl", "kickstart", "gui/{uid}/local.tickr.bot"]
+# Seconds POST /commands/start-bot waits for start_bot_command to return before answering 503; read by the api server.
+start_bot_timeout_seconds = 10
 # Newest AI advisor runs GET /advisor returns (folders under [advisor] proposals_dir, newest first; its
 # `awaiting_review` counts them all); count; read by the api server.
 advisor_runs = 20

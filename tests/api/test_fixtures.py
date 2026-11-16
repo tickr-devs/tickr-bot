@@ -26,6 +26,7 @@ from tickr.api.contract import (
     BackupJobV1,
     BarsV1,
     BarV1,
+    BotStartV1,
     BotState,
     ChartBarV1,
     ChartInterval,
@@ -156,6 +157,8 @@ def documents() -> dict[str, object]:
         "status-response-v1.unavailable": _response(
             None, None, False, "the bot has not written a status file"),
         "command-accepted-v1": CommandAcceptedV1(command=command, warning=None),
+        # Settings > Start: launchd took the start; the operator stop was cleared first.
+        "bot-start-v1": BotStartV1(T0, True),
         # An example only: real tokens never leave the phone's Keychain and the Mac's memory.
         "paired-v1": PairedV1(token="example-token-not-a-secret_0123456789-abcdef"),
         "command-accepted-v1.warning": CommandAcceptedV1(

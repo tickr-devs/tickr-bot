@@ -45,10 +45,12 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from tickr.api import contract, flow, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
+from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from tickr.api.configview import config_document
 from tickr.api.contract import (
     AccountResponseV1,
+    BotStartV1,
     CommandAcceptedV1,
     CommandKind,
     ContractError,
@@ -159,6 +161,7 @@ class ApiSettings:
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
     lab: LabReplaySettings  # GET and POST /lab/replay: the Lab's simulated replay
+    start: StartSettings  # POST /commands/start-bot: launchd's start of the bot job
     trade_whatif: trade_whatif.TradeWhatIfSettings  # GET /trades/whatif
     config_file: Path | None  # the bot.toml this API loaded, shown at GET /config
     config_root: Path  # GET /config shows the file's path relative to this
@@ -221,6 +224,8 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         raise ConfigError("[api] watching_max_rows must be positive")
     if api.journal_rows <= 0:
         raise ConfigError("[api] journal_rows must be positive")
+    if api.start_bot_timeout_seconds <= 0:
+        raise ConfigError("[api] start_bot_timeout_seconds must be positive")
     if api.advisor_runs <= 0:
         raise ConfigError("[api] advisor_runs must be positive")
     if min(api.watching_closeness_decimal_places, api.flow_change_pct_decimal_places,
@@ -293,6 +298,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
         lab=LabReplaySettings.from_config(cfg, config_path),
+        start=StartSettings.from_config(cfg),
         trade_whatif=trade_whatif.TradeWhatIfSettings.from_config(cfg),
         config_file=config_path,
         config_root=cfg.root,
@@ -335,12 +341,16 @@ class ApiServer(ThreadingHTTPServer):
 
     def __init__(self, settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
                  remote: bool = False, inbox_lock: threading.Lock | None = None,
+                 start_lock: threading.Lock | None = None,
                  lab: LabReplay | None = None) -> None:
         self.settings = settings
         self.clock = clock
         self.remote = remote
         # Shared with the other listener so both count the inbox under one lock.
         self.inbox_lock = inbox_lock or threading.Lock()
+        # One start at a time across both listeners; its own lock, so a hanging start command
+        # never holds back a queued command (emergency, flatten).
+        self.start_lock = start_lock or threading.Lock()
         # One redemption at a time, so a pairing code can never yield two tokens.
         self.pair_lock = threading.Lock()
         # Shared too, so one replay at a time whichever listener started it.
@@ -356,6 +366,7 @@ class ApiServer(ThreadingHTTPServer):
                                     settings.check_places)
         # No source until one is attached (python -m tickr.api, or the demo's world).
         self.chart = Chart(settings.chart)
+        self.start_runner = run_command  # runs [api] start_bot_command; replaced in tests
         port = settings.remote_port if remote else settings.port
         super().__init__((settings.host, port), Handler)
 
@@ -408,6 +419,15 @@ class ApiServer(ThreadingHTTPServer):
             return ErrorV1("unavailable", "account file is dated in the future")
         return AccountResponseV1(served_at=now, account=account, age_seconds=age,
                                  stale=age > self.settings.account_stale_seconds)
+
+    def start_bot(self) -> BotStartV1 | ErrorV1:
+        """POST /commands/start-bot (api/botstart.py), one at a time across both listeners."""
+        with self.start_lock:
+            try:
+                return start_bot(self.settings.start, self.status_response(), self.clock(),
+                                 self.start_runner)
+            except StartRefused as exc:
+                return ErrorV1(exc.error, exc.cause)
 
     def enqueue(self, kind: CommandKind, symbol: str | None = None,
                 key: str | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
@@ -502,6 +522,7 @@ PAGE_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 LAB_REPLAY = "/lab/replay"  # GET reads, POST starts: outside the command inbox
+START_BOT = "/commands/start-bot"  # POST only; runs launchd's start, outside the command inbox
 TRADE_WHATIF = "/trades/whatif"  # GET: another version on one trade's day, simulated
 # A strategy folder name: one path segment, never "." or "..".
 FOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -674,7 +695,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._account()
             elif path == "/chart":
                 self._chart()
-            elif path in COMMAND_ROUTES:
+            elif path in COMMAND_ROUTES or path == START_BOT:
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
             elif path in ("/days", "/bars", "/performance") or path.startswith(DAY_PREFIX):
                 self._history(path)
@@ -693,6 +714,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == LAB_REPLAY:
                 self._start_lab_replay()
+                return
+            if path == START_BOT:
+                self._start_bot()
                 return
             if path == ADVISOR_DECISION:
                 self._advisor_decision()
@@ -742,6 +766,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(202, result)
         except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
             self._error("internal", type(exc).__name__)
+
+    def _start_bot(self) -> None:
+        """POST /commands/start-bot with {}: 202 bot-start-v1, or the error with one cause. An
+        Idempotency-Key is checked for form only: a repeat is harmless (a running job is never
+        restarted, and a running bot is refused)."""
+        key = self.headers.get(IDEMPOTENCY_HEADER)
+        if key is not None and not IDEMPOTENCY_KEY.match(key):
+            self._error("bad_request", f"{IDEMPOTENCY_HEADER} must be 1-128 characters "
+                        "from A-Z a-z 0-9 . _ : -")
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        if body:
+            self._error("bad_request", "body must be an empty JSON object {}")
+            return
+        result = self.server.start_bot()
+        if isinstance(result, ErrorV1):
+            self._error(result.error, result.cause)
+        else:
+            self._json(202, result)
 
     def _advisor_decision(self) -> None:
         """POST /advisor/decision with {"run": "<id>", "verdict": "accepted"|"rejected"}:
@@ -1104,7 +1149,7 @@ def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now) -> 
 def make_remote_server(local: ApiServer) -> ApiServer:
     """The phone-facing listener next to `local`, sharing its settings, clock and inbox lock."""
     return ApiServer(local.settings, local.clock, remote=True, inbox_lock=local.inbox_lock,
-                     lab=local.lab)
+                     start_lock=local.start_lock, lab=local.lab)
 
 
 def _write_private(path: Path, text: str) -> None:

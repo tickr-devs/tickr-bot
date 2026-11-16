@@ -169,6 +169,7 @@ def build_folder(repo: Path, scenario: Scenario) -> Path:
     text = _set_line(text, "observers", "[" + ", ".join(f'"{o}"' for o in scenario.observers)
                      + "]")
     text = _set_line(text, "data_dir", f'"{DEMO_DATA_DIR}"')
+    text = _set_line(text, "start_bot_command", "[]")  # never the real bot's launchd job
     renamed = table.split("\n", 1)
     text += f"\n# Copy for `tickr demo`.\n[environments.{scenario.environment}]\n{renamed[1]}"
     path.write_text(_unreachable(text), "utf-8")

@@ -177,6 +177,8 @@ class ApiConfig:
     observer_trades_max_rows: int
     watching_max_rows: int
     journal_rows: int
+    start_bot_command: tuple[str, ...]
+    start_bot_timeout_seconds: Decimal
     advisor_runs: int
     watching_closeness_decimal_places: int
     check_decimal_places: int

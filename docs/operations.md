@@ -60,8 +60,9 @@ it is refused and the bot keeps running (send emergency or flatten first, wait f
 to close, then stop-bot). A
 SIGTERM does not have this check: it leaves an open position under its DAY stop, and nothing
 flattens it while the bot is down. When obeyed, the bot writes `data/<[runtime] stop_marker_file>` and every later start is refused (preflight
-cause `stopped-by-operator`, with an alert) until you run `tickr clear-stop`. See
-docs/api.md, "Commands".
+cause `stopped-by-operator`, with an alert) until you run `tickr clear-stop`, or press Start in the app (`POST /commands/start-bot`,
+which removes the marker and runs `launchctl kickstart` of the bot job). See docs/api.md,
+"Commands" and "Start-bot".
 
 ## Exit codes
 
