@@ -402,7 +402,7 @@ class Feed(FakeMarketData):
                                 "pre_close": str(self.world.today[symbol][0].open)})
                 for rank, symbol in enumerate(symbols, start=1)]
 
-    def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
+    def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
         self._call("bars", symbols)
         return [b for s in symbols for b in self.world.completed_and_current(s)[-count:]]
 

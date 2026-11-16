@@ -91,3 +91,17 @@ def test_limit_validation():
         RouteLimit(0, 60, 0)
     with pytest.raises(ValueError):
         RouteLimit(1, 0, 0)
+
+
+def test_reserve_keeps_requests_for_other_callers():
+    budget, _ = make()  # 3 per window
+    budget.take("/r", reserve=1)
+    budget.take("/r", reserve=1)
+    with pytest.raises(BudgetExhausted) as err:
+        budget.take("/r", reserve=1)
+    assert err.value.cause == RequestBudget.CAUSE_RESERVED
+    assert budget.usage("/r").used == 2
+    budget.take("/r")  # a caller without a reserve still gets the kept request
+    with pytest.raises(BudgetExhausted) as err:
+        budget.take("/r", reserve=1)
+    assert err.value.cause == RequestBudget.CAUSE_WINDOW_FULL

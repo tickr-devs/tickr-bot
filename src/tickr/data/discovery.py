@@ -10,9 +10,13 @@ One pass (spec section 6):
 3. Quote: one snapshot quote per symbol, fresh (provider time within `max_quote_age` and not
    ahead of our clock by more than `max_clock_skew`), bid and ask positive and not crossed.
    Then the active strategy's `quote_liquidity` rules (the spread).
-4. Bars: M1 bars, at least one completed. Then the strategy's `session_liquidity` rules on the
-   completed minutes of the current regular session (bar start >= session open, bar end <=
-   now), such as the session dollar volume.
+4. Bars: M1 bars, at least one completed. Discovery shares the bars route with the evaluation of
+   positions, WATCH symbols and candidates (and their history pages), so every discovery bars
+   read leaves `[market_data] discovery_bars_reserve_requests` of the route's window free: when
+   only those are left the pass stops visibly ("bars budget") and the symbols not reached wait
+   for the next pass; discovery never starves the trading path. Then the strategy's
+   `session_liquidity` rules on the completed minutes of the current regular session (bar
+   start >= session open, bar end <= now), such as the session dollar volume.
 
 The platform holds no liquidity threshold (owner 2026-11-15): spread, dollar volume and any
 other liquidity rule are the strategy's, refused here as `STRATEGY_LIQUIDITY` with the
@@ -159,6 +163,7 @@ class DiscoverySettings:
     snapshot_symbols_per_request: int
     bars_symbols_per_request: int
     bars_per_symbol: int
+    bars_budget_reserve: int
 
     @classmethod
     def from_config(cls, config: Config) -> DiscoverySettings:
@@ -172,6 +177,7 @@ class DiscoverySettings:
             snapshot_symbols_per_request=md.snapshot_symbols_per_request,
             bars_symbols_per_request=md.bars_symbols_per_request,
             bars_per_symbol=md.bars_per_symbol,
+            bars_budget_reserve=md.discovery_bars_reserve_requests,
         )
 
 
@@ -426,7 +432,8 @@ def discover(
         unknown = []
         try:
             bars = _read_without_refused(
-                lambda symbols: source.bars(symbols, settings.bars_per_symbol), chunk,
+                lambda symbols: source.bars(symbols, settings.bars_per_symbol,
+                                            budget_reserve=settings.bars_budget_reserve), chunk,
                 refused_by(Stage.BARS, unknown))
         except RateLimited as exc:
             return result(candidates, Stopped(Stage.BARS, StopCause.BUDGET, str(exc)))

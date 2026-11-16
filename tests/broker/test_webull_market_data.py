@@ -406,3 +406,15 @@ def test_m4_extended_sessions_are_refused_and_start_time_adds_a_bar():
     assert oldest == start - timedelta(minutes=1)  # why bars_before never sends start_time
     with pytest.raises(MalformedResponse, match="PRE"):
         read_bars(body)  # only RTH is requested; any other session is refused
+
+
+def test_discovery_bars_leave_the_reserve_and_send_nothing_when_refused():
+    body = {"result": []}
+    md, transport = adapter(*[WireResponse(200, body)] * 3, limit=3)
+    md.bars(["A"], 5, budget_reserve=1)
+    md.bars(["A"], 5, budget_reserve=1)
+    with pytest.raises(RateLimited) as caught:
+        md.bars(["A"], 5, budget_reserve=1)
+    assert caught.value.cause == "reserved"  # type: ignore[attr-defined]
+    md.bars(["A"], 5)  # evaluation (no reserve) still reads
+    assert md.budget.usage(Route.BARS.path).used == 3  # type: ignore[attr-defined]

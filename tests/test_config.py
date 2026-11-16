@@ -467,3 +467,11 @@ def test_current_bot_toml_uses_no_old_key_names():
     with warnings.catch_warnings():
         warnings.simplefilter("error", config.RenamedKeyWarning)
         assert config.load(BOT).renamed_keys == ()
+
+
+@pytest.mark.parametrize("reserve", ["-1", "30", "31"])
+def test_discovery_bars_reserve_must_leave_discovery_some_requests(tmp_path, reserve):
+    text = re.sub(r"(?m)^discovery_bars_reserve_requests = \d+",
+                  f"discovery_bars_reserve_requests = {reserve}", BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="discovery_bars_reserve_requests"):
+        config.load(_copy(tmp_path, text))

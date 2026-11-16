@@ -608,9 +608,11 @@ def send_once(
     route: Route,
     params: Mapping[str, Any],
     clock: Callable[[], float],
+    reserve: int = 0,
 ) -> WireResponse:
-    """Take budget, send once, handle transport failure and 429. Never retries."""
-    budget.take(route.path)  # BudgetExhausted (RateLimited): nothing was sent
+    """Take budget (leaving `reserve` requests of the route free), send once, handle transport
+    failure and 429. Never retries."""
+    budget.take(route.path, reserve)  # BudgetExhausted (RateLimited): nothing was sent
     started = clock()
     try:
         response = transport.send(route, params)
@@ -1016,8 +1018,8 @@ class WebullMarketData:
     def provider(self) -> str:
         return MARKET_DATA_PROVIDER
 
-    def _read(self, route: Route, params: Mapping[str, Any]) -> Any:
-        response = send_once(self._transport, self._budget, route, params, self._clock)
+    def _read(self, route: Route, params: Mapping[str, Any], reserve: int = 0) -> Any:
+        response = send_once(self._transport, self._budget, route, params, self._clock, reserve)
         if not response.ok:
             if response.error_code == CODE_INVALID_SYMBOL:
                 raise SymbolsRefused(route.name, response.status, response.error_code)
@@ -1072,13 +1074,13 @@ class WebullMarketData:
             raise MalformedResponse(f"snapshot: symbols not requested: {', '.join(stray)}")
         return quotes
 
-    def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
+    def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
         body = self._read(Route.BARS, {
             "symbols": list(symbols),
             "category": self._category,
             "timespan": BARS_TIMESPAN_M1,
             "count": str(count),
-        })
+        }, budget_reserve)
         return read_bars(body)
 
     def bars_before(self, symbol: str, end: datetime, count: int) -> list[Bar]:

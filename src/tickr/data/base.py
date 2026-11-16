@@ -138,10 +138,13 @@ class MarketData(Protocol):
 
     def screener(self, kind: ScreenerKind) -> list[ScreenerRow]: ...
 
-    def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
+    def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
         """Up to `count` most recent M1 bars per symbol, oldest first per symbol.
 
         May include the bar of the minute in progress; callers keep completed bars only.
+        `budget_reserve`: requests of the bars route this read must leave free in the budget
+        window (discovery keeps them for evaluation and history); refused as `RateLimited`
+        (cause `reserved`) when only those are left.
         """
         ...
 
@@ -193,6 +196,7 @@ class FakeMarketData:
         self._limits: dict[str, int] = {}
         self._bars_delay: Decimal | None = None
         self.calls: list[tuple[str, tuple[str, ...]]] = []
+        self.bars_reserves: list[int] = []  # budget_reserve of each bars call
         self.subscribed: set[str] = set()
         self._listener: QuoteListener | None = None
 
@@ -240,7 +244,8 @@ class FakeMarketData:
         self._call("screener", [kind.value])
         return list(self._rows.get(kind, []))
 
-    def bars(self, symbols: Sequence[str], count: int) -> list[Bar]:
+    def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
+        self.bars_reserves.append(budget_reserve)
         self._call("bars", symbols)
         if self._bars_delay is not None:
             raise DelayedData(symbols, self._bars_delay)

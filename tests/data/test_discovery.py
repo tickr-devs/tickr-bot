@@ -275,8 +275,8 @@ class Unknown(FakeMarketData):
             raise SymbolsRefused("SNAPSHOT", 417, "INVALID_SYMBOL")
         return quotes
 
-    def bars(self, symbols, count):
-        got = super().bars(symbols, count)
+    def bars(self, symbols, count, *, budget_reserve=0):
+        got = super().bars(symbols, count, budget_reserve=budget_reserve)
         if self.unknown["bars"] & set(symbols):
             raise SymbolsRefused("BARS", 417, "INVALID_SYMBOL")
         return got
@@ -349,3 +349,10 @@ def test_symbols_isolated_before_a_budget_stop_are_kept_so_the_next_pass_progres
     second = discover(md, settings(), Screen(), OPEN, lambda: NOW, None, memory)
     assert second.stopped is None
     assert [c.instrument.symbol for c in second.candidates] == ["S00", "S04"]
+
+
+def test_every_discovery_bars_read_leaves_the_configured_reserve():
+    md = FakeMarketData()
+    five(md)
+    run(md, bars_symbols_per_request=2)
+    assert md.bars_reserves == [3, 3, 3]

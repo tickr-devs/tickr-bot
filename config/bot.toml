@@ -299,6 +299,10 @@ snapshot_symbols_per_request = 100
 bars_symbols_per_request = 20
 # M1 bars requested per symbol in discovery (one regular session = 390 minutes); read by data.discovery.
 bars_per_symbol = 390
+# Requests of the bars route window (shared with the evaluation of positions, WATCH symbols and candidates, and their
+# history pages) every discovery bars read must leave free, count; below the bars route limit of every environment
+# (checked when config loads). Discovery stops its pass ("bars budget") rather than take them; read by data.discovery.
+discovery_bars_reserve_requests = 12
 # M1 bars asked per prior-session history request, per symbol (SDK maximum 1200; one regular session = 390);
 # read by data.history.
 history_bars_per_request = 1200

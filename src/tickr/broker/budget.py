@@ -81,6 +81,7 @@ class RequestBudget:
 
     CAUSE_WINDOW_FULL = "window_full"
     CAUSE_PAUSED_AFTER_429 = "paused_after_429"
+    CAUSE_RESERVED = "reserved"  # free requests remain, but they are kept for other callers
 
     def __init__(
         self,
@@ -127,12 +128,17 @@ class RequestBudget:
         with self._lock:
             return self._refusal(route, count, self._clock()) is None
 
-    def take(self, route: str) -> None:
-        """Record one request on `route` or raise `BudgetExhausted` without recording."""
+    def take(self, route: str, reserve: int = 0) -> None:
+        """Record one request on `route` or raise `BudgetExhausted` without recording. With
+        `reserve`, the request is admitted only if `reserve` more would still fit in the window
+        afterwards, so a lower-priority caller never takes the requests kept for the others
+        (cause `reserved` when only the reserve is left)."""
         with self._lock:
             now = self._clock()
-            refusal = self._refusal(route, 1, now)
+            refusal = self._refusal(route, 1 + reserve, now)
             if refusal is not None:
+                if reserve and self._refusal(route, 1, now) is None:
+                    raise BudgetExhausted(route, self.CAUSE_RESERVED, refusal.retry_after_seconds)
                 raise refusal
             self._taken[route].append(now)
 
