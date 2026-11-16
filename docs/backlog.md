@@ -27,12 +27,11 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
 | **v1.1** | Tools to find a strategy with an edge | R1-R5 merged | observer and replay results per candidate |
-| **v2** | Unattended Sandbox: the bot can run a day alone | T1-T14 merged and released | unattended Sandbox days |
-| **v3** | The owner sets up and runs the bot from the apps | S1-S7 merged in both apps | |
+| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T14, X3, X4 merged and released | unattended Sandbox days |
+| **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S7, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
 | **v5** | Standalone Mac product (still for the owner's own use) | P7 passes on a clean Mac | |
 | **v6** | Selling it: legal and business | only if the owner still wants it after v5; F2 gates the rest | |
-| later | Trading features without a version | an owner decision names the version | |
 
 Why this order: the biggest risk is that no strategy has an edge after costs (every family tested on
 history so far is negative, `docs/strategy-ledger.md`). So the research tools come right after v1,
@@ -75,7 +74,8 @@ research runs and candidates: they go on in every later version and never gate a
 - **R8** Candidate `price-action-v2` (no-progress exit, old Q43; trigger confirmation, old #153)
   judged by replay and observers; provisional X and N (`docs/observers.md`).
 - **R9** Per-variant evidence and missed-moves "trade of the day".
-- **R10** Spike-entry setup block (owner wants it back as its own block; values open).
+- **R10** Spike-entry setup block: built as the spike setup of `price-action-v3`, active since
+  2026-11-16 (docs/decisions.md); judged like any other setup.
 - **R11** Observers see what they would trade: discovery applies the union of the active strategy's
   and the observers' liquidity rules, so an observer with looser rules is not starved (left over
   from #403).
@@ -116,7 +116,7 @@ Platform checks (old group B):
 - **T8** Tradability and halts: instrument profile `status` and trade-instrument
   `trade_policy`/`forbid_reason` (CLOSE_ONLY, DENIED, HALTED) refuse entries with a typed cause and
   never block exits; probe first how a halt and the LULD band show in snapshot, profile and stream
-  (old #158). Depends on Q2. Before Production it also gates price-action-v3's spike setup, which
+  (old #158). A halt with a position open follows Q2. Before Production it also gates price-action-v3's spike setup, which
   enters right after a sharp move, where LULD pauses are most likely (Fable review of #476,
   2026-11-16).
 - **T9** Money in the account as an admission check: buying power, settled cash, intraday margin
@@ -132,9 +132,19 @@ Platform checks (old group B):
 - **T13** Profit target and time exit as strategy rules.
 - **T14** Notification settings in the apps (`docs/api-planned.md` section 4).
 
-Owner questions to answer in v2: Q1, Q2, Q4, Q5, Q6.
+Trading outside the regular session (owner 2026-11-16, ids kept):
+- **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
+  LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from
+  the first reference, then MARKET in the regular session (old Q22, Q110). Needed by X4: outside the regular session
+  only limit orders work, so the exit has to chase.
+- **X4** Extended hours and half days (owner wants them, 2026-11-16; own thread "Enable premarket and
+  after-hours trading"). No overnight holding (owner, 2026-11-16): every position is flat before the
+  extended session ends. Needs the PRE/POST stop probe and the owner's decision on protection
+  outside the regular session. Old-tracker answer, reconfirm: limit orders only in PRE/POST, smaller
+  size, no entries on stream or broker loss (old Q118, #020-12).
 
-Exit: T1-T14 merged with their probes answered (V1 for T1, the halt probe for T8), the
+Exit: T1-T14, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
+PRE/POST stop probe for X4), the
 duplicate-key test green, v2 released and running unattended in the Sandbox.
 
 ## v3: Settings from the apps
@@ -163,7 +173,17 @@ setting needs a config file. Order: design first, then macOS, then iOS.
 - **S7** Try before apply: replay a draft of strategy parameters on recent sessions from the
   Strategy screen (Lab).
 
-Exit: S1-S7 merged and shown in both apps; nothing the owner sets needs an edit of a file.
+Several positions and risk (owner 2026-11-16, ids kept):
+- **X1** Several simultaneous positions, top-up. The cheapest of the three limits; needs the owner's
+  risk-sharing design first, and a risk budget per strategy (share of the daily ceiling, position
+  limit) before two strategies are active at once.
+- **X2** Risk as percent of equity.
+- **X5** Short selling, only if the short-side research finds an edge; until the owner lifts it the
+  2026-10-23 ban stays. A large project; needs borrow and SSR facts. Old-tracker idea: Webull is the
+  authority (no own SSR rule); record `shortable` as read and map short-sell rejections to typed
+  causes (old Q107, #158).
+
+Exit: S1-S7, X1 and X2 merged and shown in both apps; nothing the owner sets needs an edit of a file.
 
 ## v4: Real money at small size
 
@@ -192,7 +212,7 @@ checkout or any developer tool. Still for the owner's own use; no legal or busin
 - **P1** One installable Mac app with the bot, local API and scheduled jobs: signed and notarized,
   bundled runtime; no Python install, no repository, no hand-written launchd files.
 - **P2** First-run setup in the app: broker credentials typed once into the Keychain (never a file or
-  a log), account check, alert channel, phone pairing, preflight as a checklist.
+  a log), account check, alert channel (app push with the Apple Developer Program and APNs, Q6), phone pairing, preflight as a checklist.
 - **P3** Running it from the app: start, stop, status and the reason the bot is not trading; settings
   only through v3 screens.
 - **P4** Updates and data: in-app update that never runs with a position open, database migration
@@ -219,37 +239,21 @@ Exit: P7 passes.
   subscription (App Store rule 3.2.1(viii) blocks trading apps from individuals), closed beta.
 - **F5** Strategy marketplace: postponed until demand is proven (owner 2026-11-15).
 
-## Later trading features (no version yet)
+## Owner questions
 
-Each needs an owner decision to get a version. Listed cheapest first.
+Open: none.
 
-- **X1** Several simultaneous positions, top-up. The cheapest of the three limits; needs the owner's
-  risk-sharing design first, and a risk budget per strategy (share of the daily ceiling, position
-  limit) before two strategies are active at once.
-- **X2** Risk as percent of equity.
-- **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
-  LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from
-  the first reference, then MARKET in the regular session (old Q22, Q110).
-- **X4** Extended hours and half days. Blocked on a PRE/POST stop probe and an owner decision on
-  protection outside the regular session. Old-tracker answer, reconfirm: limit orders only in
-  PRE/POST, smaller size, hard flatten before the session ends, no entries on stream or broker loss
-  (old Q118, #020-12).
-- **X5** Short selling. A large project; needs borrow and SSR facts. Old-tracker idea: Webull is the
-  authority (no own SSR rule); record `shortable` as read and map short-sell rejections to typed
-  causes (old Q107, #158).
-
-## Open owner questions (ask when they start blocking)
-
-- **Q1** Manual trades in the bot's account: forbidden by convention and fenced (recommended) or
-  ignored? (Partly decided 2026-11-15: foreign shares are never sold by the bot.)
-- **Q2** A position that cannot close before the close, or a halt with a position open: keep the
-  resting stop and report, send no flatten, cancel or replace into the halted book, keep overnight if
-  needed and close at the first regular-session opportunity (recommended; old Q108)?
-- **Q3** What counts as "Sandbox proved the strategy" (answered by R1).
-- **Q4** Quote capture retention days and disk allocation (decide after one measured day).
-- **Q5** Missing relative-volume history for a new listing: refuse (recommended) or pass.
-- **Q6** Phone alerts: iMessage is decided (2026-11-14); is a push from the iOS app also needed
-  before unattended days (old #147, product-spec Q7)?
+Answered (recorded in `docs/decisions.md`):
+- **Q1** Manual trades in the bot's account are ignored: no fence, the bot keeps trading and never
+  touches shares it does not own (2026-11-16, with 2026-11-15).
+- **Q2** A halt, or a position that cannot close: keep the resting stop, alert, send no order into the
+  halted book, close at the first chance once trading resumes, the next morning if forced
+  (2026-11-16).
+- **Q3** What counts as "Sandbox proved the strategy": R1's promotion ladder.
+- **Q4** Captured quotes, bars and decisions are kept forever (archived as gzip, never deleted);
+  low disk is caught by preflight's `[runtime] min_free_disk_mb` check (2026-11-16).
+- **Q5** A new listing without relative-volume history is refused with a typed cause (2026-11-16).
+- **Q6** iMessage is enough before unattended days; app push waits for v5 (2026-11-16).
 
 ## Done
 
