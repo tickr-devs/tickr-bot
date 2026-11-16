@@ -10,7 +10,7 @@ the demo sessions, minute bars).
 
 ```
 .venv/bin/tickr demo                   # start: serves within seconds (or: python -m tickr.cli demo)
-.venv/bin/tickr demo --build-fixture   # rebuild demo-fixture/ (a few minutes), commit the result
+.venv/bin/tickr demo --build-fixture   # build demo-fixture/ now (a few minutes); `tickr demo` does it on its own
 ```
 
 What it does:
@@ -37,7 +37,7 @@ What it does:
   history, a seeded random walk ending at its `base`, so the 1M, 3M and 1Y charts and RSI 14
   have data. They are weekdays (holidays are not skipped) and are served on D charts only. The
   bot never reads them: its history reads are minute bars.
-- Starts from the committed fixture (below): copies the day up to `[demo] clock` into `demo/data`,
+- Starts from the fixture (below): copies the day up to `[demo] clock` into `demo/data`,
   runs the store's normal forward migrations on it, serves the API at once on the demo's clock
   (within `[demo] answer_within_seconds`, 10; measured about 2 s), then runs the real bot in real
   time from `clock` with the live loop until `[demo] live_until` (it then stops its bot and exits
@@ -50,21 +50,45 @@ What it does:
 
 `tickr demo --build-fixture` runs the past sessions in `config/demo.toml` fast, then the demo day
 (today if it is a session, otherwise the latest session before it) fast up to `[demo] clock`, with
-the real bot on the simulated exchange, and stores the demo's data folder as
-`demo-fixture/data.tar.xz` (about 0.8 MB; the prior-session bar cache and backups are left out, the
-bot rebuilds the first from the simulated feed) with `demo-fixture/manifest.json`: the demo day,
-the clock, the store schema version and a digest of the inputs. The day must end flat at the clock
-(MVLD is flattened at 14:29:30), so the live part starts on a fresh simulated broker. The demo day
-is the fixture's date, whatever today is.
+the real bot on the simulated exchange, in its own folder `demo-build/` (so it can run while the
+demo serves from `demo/`). It stores the demo's data folder as `demo-fixture/<digest>.tar.xz`
+(about 0.8 MB; the prior-session bar cache and backups are left out, the bot rebuilds the first
+from the simulated feed), with its manifest inside: the digest of the inputs, the demo day, the
+clock and the store schema version. The day must end flat at the clock (MVLD is flattened at
+14:29:30), so the live part starts on a fresh simulated broker. The demo day is the fixture's
+date, whatever today is. Only the latest build is kept. On the owner's Mac a build takes about
+4 minutes.
 
-The fixture is stale, and `tickr demo` refuses to start (and `tests/demo` fails in CI), when one of
-these changes: the scenario (`config/demo.toml`), the demo code (`src/tickr/demo/`), the API
-contract the apps read (`src/tickr/api/contract.py`), or a strategy folder (`strategies/`, whose
-names and versions the records carry). Rebuild it in the same pull request with `tickr demo
---build-fixture` and commit `demo-fixture/`. Engine, risk or runtime changes do not make it stale:
-it keeps the data format the apps read, not the decisions today's engine would make (owner
-2026-11-15). A store schema change does not either: its forward migration runs on the fixture at
-start, as on real data; a fixture newer than the code is refused.
+The inputs are what the fixture's records depend on for the apps: the scenario
+(`config/demo.toml`), the demo code (`src/tickr/demo/`), the API contract the apps read
+(`src/tickr/api/contract.py`) and the strategy folders (`strategies/`, whose names and versions the
+records carry). Engine, risk or runtime changes do not make a fixture stale: it keeps the data
+format the apps read, not the decisions today's engine would make (owner 2026-11-15). A store
+schema change does not either: its forward migration runs on the fixture at start, as on real
+data.
+
+The fixture is built on each Mac from those committed inputs and is never committed (`.gitignore`):
+a binary in git would conflict between every pair of pull requests that touch an input and grow
+the history by a new copy on each rebuild (a rebuild is not byte for byte the same). Git LFS
+would only fix the growth, not the conflicts, and would need `git lfs` on every machine and in CI.
+So `tickr demo` builds it when needed:
+
+- **Fixture of the current inputs present** (the usual restart): copy it and serve within seconds.
+- **Inputs changed** (after a `git pull`): serve the latest previous build within seconds all the
+  same, and start `tickr demo --build-fixture` beside it as a child process (its lines go to the
+  demo's log). When the new build lands, the demo stops its bot and exits 0; the launchd job starts
+  a fresh one, which serves the new fixture within seconds. If the build fails, the demo keeps
+  serving the previous one and the cause is in the log; the next start tries again. A build still
+  running when the demo ends (at `live_until`, Ctrl-C, or launchd stopping the job) is stopped and
+  started again by the next demo.
+- **No usable fixture at all** (the first start on a Mac, or a build whose clock or schema no
+  longer fit): build it first, in the foreground (a few minutes, once), then serve. To skip that
+  wait, run `tickr demo --build-fixture` once before loading the job.
+
+CI builds the real fixture on every Python change (job `demo-fixture`), so a change that breaks the
+build (the day not flat at the clock, the bot failing) fails the pull request instead of the
+Mac's next build. `tests/demo` builds a short day's fixture once per test module and checks the
+first start, a start from a stale fixture (served, rebuilt, swapped) and the refusals.
 
 ## The live loop (`[live]`)
 
@@ -107,8 +131,8 @@ How it reaches the demo, with one click and nothing to type:
   installed with the other jobs, docs/operations.md) runs `tickr demo` at login. At `[demo]
   live_until` the demo exits 0 and launchd starts a fresh one (KeepAlive on a clean exit only), so
   whenever the apps look, the day is inside the same window: the live loop above, before the last
-  entry and the flatten. A restart answers within seconds (the fixture), so the apps are about
-  never "not reachable". It never talks to Webull (broker hosts point at `.invalid`, credential
+  entry and the flatten. A restart answers within seconds (the fixture; also right after a `git pull`, from
+  the previous build while the new one builds), so the apps are about never "not reachable". It never talks to Webull (broker hosts point at `.invalid`, credential
   names are unset), needs no credentials file, runs at Background priority, and touches only
   `demo/`. Why `tickr demo` and not a frozen copy of `demo/` served by the API alone: the frozen
   copy's status goes stale and its "today" is not the demo day, so Overview, positions and the live

@@ -615,7 +615,7 @@ def main(argv: list[str] | None = None) -> int:
                                  "(config/demo.toml) served to the apps; never talks to Webull")
     demo_parser.add_argument("--build-fixture", action="store_true",
                              help="replay the day up to [demo] clock and store it in "
-                             "demo-fixture/ (docs/demo.md)")
+                             "demo-fixture/ (`tickr demo` does this on its own; docs/demo.md)")
     args = parser.parse_args(argv)
     try:
         if args.command == "trade":

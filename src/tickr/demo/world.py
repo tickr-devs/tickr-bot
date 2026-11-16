@@ -18,6 +18,7 @@ bot sees a position without a verified stop and the apps show it unprotected.
 
 `go_live` switches the clock from simulated to real time: from then on a bot sleep really
 sleeps and the world's time moves with the wall clock, shifted by a fixed offset.
+`call_soon` hands an action from another thread to the bot's thread (the next clock advance).
 
 `daily_history` draws older days for the charts only: one D bar per weekday before the minute
 history, a seeded random walk that ends at the first minute day's open. The feed serves them on
@@ -30,6 +31,7 @@ symbol and minute). The rehearsals keep the plain planned bars.
 
 from __future__ import annotations
 
+import queue
 import random
 import time
 import zlib
@@ -230,6 +232,8 @@ class World:
         self.exchange_lead = timedelta(0)
         # Set by go_live: world time = wall time + this offset, and sleeps are real.
         self.live_offset: timedelta | None = None
+        # Actions handed over from other threads (`call_soon`), run at the next clock advance.
+        self.soon: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
 
     # --- scenario ------------------------------------------------------------------------
 
@@ -248,6 +252,11 @@ class World:
     def at(self, when: datetime, action: Callable[[], None]) -> None:
         self.events.append((when, action))
         self.events.sort(key=lambda e: e[0])
+
+    def call_soon(self, action: Callable[[], None]) -> None:
+        """From any thread: run `action` on the bot's thread at the next clock advance (`at`
+        is for the bot's thread only)."""
+        self.soon.put(action)
 
     # --- clock ---------------------------------------------------------------------------
 
@@ -278,6 +287,8 @@ class World:
         while self.events and self.events[0][0] <= self.now:
             _, action = self.events.pop(0)
             action()
+        while not self.soon.empty():
+            self.soon.get()()
 
     # --- prices --------------------------------------------------------------------------
 

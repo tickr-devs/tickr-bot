@@ -26,9 +26,10 @@ clock = "14:30"
 # local.tickr.demo launchd job starts a fresh one, so the day stays inside the same window (open
 # position, before the last entry and the flatten) whenever the apps look at it.
 live_until = "15:40"
-# Most seconds from `tickr demo` starting to its API's first answer: it copies the committed
-# fixture (demo-fixture/, the day up to `clock`) and replays nothing. Read by tests/demo, which
-# check a start against it.
+# Most seconds from `tickr demo` starting to its API's first answer: it copies the fixture
+# (demo-fixture/, the day up to `clock`, built on this Mac) and replays nothing; after an input
+# change it serves the previous build while the new one builds. Read by tests/demo, which check a
+# start against it.
 answer_within_seconds = 10
 
 [market]

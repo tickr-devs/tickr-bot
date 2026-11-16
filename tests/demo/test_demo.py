@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import http.client
+import io
 import json
+import os
 import re
 import shutil
 import socket
@@ -47,6 +49,7 @@ from tickr.demo.world import (
     textured,
     weekdays_before,
 )
+from tickr.store import MIGRATIONS
 from tickr.types import (
     OrderRequest,
     OrderState,
@@ -588,109 +591,196 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-# --- the fixture: the demo starts from the committed day, it replays nothing ------------------
+# --- the fixture: built from the committed inputs, a start replays nothing --------------------
 
 
-def test_committed_fixture_is_current():
-    """Fails when the demo fixture is stale: rebuild it with `tickr demo --build-fixture`
-    (docs/demo.md) in the pull request that changes the scenario, the demo code, the API
-    contract or a strategy."""
-    scenario = load(ROOT / "config" / "demo.toml")
-    manifest = demo.read_fixture(ROOT, scenario)
-    archive = ROOT / demo.FIXTURE_DIR / demo.FIXTURE_DATA
-    assert archive.stat().st_size < 20 * 1024 * 1024  # compact: committed to git
-    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
-    calendar.day(date.fromisoformat(str(manifest["demo_day"])))  # a session
-
-
-def _flat_small(root: Path):
-    """`small`, flattened before its clock so the fixture ends flat, and live for seconds."""
+def _short_day(root: Path):
+    """`small` cut to AAA's breakout and stop-out on the demo day only, flat at the clock, live
+    for seconds: one fixture build replays half an hour, not two sessions."""
     scenario = small(root / "config" / "demo.toml")
-    commands = (*scenario.commands, DemoCommand("11:20", api.CommandKind.FLATTEN, None))
-    return replace(scenario, commands=commands, live_until="11:30:08")
+    aaa = replace(scenario.today[0], legs=(("09:30", "09:45", D("24.50"), HOT),
+                                           ("09:46", "09:48", D(21), HOT)))
+    return replace(scenario, past=(), today=(aaa,), commands=(), clock="09:50",
+                   live_until="09:50:04")
 
 
-def test_a_stale_fixture_is_refused_at_start(tmp_path):
-    root = repo(tmp_path)
-    scenario = _flat_small(root)
-    with pytest.raises(demo.DemoRefused, match="no demo fixture"):
-        demo.run_demo(root, scenario, SUNDAY, log=lambda line: None)
+def _no_build(repo_root: Path) -> demo.Builder:
+    raise AssertionError("no background build expected: the fixture is current")
+
+
+def _archive(root: Path, inputs: str, **manifest: object) -> Path:
+    """A fixture archive holding only its manifest (for the checks before anything is read)."""
+    path = demo.fixture_path(root, inputs)
+    path.parent.mkdir(exist_ok=True)
+    _pack(path, {"inputs": inputs, "demo_day": FRIDAY.isoformat(), "clock": "09:50",
+                 "schema": 1, **manifest})
+    return path
+
+
+def _pack(path: Path, manifest: dict, data_from: Path | None = None) -> None:
+    raw = json.dumps(manifest).encode()
+    with tarfile.open(path, "w:xz") as tar:
+        if data_from is not None:
+            with tarfile.open(data_from, "r:xz") as source:
+                for member in source.getmembers():
+                    if member.name != demo.FIXTURE_MANIFEST:
+                        tar.addfile(member, source.extractfile(member))
+        info = tarfile.TarInfo(demo.FIXTURE_MANIFEST)
+        info.size = len(raw)
+        tar.addfile(info, io.BytesIO(raw))
+
+
+@pytest.fixture(scope="module")
+def first_start(tmp_path_factory):
+    """The one fixture build of this module: the first `tickr demo` on a Mac (no fixture yet)
+    builds it in the foreground, then serves it and runs live until live_until."""
+    root = _demo_port(repo(tmp_path_factory.mktemp("first")), _free_port())
+    scenario = _short_day(root)
+    lines: list[str] = []
+    code = demo.run_demo(root, scenario, SUNDAY, log=lines.append, start_build=_no_build)
+    return root, scenario, code, lines
+
+
+def _with_fixture(tmp_path: Path, first_start) -> tuple[Path, int, Path]:
+    """A fresh repo holding a copy of the module's fixture; returns it, its port and the copy."""
+    built, scenario, _, _ = first_start
+    root = _demo_port(repo(tmp_path), port := _free_port())
+    archive = demo.fixture_path(built, demo.fixture_inputs(built, scenario))
     (root / demo.FIXTURE_DIR).mkdir()
-    manifest = {"inputs": demo.fixture_inputs(root, scenario), "demo_day": "2026-11-13",
-                "clock": scenario.clock, "schema": 1}
-    path = root / demo.FIXTURE_DIR / demo.FIXTURE_MANIFEST
-    path.write_text(json.dumps(manifest), "utf-8")
-    assert demo.read_fixture(root, scenario)["demo_day"] == "2026-11-13"
+    return root, port, Path(shutil.copy2(archive, root / demo.FIXTURE_DIR / archive.name))
+
+
+def test_first_start_builds_the_fixture_then_serves(first_start):
+    root, scenario, code, lines = first_start
+    assert code == 0
+    assert any("building it first" in line for line in lines)
+    assert any("serving on" in line for line in lines)
+    (archive,) = (root / demo.FIXTURE_DIR).iterdir()  # one build, no partial file left
+    assert archive == demo.fixture_path(root, demo.fixture_inputs(root, scenario))
+    manifest = demo.read_fixture(archive, scenario)
+    assert (manifest["demo_day"], manifest["clock"]) == (FRIDAY.isoformat(), scenario.clock)
+    assert manifest["schema"] == len(MIGRATIONS)
+    assert archive.stat().st_size < 20 * 1024 * 1024  # compact
+    assert (root / (scenario.root_dir + demo.BUILD_SUFFIX)).is_dir()  # built beside, not in, demo/
+    assert not (root / "data").exists()  # the real data_dir is never created
+
+
+def test_find_fixture_takes_the_current_build_else_the_latest_usable_one(tmp_path):
+    root = repo(tmp_path)
+    scenario = _short_day(root)
+    assert demo.find_fixture(root, scenario, log=lambda line: None) is None
+    inputs = demo.fixture_inputs(root, scenario)
+    (root / demo.FIXTURE_DIR).mkdir()
+    (root / demo.FIXTURE_DIR / "data.tar.xz").write_bytes(b"")  # not a build: never read
+    latest, earlier = "a" * 64, "b" * 64
+    _archive(root, latest)
+    os.utime(_archive(root, earlier), (1, 1))  # written long ago
+    found = demo.find_fixture(root, scenario, log=lambda line: None)
+    assert found is not None and (found.archive.name, found.current) == (
+        latest + demo.FIXTURE_SUFFIX, False)
+    current = _archive(root, inputs)
+    found = demo.find_fixture(root, scenario, log=lambda line: None)
+    assert found is not None and (found.archive, found.current) == (current, True)
+    # Any change of the inputs makes it a previous build.
     changed = replace(scenario, today=(replace(scenario.today[0], base=D(19)),
                                        *scenario.today[1:]))
-    with pytest.raises(demo.DemoRefused, match="stale"):
-        demo.read_fixture(root, changed)
+    assert not demo.find_fixture(root, changed, log=lambda line: None).current
     (root / "strategies" / "price-action-v1" / "strategy.toml").write_text("# changed", "utf-8")
-    with pytest.raises(demo.DemoRefused, match="stale"):
-        demo.read_fixture(root, scenario)
+    assert demo.fixture_inputs(root, scenario) != inputs
 
 
-def test_fixture_newer_than_the_code_is_refused(tmp_path):
+@pytest.mark.parametrize(("manifest", "cause"), [
+    ({"schema": 10_000}, "newer than this code"),
+    ({"clock": "09:59"}, "ends at 09:59"),
+    ({"inputs": "c" * 64}, "other inputs"),
+])
+def test_a_fixture_a_start_cannot_use_is_skipped(tmp_path, manifest, cause):
     root = repo(tmp_path)
-    scenario = _flat_small(root)
-    (root / demo.FIXTURE_DIR).mkdir()
-    (root / demo.FIXTURE_DIR / demo.FIXTURE_MANIFEST).write_text(json.dumps({
-        "inputs": demo.fixture_inputs(root, scenario), "demo_day": "2026-11-13",
-        "clock": scenario.clock, "schema": 10_000}), "utf-8")
-    with pytest.raises(demo.DemoRefused, match="newer"):
-        demo.read_fixture(root, scenario)
+    scenario = _short_day(root)
+    inputs = demo.fixture_inputs(root, scenario)
+    path = demo.fixture_path(root, inputs)
+    path.parent.mkdir()
+    _pack(path, {"inputs": inputs, "demo_day": FRIDAY.isoformat(), "clock": scenario.clock,
+                 "schema": 1, **manifest})
+    with pytest.raises(demo.DemoRefused, match=cause):
+        demo.read_fixture(path, scenario)
+    lines: list[str] = []
+    assert demo.find_fixture(root, scenario, log=lines.append) is None
+    assert len(lines) == 1 and cause in lines[0]
 
 
-def _demo_port(root: Path, port: int) -> Path:
-    bot = root / "config" / "bot.toml"
-    text, count = re.subn(r"(?m)^demo_port = \d+$", f"demo_port = {port}",
-                          bot.read_text("utf-8"))
-    assert count == 1
-    bot.write_text(text, "utf-8")
-    return root
+def _poll(port: int, started: float, done: threading.Event,
+          answers: list[tuple[float, dict]], failures: list[tuple[type, int]]) -> None:
+    """GET /status every 0.1 s: (seconds since start, status) per answer, (error, answers
+    before it) per failure."""
+    while not done.is_set():
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            conn.request("GET", "/status", headers={"Host": f"127.0.0.1:{port}"})
+            resp = conn.getresponse()
+            body = json.loads(resp.read())
+            conn.close()
+            if resp.status == 200 and body["status"] is not None:
+                answers.append((monotonic() - started, body["status"]))
+        except (OSError, http.client.HTTPException) as exc:
+            failures.append((type(exc), len(answers)))
+        done.wait(0.1)
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-def test_demo_starts_from_its_fixture_and_answers_within_seconds(tmp_path):
+def test_demo_starts_from_its_fixture_and_answers_within_seconds(tmp_path, first_start):
     """`tickr demo` copies the fixture, answers within [demo] answer_within_seconds (nothing
-    replayed), runs the real bot live from the clock and stops itself at live_until. Before it
-    serves, nothing holds the port: a client is refused at once, never reset or left hanging."""
-    root = _demo_port(repo(tmp_path), port := _free_port())
-    scenario = _flat_small(root)
-    archive = demo.build_fixture(root, scenario, SUNDAY, log=lambda line: None)
-    assert archive.is_file()
-    shutil.rmtree(root / scenario.root_dir)  # a start rebuilds the folder from the fixture
+    replayed) and runs the real bot live from the clock. Before it serves, nothing holds the
+    port: a client is refused at once, never reset or left hanging. Here the inputs changed
+    since the build (a `git pull`): the start serves that previous build all the same, builds
+    the new one beside it, and exits 0 once it lands (launchd starts a fresh demo on it)
+    instead of serving the old one until live_until. A start from a current build is the same
+    without the build (`first_start`, after its build)."""
+    root, port, previous = _with_fixture(tmp_path, first_start)
+    # A later live_until: changed inputs, and the swap must stop the demo well before it.
+    scenario = replace(_short_day(root), live_until="09:50:30")
+    current = demo.fixture_path(root, demo.fixture_inputs(root, scenario))
     answers: list[tuple[float, dict]] = []  # (seconds since start, status)
     failures: list[tuple[type[BaseException], int]] = []  # (error, answers before it)
     done = threading.Event()
+
+    def live_written() -> bool:  # the live bot has written a status after the clock
+        return any(api.parse_time(s["written_at"]).astimezone(NEW_YORK).strftime("%H:%M:%S")
+                   >= scenario.clock + ":01" for _, s in list(answers))
+
+    class Build:  # stands in for `tickr demo --build-fixture`: lands once the live bot wrote
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def wait(self) -> int:
+            while not live_written() and not done.is_set():
+                done.wait(0.05)
+            manifest = demo.read_fixture(previous, scenario)
+            _pack(current, {**manifest, "inputs": demo.fixture_inputs(root, scenario)},
+                  data_from=previous)
+            return 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    builds: list[Build] = []
+
+    def start_build(repo_root: Path) -> Build:
+        assert repo_root == root
+        builds.append(Build())
+        return builds[-1]
+
+    lines: list[str] = []
     started = monotonic()
-
-    def poll() -> None:
-        while not done.is_set():
-            try:
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-                conn.request("GET", "/status", headers={"Host": f"127.0.0.1:{port}"})
-                resp = conn.getresponse()
-                body = json.loads(resp.read())
-                conn.close()
-                if resp.status == 200 and body["status"] is not None:
-                    answers.append((monotonic() - started, body["status"]))
-            except (OSError, http.client.HTTPException) as exc:
-                failures.append((type(exc), len(answers)))
-            done.wait(0.1)
-
-    poller = threading.Thread(target=poll, daemon=True)
+    poller = threading.Thread(target=_poll, args=(port, started, done, answers, failures),
+                              daemon=True)
     poller.start()
     try:
-        assert demo.run_demo(root, scenario, SUNDAY, log=lambda line: None) == 0
+        assert demo.run_demo(root, scenario, SUNDAY, log=lines.append,
+                             start_build=start_build) == 0
     finally:
         done.set()
         poller.join(timeout=5)
+    ended = monotonic() - started
     assert answers, "the demo never answered"
     assert answers[0][0] <= scenario.answer_within_seconds
     assert all(error is ConnectionRefusedError for error, before in failures if before == 0)
@@ -698,22 +788,23 @@ def test_demo_starts_from_its_fixture_and_answers_within_seconds(tmp_path):
     first = answers[0][1]
     assert first["environment"] == scenario.environment
     assert [t["symbol"] for t in first["trades_today"]][:1] == ["AAA"]
-    written = {api.parse_time(s["written_at"]).astimezone(NEW_YORK).strftime("%H:%M:%S")
-               for _, s in answers}
-    assert max(written) >= scenario.clock + ":01"  # the live bot, after the clock
+    assert live_written()
+    # The new build landed: the demo stopped on it, not at live_until.
+    assert len(builds) == 1 and builds[0].terminated  # a build still running would be stopped
+    assert any("restarting onto it" in line for line in lines)
+    live_seconds = (datetime.combine(FRIDAY, time.fromisoformat(scenario.live_until))
+                    - datetime.combine(FRIDAY, time.fromisoformat(scenario.clock)))
+    assert ended < live_seconds.total_seconds() / 2
+    found = demo.find_fixture(root, scenario, log=lambda line: None)
+    assert found is not None and found.current
 
 
 def test_a_busy_demo_port_is_refused_at_start(tmp_path):
     root = _demo_port(repo(tmp_path), port := _free_port())
-    scenario = _flat_small(root)
-    (root / demo.FIXTURE_DIR).mkdir()
-    manifest = {"inputs": demo.fixture_inputs(root, scenario), "demo_day": "2026-11-13",
-                "clock": scenario.clock, "schema": 1}
-    (root / demo.FIXTURE_DIR / demo.FIXTURE_MANIFEST).write_text(json.dumps(manifest), "utf-8")
+    scenario = _short_day(root)
+    _archive(root, demo.fixture_inputs(root, scenario))
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", port))
         busy.listen()
-        with tarfile.open(root / demo.FIXTURE_DIR / demo.FIXTURE_DATA, "w:xz"):
-            pass
         with pytest.raises(demo.DemoRefused, match="cannot listen"):
-            demo.run_demo(root, scenario, SUNDAY, log=lambda line: None)
+            demo.run_demo(root, scenario, SUNDAY, log=lambda line: None, start_build=_no_build)
