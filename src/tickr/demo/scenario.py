@@ -87,6 +87,17 @@ class LiveLoop:
 
 
 @dataclass(frozen=True)
+class Recording:
+    """What `tickr demo --record` puts in the apps' recording (`[recording]`): the loop cycle it
+    holds, the GET /performance window the apps ask for, and the simulated seconds the bot gets
+    to act on each command the apps can send, after that cycle."""
+
+    cycle: int
+    performance_days: int
+    command_seconds: int
+
+
+@dataclass(frozen=True)
 class Scenario:
     root_dir: str
     environment: str
@@ -112,6 +123,7 @@ class Scenario:
     # (symbol, New York time "HH:MM:SS") of symbols only the live loop moves: the simulated
     # screeners list them from then on, so the fast part of the day does not evaluate them.
     listed: tuple[tuple[str, str], ...] = ()
+    recording: Recording | None = None
 
 
 def _keys(where: str, raw: Any, keys: set[str]) -> dict[str, Any]:
@@ -361,7 +373,7 @@ def load(path: Path) -> Scenario:
         raw = tomllib.loads(path.read_text("utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise ScenarioError(f"{path}: {exc}") from exc
-    top = _keys("demo.toml", raw, {"demo", "market", "scenario", "live"})
+    top = _keys("demo.toml", raw, {"demo", "market", "scenario", "live", "recording"})
     plan = _keys("[scenario]", top["scenario"], {"today", "commands", "past", "faults"})
     demo = _keys("[demo]", top["demo"], {
         "root_dir", "environment", "observers", "provider",
@@ -415,4 +427,16 @@ def load(path: Path) -> Scenario:
         live=_loop(top["live"], today),
         answer_within_seconds=_count("[demo] answer_within_seconds",
                                      demo["answer_within_seconds"]),
+        recording=_recording(top["recording"], clock, live_until, top["live"]),
     ))
+
+
+def _recording(raw: Any, clock: str, live_until: str, live: Any) -> Recording:
+    table = _keys("[recording]", raw, {"cycle", "performance_days", "command_seconds"})
+    cycle = table["cycle"]
+    cycles = loop_cycles(clock, live_until, _count("[live] cycle_minutes", live["cycle_minutes"]))
+    # The cycle after it must exist too: the commands are recorded into its start.
+    if isinstance(cycle, bool) or not isinstance(cycle, int) or not 0 <= cycle < cycles - 1:
+        raise ScenarioError(f"[recording] cycle must be a whole loop cycle from 0 to {cycles - 2}")
+    return Recording(cycle, _count("[recording] performance_days", table["performance_days"]),
+                     _count("[recording] command_seconds", table["command_seconds"]))

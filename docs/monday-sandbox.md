@@ -45,8 +45,9 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
 6. The Mac stays on power, awake and logged in all day. Messages is signed in.
    **Demo day is off in both apps** («Демо-день выключен в обоих приложениях»): Mac Settings ›
    General and iPhone Settings, "Demo day" switch off; no DEMO DAY pill in the Mac title bar and
-   no demo banner on the iPhone's Home or the menu-bar panel. While it is on, every command from
-   that app (flatten, stop, emergency) goes to the demo, not the bot.
+   no demo banner on the iPhone's Home or the menu-bar panel. While it is on, that app shows the
+   recorded demo day it carries and sends no command anywhere (flatten, stop, emergency only play
+   the recording), so it cannot act on the bot.
 7. Keep the bot job from starting by itself at 09:00 (manual-trade.md, "Before the open",
    step 1). Leave the watchdog job alone.
    ```sh
@@ -54,20 +55,9 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    launchctl bootout gui/$(id -u)/local.tickr.bot
    launchctl print-disabled gui/$(id -u) | grep tickr.bot   # shows it disabled
    ```
-   **The demo day job stays unloaded during the live session** («Во время живой сессии задача
-   демо-дня `local.tickr.demo` выгружена»). It never talks to Webull, but it runs a second,
-   simulated bot on this Mac and serves the apps' "Demo day"; on Monday neither is wanted.
-   Since the live loop (#427) the demo also keeps a steady CPU load (quotes and bars every few
-   seconds, all session long), which must not compete with the real bot's quote handling
-   («демо-день постоянно нагружает процессор и не должен мешать настоящему боту»).
-   Unload it until after the close (16:00), then load it again if you want the demo back:
-   ```sh
-   launchctl bootout gui/$(id -u)/local.tickr.demo           # no output, or "No such process"
-   launchctl print gui/$(id -u)/local.tickr.demo 2>&1 | head -1   # "Could not find service": unloaded
-   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8766/demo/status   # 503: nothing serves the demo
-   # after the close, to bring it back:
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.demo.plist
-   ```
+   The demo day no longer runs on this Mac: the apps carry it as a recording, so there is no demo
+   job to unload and no second, simulated bot loading the CPU. If the old `local.tickr.demo` job
+   is still installed, remove it once (docs/operations.md, "Everyday commands").
 
 ## Monday
 

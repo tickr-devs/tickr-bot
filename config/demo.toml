@@ -22,9 +22,9 @@ past_stop = "16:05"
 # New York time the demo day is fast-forwarded to; from then on it runs in real time with its API
 # on bot.toml [api] demo_port.
 clock = "14:30"
-# New York time the live demo day ends (after `clock`): the demo stops its bot and exits 0, and the
-# local.tickr.demo launchd job starts a fresh one, so the day stays inside the same window (open
-# position, before the last entry and the flatten) whenever the apps look at it.
+# New York time the live demo day of `tickr demo` ends (after `clock`): the demo stops its bot and
+# exits 0, so the day it serves stays inside the same window (the live loop, before the last entry
+# and the flatten).
 live_until = "15:40"
 # Most seconds from `tickr demo` starting to its API's first answer: it copies the fixture
 # (demo-fixture/, the day up to `clock`, built on this Mac) and replays nothing; after an input
@@ -158,7 +158,7 @@ past = [
 # under the operator's entry stop and refuses the stopped-out symbol's re-breakout inside its pause
 # after a loss. Quotes tick, minute bars close, discovery, reconciliation and the account update
 # all the time. Cycles start at [demo] clock and repeat for every whole cycle before live_until
-# (the launchd job then starts a fresh demo). Read by tickr.demo.scenario (`unroll`).
+# (`tickr demo` then exits). `tickr demo --record` records one of these cycles ([recording]). Read by tickr.demo.scenario (`unroll`).
 [live]
 # Length of one cycle, minutes (whole minutes).
 cycle_minutes = 10
@@ -194,3 +194,21 @@ commands = [
   { at_seconds = 470, kind = "entry-stop-on", role = "" },
   { at_seconds = 590, kind = "entry-stop-off", role = "" },
 ]
+
+# The demo day the apps carry (`tickr demo --record`, docs/demo.md): the real bot runs this
+# scenario fast and every API answer the apps read is recorded, at the API's [api] poll_seconds,
+# over one cycle of the live loop, into apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.
+# The apps' "Demo day" switch plays that recording in a loop; it needs neither the Mac nor the bot.
+[recording]
+# Which cycle of the live loop is recorded, counted from 0 at [demo] clock (whole number below the
+# number of cycles before live_until). 1: the cycle after the first, so its "cooldown" role
+# refuses the symbol stopped out in the cycle before (the first cycle has none).
+cycle = 1
+# Days of the GET /performance window the apps ask for, ending on the demo day (the macOS
+# Trades screen's performance card, AppModel.performanceDays); days.
+performance_days = 30
+# After that cycle, every command the apps can send (each kind, flatten per symbol) is sent to the
+# real bot one after another, this many simulated seconds apart, and the bot's answer and outcome
+# are recorded: what the apps show when a command is sent on the demo day. Seconds (above the
+# bot's command poll, so each command is acted on before the next).
+command_seconds = 5

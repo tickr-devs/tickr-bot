@@ -11,13 +11,18 @@ the demo sessions, minute bars).
 ```
 .venv/bin/tickr demo                   # start: serves within seconds (or: python -m tickr.cli demo)
 .venv/bin/tickr demo --build-fixture   # build demo-fixture/ now (a few minutes); `tickr demo` does it on its own
+.venv/bin/tickr demo --record          # record the demo day the apps carry (about ten minutes; commit the file)
 ```
+
+The apps do not need any of this running: their "Demo day" switch plays a recording of this day
+that they carry with them (below, "The Demo day switch in the apps"). `tickr demo` serves the same
+day live, for a browser or `curl`, the layout sweep and the macOS screen tour.
 
 What it does:
 
 - Rebuilds `demo/` in the repo (git-ignored): a copy of `config/` and `strategies/` whose
-  `bot.toml` runs as environment `demo`, serves the API on bot.toml `[api] demo_port` (8776, with
-  `demo_port = 0` in the copy, so the demo's API forwards nowhere) and runs the observers listed in
+  `bot.toml` runs as environment `demo`, serves the API on bot.toml `[api] demo_port` (8776; the
+  copy's own `demo_port` is 0) and runs the observers listed in
   `config/demo.toml`. The demo's `data/` is inside that folder; the real
   `data/` is never read or written. A `demo/` folder it did not make is refused, never deleted.
 - Runs the real bot (`tickr run`) on a simulated exchange (`src/tickr/demo/world.py`):
@@ -43,8 +48,7 @@ What it does:
   time from `clock` with the live loop until `[demo] live_until` (it then stops its bot and exits
   0) or Ctrl-C. Nothing is replayed at start. The bot comes up as on any restart mid-day: it
   reconciles with the (fresh, flat) simulated broker, and its records say every trade is closed.
-  The port is bound only then; before, a client is refused at once (the bot's `/demo` forward
-  answers 503). Log lines are written at once.
+  The port is bound only then; before, a client is refused at once. Log lines are written at once.
 
 ## The fixture (`demo-fixture/`)
 
@@ -76,14 +80,14 @@ So `tickr demo` builds it when needed:
 - **Fixture of the current inputs present** (the usual restart): copy it and serve within seconds.
 - **Inputs changed** (after a `git pull`): serve the latest previous build within seconds all the
   same, and start `tickr demo --build-fixture` beside it as a child process (its lines go to the
-  demo's log). When the new build lands, the demo stops its bot and exits 0; the launchd job starts
-  a fresh one, which serves the new fixture within seconds. If the build fails, the demo keeps
+  demo's log). When the new build lands, the demo stops its bot and exits 0; the next start
+  serves the new fixture within seconds. If the build fails, the demo keeps
   serving the previous one and the cause is in the log; the next start tries again. A build still
-  running when the demo ends (at `live_until`, Ctrl-C, or launchd stopping the job) is stopped and
+  running when the demo ends (at `live_until`, Ctrl-C, or a SIGTERM) is stopped and
   started again by the next demo.
 - **No usable fixture at all** (the first start on a Mac, or a build whose clock or schema no
   longer fit): build it first, in the foreground (a few minutes, once), then serve. To skip that
-  wait, run `tickr demo --build-fixture` once before loading the job.
+  wait, run `tickr demo --build-fixture` once beforehand.
 
 A build never leaves a fixture a start would take but should not:
 
@@ -143,32 +147,51 @@ part of the loop: it is an offline tool that needs the Anthropic API.
 
 Both apps have a "Demo day" switch (Mac: Settings › General; iPhone: Settings). On, the app shows
 the demo day and only that day: the day picker, the day menu and the previous/next buttons stand
-still and a DEMO chip sits next to the day. Off, the app is back on the bot, on today, and any
-recorded day can be picked again.
+still and a DEMO chip sits next to the day, and the command surfaces carry the demo banner. Off,
+the app is back on the bot, on today, and any recorded day can be picked again.
 
-How it reaches the demo, with one click and nothing to type:
+The apps carry the demo day with them, so it works on its own: any time (also while the bot
+trades), on the phone away from the Mac, with no `tickr demo` running and no network at all.
 
-- **The demo runs on its own**: the `local.tickr.demo` launchd job (`ops/launchd`, rendered and
-  installed with the other jobs, docs/operations.md) runs `tickr demo` at login. At `[demo]
-  live_until` the demo exits 0 and launchd starts a fresh one (KeepAlive on a clean exit only), so
-  whenever the apps look, the day is inside the same window: the live loop above, before the last
-  entry and the flatten. A restart answers within seconds (the fixture; also right after a `git pull`, from
-  the previous build while the new one builds), so the apps are about never "not reachable". It never talks to Webull (broker hosts point at `.invalid`, credential
-  names are unset), needs no credentials file, runs at Background priority, and touches only
-  `demo/`. Why `tickr demo` and not a frozen copy of `demo/` served by the API alone: the frozen
-  copy's status goes stale and its "today" is not the demo day, so Overview, positions and the live
-  flow would all read as a dead bot; `tickr demo` is the real bot on a simulated exchange, the same
-  code path as production, with no second way of serving.
-- **The apps never change their address**: the bot's own API forwards every request under `/demo/`
-  to the demo's API on `[api] demo_port` (`api/demo_forward.py`, docs/api.md). The switch only puts
-  `/demo` in front of the path. So the Mac uses `http://127.0.0.1:8766/demo`, and the iPhone uses
-  its paired Tailscale address with `/demo`, through the same `tailscale serve` and the same pairing:
-  no second port, no second pairing. The token is checked by the bot's API and never forwarded; the
-  real address and token stay as they are and are used again the moment the switch is off.
-- The demo's port lives in one place, `[api] demo_port` in `config/bot.toml`; the apps hold no port.
+- **The recording** (`apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz`, made by `tickr demo
+  --record`, `src/tickr/demo/record.py`): the real bot runs the scenario on the simulated exchange
+  exactly as `tickr demo` does (past sessions and the day up to `[demo] clock` fast, then the bot
+  again from `clock` with the live loop), fast and in its own folder (`demo-record/`, deleted
+  afterwards). Through `[recording] cycle` of the live loop (cycle 1: its cooldown refusal has the
+  symbol stopped out the cycle before), every `[api] poll_seconds` of simulated time (3 s, the
+  apps' status poll; 200 frames) the bot is held while the demo's own API is asked for everything
+  the apps read: status, account, pending commands, jobs, journal, settings, config, advisor, Lab
+  replay, the day list and the day, flow, watching, observers, skipped, performance over
+  `[recording] performance_days`, and per symbol of the day its decisions and bars; once a minute
+  its charts in every range and interval the apps offer; once, the past days with their trades'
+  bars and decisions. Right after the cycle, every command the apps can send (each kind, flatten
+  per symbol of the day) goes to the real bot through the demo's API, one every `[recording]
+  command_seconds`, stop-bot last, and the API's answer and the bot's outcome are kept; after the
+  bot stops, start-bot, a Lab replay and an advisor decision are asked once. The file is
+  xz-compressed lines (about 0.5 MB; about 16 MB once unpacked in the app): line 1 the index (per
+  route its change points), every further line a piece; a route keeps its first answer whole and
+  each change as runs copied from the answer before plus new pieces (cut at commas), so a ticking
+  clock or a new candle costs a few bytes. A recording takes about seven minutes on the Mac.
+- **Playing it** (TickrKit `DemoSource`): with the switch on, the app's address is
+  `DemoDay.address` (`tickr-demo://day`, no network host), and the container answers it from the
+  recording instead of URLSession, through the same `APIClient` and the same decoders as the live
+  API, so every screen and every animation works as on a real day. The clock loops: frame
+  `(now - first use) / poll_seconds`, wrapping after the cycle back to its start (the cycle's
+  trades disappear and come back, as at a new cycle). A GET is the frame's recorded answer; a read
+  the recording does not hold is `404 not_found`. A command is never sent or queued anywhere: the
+  app gets the answer the demo's API gave that command when it was recorded (under a fresh
+  command id), and the bot's recorded outcome of it joins the recent commands of the following
+  status answers, at the frame's time. So the confirmation (which says DEMO: nothing is sent),
+  the "sent" toast and its outcome play as usual, and nothing reaches any bot. The recording
+  itself does not change: the flatten does not close the recorded position.
+- **Kept current**: the file's `inputs` is the fixture digest (the scenario, the demo code, the API
+  contract, the strategies; "The fixture" above). `tests/demo/test_recording.py` fails while it
+  does not match, so a change of those inputs comes with `tickr demo --record` and the new file in
+  the same pull request. The Swift tests decode every recorded answer with the apps' live decoders
+  (`DemoSourceTests`), so a contract change the recording does not follow fails there too.
 
-Without the job, `tickr demo` in a terminal serves the same day the same way. The API's clock is the
-demo day's clock, so "today" in the apps is the demo day.
+The bot's API no longer forwards `/demo/` and the `local.tickr.demo` launchd job is gone: the apps
+need neither. `tickr demo` stays for looking at the day served live (above).
 
 The bot holds one position at a time in v1 (admission refuses a second), so the demo has at most
 one open position; the day's trades come one after another. Everything the day contains is in

@@ -116,7 +116,7 @@ def _render(config_path, env, out):
 def test_render_launchd(config_path, repo, tmp_path, capsys):
     out = tmp_path / "plists"
     assert _render(config_path, _env_file(tmp_path, 0o600), out) == 0
-    assert len(list(out.glob("*.plist"))) == 7  # the seven jobs
+    assert len(list(out.glob("*.plist"))) == 6  # the six jobs
     bot = plistlib.loads((out / "local.tickr.bot.plist").read_bytes())
     # The link is written as given (the job resolves it), the config relative to it.
     assert bot["ProgramArguments"][4:] == ["/x/live", ".venv/bin/python", "config/bot.toml"]

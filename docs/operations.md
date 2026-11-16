@@ -16,7 +16,6 @@ The bot job has one starter besides its schedule: near the flatten time the watc
 | test-alert | `local.tickr.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
 | nightly-fetch | `local.tickr.nightly-fetch` | `[runtime] nightly_fetch_start_local` on `launch_weekdays` (after the close); stops itself before the next open | never |
 | api | `local.tickr.api` | at login, always on, loopback only | launchd keeps it alive |
-| demo | `local.tickr.demo` | at login: `tickr demo`, the apps' "Demo day" (docs/demo.md); never talks to Webull, no credentials | after each clean exit at `[demo] live_until`, or when a new fixture has been built after a `git pull` (a fresh start from `demo-fixture/`, answering within seconds); a refusal (such as a busy port) is not retried |
 
 Times in `[runtime]` are the **Mac's local time**. The calendar decides whether there is a
 session: on weekends, market closures and half days (unless `half_days_enabled`) preflight reports
@@ -176,11 +175,8 @@ mkdir -p ~/Library/Logs/Tickr
     --env-file ~/.config/tickr/env \
     --log-dir ~/Library/Logs/Tickr \
     --out data/launchd
-# Optional, before loading the demo job: build its fixture now (about 4 minutes) instead of at
-# its first start (docs/demo.md).
-.venv/bin/tickr demo --build-fixture
-# Read the seven files in data/launchd, then:
-for job in preflight bot watchdog api test-alert demo; do
+# Read the six files in data/launchd, then:
+for job in preflight bot watchdog api test-alert; do
   cp data/launchd/local.tickr.$job.plist ~/Library/LaunchAgents/
   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.$job.plist
 done
@@ -367,8 +363,17 @@ launchctl bootout gui/$(id -u)/local.tickr.bot          # remove a job
 tail -f ~/Library/Logs/Tickr/bot.log
 ```
 
-To look at the apps with a full made-up day (never Webull, its own folder): `tickr demo`,
-see [demo.md](demo.md).
+To look at the apps with a full made-up day, turn on "Demo day" in their Settings: the apps carry
+it with them and need neither this Mac nor the bot (docs/demo.md). To serve the same day from a
+real bot on a simulated exchange (never Webull, its own folder): `tickr demo`, same document.
+
+The demo day had a launchd job of its own (`local.tickr.demo`) until the apps carried the day
+themselves. If it is still installed on this Mac, remove it once:
+
+```sh
+launchctl bootout gui/$(id -u)/local.tickr.demo 2>/dev/null
+rm -f ~/Library/LaunchAgents/local.tickr.demo.plist
+```
 
 ## Disk upkeep: `tickr maintain`
 

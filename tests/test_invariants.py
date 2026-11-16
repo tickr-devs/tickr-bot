@@ -219,9 +219,8 @@ NETWORK_IMPORTERS = {
     "broker/webull.py": "the Webull adapter: every host comes from the allowlist (rule 9)",
     "advisor/client.py": "the owner's offline advisor tool calls Anthropic; never imported "
                          "by the bot (checked below)",
-    "api/demo_forward.py": "the API's /demo/ forwarding: loopback only, to the API's own "
-                           "loopback host ([api] host, loopback only) on [api] demo_port; "
-                           "never a host from the request",
+    "demo/record.py": "`tickr demo --record`: reads the demo's own API on the loopback port it "
+                      "opened itself (127.0.0.1, port 0), never another host",
 }
 
 

@@ -27,5 +27,8 @@ xcuserdata/
 /demo-fixture/
 /demo-build/
 /demo-build.lock
+# `tickr demo --record` replays into its own folder and deletes it when done.
+/demo-record/
+/demo-record.lock
 # SwiftPM pins Xcode writes for the root workspace; each project and package commits its own.
 /Tickr.xcworkspace/xcshareddata/swiftpm/

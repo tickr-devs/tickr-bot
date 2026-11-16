@@ -26,8 +26,7 @@ def test_templates_render_to_valid_plists(config_path, repo, tmp_path):
     jobs = _render(config_path, repo, tmp_path / "out")
     assert set(jobs) == {"local.tickr.preflight.plist", "local.tickr.bot.plist",
                          "local.tickr.api.plist", "local.tickr.watchdog.plist",
-                         "local.tickr.test-alert.plist", "local.tickr.nightly-fetch.plist",
-                         "local.tickr.demo.plist"}
+                         "local.tickr.test-alert.plist", "local.tickr.nightly-fetch.plist"}
     for job in jobs.values():
         assert job["WorkingDirectory"] == str(PATHS.release)
         # Every job resolves the release link once at its start and runs the interpreter and
@@ -64,15 +63,6 @@ def test_api_always_on_and_preflight_scheduled(config_path, repo, tmp_path):
     assert preflight["KeepAlive"] is False
     assert len(preflight["StartCalendarInterval"]) == len(
         config_module.load(config_path).runtime.launch_weekdays)
-
-
-def test_demo_day_runs_at_login_and_restarts_only_after_a_clean_exit(config_path, repo, tmp_path):
-    job = _render(config_path, repo, tmp_path / "out")["local.tickr.demo.plist"]
-    assert job["RunAtLoad"] is True
-    assert job["KeepAlive"] == {"SuccessfulExit": True}  # a refusal is not retried in a loop
-    assert job["ProgramArguments"][2].endswith('-m tickr.cli --config "$PWD/$2" demo')
-    assert job["ProcessType"] == "Background"
-    assert "ENV_FILE" not in str(job) and str(PATHS.env_file) not in str(job)
 
 
 def test_nightly_fetch_runs_after_the_close_with_its_folders(config_path, repo, tmp_path):
