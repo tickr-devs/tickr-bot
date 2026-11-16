@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from tickr.runtime.evaluation import Evaluator
     from tickr.runtime.market import MarketRuntime
     from tickr.runtime.watch import Watch
+    from tickr.types import Quote
 
 STRATEGIES_DIR = "strategies"
 STRATEGY_FILE = "strategy.toml"
@@ -80,6 +81,7 @@ STRATEGY_NOT_LOADED = "strategy-not-loaded"
 ACCOUNT_WRITE_FAILED = "account-write-failed"  # one row per stretch of failed writes
 STOP_TIMING_FAILED = "stop-timing-failed"  # one row per trade whose stop timing is unreadable
 ENTRY_SEND_FAILED = "entry-send-failed"  # one row per trade whose entry send is unreadable
+RESTART_ENTRY_CANCEL = "bot restarted: a working entry is never resumed"
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
@@ -98,6 +100,10 @@ class ServicePaths:
         commands = data / config.api.commands_dir
         return cls(data / config.api.status_file, commands / api.INBOX,
                    commands / api.PROCESSED, data / config.api.account_file)
+
+
+def _no_quote(symbol: str) -> Quote | None:  # noqa: ARG001 - no market: no quote for any
+    return None
 
 
 def strategy_id(config: Config) -> api.StrategyId:
@@ -387,13 +393,12 @@ class Service:
 
     def _guard_entries(self) -> None:
         """A working entry is cancelled once its quote leaves the price window or goes stale,
-        and at the last-entry time (spec 9). Needs the market's quotes, so only with one."""
+        at the last-entry time, and while new entries are blocked (spec 9). Without a market
+        there is no quote, so every working entry is cancelled ("no quote")."""
         from tickr.runtime.entries import guard_entries  # entries imports this module
 
-        if self.market is None:
-            return
-        guard_entries(self.engine, self.config, self.calendar, self.market.inbox.latest,
-                      self.now())
+        latest = self.market.inbox.latest if self.market is not None else _no_quote
+        guard_entries(self.engine, self.config, self.calendar, latest, self.now())
 
     # --- strategy --------------------------------------------------------------------------
 
@@ -852,6 +857,12 @@ class Service:
         orders = self.config.orders
         self.write_status()
         self.engine.recover()
+        # A working entry is never resumed after a restart: its decision is stale and nothing
+        # watched it while the bot was down. Cancelled now; a fill that races the cancel is
+        # protected by the engine step like any fill.
+        for trade in self.engine.trades():
+            if trade.exit_requested is None:
+                self.engine.cancel_entry(trade.trade_id, RESTART_ENTRY_CANCEL)
         # Nothing when the startup reconcile did not read.
         self._disagreed = record_reconcile(self.engine, False)
         if not self._broker_read_failing():

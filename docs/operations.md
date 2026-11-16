@@ -301,6 +301,8 @@ the shared database the first time its bot opens it, after a verified backup
   by the daily loss rule): one way as well.
 - Migration v7 (2026-11-16) adds `orders.net_cash_usd` (an order's settled cash amount from the
   account's cash activities): one way as well.
+- Migration v8 (2026-11-16) adds `trades.entry_rest_until` (until when a resting limit entry may
+  work): one way as well.
 
 ### Emergency: the owner switches back by hand
 

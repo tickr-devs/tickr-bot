@@ -213,6 +213,7 @@ class TradeRow:
     stop_price: Decimal
     stop_percent_below_fill: Decimal | None
     entry_low_price: Decimal | None
+    entry_rest_until: datetime | None
     planned_loss_usd: Decimal
     exit_requested: str | None
     stop_failures: int
@@ -248,6 +249,8 @@ def _trade(row: Any) -> TradeRow:
         stop_price=Decimal(row["stop_price"]),
         stop_percent_below_fill=_dec(row["stop_percent_below_fill"]),
         entry_low_price=_dec(row["entry_low_price"]),
+        entry_rest_until=(None if row["entry_rest_until"] is None
+                          else datetime.fromisoformat(row["entry_rest_until"])),
         planned_loss_usd=Decimal(row["planned_loss_usd"]),
         exit_requested=row["exit_requested"], stop_failures=row["stop_failures"],
         last_stop_failure_at=row["last_stop_failure_at"],
@@ -436,7 +439,8 @@ class Engine:
                    stop_price: Decimal, planned_loss_usd: Decimal,
                    stop_percent_below_fill: Decimal | None = None,
                    entry_low_price: Decimal | None = None,
-                   strategy: tuple[str, str] | None = None) -> str:
+                   strategy: tuple[str, str] | None = None,
+                   rest_until: datetime | None = None) -> str:
         """Record and send a LIMIT BUY entry. Refuses (EntryRefused) instead of guessing.
 
         With `stop_percent_below_fill`, the stop is re-derived from the first observed average
@@ -444,7 +448,9 @@ class Engine:
         is the bound computed from the limit and is never loosened. `entry_low_price` is the
         bottom of the strategy's price window, kept so a resting entry can be cancelled once
         the quote leaves the window (`cancel_entry`). `strategy` (name, version) of the decision
-        that opened it is journaled for display; None for a manual trade."""
+        that opened it is journaled for display; None for a manual trade. `rest_until` (aware)
+        makes it a resting entry that may wait below the ask until then
+        (`runtime.entries.entry_cancel_cause`); it needs `entry_low_price`."""
         gate = self.gate()
         if not gate.open:
             raise EntryRefused(f"trading gate closed: {gate.cause}")
@@ -459,22 +465,27 @@ class Engine:
             raise EntryRefused("stop must be above zero and below the entry limit")
         if entry_low_price is not None and not stop_price < entry_low_price <= limit_price:
             raise EntryRefused("window bottom must be above the stop and at most the limit")
+        if rest_until is not None and (rest_until.tzinfo is None or entry_low_price is None):
+            raise EntryRefused("a resting entry needs an aware end time and a window bottom")
 
         with self.store.transaction():
             trade_id = f"t{self.store.next_counter('trade')}"
             self.store.execute(
                 "INSERT INTO trades(trade_id, run_id, symbol, state, entry_quantity, "
                 "entry_limit_price, stop_price, stop_percent_below_fill, planned_loss_usd, "
-                "opened_at, entry_low_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "opened_at, entry_low_price, entry_rest_until) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (trade_id, self.run_id, symbol, TradeState.OPENING, str(quantity),
                  str(limit_price), str(stop_price),
                  None if stop_percent_below_fill is None else str(stop_percent_below_fill),
                  str(planned_loss_usd), self.store.stamp(),
-                 None if entry_low_price is None else str(entry_low_price)))
+                 None if entry_low_price is None else str(entry_low_price),
+                 None if rest_until is None else rest_until.astimezone(UTC).isoformat()))
             self.store.append(TRADE_OPENED, {
                 "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
                 "stop_price": stop_price, "planned_loss_usd": planned_loss_usd,
                 "entry_low_price": entry_low_price,
+                **({} if rest_until is None else {"rest_until": rest_until}),
                 **({} if strategy is None else {"strategy": strategy[0],
                                                 "strategy_version": strategy[1]}),
                 "code_version": self.store.run_code_version(self.run_id)},

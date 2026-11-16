@@ -1112,3 +1112,33 @@ def test_a_trade_carries_the_code_version_of_the_run_that_opened_it(tmp_path):
     status = bot.service.status()
     (done,) = status.trades_today
     assert done.code_version == sha and status.code_version == sha
+
+
+def _resting(bot: Bot) -> str:
+    return bot.engine.open_trade("ABC", D(10), D("9.90"), D("9.60"), D("3"),
+                                 entry_low_price=D("9.80"),
+                                 rest_until=bot.now + timedelta(minutes=6))
+
+
+def test_a_restart_never_resumes_a_working_entry(tmp_path):
+    first = Bot(tmp_path, broker=FakeBroker())
+    first.engine.recover()
+    t = _resting(first)
+    first.store.close()  # the crash: the entry still rests at the broker
+    bot = Bot(tmp_path, broker=first.broker)
+    bot.run(0)
+    (row,) = bot.store.journal("entry-cancel")
+    assert row.body["cause"] == service.RESTART_ENTRY_CANCEL
+    (entry,) = bot.engine.orders(t)
+    assert entry.cancel_state == "sent"
+
+
+def test_without_a_market_every_working_entry_is_cancelled(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    bot.engine.recover()
+    t = _resting(bot)
+    assert bot.service.market is None
+    bot.service._guard_entries()
+    (row,) = bot.store.journal("entry-cancel")
+    assert row.body["cause"] == "no quote"
+    assert bot.engine.orders(t)[0].cancel_state == "sent"

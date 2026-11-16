@@ -153,6 +153,10 @@ def _check_decision(strategy: Strategy, symbol: str, decision: Decision) -> None
 
 def _entry_problem(decision: Decision) -> str | None:
     """Why an ENTER decision cannot be simulated, or None."""
+    if decision.rest_bars is not None:
+        # A resting limit below the ask fills only on a pullback; simulating it as a
+        # marketable entry would book fills the order could not get.
+        return "resting limit entries (rest_bars) are not modelled"
     if decision.entry_high is None:
         return "ENTER without entry_high"
     if decision.stop is None:

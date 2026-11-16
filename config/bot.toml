@@ -53,6 +53,9 @@ max_clock_skew_seconds = 1
 symbol_cooldown_after_loss_enabled = true
 # Pause length in minutes from the losing trade's close; an entry exactly at the end is allowed (owner 2026-11-14); read by safety.
 symbol_cooldown_minutes_after_loss = 30
+# Longest a resting limit entry (a strategy's pullback buy below the ask, Decision.rest_bars) may work, in completed M1
+# bars after the decision bar; a decision asking for more is refused (owner 2026-11-16); read by safety.
+max_entry_rest_bars = 10
 
 [session]
 # Market time zone for all session times; read by the calendar and the scheduler.

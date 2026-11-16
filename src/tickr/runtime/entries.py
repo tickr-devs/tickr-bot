@@ -33,6 +33,7 @@ from tickr.strategy.base import Decision, Role, Verdict
 from tickr.types import Quote
 
 ZERO = Decimal(0)
+M1 = timedelta(minutes=1)
 STOP_ORDERS_PER_ENTRY = 1
 FOREIGN = (Fence.FOREIGN_POSITION, Fence.FOREIGN_ORDER)
 # Fences that are reported through their own admission field, not as unresolved exposure.
@@ -42,12 +43,16 @@ NOT_EXPOSURE = (Fence.STARTUP_RECONCILE, Fence.ENTRY_STOP, Fence.BROKER_READ, *F
 def entry_cancel_cause(trade: TradeRow, quote: Quote | None, now: datetime,
                        last_entry: datetime | None, config: Config) -> str | None:
     """Why a working entry must be cancelled now (spec 9), or None to let it rest. The window
-    is the one admission checked: entry_low <= ask <= limit, with the same freshness rules.
-    `last_entry` None means the calendar cannot say: cancel."""
+    is the one admission checked: entry_low <= ask <= limit, with the same freshness rules; a
+    resting entry (`entry_rest_until` set) may wait with the ask above its limit, until its
+    rest time is over. `last_entry` None means the calendar cannot say: cancel."""
     if last_entry is None:
         return "no trading session known"
     if now >= last_entry:
         return f"last entry time {last_entry.isoformat()}"
+    resting = trade.entry_rest_until is not None
+    if trade.entry_rest_until is not None and now >= trade.entry_rest_until:
+        return f"rest time over {trade.entry_rest_until.isoformat()}"
     if quote is None:
         return "no quote"
     age = now - quote.provider_time
@@ -55,17 +60,53 @@ def entry_cancel_cause(trade: TradeRow, quote: Quote | None, now: datetime,
         return f"quote stale ({age.total_seconds()} s)"
     if -age > timedelta(seconds=float(config.risk.max_clock_skew_seconds)):
         return f"quote from the future ({(-age).total_seconds()} s ahead)"
-    if quote.ask > trade.entry_limit_price:
+    if not resting and quote.ask > trade.entry_limit_price:
         return f"ask {quote.ask} above the limit {trade.entry_limit_price}"
     if trade.entry_low_price is not None and quote.ask < trade.entry_low_price:
         return f"ask {quote.ask} below the window {trade.entry_low_price}"
     return None
 
 
+def rest_until(decision: Decision, bar_start: datetime) -> datetime | None:
+    """End of a resting entry's time: the decision bar closes at bar_start + 1 minute and the
+    order then works for `rest_bars` more bars. None for a marketable entry."""
+    if decision.rest_bars is None:
+        return None
+    return bar_start + (decision.rest_bars + 1) * M1
+
+
+def entry_block_cause(engine: Engine, config: Config, trade: TradeRow,
+                      now: datetime) -> str | None:
+    """Why a working entry must not stay open for a platform reason: the state in which a new
+    entry would be refused (hard rule 1: a conflict blocks new entries, and a fill of an entry
+    still working is a new position). The trading gate closed, any fence (operator pause,
+    startup reconcile, broker read, reconcile disagreement, foreign exposure, another trade's
+    trouble, ...) except the fences about this trade itself or its own orders (the engine
+    already acts on those: its stop, its unknown status, its cancel; cancelling the entry for
+    them would only add a cancel of an order whose state is the open question), or today's
+    money unknown or over the daily loss ceiling with the open reservations. None when
+    nothing blocks."""
+    gate = engine.gate()
+    if not gate.open:
+        return f"trading gate closed: {gate.cause}"
+    own = {trade.trade_id, *(o.client_order_id for o in engine.orders(trade.trade_id))}
+    fences = sorted(name for name in engine.fences()
+                    if name.partition(":")[2] not in own)
+    if fences:
+        return "entries fenced: " + ", ".join(fences)
+    room = daily_loss_room(engine, config, now)
+    if room is None:
+        return "today's realized result unknown"
+    if room < 0:
+        return f"daily loss ceiling: {-room} over it with the open reservations"
+    return None
+
+
 def guard_entries(engine: Engine, config: Config, calendar: SessionCalendar | None,
                   latest: Callable[[str], Quote | None], now: datetime) -> None:
     """Once per loop pass: cancel every working entry whose quote left the price window or
-    went stale, and all of them at the last-entry time. Never re-priced (spec 9)."""
+    went stale, all of them at the last-entry time, and all of them while a new entry would
+    be refused for a platform reason (`entry_block_cause`). Never re-priced (spec 9)."""
     last_entry: datetime | None = None
     if calendar is not None:
         try:
@@ -81,7 +122,8 @@ def guard_entries(engine: Engine, config: Config, calendar: SessionCalendar | No
         orders = engine.orders(trade.trade_id)
         if not any(o.leg is Leg.ENTRY and o.live for o in orders):
             continue
-        cause = entry_cancel_cause(trade, latest(trade.symbol), now, last_entry, config)
+        cause = (entry_block_cause(engine, config, trade, now)
+                 or entry_cancel_cause(trade, latest(trade.symbol), now, last_entry, config))
         if cause is not None:
             engine.cancel_entry(trade.trade_id, cause)
 
@@ -243,7 +285,8 @@ class EntryDesk:
                                            inputs.limit_price, inputs.stop_price,
                                            result.planned_loss_usd,
                                            entry_low_price=decision.entry_low,
-                                           strategy=(decision.strategy, decision.version))
+                                           strategy=(decision.strategy, decision.version),
+                                           rest_until=rest_until(decision, bar_start))
                     admission = RecordAdmission.TAKEN
                 except EntryRefused as exc:
                     admission, cause = RecordAdmission.REFUSED, f"{ENGINE_REFUSED}: {exc.cause}"

@@ -61,6 +61,12 @@ class Decision:
     quantity: Decimal | None = None
     """Whole shares the strategy sized for (set on ENTER); the platform checks it against
     its own limits and refuses on breach."""
+    rest_bars: int | None = None
+    """ENTER only. None: a marketable entry, admitted only while the ask is inside
+    entry_low..entry_high and cancelled as soon as it leaves. A whole number N >= 1: a resting
+    limit buy at entry_high (a pullback entry), which may be below the ask; it works for the
+    N bars after the decision bar and is cancelled then, at the last entry time, or once the
+    ask falls below entry_low. The platform refuses N above `[risk] max_entry_rest_bars`."""
 
     @property
     def decisive(self) -> Check | None:

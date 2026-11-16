@@ -15,6 +15,9 @@ the keys in `RECORD_KEYS`:
 - `refusal_cause`: non-empty string when `admission` is `refused`, otherwise null.
 - `checks`: list of {rule, measured, operator, threshold, passed, note}.
 
+One key is optional: `rest_bars`, a whole number >= 1, present only on an ENTER that asks for
+a resting limit entry (`Decision.rest_bars`); a decision without it writes no such key.
+
 Any deviation is a `RecordFileError` naming the file, line and cause; nothing is defaulted.
 """
 
@@ -52,6 +55,7 @@ RECORD_KEYS = frozenset(
         "checks",
     }
 )
+OPTIONAL_KEYS = frozenset({"rest_bars"})
 CHECK_KEYS = frozenset({"rule", "measured", "operator", "threshold", "passed", "note"})
 
 
@@ -90,6 +94,8 @@ class DecisionRecord:
                 return "ENTER needs admission taken, refused or not_evaluated"
         elif self.admission is not Admission.NOT_APPLICABLE:
             return f"{verdict.value} must have admission not_applicable"
+        if self.decision.rest_bars is not None and verdict is not Verdict.ENTER:
+            return "rest_bars is only for an ENTER"
         if self.admission is Admission.TAKEN and self.role is not Role.ACTIVE:
             return "only the active role can have an ENTER taken"
         if self.admission is Admission.REFUSED:
@@ -164,9 +170,9 @@ def record_from_mapping(data: Any) -> DecisionRecord:
     if not isinstance(data, dict):
         raise ValueError("record is not a JSON object")
     keys = set(data)
-    if keys != RECORD_KEYS:
+    if keys - OPTIONAL_KEYS != RECORD_KEYS:
         missing = sorted(RECORD_KEYS - keys)
-        unknown = sorted(keys - RECORD_KEYS)
+        unknown = sorted(keys - RECORD_KEYS - OPTIONAL_KEYS)
         raise ValueError(f"keys mismatch: missing={missing} unknown={unknown}")
     if not isinstance(data["checks"], list):
         raise ValueError("checks must be a list")
@@ -180,6 +186,7 @@ def record_from_mapping(data: Any) -> DecisionRecord:
         verdict=_enum("verdict", data["verdict"], Verdict),
         checks=tuple(_check(c) for c in data["checks"]),
         setup=_text("setup", data["setup"], optional=True),
+        rest_bars=_rest_bars(data.get("rest_bars")),
         **{key: _decimal_or_none(key, data[key]) for key in DECIMAL_KEYS},
     )
     record = DecisionRecord(
@@ -194,6 +201,14 @@ def record_from_mapping(data: Any) -> DecisionRecord:
     if problem is not None:
         raise ValueError(problem)
     return record
+
+
+def _rest_bars(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"rest_bars must be a whole number >= 1, got {value!r}")
+    return value
 
 
 def _str(value: Decimal | None) -> str | None:
@@ -230,6 +245,8 @@ def record_to_json(record: DecisionRecord) -> str:
             for c in d.checks
         ],
     }
+    if d.rest_bars is not None:
+        body["rest_bars"] = d.rest_bars
     return json.dumps(body, sort_keys=True)
 
 

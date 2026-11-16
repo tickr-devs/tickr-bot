@@ -90,6 +90,7 @@ class RiskConfig:
     max_clock_skew_seconds: Decimal
     symbol_cooldown_after_loss_enabled: bool
     symbol_cooldown_minutes_after_loss: int
+    max_entry_rest_bars: int
 
 
 @dataclass(frozen=True)
@@ -540,6 +541,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "
                           "turn the cooldown off set symbol_cooldown_after_loss_enabled = false")
+    if risk.max_entry_rest_bars < 1:
+        raise ConfigError("[risk] max_entry_rest_bars must be at least 1")
     if not 0 <= risk.min_daily_room_usd < risk.max_daily_loss_usd:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
     if built["orders"].detail_unreadable_seconds <= 0:
