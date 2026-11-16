@@ -104,6 +104,14 @@ def _quote(symbol: str, body: dict[str, str] | None) -> Quote | None:
                  datetime.fromisoformat(body["receipt_time"]))
 
 
+def _first_fill_seen(engine: Engine, client_order_id: str) -> datetime | None:
+    """Time of the first Detail read that showed the entry filled (store clock), or None."""
+    for row in engine.store.journal("order-observed", client_order_id):
+        if Decimal(row.body["filled_quantity"]) > 0:
+            return datetime.fromisoformat(row.at_utc)
+    return None
+
+
 def _chunks(items: Sequence[str], size: int) -> list[Sequence[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
@@ -146,8 +154,10 @@ class Evaluator:
             quantity = self.engine.expected_quantity(orders)
             entry = next((o for o in orders if o.leg is Leg.ENTRY), None)
             if quantity > 0 and entry is not None and entry.average_fill_price is not None:
-                views[trade.symbol] = PositionView(entry.average_fill_price, quantity,
-                                                   trade.stop_price)
+                views[trade.symbol] = PositionView(
+                    entry.average_fill_price, quantity, trade.stop_price,
+                    entry_quantity=entry.filled_quantity,
+                    filled_at=_first_fill_seen(self.engine, entry.client_order_id))
         return views
 
     def _pending_remainder(self) -> Remainder | None:  # bar, saved quotes, loss budget

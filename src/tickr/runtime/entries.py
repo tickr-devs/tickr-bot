@@ -33,6 +33,9 @@ from tickr.strategy.base import Decision, Role, Verdict
 from tickr.types import Quote
 
 ZERO = Decimal(0)
+# A strategy's partial EXIT the engine did not take (trade not open, entry still working, an
+# earlier reduce, a refused close, or not below the held quantity); one row per trade.
+REDUCE_REFUSED = "reduce-refused"
 M1 = timedelta(minutes=1)
 STOP_ORDERS_PER_ENTRY = 1
 FOREIGN = (Fence.FOREIGN_POSITION, Fence.FOREIGN_ORDER)
@@ -290,14 +293,28 @@ class EntryDesk:
                                            result.planned_loss_usd,
                                            entry_low_price=decision.entry_low,
                                            strategy=(decision.strategy, decision.version),
-                                           rest_until=rest_until(decision, bar_start))
+                                           rest_until=rest_until(decision, bar_start),
+                                           scale_out_quantity=decision.scale_out)
                     admission = RecordAdmission.TAKEN
                 except EntryRefused as exc:
                     admission, cause = RecordAdmission.REFUSED, f"{ENGINE_REFUSED}: {exc.cause}"
         elif decision.verdict is Verdict.EXIT:
             for trade in self.engine.trades():
-                if trade.symbol == decision.symbol and not trade.exit_requested:
+                if trade.symbol != decision.symbol or trade.exit_requested:
+                    continue
+                if decision.quantity is None:
                     self.engine.request_exit(trade.trade_id, "strategy-exit")
+                elif (not self.engine.request_reduce(trade.trade_id, decision.quantity,
+                                                     "strategy-scale-out")
+                      and trade.reduce_state is None
+                      and not self.engine.store.journal(REDUCE_REFUSED, trade.trade_id)):
+                    # Journaled once per trade: the strategy asks again every bar.
+                    with self.engine.store.transaction():
+                        self.engine.store.append(REDUCE_REFUSED, {
+                            "quantity": decision.quantity, "state": trade.state,
+                            "cause": self.engine.reduce_refusal(trade.trade_id,
+                                                                decision.quantity)},
+                            key=trade.trade_id, run_id=self.engine.run_id)
         return self._write(DecisionRecord(now, bar_start, Role.ACTIVE, decision, admission,
                                           cause))
 

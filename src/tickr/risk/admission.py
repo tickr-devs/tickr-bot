@@ -250,6 +250,12 @@ def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admissio
         return _refuse(C.DECISION_INVALID,
                        f"need 0 < stop {d.stop} < entry_low {d.entry_low} <= "
                        f"entry_high {d.entry_high}")
+    if d.scale_out is not None and not (
+            isinstance(d.scale_out, Decimal) and d.scale_out.is_finite()
+            and Decimal(0) < d.scale_out < d.quantity
+            and d.scale_out == d.scale_out.to_integral_value()):
+        return _refuse(C.DECISION_INVALID,
+                       f"scale_out {d.scale_out} not a whole number below quantity {d.quantity}")
     rest = d.rest_bars
     if rest is not None and (isinstance(rest, bool) or not isinstance(rest, int)
                              or not 1 <= rest <= lim.max_entry_rest_bars):

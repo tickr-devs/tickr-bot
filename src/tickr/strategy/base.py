@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -60,7 +61,13 @@ class Decision:
     setup: str | None = None
     quantity: Decimal | None = None
     """Whole shares the strategy sized for (set on ENTER); the platform checks it against
-    its own limits and refuses on breach."""
+    its own limits and refuses on breach. On EXIT: None closes the whole position; a whole
+    number below the position sells only that many at market (a scale-out, once per trade)
+    and keeps the rest under its stop."""
+    scale_out: Decimal | None = None
+    """ENTER only, optional: the whole shares (below `quantity`) the strategy plans to sell
+    first, by a later EXIT with `quantity`. The platform places stops so that exactly these
+    shares can be released while the rest stays protected."""
     rest_bars: int | None = None
     """ENTER only. None: a marketable entry, admitted only while the ask is inside
     entry_low..entry_high and cancelled as soon as it leaves. A whole number N >= 1: a resting
@@ -81,6 +88,11 @@ class PositionView:
     entry_price: Decimal
     quantity: Decimal
     stop: Decimal
+    entry_quantity: Decimal | None = None
+    """Shares bought in all (None: not known, e.g. replay); below it, a part was sold."""
+    filled_at: datetime | None = None
+    """When the first fill of the entry was seen (None: not known): bars from then on are
+    the position's own, e.g. for the highest high since entry."""
 
 
 @dataclass(frozen=True)

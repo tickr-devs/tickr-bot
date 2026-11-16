@@ -15,8 +15,9 @@ the keys in `RECORD_KEYS`:
 - `refusal_cause`: non-empty string when `admission` is `refused`, otherwise null.
 - `checks`: list of {rule, measured, operator, threshold, passed, note}.
 
-One key is optional: `rest_bars`, a whole number >= 1, present only on an ENTER that asks for
-a resting limit entry (`Decision.rest_bars`); a decision without it writes no such key.
+Two keys are optional, written only when set and only on an ENTER: `rest_bars`, a whole number
+>= 1 (a resting limit entry, `Decision.rest_bars`), and `scale_out`, a decimal string (the
+shares planned to be sold first, `Decision.scale_out`).
 
 Any deviation is a `RecordFileError` naming the file, line and cause; nothing is defaulted.
 """
@@ -55,7 +56,7 @@ RECORD_KEYS = frozenset(
         "checks",
     }
 )
-OPTIONAL_KEYS = frozenset({"rest_bars"})
+OPTIONAL_KEYS = frozenset({"rest_bars", "scale_out"})
 CHECK_KEYS = frozenset({"rule", "measured", "operator", "threshold", "passed", "note"})
 
 
@@ -96,6 +97,8 @@ class DecisionRecord:
             return f"{verdict.value} must have admission not_applicable"
         if self.decision.rest_bars is not None and verdict is not Verdict.ENTER:
             return "rest_bars is only for an ENTER"
+        if self.decision.scale_out is not None and verdict is not Verdict.ENTER:
+            return "scale_out is only for an ENTER"
         if self.admission is Admission.TAKEN and self.role is not Role.ACTIVE:
             return "only the active role can have an ENTER taken"
         if self.admission is Admission.REFUSED:
@@ -187,6 +190,7 @@ def record_from_mapping(data: Any) -> DecisionRecord:
         checks=tuple(_check(c) for c in data["checks"]),
         setup=_text("setup", data["setup"], optional=True),
         rest_bars=_rest_bars(data.get("rest_bars")),
+        scale_out=_decimal_or_none("scale_out", data.get("scale_out")),
         **{key: _decimal_or_none(key, data[key]) for key in DECIMAL_KEYS},
     )
     record = DecisionRecord(
@@ -247,6 +251,8 @@ def record_to_json(record: DecisionRecord) -> str:
     }
     if d.rest_bars is not None:
         body["rest_bars"] = d.rest_bars
+    if d.scale_out is not None:
+        body["scale_out"] = str(d.scale_out)
     return json.dumps(body, sort_keys=True)
 
 

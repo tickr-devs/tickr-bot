@@ -155,10 +155,18 @@ def _schema_v8(db: sqlite3.Connection) -> None:
     db.execute("ALTER TABLE trades ADD COLUMN entry_rest_until TEXT")
 
 
+def _schema_v9(db: sqlite3.Connection) -> None:
+    # Scale-out (engine.core.request_reduce): the shares the entry decision plans to sell at its
+    # first target (NULL: none; stops are then not split for it), and one partial sale: how
+    # many shares, why, and its state (NULL: none asked; requested, sent, done).
+    for column in ("scale_out_quantity", "reduce_quantity", "reduce_cause", "reduce_state"):
+        db.execute(f"ALTER TABLE trades ADD COLUMN {column} TEXT")
+
+
 # Forward-only migrations. Never edit a released entry; append a new one.
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5, _schema_v6, _schema_v7,
-    _schema_v8)
+    _schema_v8, _schema_v9)
 
 
 def _json_default(value: Any) -> Any:

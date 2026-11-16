@@ -310,6 +310,8 @@ the shared database the first time its bot opens it, after a verified backup
   account's cash activities): one way as well.
 - Migration v8 (2026-11-16) adds `trades.entry_rest_until` (until when a resting limit entry may
   work): one way as well.
+- Migration v9 (2026-11-16) adds the trade's scale-out columns (`scale_out_quantity`,
+  `reduce_quantity`, `reduce_cause`, `reduce_state`): one way as well.
 
 ### Emergency: the owner switches back by hand
 

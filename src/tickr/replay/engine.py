@@ -157,6 +157,10 @@ def _entry_problem(decision: Decision) -> str | None:
         # A resting limit below the ask fills only on a pullback; simulating it as a
         # marketable entry would book fills the order could not get.
         return "resting limit entries (rest_bars) are not modelled"
+    if decision.scale_out is not None:
+        # Replay closes the whole simulated position on any EXIT; a partial sale would be
+        # booked as a full one.
+        return "scale-out (partial exits) is not modelled"
     if decision.entry_high is None:
         return "ENTER without entry_high"
     if decision.stop is None:
