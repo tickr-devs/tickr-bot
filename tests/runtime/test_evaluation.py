@@ -71,6 +71,12 @@ class Market:
         if self.on_discover is not None:
             self.on_discover()
 
+    def collect(self) -> None:
+        """Every pass runs in place here: nothing is ever in flight."""
+
+    def discovering(self) -> bool:
+        return False
+
     def candidates(self) -> list[str]:
         return list(self.symbols)
 

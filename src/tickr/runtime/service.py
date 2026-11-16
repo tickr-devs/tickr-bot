@@ -415,12 +415,15 @@ class Service:
         return cause is None
 
     def _strategy_pass(self, monotonic: Callable[[], float]) -> None:
-        """Market upkeep and the entry guard every pass; discovery and the strategy only when
-        protection allows, timed against `[runtime] evaluation_budget_seconds`."""
+        """Market upkeep (a finished discovery pass collected) and the entry guard every pass;
+        discovery starts and the strategy only when protection allows. The pass is timed
+        against `[runtime] evaluation_budget_seconds`: discovery runs on its own thread
+        (runtime/market.py), so this is the loop's own time; the pass's own duration is in its
+        `discovery` row."""
         allowed = self._protect_first()
         started = monotonic()
         if self.market is not None:
-            # After the engine's broker work of this pass. With an evaluator, discovery runs
+            # After the engine's broker work of this pass. With an evaluator, discovery starts
             # inside its minute, after the positions' and WATCH symbols (Evaluator.tick).
             self.market.tick(discover=allowed and self.evaluator is None)
             self._guard_entries()  # every pass: it protects a working entry

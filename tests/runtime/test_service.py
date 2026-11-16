@@ -1024,7 +1024,8 @@ def test_positions_and_watch_are_evaluated_before_discovery_starts(tmp_path):
     source.add_bars([Bar("WAT", MONDAY_11 - timedelta(minutes=2), one, one, one, one, one)])
     market = MarketRuntime(bot.engine, CFG, source, health=StreamHealth.from_config(CFG),
                            inbox=inbox, capture=None, calendar=CALENDAR, today_bars=today_bars,
-                           now=lambda: bot.now, monotonic=lambda: bot.clock[0])
+                           now=lambda: bot.now, monotonic=lambda: bot.clock[0],
+                           spawn=lambda run: run())  # the pass in place: one loop pass
     strategy = Watching()
     market.screen = strategy
     desk = EntryDesk(bot.engine, CFG, calendar=CALENDAR, last_broker_read_at=lambda: bot.now,

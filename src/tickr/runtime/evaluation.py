@@ -1,32 +1,35 @@
 """Run the active strategy once per completed minute (spec 5) and hand each decision to the
 entry desk with exactly the bar and quote the strategy saw.
 
-Per completed minute, in the regular session, its bar fixed once: first the open positions'
-symbols and the WATCH symbols, with their own today's-bars read and their own history call, so
-a position's decision never waits behind discovery or the candidates; then, unless a decision
-now needs the loop, discovery (`MarketRuntime.discover`, when due) and the latest discovery
-candidates, 20 at a time. Today's completed regular-session M1 bars come from `TodayBars` when
-a read was sent after the minute was over by our clock (discovery's, data/todaybars.py), else
-from `MarketData.bars` (only the symbols missing). As with any read, completeness trusts the
-local clock: a bar the provider publishes late is absent, and the strategy decides on the
-previous bar. The prior sessions come from `HistoryReader`, one call per group of 20 (the symbols
-already known for the day cost nothing, the new ones go 20 per request), then cached. Before
-the open, `HistoryPreload` (runtime/preload.py) loads the screeners' symbols' history.
-A history refusal is not an error here: the strategy gets no prior sessions and refuses with
-its own cause, and the decision is recorded like any other. A budget refusal, delayed data or
-a failed read (bars or history) stops the rest of the minute (journaled); a strategy exception
-is journaled and that symbol skipped. An unexpected exception before the positions' symbols
-are done leaves the minute to the next pass. As soon as a decision leaves an order
-needing the loop (an entry sent, an exit asked; runtime/protection.py), the rest of the minute
-(candidates included) waits (journaled with the symbols left and their quotes at that
-moment), so the fill and its stop are not kept waiting behind more reads. On the first pass
-the service runs the strategy
-again, that remainder is evaluated on the same bar (bars cut at it), the saved quotes and the
-daily loss budget of that minute (never the room left at replay time), for
-the record only: an ENTER is recorded `not_evaluated`, nothing is sent or asked, the WATCH set
-is untouched. A `evaluation-remainder` row (keyed by the bar) is written before the records,
-so a restart never records the remainder twice; a remainder whose bars or history cannot be
-read is journaled, never silently dropped. Nothing here ever ends the trading loop.
+Per completed minute, in the regular session, its bar fixed once: first the open positions' symbols
+and the WATCH symbols, with their own today's-bars read and their own history call, so a position's
+decision never waits behind discovery or the candidates; then, unless a decision now needs the
+loop, discovery starts on its own thread (`MarketRuntime.discover`, when due) and the loop goes on
+with its broker work. The latest discovery candidates, 20 at a time, are evaluated on the first
+loop pass of that same minute where no discovery pass is in flight (at once when none was started),
+from the candidate list the loop last collected; a minute that ends before that gets no candidate
+evaluation (journaled `evaluation-stopped`, stage `candidates-late`): the next minute is evaluated
+on its own bar, never the old one. Today's completed regular-session M1 bars come from `TodayBars`
+when a read was sent after the minute was over by our clock (discovery's, data/todaybars.py), else
+from `MarketData.bars` (only the symbols missing). As with any read, completeness trusts the local
+clock: a bar the provider publishes late is absent, and the strategy decides on the previous bar.
+The prior sessions come from `HistoryReader`, one call per group of 20 (the symbols already known
+for the day cost nothing, the new ones go 20 per request), then cached. Before the open,
+`HistoryPreload` (runtime/preload.py) loads the screeners' symbols' history. A history refusal is
+not an error here: the strategy gets no prior sessions and refuses with its own cause, and the
+decision is recorded like any other. A budget refusal, delayed data or a failed read (bars or
+history) stops the rest of the minute (journaled); a strategy exception is journaled and that
+symbol skipped. An unexpected exception before the positions' symbols are done leaves the minute to
+the next pass. As soon as a decision leaves an order needing the loop (an entry sent, an exit
+asked; runtime/protection.py), the rest of the minute (candidates included) waits (journaled with
+the symbols left and their quotes at that moment), so the fill and its stop are not kept waiting
+behind more reads. On the first pass the service runs the strategy again, that remainder is
+evaluated on the same bar (bars cut at it), the saved quotes and the daily loss budget of that
+minute (never the room left at replay time), for the record only: an ENTER is recorded
+`not_evaluated`, nothing is sent or asked, the WATCH set is untouched. A `evaluation-remainder` row
+(keyed by the bar) is written before the records, so a restart never records the remainder twice; a
+remainder whose bars or history cannot be read is journaled, never silently dropped. Nothing here
+ever ends the trading loop.
 """
 
 from __future__ import annotations
@@ -56,6 +59,7 @@ EVALUATION_STOPPED = "evaluation-stopped"
 STRATEGY_ERROR = "strategy-error"
 HISTORY_REFUSED = "history-refused"
 PROTECT_FIRST = "protect-first"
+CANDIDATES_LATE = "candidates-late"
 REMAINDER = "evaluation-remainder"
 Remainder = tuple[datetime, dict[str, Quote | None], Decimal | None]
 
@@ -64,7 +68,15 @@ class CandidateSource(Protocol):
     """What the evaluation needs of `runtime.market.MarketRuntime`."""
 
     def discover(self) -> None:
-        """One discovery pass when due (it decides); its bars reads go to TodayBars."""
+        """Start one discovery pass when due (it decides); its bars reads go to TodayBars."""
+        ...
+
+    def collect(self) -> None:
+        """Take a finished discovery pass, if any (never waits)."""
+        ...
+
+    def discovering(self) -> bool:
+        """A discovery pass is still in flight."""
         ...
 
     def candidates(self) -> list[str]:
@@ -112,6 +124,9 @@ class Evaluator:
         self.contexts: list[SymbolContext] = []  # of the latest pass, for observers
         self.evaluated_at: datetime | None = None  # decision time of `contexts`
         self._last_bar: datetime | None = None
+        # The bar whose candidates wait for discovery, and the symbols its positions' phase
+        # already decided (never twice in a minute).
+        self._waiting: tuple[datetime, list[str]] | None = None
         self._history_refused: set[tuple[str, date]] = set()
         self._budget: Decimal | None = None  # daily loss room of the current minute
         self._remainder = self._pending_remainder()
@@ -154,10 +169,12 @@ class Evaluator:
         return room
 
     def tick(self, market: CandidateSource) -> None:
-        """Once per loop pass; does work only when a new minute has completed or a minute's
-        remainder waits (then only that, this pass). A new minute, its bar fixed once: first
-        the positions' and WATCH symbols (their own reads); then, unless a decision now needs
-        the loop, `market.discover()` (it runs only when due) and the candidates."""
+        """Once per loop pass; does work only when a new minute has completed, its candidates
+        wait, or a minute's remainder waits (then only that, this pass). A new minute, its bar
+        fixed once: first the positions' and WATCH symbols (their own reads); then, unless a
+        decision now needs the loop, `market.discover()` (it starts a pass only when due) and,
+        on this or a later pass of the same minute once no pass is in flight, the
+        candidates."""
         self.contexts = []
         now = self.now()
         self.evaluated_at = now
@@ -174,9 +191,8 @@ class Evaluator:
         if not day.in_regular_session(now):
             return
         bar_start = now.replace(second=0, microsecond=0) - M1
-        new = bar_start >= day.regular_open and bar_start != self._last_bar
-        first: list[str] = []
-        if new:
+        if bar_start >= day.regular_open and bar_start != self._last_bar:
+            self._late()
             positions = self._positions()
             self._budget = self._loss_budget(now)
             first = list(dict.fromkeys([*sorted(positions), *sorted(self.watch)]))
@@ -186,11 +202,30 @@ class Evaluator:
             self._last_bar = bar_start  # only once the positions' minute is done
             if stopped:
                 return
+            self._waiting = (bar_start, first)
         market.discover()
-        if not new:
+        if self._waiting is None:
             return
+        if self._waiting[0] != bar_start:
+            self._late()  # its minute is over: never evaluated on a later minute's clock
+            return
+        market.collect()
+        if market.discovering():
+            return  # the loop's broker work goes on; a later pass of this minute evaluates
+        first = self._waiting[1]
+        self._waiting = None
         later = [s for s in market.candidates() if s not in first]
         self._run(later, bar_start, day.regular_open, self._positions(), late=None)
+
+    def _late(self) -> None:
+        """The candidates of the waiting minute were never evaluated: its minute is over
+        (discovery still in flight, or protection held the loop until then)."""
+        if self._waiting is None:
+            return
+        bar_start, _ = self._waiting
+        self._waiting = None
+        self._journal(EVALUATION_STOPPED, {"bar_start": bar_start.isoformat(),
+                                           "stage": CANDIDATES_LATE})
 
     def _finish_remainder(self, now: datetime) -> None:
         assert self._remainder is not None

@@ -478,10 +478,19 @@ bot and the manual commands refuse to start on another environment's records.
 ## Fill to stop
 
 While a trade has an entry working, filled shares not yet covered by a stop that Detail shows
-working, or an exit in progress, the bot does no discovery and runs no strategy: each pass is
-only the Detail and positions reads and the protection step. One `evaluation-skipped` row marks
-the start of each such stretch. A pass whose market upkeep, discovery and strategy took longer
-than `[runtime] evaluation_budget_seconds` journals `evaluation-slow`.
+working, or an exit in progress, the bot starts no discovery pass and runs no strategy: each
+pass is only the Detail and positions reads and the protection step (a discovery pass already
+running on its own thread finishes; it never touches orders). One `evaluation-skipped` row marks
+the start of each such stretch. A loop pass whose market upkeep and strategy took longer than
+`[runtime] evaluation_budget_seconds` journals `evaluation-slow`; discovery is not part of it.
+
+Discovery runs on its own thread, one pass at a time, so a slow pass never delays Detail
+polling, stops or commands. Each `discovery` row has the pass's duration in `seconds`; a pass
+that takes longer than a minute skips the next minute's start. The candidates of a minute are
+evaluated once its pass is collected (or at once when none started that minute); when the
+minute ends first, an `evaluation-stopped` row with stage `candidates-late` and the minute's
+`bar_start` says its candidates were not evaluated. On stop, a pass in flight ends before its
+next request and is waited for at most `[runtime] discovery_stop_seconds`.
 
 Before the open (from `[market_data] history_preload_minutes_before_open`, 9:00 ET) the bot
 reads the screeners and loads the prior-session history of their symbols, one batch of up to 20

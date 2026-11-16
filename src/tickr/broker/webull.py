@@ -2022,7 +2022,18 @@ class SdkTransport:
     during construction, when the token waits for the owner's confirmation in the Webull app.
 
     `market_data_only` (the API's chart reads): the account id is never read and only
-    MARKET_DATA_ROUTES may be sent; any other route is refused before anything is sent."""
+    MARKET_DATA_ROUTES may be sent; any other route is refused before anything is sent.
+
+    `send` is called from several threads at once (the trading loop, the discovery thread, the
+    account display reads) and takes no lock, so no request ever waits behind another
+    thread's. Thread safety read from SDK 3.0.3's source: every send builds its own
+    `ApiRequest` (its own header, query and body dicts); after construction
+    `ApiClient.get_response` only reads the client (signer and credential fixed, a fresh uuid
+    nonce per call, the token set once by the token initialisation here and never refreshed
+    later); `webull.core.http.response.Response.get_response_object` opens a new
+    `requests.Session` for each request, so no connection pool or cookie jar is shared; the
+    SDK's per-request context (`RequestContextHolder`, used only by its own order helpers,
+    not here) is thread-local. The request budget has its own lock (broker/budget.py)."""
 
     def __init__(self, settings: WebullSettings,
                  on_token_pending: Callable[[], None] = _no_token_hook,

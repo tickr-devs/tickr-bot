@@ -5,24 +5,35 @@ position.
 
 Stream callbacks arrive on the provider's thread. They only touch `StreamInbox` (a lock and a
 few dicts); everything that writes the database happens on the trading loop in `tick()`.
-Strategy evaluation is `runtime.evaluation`; the service copies its WATCH set into `watch`.
+Discovery passes run on their own thread (`DiscoveryWorker`, one pass at a time), so the
+loop's broker work never waits for their ~40 market-data reads. That thread only reads market
+data, appends capture records (`CaptureWriter`, one lock around every write) and fills
+`TodayBars` (one lock); the loop collects a finished pass on a later pass (`collect`, never
+waits) and does everything else itself: the journal, the discovery.jsonl pass record, the
+candidate list. Strategy evaluation is `runtime.evaluation`; the service copies its WATCH set
+into `watch`.
 """
 
 from __future__ import annotations
 
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 from tickr.api import contract as api
-from tickr.broker.base import BrokerError
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import Config
-from tickr.data.base import MarketData, MarketDataError, QuoteListener, StreamNotice
-from tickr.data.capture import CaptureWriter
+from tickr.data.base import (
+    MarketData,
+    QuoteListener,
+    ScreenerKind,
+    ScreenerRow,
+    StreamNotice,
+)
+from tickr.data.capture import CaptureError, CaptureWriter
 from tickr.data.discovery import (
     Candidate,
     DiscoveryResult,
@@ -36,7 +47,7 @@ from tickr.data.health import FanOut, StreamHealth, StreamState
 from tickr.data.todaybars import TodayBars
 from tickr.engine.core import Engine, Leg
 from tickr.strategy.base import Liquidity
-from tickr.types import Quote
+from tickr.types import Bar, Quote
 
 STREAM_TRANSPORT = "stream-transport"
 STREAM_ERROR = "stream-error"
@@ -44,6 +55,7 @@ DISCOVERY = "discovery"
 DISCOVERY_FAILED = "discovery-failed"
 STREAM_SUBSCRIPTIONS = "stream-subscriptions"
 STREAM_LOST_EXIT = "stream-lost"
+DISCOVERY_THREAD = "tickr-discovery"
 
 
 class StreamInbox:
@@ -105,11 +117,125 @@ class DiscoveryState:
     candidates: tuple[Candidate, ...]
 
 
+class DiscoveryCancelled(Exception):
+    """The run is stopping: the discovery pass in flight ends before its next request."""
+
+
+class _StopsBetweenRequests:
+    """The reads of one discovery pass, refused once `stopping` is set: a pass in flight at
+    shutdown ends at its next request (the one being sent finishes or times out on its own),
+    so it never runs on into the shutdown or appends to a capture file being closed."""
+
+    def __init__(self, source: MarketData, stopping: threading.Event) -> None:
+        self._source = source
+        self._stopping = stopping
+        self.provider = source.provider
+
+    def _check(self) -> None:
+        if self._stopping.is_set():
+            raise DiscoveryCancelled("the run is stopping")
+
+    def screener(self, kind: ScreenerKind) -> list[ScreenerRow]:
+        self._check()
+        return self._source.screener(kind)
+
+    def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
+        self._check()
+        return self._source.snapshot(symbols)
+
+    def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
+        self._check()
+        return self._source.bars(symbols, count, budget_reserve=budget_reserve)
+
+
+@dataclass(frozen=True)
+class DiscoveryOutcome:
+    """One finished discovery pass, handed from the discovery thread to the loop."""
+
+    started: datetime  # local clock at the start: the minute the pass belongs to
+    finished: datetime  # local clock at the end: the pass record's receipt time
+    seconds: float  # how long the pass took (monotonic clock)
+    result: DiscoveryResult | None  # None when it failed
+    error: Exception | None  # why it failed (any exception: never raised into the loop)
+
+
+Spawn = Callable[[Callable[[], None]], threading.Thread | None]
+
+
+def daemon_thread(target: Callable[[], None]) -> threading.Thread:
+    """Run `target` on a daemon thread: a pass in flight never keeps the process alive."""
+    thread = threading.Thread(target=target, name=DISCOVERY_THREAD, daemon=True)
+    thread.start()
+    return thread
+
+
+class DiscoveryWorker:
+    """At most one discovery pass at a time, off the trading loop. The loop starts a pass
+    (`start`) and later takes its outcome (`take`, never waits); the thread only runs the job
+    and keeps the outcome, which the loop journals itself. A new pass starts only once the
+    previous outcome was taken. `spawn` runs the job (a daemon thread; tests run it in place).
+    `stop` refuses new passes, tells the pass in flight to end before its next request and
+    waits for it at most the given time."""
+
+    def __init__(self, spawn: Spawn = daemon_thread) -> None:
+        self._spawn = spawn
+        self._lock = threading.Lock()
+        self._running = False
+        self._outcome: DiscoveryOutcome | None = None
+        self._thread: threading.Thread | None = None  # touched by the loop thread only
+        self.stopping = threading.Event()
+
+    def busy(self) -> bool:
+        """A pass is in flight, or its outcome has not been taken yet."""
+        with self._lock:
+            return self._running or self._outcome is not None
+
+    def start(self, job: Callable[[], DiscoveryOutcome]) -> bool:
+        """Start `job` unless a pass is busy or the run is stopping; True when started."""
+        with self._lock:
+            if self._running or self._outcome is not None or self.stopping.is_set():
+                return False
+            self._running = True
+
+        def run() -> None:
+            outcome: DiscoveryOutcome | None = None
+            try:
+                outcome = job()  # never raises: every failure is an outcome
+            finally:
+                with self._lock:
+                    self._outcome = outcome
+                    self._running = False
+
+        try:
+            self._thread = self._spawn(run)
+        except BaseException:
+            with self._lock:  # no thread: nothing in flight
+                self._running = False
+            raise
+        return True
+
+    def take(self) -> DiscoveryOutcome | None:
+        """The finished pass's outcome, once; None while in flight or when there is none."""
+        with self._lock:
+            outcome, self._outcome = self._outcome, None
+        return outcome
+
+    def stop(self, timeout_seconds: float) -> bool:
+        """True when no pass is left running after at most `timeout_seconds`."""
+        self.stopping.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout_seconds)
+            return not thread.is_alive()
+        return True
+
+
 class MarketRuntime:
     def __init__(self, engine: Engine, config: Config, source: MarketData, *,
                  health: StreamHealth, inbox: StreamInbox, capture: CaptureWriter | None,
                  calendar: SessionCalendar | None, today_bars: TodayBars,
-                 now: Callable[[], datetime], monotonic: Callable[[], float]) -> None:
+                 now: Callable[[], datetime], monotonic: Callable[[], float],
+                 spawn: Spawn = daemon_thread) -> None:
         self.engine = engine
         self.config = config
         self.source = source
@@ -142,6 +268,7 @@ class MarketRuntime:
         self._pass_minute: datetime | None = None  # the minute of the latest loop pass
         self._first_pass = False  # this loop pass is the first of its minute (or the first)
         self._discovery_anchor: datetime | None = None  # interval counted from here
+        self._worker = DiscoveryWorker(spawn)  # the discovery pass in flight, if any
         self._started = now()
 
     def bind(self) -> None:
@@ -155,17 +282,29 @@ class MarketRuntime:
 
     def tick(self, *, discover: bool = True) -> None:
         """`discover=False` while protection needs the loop (runtime/protection.py), and
-        whenever the strategy's evaluation runs discovery itself (`discover()`, after the
-        positions and WATCH symbols of the minute): the stream, subscriptions and the
-        stream-loss exit still run."""
+        whenever the strategy's evaluation starts discovery itself (`discover()`, after the
+        positions and WATCH symbols of the minute): the stream, a finished discovery pass,
+        subscriptions and the stream-loss exit still run."""
         minute = self.now().replace(second=0, microsecond=0)
         self._first_pass = minute != self._pass_minute
         self._pass_minute = minute
         self._journal_stream_events()
+        self.collect()
         self._sync_subscriptions()  # new candidates: on the next pass, a second later
         self._exit_on_stream_loss()
         if discover:
             self.discover()
+            self.collect()  # a pass run in place (tests) is journaled in this same pass
+
+    def discovering(self) -> bool:
+        """A discovery pass is in flight (or finished and not yet collected)."""
+        return self._worker.busy()
+
+    def close(self, timeout_seconds: float) -> bool:
+        """At the end of the run: no new pass; a pass in flight ends before its next request
+        and is waited for at most `timeout_seconds`, then abandoned (a daemon thread). True
+        when none is left running. Never collected: the loop has stopped."""
+        return self._worker.stop(timeout_seconds)
 
     def candidates(self) -> list[str]:
         """The symbols of the latest discovery's candidates, best first."""
@@ -355,15 +494,17 @@ class MarketRuntime:
                 self.engine.request_exit(trade.trade_id, STREAM_LOST_EXIT)
 
     def discover(self) -> None:
-        """One discovery pass, in the regular session, only in the first loop pass of a minute
-        (after `tick` of that pass) and at least `discovery_interval_seconds` after the
-        previous start, so the bars route's 60 s window is not asked twice for a whole pass.
-        The interval is counted from the start of the minute the previous pass began in (the
-        first pass of a minute starts a fraction of a second after it, so counting from the
-        exact start would skip every other minute), except after the bot's very first pass,
-        which may be mid-minute: then from that exact start. With 60 s every pass starts at
-        the start of a minute, so its bars reads were sent after the minute just completed and
-        the evaluation of that minute reuses them (TodayBars)."""
+        """Start one discovery pass on the discovery thread, in the regular session, only in
+        the first loop pass of a minute (after `tick` of that pass), only when no pass is in
+        flight, and at least `discovery_interval_seconds` after the previous start, so the bars
+        route's 60 s window is not asked twice for a whole pass. The interval is counted from
+        the start of the minute the previous pass began in (the first pass of a minute starts
+        a fraction of a second after it, so counting from the exact start would skip every
+        other minute), except after the bot's very first pass, which may be mid-minute: then
+        from that exact start. With 60 s every pass starts at the start of a minute, so its
+        bars reads were sent after the minute just completed and the evaluation of that minute
+        reuses them (TodayBars). A pass still in flight at a minute's first pass skips that
+        minute (one pass at a time); `collect` takes the outcome on a later loop pass."""
         if not self._first_pass:
             return
         self._first_pass = False  # at most once per loop pass
@@ -374,36 +515,70 @@ class MarketRuntime:
         regular, session_open = self._in_regular_session(now)
         if not regular or session_open is None:
             return
+        if self._worker.busy():
+            return
         startup = self._discovery_anchor is None and now - self._started < interval
-        self._discovery_anchor = now if startup else now.replace(second=0, microsecond=0)
-        try:
-            result = discover(self.source, self.settings, self.screen, session_open,
-                              self.now, self.capture, self._refused_symbols, self.today_bars)
-        except (MarketDataError, BrokerError) as exc:  # MalformedResponse is a BrokerError
-            # `detail` is the error's own text: the route, HTTP status and provider error code
-            # for a failed read (never a body, credential or account id), cut to
-            # `failure_detail_max_chars`; a cut row also has the whole text's length.
-            detail = str(exc)
-            cap = self.config.market_data.failure_detail_max_chars
-            body: dict[str, object] = {"error": type(exc).__name__, "detail": detail[:cap]}
-            if len(detail) > cap:
-                body["detail_length"] = len(detail)
-            with self.engine.store.transaction():
-                self.engine.store.append(DISCOVERY_FAILED, body, run_id=self.engine.run_id)
-            return  # tried again at the next interval
+        anchor = now if startup else now.replace(second=0, microsecond=0)
+        # Everything the thread uses is taken here; it never touches the store, the engine,
+        # subscriptions or this object's state.
+        source = _StopsBetweenRequests(self.source, self._worker.stopping)
+        settings, screen, capture = self.settings, self.screen, self.capture
+        refused, today_bars, clock, monotonic = (self._refused_symbols, self.today_bars,
+                                                 self.now, self.monotonic)
+
+        def job() -> DiscoveryOutcome:
+            begun = monotonic()
+            try:
+                result = discover(source, settings, screen, session_open, clock, capture,
+                                  refused, today_bars)
+            except Exception as exc:  # noqa: BLE001 - collected and journaled by the loop
+                return DiscoveryOutcome(now, clock(), monotonic() - begun, None, exc)
+            return DiscoveryOutcome(now, clock(), monotonic() - begun, result, None)
+
+        if self._worker.start(job):
+            self._discovery_anchor = anchor
+
+    def collect(self) -> None:
+        """On the loop thread, never waiting: journal a finished pass, if any. A failure is
+        `discovery-failed` (tried again at the next interval); a pass is `discovery` with its
+        `seconds`, after its discovery.jsonl record, and its candidates become the list."""
+        outcome = self._worker.take()
+        if outcome is None:
+            return
+        result = outcome.result
+        if result is None:
+            assert outcome.error is not None
+            self._journal_failure(outcome.error)
+            return
         candidates, kept = self._with_earlier(result)
         summary = result.summary()
         if kept:
             summary += f"; kept {len(kept)} earlier candidates not reached"
-        self.discovery = DiscoveryState(now, summary, candidates)
+        self.discovery = DiscoveryState(outcome.started, summary, candidates)
         if self.capture is not None:
-            finished = self.now()
-            self.capture.discovery(pass_record(result, finished), finished)
+            try:
+                self.capture.discovery(pass_record(result, outcome.finished), outcome.finished)
+            except CaptureError as exc:  # the candidates stay; the record is missing
+                self._journal_failure(exc)
+                return
         with self.engine.store.transaction():
             self.engine.store.append(DISCOVERY, {
                 "summary": summary, "evaluated": result.evaluated,
-                "candidates": [c.instrument.symbol for c in candidates], "kept": kept},
+                "candidates": [c.instrument.symbol for c in candidates], "kept": kept,
+                "seconds": outcome.seconds},
                 run_id=self.engine.run_id)
+
+    def _journal_failure(self, exc: Exception) -> None:
+        """`detail` is the error's own text: the route, HTTP status and provider error code
+        for a failed read (never a body, credential or account id), cut to
+        `failure_detail_max_chars`; a cut row also has the whole text's length."""
+        detail = str(exc)
+        cap = self.config.market_data.failure_detail_max_chars
+        body: dict[str, object] = {"error": type(exc).__name__, "detail": detail[:cap]}
+        if len(detail) > cap:
+            body["detail_length"] = len(detail)
+        with self.engine.store.transaction():
+            self.engine.store.append(DISCOVERY_FAILED, body, run_id=self.engine.run_id)
 
     def _with_earlier(self, result: DiscoveryResult) -> tuple[tuple[Candidate, ...], list[str]]:
         """A pass that stopped early (bars budget, delayed data, a screener or snapshot

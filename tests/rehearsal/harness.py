@@ -56,6 +56,7 @@ class Rehearsal:
         monkeypatch.setattr(cli, "NOW", self.world.clock)
         monkeypatch.setattr(cli, "SLEEP", self.world.sleep)
         monkeypatch.setattr(cli, "MONOTONIC", self.world.mono)
+        monkeypatch.setattr(cli, "DISCOVERY_SPAWN", cli.run_in_place)
         monkeypatch.setattr(cli, "NOTIFIER", lambda alerts: self.notifier)
         self.config = config.load(self.bot_toml)
         self.paths = service.ServicePaths.from_config(self.config)

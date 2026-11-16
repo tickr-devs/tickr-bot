@@ -485,10 +485,14 @@ watchdog_restart_timeout_seconds = 10
 # Record of the watchdog's one restart a day (New York date), relative to data_dir; written before the command runs and
 # never removed, so a day never gets a second attempt; read by runtime.watchdog.
 watchdog_restart_file = "watchdog-restart.json"
-# Seconds one loop pass may spend on market upkeep, discovery and the strategy before an
-# evaluation-slow journal row (the next Detail read waits for it; keep it near
-# [orders] detail_poll_seconds); read by runtime.service.
+# Seconds one loop pass may spend on market upkeep and the strategy before an evaluation-slow journal row (the next
+# Detail read waits for it; keep it near [orders] detail_poll_seconds). Discovery runs on its own thread and is not part
+# of it: its duration is the `seconds` of each discovery journal row; read by runtime.service.
 evaluation_budget_seconds = 3
+# At the end of a run, seconds to wait for a discovery pass in flight, which stops before its next request (one market
+# data request takes about 0.3 s); after that it is abandoned (a daemon thread) and the capture files close; read by
+# cli (run) through runtime.market.
+discovery_stop_seconds = 2
 # Stop marker the bot writes when it obeys a stop-bot command, relative to data_dir; while it exists preflight fails and
 # `tickr run` refuses, until `tickr clear-stop`; read by runtime.stopmarker (bot, preflight, cli).
 stop_marker_file = "stopped-by-operator.json"

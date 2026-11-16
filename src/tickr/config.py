@@ -296,6 +296,7 @@ class RuntimeConfig:
     watchdog_restart_timeout_seconds: int
     watchdog_restart_file: str
     evaluation_budget_seconds: Decimal
+    discovery_stop_seconds: Decimal
     stop_marker_file: str
     release_step_timeout_seconds: int
     release_stop_wait_seconds: int

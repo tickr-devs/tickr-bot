@@ -40,9 +40,14 @@ INTERVAL = float(CFG.market_data.discovery_interval_seconds)
 LOST_AFTER = timedelta(seconds=float(CFG.market_data.stream_lost_exit_seconds))
 
 
+def in_place(run):
+    """Run a discovery pass in place, so `tick` journals it in the same pass."""
+    run()
+
+
 class Rig:
     def __init__(self, tmp_path: Path, now: datetime = MONDAY_11,
-                 source: FakeMarketData | None = None) -> None:
+                 source: FakeMarketData | None = None, spawn=in_place) -> None:
         self.broker = FakeBroker()
         self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
         self.engine = Engine(self.store, self.broker, CFG, "mkt00001",
@@ -55,7 +60,7 @@ class Rig:
                                     health=StreamHealth.from_config(CFG), inbox=self.inbox,
                                     capture=None, calendar=CALENDAR,
                                     today_bars=TodayBars(), now=lambda: self.now,
-                                    monotonic=lambda: self.clock)
+                                    monotonic=lambda: self.clock, spawn=spawn)
         self.market.screen = load_active(CFG).strategy  # set by the caller once loaded
 
     def advance(self, seconds: float) -> None:

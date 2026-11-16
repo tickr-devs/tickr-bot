@@ -171,6 +171,22 @@ SLEEP: Callable[[float], None] = time.sleep
 MONOTONIC: Callable[[], float] = time.monotonic
 
 
+def _discovery_thread(run: Callable[[], None]) -> Any:
+    from tickr.runtime.market import daemon_thread
+    return daemon_thread(run)
+
+
+def run_in_place(run: Callable[[], None]) -> None:
+    """A discovery pass run inside the loop pass that starts it: on a fake clock (demo,
+    rehearsals) a real thread would race the simulated time."""
+    run()
+
+
+# How `tickr run` runs a discovery pass (runtime.market.Spawn): its own daemon thread; replaced
+# with `run_in_place` (with SLEEP, NOW and MONOTONIC) wherever the run lives on a fake clock.
+DISCOVERY_SPAWN: Callable[[Callable[[], None]], Any] = _discovery_thread
+
+
 class _Interrupt:
     """First Ctrl-C asks for an orderly exit; the second one stops the command (stops rest)."""
 
@@ -508,6 +524,7 @@ def _run(path: Path) -> int:
         observers: ObserverSet | None = None
         watch: Watch | None = None
         account_reads: AccountReads | None = None
+        market: MarketRuntime | None = None
         try:
             alerter = Alerter(cfg.alerts, f"Tickr {cfg.environment_name}",
                               NOTIFIER(cfg.alerts), clock=NOW)
@@ -529,7 +546,7 @@ def _run(path: Path) -> int:
             market = MarketRuntime(engine, cfg, adapters.market,
                                    health=StreamHealth.from_config(cfg), inbox=inbox,
                                    capture=capture, calendar=calendar, today_bars=today_bars,
-                                   now=NOW, monotonic=MONOTONIC)
+                                   now=NOW, monotonic=MONOTONIC, spawn=DISCOVERY_SPAWN)
             watch = Watch(engine, cfg, alerter, NOW)
 
             def observers_refused(cause: str) -> None:
@@ -570,8 +587,12 @@ def _run(path: Path) -> int:
             cause = f"stopped ({how})" if clean else "shutdown-deadline"
         finally:
             # Each step guarded: a failing SDK disconnect must not skip recording the run end.
+            # The discovery pass in flight ends before the capture files close.
+            discovery_stop = float(cfg.runtime.discovery_stop_seconds)
             for step in ((adapters.stop_stream if adapters is not None else None),
                          ((lambda: account_reads.stop(0)) if account_reads is not None
+                          else None),
+                         ((lambda: market.close(discovery_stop)) if market is not None
                           else None),
                          (capture.close if capture is not None else None),
                          (_closer(observers, cfg) if observers is not None else None),
