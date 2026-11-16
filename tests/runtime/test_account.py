@@ -432,3 +432,50 @@ def test_an_unexpected_error_in_the_display_thread_is_journaled_and_it_goes_on(t
 
 # Test data: the most a test waits for the display thread, seconds.
 WAIT_SECONDS = 5
+
+
+def closed_trade(bot: Bot) -> str:
+    t = opened(bot)
+    bot.service.state = api.BotState.RUNNING
+    bot.command(api.CommandKind.FLATTEN)
+    assert bot.run(10)
+    return t
+
+
+def test_status_result_after_the_brokers_fees_on_todays_fills(tmp_path):
+    bot = Bot(tmp_path)
+    t = closed_trade(bot)
+    filled = [o for o in bot.engine.orders(t) if o.filled_quantity > 0]
+    fees = {o.client_order_id: D("0.07") if o.side is Side.SELL else D(0) for o in filled}
+
+    class WithFees(FakeBroker):
+        def fills_today(self, day):
+            return [replace(f, fees=fees.get(f.client_order_id)) for f in super().fills_today(day)]
+
+    reads = AccountReads(WithFees(funds=FUNDS, orders=bot.broker.orders),
+                         float(CFG.orders.balance_read_seconds), lambda: bot.now)
+    bot.service.account_reads = reads
+    status = bot.service.status()
+    assert (status.fees_today_usd, status.result_today_net_usd) == (None, None)  # not read yet
+    reads.read_once()
+    status = bot.service.status()
+    assert status.fees_today_usd == D("0.07")
+    assert status.result_today_net_usd == status.result_today_gross_usd - D("0.07")
+
+
+def test_fees_stay_unknown_while_a_fill_is_missing_from_the_list(tmp_path):
+    bot = Bot(tmp_path)
+    t = closed_trade(bot)
+    exit_id = [o for o in bot.engine.orders(t) if o.filled_quantity > 0][-1].client_order_id
+
+    class Lagging(FakeBroker):
+        def fills_today(self, day):
+            return [replace(f, fees=D(0)) for f in super().fills_today(day)
+                    if f.client_order_id != exit_id]
+
+    reads = AccountReads(Lagging(funds=FUNDS, orders=bot.broker.orders),
+                         float(CFG.orders.balance_read_seconds), lambda: bot.now)
+    bot.service.account_reads = reads
+    reads.read_once()
+    status = bot.service.status()
+    assert (status.fees_today_usd, status.result_today_net_usd) == (None, None)

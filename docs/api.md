@@ -230,6 +230,13 @@ unknown (a trade closed today has fills without a known price), never zero:
 room is below `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot
 tracks; `position` is its first element or `null`, kept for older clients.
 
+`result_today_gross_usd` sums today's closed trades before fees. `fees_today_usd` is the broker's
+actual fees on the fills of those trades, from the display reads' list of today's fills (the
+account file's `fills`), and `result_today_net_usd` = gross - fees, the figure the broker's day
+P&L shows. Both are `null` until every filled order of today's closed trades is in that list
+with its filled quantity and readable fees. Display only: the daily loss rule above does not
+count fees.
+
 Each `trades_today` entry also has `planned_loss_usd` (1 R as recorded when the trade was opened)
 and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE are only in
 `day-v1`: the bot does not read capture files to write its status.

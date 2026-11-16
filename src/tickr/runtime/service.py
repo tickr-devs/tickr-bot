@@ -659,11 +659,36 @@ class Service:
         return (entries.realized_loss_today(self.engine, now), reserved,
                 entries.daily_loss_room(self.engine, self.config, now))
 
-    def _trades_today(self) -> tuple[api.Trade, ...]:
-        """For status only: today's trades with their stop confirmation time."""
+    def _closed_today(self) -> list[api.DayTrade]:
         today = self.now().astimezone(NEW_YORK).date()
-        return tuple(_status_trade(self._shown(t))
-                     for t in closed_trades(self.engine.store, closed_on=today))
+        return closed_trades(self.engine.store, closed_on=today)
+
+    def _trades_today(self, closed: list[api.DayTrade]) -> tuple[api.Trade, ...]:
+        """For status only: today's trades with their stop confirmation time."""
+        return tuple(_status_trade(self._shown(t)) for t in closed)
+
+    def _fees_today(self, closed: list[api.DayTrade]) -> Decimal | None:
+        """The broker's fees on the fills of today's closed trades, from the display reads'
+        latest list of today's fills (display only). None (unknown) until every filled order
+        of those trades is in that list with its filled quantity and readable fees, so a fill
+        the list has not caught up with yet never shows as free."""
+        if self.account_reads is None:
+            return None
+        snapshot = self.account_reads.snapshot()
+        if snapshot.fills_read_at is None:
+            return None
+        fills = {f.client_order_id: f for f in snapshot.fills}
+        total = ZERO
+        for trade in closed:
+            for order in self.engine.orders(trade.trade_id):
+                if order.filled_quantity <= 0:
+                    continue
+                fill = fills.get(order.client_order_id)
+                if fill is None or fill.fees is None \
+                        or fill.filled_quantity != order.filled_quantity:
+                    return None
+                total += fill.fees
+        return total
 
     def _shown(self, trade: api.DayTrade) -> api.DayTrade:
         """A display metric never ends the loop: an unreadable journal shows null, journaled
@@ -717,7 +742,10 @@ class Service:
     def status(self) -> api.StatusV1:
         gate = trading_gate(self.config)
         fences = self.engine.fence_rows()
-        trades = self._trades_today()
+        closed = self._closed_today()
+        trades = self._trades_today(closed)
+        gross = sum((t.result_gross_usd for t in trades), ZERO)
+        fees = self._fees_today(closed)
         positions = self._positions()
         loss, reserved, room = self._daily_money()
         return api.StatusV1(
@@ -728,14 +756,15 @@ class Service:
             entry_block=self._entry_block(gate.open, gate.cause, fences),
             fences=tuple(self._fence(name, cause, set_at) for name, cause, set_at in fences),
             position=positions[0] if positions else None, trades_today=trades,
-            result_today_gross_usd=sum((t.result_gross_usd for t in trades), ZERO),
+            result_today_gross_usd=gross,
             freshness=(self.market.freshness(self.last_broker_read_at)
                        if self.market is not None
                        else api.Freshness(self.last_broker_read_at, None, api.StreamHealth.OFF)),
             recent_commands=self._recent_commands(),
             realized_loss_today_usd=loss, open_reservations_usd=reserved,
             daily_room_usd=room, positions=positions,
-            code_version=self.engine.store.run_code_version(self.engine.run_id))
+            code_version=self.engine.store.run_code_version(self.engine.run_id),
+            fees_today_usd=fees, result_today_net_usd=None if fees is None else gross - fees)
 
     def write_status(self) -> None:
         api.write_status(self.paths.status, self.status())

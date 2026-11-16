@@ -43,6 +43,7 @@ from tickr.version import UNRECORDED, CodeVersionUnknown, running_code_version
 if TYPE_CHECKING:
     from tickr.data.todaybars import TodayBars
     from tickr.observers.runner import ObserverSet
+    from tickr.runtime.account import DisplayReads
     from tickr.runtime.evaluation import Evaluator
     from tickr.runtime.market import StreamInbox
 
@@ -122,6 +123,10 @@ class RunAdapters:
     market: MarketData
     start_stream: Callable[[], None]
     stop_stream: Callable[[], None]
+    # The broker behind the account file's balances and fills, read on their own thread; None
+    # when there is no real broker to read (the demo's simulated exchange keeps simulated time
+    # and is not made for a second thread): those fields then stay null.
+    display_reads: DisplayReads | None = None
 
 
 def _webull_run_adapters(cfg: config_module.Config,
@@ -129,7 +134,7 @@ def _webull_run_adapters(cfg: config_module.Config,
                          on_token_pending: Callable[[], None]) -> RunAdapters:
     from tickr.broker.webull import bot_adapters  # optional dependency
     broker, market, stream = bot_adapters(cfg, on_stream_error, on_token_pending)
-    return RunAdapters(broker, market, stream.start, stream.stop)
+    return RunAdapters(broker, market, stream.start, stream.stop, display_reads=broker)
 
 
 def _webull_probe_adapters(cfg: config_module.Config) -> tuple[Broker, MarketData]:
@@ -546,8 +551,9 @@ def _run(path: Path) -> int:
                 evaluator, observers = wired
                 market.screen = evaluator.strategy  # discovery applies its liquidity rules
             # Display reads (balance, account kind, today's fills) on their own thread.
-            account_reads = AccountReads(adapters.broker,
-                                         float(cfg.orders.balance_read_seconds), NOW)
+            if adapters.display_reads is not None:
+                account_reads = AccountReads(adapters.display_reads,
+                                             float(cfg.orders.balance_read_seconds), NOW)
             bot = service.Service(engine, now=NOW, calendar=calendar, strategy=strategy,
                                   paths=service.ServicePaths.from_config(cfg), market=market,
                                   evaluator=evaluator, entries_off=entries_off,
@@ -555,7 +561,8 @@ def _run(path: Path) -> int:
                                   account_reads=account_reads)
             market.bind()
             adapters.start_stream()
-            account_reads.start()
+            if account_reads is not None:
+                account_reads.start()
             clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP,
                             monotonic=MONOTONIC)
             how = (f"operator command {bot.stopped_by}" if bot.stopped_by is not None

@@ -956,6 +956,28 @@
         }
       ]
     },
+    "fees_today_usd": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "result_today_net_usd": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "schema_version": {
       "type": "integer",
       "const": 1
@@ -981,6 +1003,8 @@
     "daily_room_usd",
     "positions",
     "code_version",
+    "fees_today_usd",
+    "result_today_net_usd",
     "schema_version"
   ],
   "additionalProperties": false
