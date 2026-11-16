@@ -611,8 +611,11 @@ def main(argv: list[str] | None = None) -> int:
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
     fence.add_argument("name")
     sub.add_parser("clear-stop", help="allow starts again after an operator stop-bot command")
-    sub.add_parser("demo", help="a made-up trading day in its own folder (config/demo.toml) "
-                   "served to the apps; never talks to Webull")
+    demo_parser = sub.add_parser("demo", help="a made-up trading day in its own folder "
+                                 "(config/demo.toml) served to the apps; never talks to Webull")
+    demo_parser.add_argument("--build-fixture", action="store_true",
+                             help="replay the day up to [demo] clock and store it in "
+                             "demo-fixture/ (docs/demo.md)")
     args = parser.parse_args(argv)
     try:
         if args.command == "trade":
@@ -642,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "demo":
             from tickr.demo.run import main as demo_main
             repo = config_module.load(args.config).root
-            return demo_main(repo, repo / "config" / "demo.toml")
+            return demo_main(repo, repo / "config" / "demo.toml", build=args.build_fixture)
     except config_module.ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2

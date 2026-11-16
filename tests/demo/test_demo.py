@@ -6,12 +6,15 @@ import http.client
 import json
 import re
 import shutil
+import socket
 import sys
+import tarfile
 import threading
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal as D
 from pathlib import Path
+from time import monotonic
 
 import pytest
 
@@ -427,34 +430,6 @@ def test_chart_days_give_the_d_chart_a_long_history_the_bot_never_reads():
                for b in world.feed.bars_before("AAA", world.now, 100000))
 
 
-def test_live_demo_day_ends_at_live_until(tmp_path):
-    """The live demo day stops itself at [demo] live_until (exit 0), so the launchd job starts
-    a fresh day in the same window."""
-    root = repo(tmp_path)
-    scenario = load(root / "config" / "demo.toml")
-    cfg = config.load(demo.build_folder(root, scenario))
-    scheduled: dict[datetime, object] = {}
-
-    class FakeWorld:
-        def at(self, when, action):
-            scheduled[when] = action
-
-    class Server:
-        def shutdown(self):
-            pass
-
-    class Session:
-        def __init__(self):
-            self.scenario, self.day = scenario, FRIDAY
-
-        def run(self, world):
-            return 0
-
-    assert demo._demo_day(Session(), FakeWorld(), cfg, Server(), lambda _: None) == 0
-    assert scheduled[ny(FRIDAY, scenario.live_until)] is demo._stop_self
-    assert ny(FRIDAY, scenario.clock) in scheduled  # going live comes first
-
-
 # --- the live loop ([live] in demo.toml) -------------------------------------------------------
 
 
@@ -502,7 +477,7 @@ def test_live_loop_prices_compound_from_where_each_symbol_was_left():
     plan = SymbolPlan("AAA", D(20), D(3000), ScreenerKind.GAINERS,
                       (("09:30", "09:40", D(22), HOT),))
     legs = ((0, 2, D("0.10"), HOT), (3, 4, D("-0.5"), HOT))
-    loop = LiveLoop(5, (LoopRole("up", ("AAA",), legs),),
+    loop = LiveLoop(5, 3, (LoopRole("up", ("AAA",), legs),),
                     (LoopCommand(90, api.CommandKind.FLATTEN, "up"),
                      LoopCommand(150, api.CommandKind.ENTRY_STOP_ON, None)))
     scenario = unroll(replace(base, today=(plan,), commands=(), clock="10:00",
@@ -570,3 +545,175 @@ def test_live_loop_makes_the_real_bot_trade_and_refuse_every_cycle(tmp_path):
                for line in decisions.read_text("utf-8").splitlines()
                if json.loads(line)["admission"] == "refused"}
     assert {"OWN_POSITION_OPEN", "ENTRY_STOP_SET"} <= refused
+
+
+def test_symbols_only_the_loop_moves_are_listed_shortly_before_the_clock():
+    """The fast part of the day does not evaluate the loop's idle symbols: the screeners list
+    them only `listed_minutes_before_clock` before the clock (startup time of the demo)."""
+    scenario = load(ROOT / "config" / "demo.toml")
+    loop = scenario.live
+    assert loop is not None
+    listed = dict(scenario.listed)
+    morning = {p.symbol for p in load(ROOT / "config" / "demo.toml").today
+               if p.legs and p.legs[0][0] < scenario.clock}
+    role_symbols = {s for role in loop.roles for s in role.symbols}
+    assert set(listed) == role_symbols - morning and "MVLD" not in listed
+    at = (datetime.combine(FRIDAY, time.fromisoformat(scenario.clock))
+          - timedelta(minutes=loop.listed_minutes_before_clock)).time().isoformat()
+    assert set(listed.values()) == {at}
+
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+    market_day = calendar.day(FRIDAY)
+    world = World(ny(FRIDAY, "12:00"), market_day, D("0.01"), D(500), "demo")
+    bars = day_bars("AAA", market_day, D(20), D(3000), (), D("0.05"))
+    world.add_symbol("AAA", bars, [], listed_from=ny(FRIDAY, "12:05"))
+    world.add_symbol("BBB", day_bars("BBB", market_day, D(30), D(3000), (), D("0.05")), [])
+    assert [r.symbol for r in world.feed.screener(ScreenerKind.GAINERS)] == ["BBB"]
+    world.advance(5 * 60)
+    assert {r.symbol for r in world.feed.screener(ScreenerKind.GAINERS)} == {"AAA", "BBB"}
+
+
+def _demo_port(root: Path, port: int) -> Path:
+    bot = root / "config" / "bot.toml"
+    text, count = re.subn(r"(?m)^demo_port = \d+$", f"demo_port = {port}",
+                          bot.read_text("utf-8"))
+    assert count == 1
+    bot.write_text(text, "utf-8")
+    return root
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+# --- the fixture: the demo starts from the committed day, it replays nothing ------------------
+
+
+def test_committed_fixture_is_current():
+    """Fails when the demo fixture is stale: rebuild it with `tickr demo --build-fixture`
+    (docs/demo.md) in the pull request that changes the scenario, the demo code, the API
+    contract or a strategy."""
+    scenario = load(ROOT / "config" / "demo.toml")
+    manifest = demo.read_fixture(ROOT, scenario)
+    archive = ROOT / demo.FIXTURE_DIR / demo.FIXTURE_DATA
+    assert archive.stat().st_size < 20 * 1024 * 1024  # compact: committed to git
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+    calendar.day(date.fromisoformat(str(manifest["demo_day"])))  # a session
+
+
+def _flat_small(root: Path):
+    """`small`, flattened before its clock so the fixture ends flat, and live for seconds."""
+    scenario = small(root / "config" / "demo.toml")
+    commands = (*scenario.commands, DemoCommand("11:20", api.CommandKind.FLATTEN, None))
+    return replace(scenario, commands=commands, live_until="11:30:08")
+
+
+def test_a_stale_fixture_is_refused_at_start(tmp_path):
+    root = repo(tmp_path)
+    scenario = _flat_small(root)
+    with pytest.raises(demo.DemoRefused, match="no demo fixture"):
+        demo.run_demo(root, scenario, SUNDAY, log=lambda line: None)
+    (root / demo.FIXTURE_DIR).mkdir()
+    manifest = {"inputs": demo.fixture_inputs(root, scenario), "demo_day": "2026-11-13",
+                "clock": scenario.clock, "schema": 1}
+    path = root / demo.FIXTURE_DIR / demo.FIXTURE_MANIFEST
+    path.write_text(json.dumps(manifest), "utf-8")
+    assert demo.read_fixture(root, scenario)["demo_day"] == "2026-11-13"
+    changed = replace(scenario, today=(replace(scenario.today[0], base=D(19)),
+                                       *scenario.today[1:]))
+    with pytest.raises(demo.DemoRefused, match="stale"):
+        demo.read_fixture(root, changed)
+    (root / "strategies" / "price-action-v1" / "strategy.toml").write_text("# changed", "utf-8")
+    with pytest.raises(demo.DemoRefused, match="stale"):
+        demo.read_fixture(root, scenario)
+
+
+def test_fixture_newer_than_the_code_is_refused(tmp_path):
+    root = repo(tmp_path)
+    scenario = _flat_small(root)
+    (root / demo.FIXTURE_DIR).mkdir()
+    (root / demo.FIXTURE_DIR / demo.FIXTURE_MANIFEST).write_text(json.dumps({
+        "inputs": demo.fixture_inputs(root, scenario), "demo_day": "2026-11-13",
+        "clock": scenario.clock, "schema": 10_000}), "utf-8")
+    with pytest.raises(demo.DemoRefused, match="newer"):
+        demo.read_fixture(root, scenario)
+
+
+def _demo_port(root: Path, port: int) -> Path:
+    bot = root / "config" / "bot.toml"
+    text, count = re.subn(r"(?m)^demo_port = \d+$", f"demo_port = {port}",
+                          bot.read_text("utf-8"))
+    assert count == 1
+    bot.write_text(text, "utf-8")
+    return root
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_demo_starts_from_its_fixture_and_answers_within_seconds(tmp_path):
+    """`tickr demo` copies the fixture, answers within [demo] answer_within_seconds (nothing
+    replayed), runs the real bot live from the clock and stops itself at live_until. Before it
+    serves, nothing holds the port: a client is refused at once, never reset or left hanging."""
+    root = _demo_port(repo(tmp_path), port := _free_port())
+    scenario = _flat_small(root)
+    archive = demo.build_fixture(root, scenario, SUNDAY, log=lambda line: None)
+    assert archive.is_file()
+    shutil.rmtree(root / scenario.root_dir)  # a start rebuilds the folder from the fixture
+    answers: list[tuple[float, dict]] = []  # (seconds since start, status)
+    failures: list[tuple[type[BaseException], int]] = []  # (error, answers before it)
+    done = threading.Event()
+    started = monotonic()
+
+    def poll() -> None:
+        while not done.is_set():
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+                conn.request("GET", "/status", headers={"Host": f"127.0.0.1:{port}"})
+                resp = conn.getresponse()
+                body = json.loads(resp.read())
+                conn.close()
+                if resp.status == 200 and body["status"] is not None:
+                    answers.append((monotonic() - started, body["status"]))
+            except (OSError, http.client.HTTPException) as exc:
+                failures.append((type(exc), len(answers)))
+            done.wait(0.1)
+
+    poller = threading.Thread(target=poll, daemon=True)
+    poller.start()
+    try:
+        assert demo.run_demo(root, scenario, SUNDAY, log=lambda line: None) == 0
+    finally:
+        done.set()
+        poller.join(timeout=5)
+    assert answers, "the demo never answered"
+    assert answers[0][0] <= scenario.answer_within_seconds
+    assert all(error is ConnectionRefusedError for error, before in failures if before == 0)
+    # The day up to the clock is there at once (the fixture), and the live bot then writes it.
+    first = answers[0][1]
+    assert first["environment"] == scenario.environment
+    assert [t["symbol"] for t in first["trades_today"]][:1] == ["AAA"]
+    written = {api.parse_time(s["written_at"]).astimezone(NEW_YORK).strftime("%H:%M:%S")
+               for _, s in answers}
+    assert max(written) >= scenario.clock + ":01"  # the live bot, after the clock
+
+
+def test_a_busy_demo_port_is_refused_at_start(tmp_path):
+    root = _demo_port(repo(tmp_path), port := _free_port())
+    scenario = _flat_small(root)
+    (root / demo.FIXTURE_DIR).mkdir()
+    manifest = {"inputs": demo.fixture_inputs(root, scenario), "demo_day": "2026-11-13",
+                "clock": scenario.clock, "schema": 1}
+    (root / demo.FIXTURE_DIR / demo.FIXTURE_MANIFEST).write_text(json.dumps(manifest), "utf-8")
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", port))
+        busy.listen()
+        with tarfile.open(root / demo.FIXTURE_DIR / demo.FIXTURE_DATA, "w:xz"):
+            pass
+        with pytest.raises(demo.DemoRefused, match="cannot listen"):
+            demo.run_demo(root, scenario, SUNDAY, log=lambda line: None)

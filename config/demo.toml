@@ -26,6 +26,10 @@ clock = "14:30"
 # local.tickr.demo launchd job starts a fresh one, so the day stays inside the same window (open
 # position, before the last entry and the flatten) whenever the apps look at it.
 live_until = "15:40"
+# Most seconds from `tickr demo` starting to its API's first answer: it copies the committed
+# fixture (demo-fixture/, the day up to `clock`) and replays nothing. Read by tests/demo, which
+# check a start against it.
+answer_within_seconds = 10
 
 [market]
 # Half of the bid/ask spread of every simulated quote, USD.
@@ -86,8 +90,8 @@ today = [
   { symbol = "TRXQ", base = "26.00", volume = "7000", screener = "TOP_ACTIVES", legs = [["12:40", "12:55", "30.50", "40000"], ["13:10", "13:12", "24.00", "40000"]] },
   # And one more: the day is now close to its loss ceiling.
   { symbol = "HLQN", base = "11.00", volume = "9000", screener = "GAINERS", legs = [["13:20", "13:35", "14.20", "60000"], ["13:45", "13:47", "10.00", "60000"]] },
-  # The open position when the demo goes live: bought on the breakout into the room left, drifting
-  # up, then flattened by the operator just after [demo] clock (see commands), which gives the
+  # Bought on the breakout into the room left, drifting up, then flattened by the operator just
+  # before [demo] clock (see commands): the demo day's fixture ends flat, and the win gives the
   # live loop ([live] below) its room back.
   { symbol = "MVLD", base = "24.00", volume = "9000", screener = "GAINERS", legs = [["13:55", "14:10", "28.50", "40000"], ["14:10", "14:30", "29.20", "9000"]] },
   # Breaks out while MVLD is held: risk refuses it (one position at a time), so the live flow's
@@ -113,7 +117,7 @@ today = [
 # (contract CommandKind value) and symbol (flatten only; empty = everything).
 commands = [
   { at = "10:24", kind = "flatten", symbol = "VLNQ" },
-  { at = "14:30:20", kind = "flatten", symbol = "MVLD" },
+  { at = "14:29:30", kind = "flatten", symbol = "MVLD" },
 ]
 
 # Demo faults for QA, off by default (empty list). Each: New York time `at`, `kind` and a
@@ -157,6 +161,10 @@ past = [
 [live]
 # Length of one cycle, minutes (whole minutes).
 cycle_minutes = 10
+# Minutes before [demo] clock from which the simulated screeners list the symbols only the loop
+# moves (they have no legs of their own); before that the bot never sees them, so the fast part
+# of the day does not spend its time evaluating eleven idle symbols (startup time of the demo).
+listed_minutes_before_clock = 5
 # Each role moves one symbol per cycle: cycle k uses symbols[k % len(symbols)], so a symbol comes
 # back every len(symbols) cycles from the price it was left at. `legs` = [from minute, to minute
 # of the cycle, change of the price over the leg (ratio, "0.08" = +8 %), volume per minute]; the

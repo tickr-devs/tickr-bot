@@ -16,7 +16,7 @@ The bot job has one starter besides its schedule: near the flatten time the watc
 | test-alert | `local.tickr.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
 | nightly-fetch | `local.tickr.nightly-fetch` | `[runtime] nightly_fetch_start_local` on `launch_weekdays` (after the close); stops itself before the next open | never |
 | api | `local.tickr.api` | at login, always on, loopback only | launchd keeps it alive |
-| demo | `local.tickr.demo` | at login: `tickr demo`, the apps' "Demo day" (docs/demo.md); never talks to Webull, no credentials | after each clean exit at `[demo] live_until` (a fresh day); a refusal is not retried |
+| demo | `local.tickr.demo` | at login: `tickr demo`, the apps' "Demo day" (docs/demo.md); never talks to Webull, no credentials | after each clean exit at `[demo] live_until` (a fresh start from the committed `demo-fixture/`, answering within seconds); a refusal (such as a stale fixture) is not retried |
 
 Times in `[runtime]` are the **Mac's local time**. The calendar decides whether there is a
 session: on weekends, market closures and half days (unless `half_days_enabled`) preflight reports

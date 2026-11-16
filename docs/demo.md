@@ -9,7 +9,8 @@ with their simulated day results, account, past days for the day picker, perform
 the demo sessions, minute bars).
 
 ```
-.venv/bin/tickr demo          # or: python -m tickr.cli demo
+.venv/bin/tickr demo                   # start: serves within seconds (or: python -m tickr.cli demo)
+.venv/bin/tickr demo --build-fixture   # rebuild demo-fixture/ (a few minutes), commit the result
 ```
 
 What it does:
@@ -36,10 +37,34 @@ What it does:
   history, a seeded random walk ending at its `base`, so the 1M, 3M and 1Y charts and RSI 14
   have data. They are weekdays (holidays are not skipped) and are served on D charts only. The
   bot never reads them: its history reads are minute bars.
-- Plays the past sessions in `config/demo.toml` fast, then the demo day (today if it is a session,
-  otherwise the latest session before it) fast up to `[demo] clock`, then in real time with the
-  local API listening, until `[demo] live_until` (it then stops its bot and exits 0) or Ctrl-C.
-  About two to three minutes before the API is up.
+- Starts from the committed fixture (below): copies the day up to `[demo] clock` into `demo/data`,
+  runs the store's normal forward migrations on it, serves the API at once on the demo's clock
+  (within `[demo] answer_within_seconds`, 10; measured about 2 s), then runs the real bot in real
+  time from `clock` with the live loop until `[demo] live_until` (it then stops its bot and exits
+  0) or Ctrl-C. Nothing is replayed at start. The bot comes up as on any restart mid-day: it
+  reconciles with the (fresh, flat) simulated broker, and its records say every trade is closed.
+  The port is bound only then; before, a client is refused at once (the bot's `/demo` forward
+  answers 503). Log lines are written at once.
+
+## The fixture (`demo-fixture/`)
+
+`tickr demo --build-fixture` runs the past sessions in `config/demo.toml` fast, then the demo day
+(today if it is a session, otherwise the latest session before it) fast up to `[demo] clock`, with
+the real bot on the simulated exchange, and stores the demo's data folder as
+`demo-fixture/data.tar.xz` (about 0.8 MB; the prior-session bar cache and backups are left out, the
+bot rebuilds the first from the simulated feed) with `demo-fixture/manifest.json`: the demo day,
+the clock, the store schema version and a digest of the inputs. The day must end flat at the clock
+(MVLD is flattened at 14:29:30), so the live part starts on a fresh simulated broker. The demo day
+is the fixture's date, whatever today is.
+
+The fixture is stale, and `tickr demo` refuses to start (and `tests/demo` fails in CI), when one of
+these changes: the scenario (`config/demo.toml`), the demo code (`src/tickr/demo/`), the API
+contract the apps read (`src/tickr/api/contract.py`), or a strategy folder (`strategies/`, whose
+names and versions the records carry). Rebuild it in the same pull request with `tickr demo
+--build-fixture` and commit `demo-fixture/`. Engine, risk or runtime changes do not make it stale:
+it keeps the data format the apps read, not the decisions today's engine would make (owner
+2026-11-15). A store schema change does not either: its forward migration runs on the fixture at
+start, as on real data; a fixture newer than the code is refused.
 
 ## The live loop (`[live]`)
 
@@ -82,8 +107,8 @@ How it reaches the demo, with one click and nothing to type:
   installed with the other jobs, docs/operations.md) runs `tickr demo` at login. At `[demo]
   live_until` the demo exits 0 and launchd starts a fresh one (KeepAlive on a clean exit only), so
   whenever the apps look, the day is inside the same window: the live loop above, before the last
-  entry and the flatten. About three minutes in every eighty the demo is rebuilding and the apps
-  show "not reachable". It never talks to Webull (broker hosts point at `.invalid`, credential
+  entry and the flatten. A restart answers within seconds (the fixture), so the apps are about
+  never "not reachable". It never talks to Webull (broker hosts point at `.invalid`, credential
   names are unset), needs no credentials file, runs at Background priority, and touches only
   `demo/`. Why `tickr demo` and not a frozen copy of `demo/` served by the API alone: the frozen
   copy's status goes stale and its "today" is not the demo day, so Overview, positions and the live

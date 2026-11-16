@@ -1,0 +1,7 @@
+{
+  "inputs": "e4da284a22aa5b1ebe31745fa7dbb3b6c085095fe77cff27bbc63307c853dd1c",
+  "demo_day": "2026-11-13",
+  "clock": "14:30",
+  "schema": 4,
+  "built_by": "tickr demo --build-fixture"
+}

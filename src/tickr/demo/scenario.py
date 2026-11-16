@@ -81,6 +81,7 @@ class LoopCommand:
 @dataclass(frozen=True)
 class LiveLoop:
     cycle_minutes: int
+    listed_minutes_before_clock: int
     roles: tuple[LoopRole, ...]
     commands: tuple[LoopCommand, ...]
 
@@ -106,7 +107,11 @@ class Scenario:
     commands: tuple[DemoCommand, ...]
     past: tuple[tuple[SymbolPlan, ...], ...]
     faults: tuple[DemoFault, ...] = ()
+    answer_within_seconds: int = 0  # [demo]: start to the API's first answer (tests)
     live: LiveLoop | None = None  # already folded into `today` and `commands` by `load`
+    # (symbol, New York time "HH:MM:SS") of symbols only the live loop moves: the simulated
+    # screeners list them from then on, so the fast part of the day does not evaluate them.
+    listed: tuple[tuple[str, str], ...] = ()
 
 
 def _keys(where: str, raw: Any, keys: set[str]) -> dict[str, Any]:
@@ -233,8 +238,10 @@ def _minute(where: str, value: Any, cycle: int) -> int:
 
 
 def _loop(raw: Any, today: tuple[SymbolPlan, ...]) -> LiveLoop:
-    table = _keys("[live]", raw, {"cycle_minutes", "roles", "commands"})
+    table = _keys("[live]", raw, {"cycle_minutes", "listed_minutes_before_clock", "roles",
+                                  "commands"})
     cycle = _count("[live] cycle_minutes", table["cycle_minutes"])
+    listed = _count("[live] listed_minutes_before_clock", table["listed_minutes_before_clock"])
     if not isinstance(table["roles"], list) or not table["roles"]:
         raise ScenarioError("[live] roles must be a non-empty list")
     if not isinstance(table["commands"], list):
@@ -290,7 +297,7 @@ def _loop(raw: Any, today: tuple[SymbolPlan, ...]) -> LiveLoop:
         if role_name is not None and role_name not in names:
             raise ScenarioError(f"{where}.role {role_name!r} is not a role of [live] roles")
         commands.append(LoopCommand(at, kind, role_name))
-    return LiveLoop(cycle, tuple(roles), tuple(commands))
+    return LiveLoop(cycle, listed, tuple(roles), tuple(commands))
 
 
 def _wall(clock: str) -> datetime:
@@ -310,13 +317,18 @@ def loop_cycles(clock: str, live_until: str, cycle_minutes: int) -> int:
 def unroll(scenario: Scenario) -> Scenario:
     """The scenario with its live loop written out: from `clock` on, every whole cycle up to
     `live_until` moves each role's symbol of that cycle along the role's legs (prices as changes
-    of where the symbol is by then) and queues the cycle's commands. Pure and deterministic."""
+    of where the symbol is by then) and queues the cycle's commands. Symbols only the loop moves
+    (no legs of their own) are listed on their screener `listed_minutes_before_clock` before
+    `clock`, not all day. Pure and deterministic."""
     loop = scenario.live
     if loop is None:
         return scenario
     plans = {p.symbol: p for p in scenario.today}
     legs = {p.symbol: list(p.legs) for p in scenario.today}
     commands = list(scenario.commands)
+    listed_at = _plus(scenario.clock, -loop.listed_minutes_before_clock)
+    listed = tuple((symbol, listed_at) for symbol in dict.fromkeys(
+        s for role in loop.roles for s in role.symbols) if not plans[symbol].legs)
     for cycle in range(loop_cycles(scenario.clock, scenario.live_until, loop.cycle_minutes)):
         start = _plus(scenario.clock, cycle * loop.cycle_minutes)
         chosen: dict[str, str] = {}
@@ -341,7 +353,7 @@ def unroll(scenario: Scenario) -> Scenario:
     commands.sort(key=lambda c: _wall(c.at))
     return replace(scenario, today=tuple(replace(p, legs=tuple(legs[p.symbol]))
                                          for p in scenario.today),
-                   commands=tuple(commands))
+                   commands=tuple(commands), listed=listed)
 
 
 def load(path: Path) -> Scenario:
@@ -353,7 +365,7 @@ def load(path: Path) -> Scenario:
     plan = _keys("[scenario]", top["scenario"], {"today", "commands", "past", "faults"})
     demo = _keys("[demo]", top["demo"], {
         "root_dir", "environment", "observers", "provider",
-        "bot_start", "past_stop", "clock", "live_until"})
+        "bot_start", "past_stop", "clock", "live_until", "answer_within_seconds"})
     market = _keys("[market]", top["market"], {
         "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume", "texture_drift",
         "texture_pull", "texture_wick", "texture_move", "texture_move_cap", "texture_volume",
@@ -401,4 +413,6 @@ def load(path: Path) -> Scenario:
         past=tuple(_day(f"past[{n}]", day) for n, day in enumerate(plan["past"])),
         faults=tuple(_fault(f"faults[{n}]", f, today) for n, f in enumerate(plan["faults"])),
         live=_loop(top["live"], today),
+        answer_within_seconds=_count("[demo] answer_within_seconds",
+                                     demo["answer_within_seconds"]),
     ))
