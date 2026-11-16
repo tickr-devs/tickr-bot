@@ -104,7 +104,13 @@
     "verdict": "ENTER",
     "quantity": "200",
     "binding": null,
-    "binding_cause": "not proven by the record: the planned loss, the notional cap or the daily room"
+    "binding_cause": "not proven by the record: the planned loss, the notional cap or the daily room",
+    "binding_cause_codes": [
+      {
+        "code": "binding_not_proven",
+        "params": {}
+      }
+    ]
   },
   "api_version": 1
 }

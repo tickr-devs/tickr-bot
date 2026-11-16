@@ -6,5 +6,11 @@
   "unavailable_cause": "the bot has not written a status file",
   "summary": "Bot status unavailable: the bot has not written a status file. Entries are not possible.",
   "poll_seconds": "3",
-  "api_version": 1
+  "api_version": 1,
+  "unavailable_cause_codes": [
+    {
+      "code": "no_status_file",
+      "params": {}
+    }
+  ]
 }

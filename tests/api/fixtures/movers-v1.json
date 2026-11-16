@@ -41,5 +41,6 @@
       "watching": false
     }
   ],
-  "api_version": 1
+  "api_version": 1,
+  "rules_cause_codes": []
 }

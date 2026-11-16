@@ -12,7 +12,8 @@
     "last_at": "2026-11-20T15:00:00.123Z",
     "last_failed_at": "2026-11-20T22:00:00.123Z",
     "last_failed_error": "OperationalError",
-    "cause": null
+    "cause": null,
+    "cause_codes": []
   },
   "launchd": [
     {
@@ -61,12 +62,26 @@
     }
   ],
   "session": null,
-  "session_cause": "2026-11-21 is a weekend",
+  "session_cause": "WEEKEND: 2026-11-21 is a weekend",
   "nightly_fetch": {
     "finished_at": "2026-11-21T12:00:00.123Z",
     "last_day": null,
     "new_sessions": 0,
-    "cause": "stopped at 2026-11-23T12:30:00+00:00, before the next session ([backtest] nightly_stop_minutes_before_open); current is unchanged"
+    "cause": "stopped at 2026-11-23T12:30:00+00:00, before the next session ([backtest] nightly_stop_minutes_before_open); current is unchanged",
+    "cause_codes": [
+      {
+        "code": "nightly_stopped_before_open",
+        "params": {}
+      }
+    ]
   },
-  "api_version": 1
+  "api_version": 1,
+  "session_cause_codes": [
+    {
+      "code": "calendar_weekend",
+      "params": {
+        "day": "2026-11-21"
+      }
+    }
+  ]
 }

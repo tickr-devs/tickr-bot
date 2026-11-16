@@ -76,7 +76,8 @@
           }
         }
       ],
-      "decision": null
+      "decision": null,
+      "cause_codes": []
     },
     {
       "id": "20261114T150000Z-price-action-v1",
@@ -108,7 +109,8 @@
       "decision": {
         "verdict": "accepted",
         "at": "2026-11-15T12:00:00.123Z"
-      }
+      },
+      "cause_codes": []
     },
     {
       "id": "20261114T120000Z-price-action-v1",
@@ -129,16 +131,34 @@
       "cause": "4 changes proposed, at most 3 allowed",
       "idea": null,
       "judges": [],
-      "decision": null
+      "decision": null,
+      "cause_codes": [
+        {
+          "code": "too_many_changes",
+          "params": {
+            "count": "4",
+            "max": "3"
+          }
+        }
+      ]
     }
   ],
   "unreadable": [
     {
       "id": "20261113T180000Z-price-action-v1",
-      "cause": "no run.json (a run written before the apps read runs, or an interrupted one)"
+      "cause": "no run.json (a run written before the apps read runs, or an interrupted one)",
+      "cause_codes": [
+        {
+          "code": "run_file_missing",
+          "params": {
+            "file": "run.json"
+          }
+        }
+      ]
     }
   ],
   "awaiting_review": 1,
   "cause": null,
-  "api_version": 1
+  "api_version": 1,
+  "cause_codes": []
 }

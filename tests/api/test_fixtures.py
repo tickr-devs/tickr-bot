@@ -289,7 +289,7 @@ def documents() -> dict[str, object]:
             ReconcileJobV1(Decimal("10"), T0 + timedelta(days=4, hours=6), None),
             BackupJobV1(T0 + timedelta(days=4), T0 + timedelta(days=4, hours=7),
                         "OperationalError", None),
-            _LAUNCHD, None, "2026-11-21 is a weekend",
+            _LAUNCHD, None, "WEEKEND: 2026-11-21 is a weekend",
             # Friday night stopped before the 429 window cleared: the data still ends Thursday.
             NightlyFetchJobV1(T0 + timedelta(days=4, hours=21), None, 0,
                               "stopped at 2026-11-23T12:30:00+00:00, before the next session "

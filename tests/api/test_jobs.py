@@ -66,7 +66,9 @@ def test_without_status_or_database_only_config_and_calendar_answer(cfg):
         ("watchdog", runtime.watchdog_start_local, list(runtime.launch_weekdays)),
         ("nightly-fetch", runtime.nightly_fetch_start_local, list(runtime.launch_weekdays))]
     assert body["nightly_fetch"] == {"finished_at": None, "last_day": None,
-                                     "new_sessions": None, "cause": NIGHTLY_NEVER_RAN}
+                                     "new_sessions": None, "cause": NIGHTLY_NEVER_RAN,
+                                     "cause_codes": [{"code": "nightly_never_ran",
+                                                      "params": {}}]}
     session = body["session"]
     assert session["day"] == MONDAY.isoformat() and body["session_cause"] is None
     close = datetime(2026, 11, 16, 21, 0, tzinfo=UTC)

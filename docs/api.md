@@ -195,8 +195,14 @@ every build, so the two always agree; a reader of a document without it rebuilds
 way. Siblings: `entry_cause_codes` (positions, `trades_today`, day-v1 `trades`),
 `prices_after_cause_codes`, `overshoot_cause_codes` (day-v1 trades, skipped signals),
 `cause_codes` (each `prices_after` point, `what_if`, observer `trades`, `clean`, performance
-`exclusions`, error-v1, lab-replay-v1 and its `compare` and `versions`, trade-whatif-v1), `text_codes` (`clean.causes[]`), `result_cause_codes` / `trades_cause_codes`
-(observers), `closeness_cause_codes` / `quote_age_cause_codes` (watching), and one per
+`exclusions`, error-v1, lab-replay-v1 and its `compare` and `versions`, trade-whatif-v1,
+chart-v1, jobs-v1 `backup` and `nightly_fetch`, advisor-runs-v1 and each of its `runs` and
+`unreadable`, each status `recent_commands` record), `text_codes` (`clean.causes[]`),
+`result_cause_codes` / `trades_cause_codes` (observers), `closeness_cause_codes` /
+`quote_age_cause_codes` and `latest_size.binding_cause_codes` (watching),
+`rules_cause_codes` (movers), `session_cause_codes` (jobs), `unavailable_cause_codes`
+(status-response), `change_cause_codes` / `excluded_cause_codes` (flow `chips`),
+`agreement_cause_codes` / `fences_cause_codes` (flow `reconcile`), and one per
 performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` New York):
 - entry send: `entry_orders_count` {count}, `no_intent_row`, `never_attempted`, `no_fill_row`,
   `journal_unreadable` {detail}, `not_read`, `not_computed`;
@@ -240,6 +246,42 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
 - guard and pairing: `host_not_allowed` {host}, `origin_not_allowed` {origin},
   `no_phone_paired`, `token_required`, `token_not_paired`, `no_pairing_waiting`,
   `pairing_expired`, `pairing_code_wrong`;
+- fast movers: `no_fast_mover_rules`;
+- the session calendar and the day's session: `calendar_weekend` {day}, `calendar_holiday`
+  {day}, `calendar_not_covered` {day}, `calendar_invalid` {detail}, `calendar_naive_time`
+  {detail}, `calendar_invalid_offset` {detail}, `half_day_off` {day};
+- jobs: `no_database`, `database_unreadable` {error}, `no_backup`, `nightly_never_ran`,
+  `nightly_file_unreadable` {error}; the nightly fetch's own refusals `nightly_in_session`,
+  `nightly_low_disk` {free_mb, min_mb}, `nightly_no_pool`, `nightly_pool_empty`,
+  `nightly_too_many_missing` {count, day, max}, `nightly_no_session_ahead` {days, day},
+  `nightly_stopped_before_open`, and any other as `nightly_refused` {detail} (the whole text);
+- the bot's status and account files: `no_status_file`, `status_file_invalid` {detail},
+  `status_from_future`, `account_file_invalid` {detail}, `past_day_reconciliation`,
+  `past_day_status`, `broker_read_other_day` {day}, `status_other_day` {day};
+- flow chips: `row_without_price`, `row_without_pre_close`, `price_not_number` {value},
+  `pre_close_not_number` {value}, `pre_close_not_positive` {value}, and the universe filter's
+  `universe_conflicting_rows`, `universe_exchange`, `universe_currency`,
+  `universe_type_unknown`, `universe_type` (each {measured});
+- latest size: `binding_not_proven`; chart: `no_chart_bars` {interval, source, symbol, range};
+- the AI advisor: `no_advisor_runs`, `proposals_unreadable` {error}, an unreadable run's
+  `run_folder_misnamed`, `run_folder_unreadable` {error}, `run_file_missing` {file},
+  `run_file_invalid` {file, error}, `run_file_wrong_schema` {file, schema}; a refused answer's
+  `answer_not_json` {detail}, `answer_off_schema`, `changes_not_list`, `too_many_changes`
+  {count, max}, `change_malformed` {detail}, `change_twice`, `change_fixed_section`,
+  `change_unknown_key` (each {section, key}), `change_not_toml`, `change_same_value` (each
+  {section, key, value}), `change_other_kind` {section, key, value, kind, current_kind},
+  `answer_empty`, `idea_off_schema`, `idea_incomplete` {fields}, `idea_name_wrong` {name},
+  `version_not_whole` {file, version}, `no_strategy_named` {strategy, folder}, the strategy
+  loader's codes above, and any other as `advisor_refused` {detail} (the whole text; also the
+  code of a run that was not refused, whose `cause` repeats the advisor's no-change reason);
+- operator commands: `command_after_stop` {command}, `close_in_progress`, `trades_still_open`
+  {count}, `no_open_position` {symbol}, `close_refused_before` {trades},
+  `close_held_outside_session` {trades}, `close_not_sent_now` (with the close refusal's values),
+  `nothing_open`, `entry_cancels_requested` {count}, `step_done`, `steps_done` {steps},
+  `steps_not_run` {steps}, `every_step_ran`, a refused command file's
+  `command_file_unreadable` {detail}, `command_file_misnamed`, `command_from_future`
+  {seconds}, `command_expired` {seconds, limit}; an emergency's step is `command_step` {step,
+  step_code, and the step code's own values}: the step (a command kind) and what it did;
 - any of them: `display_failed` {error, detail} (a display part failed unexpectedly).
 `{detail}` is untranslated text (an error message, a calendar's own words). A check's `note` is
 the strategy's own fixed text per rule and has no code: translate it by `rule` and the exact

@@ -168,7 +168,8 @@ def test_latest_size_is_the_newest_recorded_quantity_with_its_structured_binding
     assert body["latest_size"] == {
         "symbol": "ABCD", "at": "2026-11-16T15:00:00.000Z",
         "strategy": {"name": ACTIVE[0], "version": ACTIVE[1]}, "verdict": "ENTER",
-        "quantity": "200", "binding": None, "binding_cause": contract.BINDING_NOT_RECORDED}
+        "quantity": "200", "binding": None, "binding_cause": contract.BINDING_NOT_RECORDED,
+        "binding_cause_codes": [{"code": "binding_not_proven", "params": {}}]}
     risk = check("0.335", ">", "0", contract.SIZING_RISK_RULE)
     risk = Check(risk.rule, risk.measured, risk.operator, risk.threshold, True)
     records = (_watch("ABCD", 0, sized), _watch("QRST", 4, PASS, room, risk, small))
@@ -283,18 +284,22 @@ def test_flow_stages_on_a_fake_broker_day(api, cfg):
         {"symbol": "ABCD", "sources": ["GAINERS", "TOP_ACTIVES"], "change_pct": "12.40",
          "change_cause": None, "excluded_cause": None,
          "ranks": [{"kind": "GAINERS", "rank": 1}, {"kind": "TOP_ACTIVES", "rank": 2}],
-         "price": "11.24"},
+         "price": "11.24", "change_cause_codes": [], "excluded_cause_codes": []},
         {"symbol": "SPY", "sources": ["GAINERS", "TOP_ACTIVES"], "change_pct": "10.00",
          "change_cause": None,
          "excluded_cause": "SECURITY_TYPE_NOT_ALLOWED: ETF",
          "ranks": [{"kind": "GAINERS", "rank": 2}, {"kind": "TOP_ACTIVES", "rank": 1}],
-         "price": "11.00"},
+         "price": "11.00", "change_cause_codes": [],
+         "excluded_cause_codes": [{"code": "universe_type", "params": {"measured": "ETF"}}]},
         {"symbol": "WXYZ", "sources": ["GAINERS"], "change_pct": None,
          "change_cause": "the captured row has no pre_close", "excluded_cause": None,
-         "ranks": [{"kind": "GAINERS", "rank": 2}], "price": "11.00"},
+         "ranks": [{"kind": "GAINERS", "rank": 2}], "price": "11.00",
+         "change_cause_codes": [{"code": "row_without_pre_close", "params": {}}],
+         "excluded_cause_codes": []},
         {"symbol": "EFGH", "sources": ["LOSERS"], "change_pct": "-8.05",
          "change_cause": None, "excluded_cause": None,
-         "ranks": [{"kind": "LOSERS", "rank": 1}], "price": "9.195"}]
+         "ranks": [{"kind": "LOSERS", "rank": 1}], "price": "9.195", "change_cause_codes": [],
+         "excluded_cause_codes": []}]
     stages = {s["stage"]: (s["count"], s["symbols"]) for s in body["stages"]}
     assert [s["stage"] for s in body["stages"]] == [s.value for s in contract.FlowStage]
     assert stages == {
@@ -312,7 +317,8 @@ def test_flow_stages_on_a_fake_broker_day(api, cfg):
         "mismatch": None, "fences_cause": None,
         "fences": [{"kind": "foreign-position:EFGH", "since": "2026-11-16T15:00:00.123Z",
                     "text": "position not opened by this bot", "code": "foreign_position",
-                    "params": {}}]}
+                    "params": {}}],
+        "agreement_cause_codes": [], "fences_cause_codes": []}
 
 
 def test_flow_reconcile_mismatch_and_missing_or_old_files(api, cfg):
@@ -320,7 +326,9 @@ def test_flow_reconcile_mismatch_and_missing_or_old_files(api, cfg):
     assert reconcile == {"agreement": None,
                          "agreement_cause": "the bot has not written an account file",
                          "read_at": None, "mismatch": None, "fences": None,
-                         "fences_cause": "the bot has not written a status file"}
+                         "fences_cause": "the bot has not written a status file",
+                         "agreement_cause_codes": [{"code": "no_account_file", "params": {}}],
+                         "fences_cause_codes": [{"code": "no_status_file", "params": {}}]}
     contract.write_account(api.settings.account_path, account(
         read_at=BAR, matches_records=False, mismatch="foreign-position:EFGH: not ours"))
     contract.write_status(api.settings.status_path,
@@ -328,8 +336,9 @@ def test_flow_reconcile_mismatch_and_missing_or_old_files(api, cfg):
     reconcile = _get(api, "/flow", "flow-v1")["reconcile"]
     assert (reconcile["agreement"], reconcile["mismatch"]) == (
         "mismatch", "foreign-position:EFGH: not ours")
-    assert (reconcile["fences"], reconcile["fences_cause"]) == (
-        None, "the latest status was written on 2026-11-15")
+    assert (reconcile["fences"], reconcile["fences_cause"], reconcile["fences_cause_codes"]) == (
+        None, "the latest status was written on 2026-11-15",
+        [{"code": "status_other_day", "params": {"day": "2026-11-15"}}])
 
 
 def test_flow_empty_and_past_day(api, cfg):

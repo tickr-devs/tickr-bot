@@ -12,7 +12,8 @@
     "verdict": "WATCH",
     "quantity": "37",
     "binding": "daily_room",
-    "binding_cause": null
+    "binding_cause": null,
+    "binding_cause_codes": []
   },
   "api_version": 1
 }

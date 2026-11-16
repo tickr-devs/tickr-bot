@@ -12,7 +12,8 @@
     "last_at": "2026-11-16T13:12:09.123Z",
     "last_failed_at": null,
     "last_failed_error": null,
-    "cause": null
+    "cause": null,
+    "cause_codes": []
   },
   "launchd": [
     {
@@ -74,7 +75,9 @@
     "finished_at": "2026-11-14T01:42:07.000Z",
     "last_day": "2026-11-13",
     "new_sessions": 1,
-    "cause": null
+    "cause": null,
+    "cause_codes": []
   },
-  "api_version": 1
+  "api_version": 1,
+  "session_cause_codes": []
 }

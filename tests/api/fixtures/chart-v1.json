@@ -34,5 +34,6 @@
       "extended": false
     }
   ],
-  "api_version": 1
+  "api_version": 1,
+  "cause_codes": []
 }

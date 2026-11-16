@@ -330,3 +330,254 @@ def test_every_refusal_the_apps_show_has_a_code(text):
     """So the apps say it in the person's language (apps/scripts/kit_reason_strings.py gives
     every code an English and a Russian sentence: tests/test_api_codes.py)."""
     assert [r.code for r in reasons.prose_reasons(text)] != [reasons.UNRECOGNIZED]
+
+
+# ---------------------------------------------------------------- causes the apps show as text
+
+SRC = API.parent
+# One example of every cause the API can put in these fields, as the bot writes it.
+FIELD_SAMPLES = {
+    "movers rules_cause": (
+        "the active strategy defines no fast movers ([spike] in its strategy.toml)",),
+    "jobs session_cause": (
+        "WEEKEND: 2026-11-21 is a weekend",
+        "HOLIDAY: 2026-11-26 is a market closure (https://www.nyse.com/markets/hours-calendars)",
+        "OUT_OF_COVERAGE: 2031-01-02 is not covered by any file",
+        "CALENDAR_INVALID: no calendar files in calendar",
+        "NAIVE_TIME: naive datetime datetime.datetime(2026, 11, 16, 10, 0)",
+        "INVALID_OFFSET: last entry 15:50:00 is not before flatten 15:45:00",
+        "no session 2026-11-27: half day, half_days_enabled = false",
+    ),
+    "jobs backup cause": (
+        "the bot has not created its database yet",
+        "database unreadable (DatabaseError)",
+        "no backup recorded yet",
+    ),
+    "jobs nightly cause": (
+        "the nightly fetch has not run yet",
+        "nightly.json unreadable (JSONDecodeError)",
+        "refused during the regular session",
+        "1200 MB free, below [backtest] nightly_min_free_disk_mb 5000",
+        "no current/pool.csv yet: pass --seed with a folder made by fetch-all",
+        "/data/backtest/current/pool.csv is empty",
+        "12 sessions missing after 2026-10-30, more than [backtest] nightly_max_new_sessions 5: "
+        "run fetch-all instead",
+        "no session within 10 days after 2026-12-24",
+        "stopped at 2026-11-17T09:00:00-05:00, before the next session ([backtest] "
+        "nightly_stop_minutes_before_open); current is unchanged",
+    ),
+    "risk unavailable_cause": (
+        "the bot has not written a status file",
+        "status file is invalid (status-v1: missing field 'run_id')",
+        "status file is dated in the future",
+    ),
+    "flow agreement_cause and fences_cause": (
+        "only the latest reconciliation is kept; it is not recorded per day",
+        "only the latest status is kept; it is not recorded per day",
+        "the bot has not written an account file",
+        "account file is invalid (account-v1: missing field 'read_at')",
+        "the latest broker read was on 2026-11-13",
+        "the bot has not written a status file",
+        "status file is invalid (status-v1: missing field 'run_id')",
+        "the latest status was written on 2026-11-13",
+    ),
+    "flow change_cause": (
+        "the captured row has no price",
+        "the captured row has no pre_close",
+        "the captured price is not a number: 'n/a'",
+        "the captured pre_close is not a number: 'NaN'",
+        "the captured pre_close is not positive: 0",
+    ),
+    "flow excluded_cause": (
+        "CONFLICTING_ROWS: listed under an instrument with conflicting rows",
+        "CONFLICTING_ROWS: 1/ABCD/NAS/USD; 2/ABCD/NYSE/USD; symbol ABCD under several "
+        "instrument ids",
+        "EXCHANGE_NOT_ALLOWED: OTC",
+        "CURRENCY_NOT_ALLOWED: CAD",
+        "SECURITY_TYPE_UNKNOWN: missing",
+        "SECURITY_TYPE_NOT_ALLOWED: ETF",
+    ),
+    "flow binding_cause": (
+        "not proven by the record: the planned loss, the notional cap or the daily room",),
+    "chart cause": ("no 5m bars from webull for ABCD in range 1d",),
+    "advisor runs cause": (
+        "no advisor run yet: the proposals folder does not exist",
+        "proposals folder unreadable (PermissionError)",
+    ),
+    "advisor unreadable run cause": (
+        "the folder name is not <UTC time>-<strategy name>",
+        "folder unreadable (PermissionError)",
+        "no run.json (a run written before the apps read runs, or an interrupted one)",
+        "run.json: KeyError: 'summary'",
+        "judge-a.json: JSONDecodeError",
+        "decision.json is not tickr-advisor-decision-v1",
+    ),
+    "advisor run cause": (
+        "answer is not JSON: Expecting value",
+        "answer does not match the proposal schema",
+        "changes is not a list",
+        "5 changes proposed, at most 3 allowed",
+        "malformed change: {'key': 'x'}",
+        "[entry] min_volume changed twice",
+        "[strategy] version: [strategy] name and version are not the model's to change",
+        "[entry] nope: no such key in the base strategy.toml",
+        "[entry] min_volume: not a TOML value: 'abc'",
+        "[entry] min_volume: new value 'x' is a string, current is integer",
+        "[entry] min_volume: new value equals the current value 100",
+        "no changes, no idea and no no_change_reason",
+        "new_strategy_idea does not match the schema",
+        "new_strategy_idea lacks hypothesis, entry_rule",
+        "new_strategy_idea name 'Idea' is not like 'name-v1'",
+        "/repo/strategies/x/strategy.toml: version 'v2' is not a whole number",
+        "no strategy folder named price-action under /repo/strategies",
+        "[entry] min_volume changed twice; [entry] nope: no such key in the base strategy.toml",
+        "my-idea-v2: no module for strategy 'my-idea' in strategy_modules",
+    ),
+    "command record cause": (
+        "read after stop-bot 7c1e: the bot is stopping",
+        "expired: requested 400 s ago (limit 300 s); steps done: entry-stop-on, "
+        "cancel-own-orders; not run: flatten",
+        "requested 5 s in the future; steps done: entry-stop-on; not run: cancel-own-orders, "
+        "flatten",
+        "expired: requested 400 s ago (limit 300 s); steps done: entry-stop-on, "
+        "cancel-own-orders, flatten; not run: none",
+        "unreadable command file: command-v1: missing field 'kind'",
+        "file name does not match command_id",
+        "a close is in progress; send stop-bot again after it completes",
+        "2 trade(s) open or entering; flatten first (or send emergency), then stop-bot",
+        "no open position in ABCD",
+        "closing order refused before for t1, t2: look in the Webull app, then clear the fence",
+        "a close of t1 was due outside the regular session and was not sent (fence "
+        "market-closed); the stop stays: close it in the Webull app, or clear the fence in the "
+        "regular session",
+        "no closing order is sent now: before the regular open 09:30 ET; the stops stay. Close "
+        "the position in the Webull app",
+        "nothing open",
+        "entry-stop-on: done; cancel-own-orders: 2 entry cancel(s) requested; flatten: nothing "
+        "open",
+        "flatten: a close of t1 was due outside the regular session and was not sent (fence "
+        "market-closed); the stop stays: close it in the Webull app, or clear the fence in the "
+        "regular session",
+        "flatten: no closing order is sent now: at or after 15:58:00 ET, 120 s before the "
+        "regular close 16:00 ET of 2026-11-16; the stops stay. Close the position in the Webull "
+        "app",
+    ),
+}
+SAMPLES = tuple(s for samples in FIELD_SAMPLES.values() for s in samples)
+
+
+@pytest.mark.parametrize("text", SAMPLES)
+def test_every_cause_these_fields_show_has_a_code(text):
+    """So the apps say it in the person's language (an English and a Russian sentence per code:
+    tests/test_api_codes.py), never in the bot's words."""
+    codes = [r.code for r in reasons.prose_reasons(text)]
+    assert codes and reasons.UNRECOGNIZED not in codes
+
+
+def test_an_emergency_step_carries_its_own_code():
+    found = reasons.prose_reasons("entry-stop-on: done; flatten: no open position in ABCD")
+    assert found == (
+        reasons.Reason("command_step", {"step": "entry-stop-on", "step_code": "step_done"}),
+        reasons.Reason("command_step", {"step": "flatten", "step_code": "no_open_position",
+                                        "symbol": "ABCD"}))
+    assert reasons.prose_reasons("flatten: anything else") == (reasons.Reason("unrecognized"),)
+
+
+def test_a_quoted_refusal_in_no_known_shape_reads_as_the_fields_fallback():
+    """A nightly fetch or an advisor run can quote any refusal of a deeper layer: the whole
+    text becomes the fallback's `detail`, so the apps still put it in a sentence."""
+    deep = "fetch: the history source answered 503"
+    assert reasons.prose_reasons_or(deep, reasons.NIGHTLY_REFUSED) == (
+        reasons.Reason(reasons.NIGHTLY_REFUSED, {"detail": deep}),)
+    assert reasons.prose_reasons_or("", reasons.ADVISOR_REFUSED) == ()
+    assert reasons.prose_reasons_or("nothing open", reasons.ADVISOR_REFUSED) == (
+        reasons.Reason("nothing_open"),)
+    run = contract.to_jsonable(contract.NightlyFetchJobV1(None, None, None, deep))
+    assert run["cause_codes"] == [{"code": reasons.NIGHTLY_REFUSED, "params": {"detail": deep}}]
+
+
+# Where each field's causes are written: (file under src/tickr, function or constant, the calls,
+# statements or assignment the texts are in; empty = the whole function).
+CAUSE_WRITERS = (
+    ("api/symbols.py", "NO_RULES", ()),
+    ("api/jobs.py", "NO_DATABASE", ()), ("api/jobs.py", "NO_BACKUP", ()),
+    ("api/jobs.py", "NIGHTLY_NEVER_RAN", ()),
+    ("api/jobs.py", "_session", ()), ("api/jobs.py", "_nightly", ("NightlyFetchJobV1",)),
+    ("api/jobs.py", "_from_database", ("BackupJobV1",)),
+    ("backtest/nightly.py", "run_nightly", ("BacktestError",)),
+    ("backtest/nightly.py", "_night", ("BacktestError",)),
+    ("backtest/nightly.py", "next_open", ("BacktestError",)),
+    ("backtest/nightly.py", "check", ("BacktestError",)),
+    ("api/server.py", "status_response", ()),
+    ("api/flow.py", "PAST_DAY", ()), ("api/flow.py", "CONFLICTING", ()),
+    ("api/flow.py", "change_pct", ()), ("api/flow.py", "reconcile", ()),
+    ("api/contract.py", "BINDING_NOT_RECORDED", ()),
+    ("api/chart.py", "answer", ("=cause",)),
+    ("api/advisor.py", "NO_FOLDER", ()), ("api/advisor.py", "advisor_document", ("AdvisorRunsV1",)),
+    ("api/advisor.py", "read_run", ("Unreadable",)), ("api/advisor.py", "_json", ("Unreadable",)),
+    ("advisor/proposal.py", "parse_reply", ("AdvisorError", "append")),
+    ("advisor/proposal.py", "_idea", ("append",)),
+    ("advisor/proposal.py", "next_version", ("AdvisorError",)),
+    ("runtime/service.py", "CLOSE_IN_PROGRESS", ()),
+    ("runtime/service.py", "process_commands", ("_record",)),
+    ("runtime/service.py", "_close_interrupted", ("_record",)),
+    ("runtime/service.py", "_flatten_rows", ("return",)),
+    ("runtime/service.py", "_stop_bot", ("_record",)),
+    ("runtime/service.py", "_emergency", ("_record", "step")),
+    ("api/contract.py", "read_commands", ("InboxItem",)),
+)
+_LETTER = re.compile(r"[A-Za-z]")
+
+
+# Texts in those calls that are not a cause: the exit reason an emergency's flatten records.
+NOT_CAUSES = {"operator-emergency"}
+
+
+def _pieces(node) -> list[str]:
+    """The literal text pieces under `node` (an f-string's constant parts, a `str.format`
+    template's parts), keys of a lookup (`body["cause"]`) left out."""
+    import ast
+    keys = {id(n.slice) for n in ast.walk(node) if isinstance(n, ast.Subscript)}
+    return [piece for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in keys
+            for piece in n.value.split("{}")
+            if _LETTER.search(piece) and piece not in NOT_CAUSES]
+
+
+def _written(path: Path, name: str, where: tuple[str, ...]) -> list[str]:
+    import ast
+    tree = ast.parse(path.read_text("utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return _pieces(node.value)
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            body = node.body[1:] if ast.get_docstring(node) else node.body
+            if not where:
+                return [p for statement in body for p in _pieces(statement)]
+            found = []
+            for inner in (n for statement in body for n in ast.walk(statement)):
+                if isinstance(inner, ast.Call):
+                    func = inner.func
+                    called = func.attr if isinstance(func, ast.Attribute) else getattr(
+                        func, "id", "")
+                    if called in where:
+                        found += [p for arg in inner.args for p in _pieces(arg)]
+                elif isinstance(inner, ast.Return) and "return" in where and inner.value:
+                    found += _pieces(inner.value)
+                elif isinstance(inner, ast.Assign) and any(
+                        isinstance(t, ast.Name) and f"={t.id}" in where for t in inner.targets):
+                    found += _pieces(inner.value)
+            return found
+    raise AssertionError(f"{path.name}: no {name}")
+
+
+def test_every_written_cause_of_these_fields_has_a_sample():
+    """A new cause written in one of these fields needs a sample above (and so a code)."""
+    missing = []
+    for file, name, where in CAUSE_WRITERS:
+        pieces = _written(SRC / file, name, where)
+        assert pieces, (file, name)
+        missing += [(file, name, piece) for piece in pieces
+                    if not any(piece.strip() in sample for sample in SAMPLES)]
+    assert missing == []

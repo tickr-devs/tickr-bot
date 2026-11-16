@@ -41,7 +41,19 @@
     "read_at": null,
     "mismatch": null,
     "fences": null,
-    "fences_cause": "only the latest status is kept; it is not recorded per day"
+    "fences_cause": "only the latest status is kept; it is not recorded per day",
+    "agreement_cause_codes": [
+      {
+        "code": "past_day_reconciliation",
+        "params": {}
+      }
+    ],
+    "fences_cause_codes": [
+      {
+        "code": "past_day_status",
+        "params": {}
+      }
+    ]
   },
   "api_version": 1
 }

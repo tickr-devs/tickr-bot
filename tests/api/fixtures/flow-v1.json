@@ -21,7 +21,9 @@
           "rank": 11
         }
       ],
-      "price": "4.12"
+      "price": "4.12",
+      "change_cause_codes": [],
+      "excluded_cause_codes": []
     },
     {
       "symbol": "SPY",
@@ -37,7 +39,16 @@
           "rank": 1
         }
       ],
-      "price": null
+      "price": null,
+      "change_cause_codes": [],
+      "excluded_cause_codes": [
+        {
+          "code": "universe_type",
+          "params": {
+            "measured": "ETF"
+          }
+        }
+      ]
     },
     {
       "symbol": "WXYZ",
@@ -53,7 +64,14 @@
           "rank": 7
         }
       ],
-      "price": null
+      "price": null,
+      "change_cause_codes": [
+        {
+          "code": "row_without_pre_close",
+          "params": {}
+        }
+      ],
+      "excluded_cause_codes": []
     },
     {
       "symbol": "EFGH",
@@ -69,7 +87,9 @@
           "rank": 2
         }
       ],
-      "price": "0.8125"
+      "price": "0.8125",
+      "change_cause_codes": [],
+      "excluded_cause_codes": []
     }
   ],
   "stages": [
@@ -158,7 +178,9 @@
         "params": {}
       }
     ],
-    "fences_cause": null
+    "fences_cause": null,
+    "agreement_cause_codes": [],
+    "fences_cause_codes": []
   },
   "api_version": 1
 }

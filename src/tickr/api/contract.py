@@ -32,8 +32,15 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from tickr.advisor_files import OwnerVerdict
 from tickr.advisor_files import Verdict as HoldoutVerdict
+from tickr.api.reasons import (
+    ADVISOR_REFUSED,
+    NIGHTLY_REFUSED,
+    Reason,
+    prose_reasons,
+    prose_reasons_or,
+    refusal_params,
+)
 from tickr.api.reasons import UNRECOGNIZED as UNRECOGNIZED_CODE
-from tickr.api.reasons import Reason, prose_reasons, refusal_params
 from tickr.data.base import ScreenerKind
 from tickr.replay.engine import ExitReason
 from tickr.research.records import Admission, DecisionRecord
@@ -89,20 +96,24 @@ Params = dict[str, str]
 # A cause's code and parameters ({code, params}; docs/api.md, "Reason codes").
 ReasonV1 = Reason
 REASONS_OF = "reasons_of"
+REASONS_OTHERWISE = "reasons_otherwise"
 
 
-def _reasons_of(source: str) -> Any:
+def _reasons_of(source: str, otherwise: str | None = None) -> Any:
     """`<source>_codes`: the codes of the cause in field `source`. Computed only when a document
     is encoded (`to_jsonable`), never when one is built or read, so no path that builds these
     records (the daily-loss check reads `DayTrade`s) ever parses a cause; the attribute itself
-    stays empty. Added after version 1 shipped."""
-    return field(init=False, default=(), metadata={REASONS_OF: source, ADDED_AFTER_V1: True})
+    stays empty. `otherwise`: the code of a cause in no known shape, for a field whose writer
+    quotes a deeper layer's refusals (reasons.prose_reasons_or). Added after version 1 shipped."""
+    return field(init=False, default=(), metadata={REASONS_OF: source, ADDED_AFTER_V1: True,
+                                                   REASONS_OTHERWISE: otherwise})
 
 
-def _codes_for(document: Any, source: str) -> tuple[Reason, ...]:
+def _codes_for(document: Any, source: str, otherwise: str | None) -> tuple[Reason, ...]:
     """Display only: a reason table that fails on a text shows it unrecognized, never raises."""
     try:
-        return prose_reasons(getattr(document, source))
+        text = getattr(document, source)
+        return prose_reasons(text) if otherwise is None else prose_reasons_or(text, otherwise)
     except Exception:  # noqa: BLE001 - see docstring
         return (Reason(UNRECOGNIZED_CODE),)
 
@@ -287,6 +298,7 @@ class CommandRecord:
     outcome: CommandOutcome
     cause: str | None
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class StatusV1:
@@ -438,6 +450,7 @@ class StatusResponseV1:
     poll_seconds: Decimal
     api_version: int = _const(API_VERSION)
 
+    unavailable_cause_codes: tuple[ReasonV1, ...] = _reasons_of("unavailable_cause")
 
 @dataclass(frozen=True)
 class AccountResponseV1:
@@ -730,6 +743,7 @@ class ChartV1:
     bars: tuple[ChartBarV1, ...]
     api_version: int = _const(API_VERSION)
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 # ---------------------------------------------------------------- settings (read-only)
 
@@ -841,6 +855,7 @@ class BackupJobV1:
     last_failed_error: str | None  # the error's type name, never its text (it may hold paths)
     cause: str | None
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class SessionTimesV1:
@@ -983,6 +998,7 @@ class AdvisorRunV1:
     judges: tuple[AdvisorJudgeV1, ...]  # by candidate name
     decision: AdvisorDecisionV1 | None  # null = awaiting the owner's review
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause", ADVISOR_REFUSED)
 
 @dataclass(frozen=True)
 class AdvisorUnreadableV1:
@@ -990,6 +1006,8 @@ class AdvisorUnreadableV1:
 
     id: str
     cause: str
+
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 
 @dataclass(frozen=True)
@@ -1005,6 +1023,7 @@ class AdvisorRunsV1:
     cause: str | None
     api_version: int = _const(API_VERSION)
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
 class NightlyFetchJobV1:
@@ -1018,6 +1037,7 @@ class NightlyFetchJobV1:
     new_sessions: int | None
     cause: str | None
 
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause", NIGHTLY_REFUSED)
 
 @dataclass(frozen=True)
 class JobsV1:
@@ -1038,6 +1058,7 @@ class JobsV1:
     nightly_fetch: NightlyFetchJobV1
     api_version: int = _const(API_VERSION)
 
+    session_cause_codes: tuple[ReasonV1, ...] = _reasons_of("session_cause")
 
 # ---------------------------------------------------------------- lab replay
 
@@ -1680,6 +1701,8 @@ class FlowChipV1:
     price: Decimal | None = _added_later(None)
     """The price in the latest captured row that listed it; null when that row has none."""
 
+    change_cause_codes: tuple[ReasonV1, ...] = _reasons_of("change_cause")
+    excluded_cause_codes: tuple[ReasonV1, ...] = _reasons_of("excluded_cause")
 
 @dataclass(frozen=True)
 class FlowStageV1:
@@ -1709,6 +1732,8 @@ class FlowReconcileV1:
     fences: tuple[Fence, ...] | None
     fences_cause: str | None
 
+    agreement_cause_codes: tuple[ReasonV1, ...] = _reasons_of("agreement_cause")
+    fences_cause_codes: tuple[ReasonV1, ...] = _reasons_of("fences_cause")
 
 @dataclass(frozen=True)
 class FlowV1:
@@ -1767,6 +1792,7 @@ class LatestSizeV1:
     binding: SizeBinding | None
     binding_cause: str | None
 
+    binding_cause_codes: tuple[ReasonV1, ...] = _reasons_of("binding_cause")
 
 @dataclass(frozen=True)
 class WatchingV1:
@@ -2032,6 +2058,7 @@ class MoversV1:
     movers: tuple[FastMoverV1, ...]
     api_version: int = _const(API_VERSION)
 
+    rules_cause_codes: tuple[ReasonV1, ...] = _reasons_of("rules_cause")
 
 # ---------------------------------------------------------------- performance (read-only)
 
@@ -2154,7 +2181,8 @@ def parse_time(text: str) -> datetime:
 
 def to_jsonable(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
-        return {f.name: to_jsonable(_codes_for(value, f.metadata[REASONS_OF])
+        return {f.name: to_jsonable(_codes_for(value, f.metadata[REASONS_OF],
+                                               f.metadata[REASONS_OTHERWISE])
                                     if REASONS_OF in f.metadata else getattr(value, f.name))
                 for f in fields(value)}
     if isinstance(value, StrEnum):

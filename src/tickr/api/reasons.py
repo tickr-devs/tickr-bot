@@ -245,6 +245,8 @@ _WIRE = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
 _ERROR = r"[A-Z][A-Za-z]*(?:Error|Exception|Refused|Unavailable|Journal)"
 # The Start button's note that it cleared the operator stop (api/botstart.py).
 _STOP_CLEARED = r" \(the operator stop was cleared, so the next scheduled start runs\)"
+# A strategy.toml key an advisor answer names: `[section] key` (advisor/proposal.py).
+_KEY = r"\[(?P<section>[^\]]*)\] (?P<key>\S+)"
 
 # Causes the API writes itself (api/history, after, observer_results, cleanday, performance,
 # contract closeness). Wire times in them are given as HH:MM New York.
@@ -398,10 +400,129 @@ _PROSE = _shapes(
     ("start_failed", r"the start command failed \((?P<error>\w+)\)"),
     ("start_exited_cleared", r"the start command exited (?P<code>-?[0-9]+)" + _STOP_CLEARED),
     ("start_exited", r"the start command exited (?P<code>-?[0-9]+)"),
+    # fast movers (api/symbols.py)
+    ("no_fast_mover_rules",
+     r"the active strategy defines no fast movers \(\[spike\] in its strategy\.toml\)"),
+    # the session calendar's own refusals (calendar.CalendarRefused) and the day's session
+    # (api/jobs.py)
+    ("calendar_weekend", r"WEEKEND: (?P<day>" + _DAY + r") is a weekend"),
+    ("calendar_holiday", r"HOLIDAY: (?P<day>" + _DAY + r") is a market closure \(.*\)"),
+    ("calendar_not_covered", r"OUT_OF_COVERAGE: (?P<day>" + _DAY + r") is not covered by any "
+                             r"file"),
+    ("calendar_invalid", r"CALENDAR_INVALID: (?P<detail>.+)"),
+    ("calendar_naive_time", r"NAIVE_TIME: (?P<detail>.+)"),
+    ("calendar_invalid_offset", r"INVALID_OFFSET: (?P<detail>.+)"),
+    ("half_day_off", r"no session (?P<day>" + _DAY + r"): half day, half_days_enabled = false"),
+    # the jobs strip: backup and nightly fetch (api/jobs.py)
+    ("no_database", r"the bot has not created its database yet"),
+    ("database_unreadable", r"database unreadable \((?P<error>\w+)\)"),
+    ("no_backup", r"no backup recorded yet"),
+    ("nightly_never_ran", r"the nightly fetch has not run yet"),
+    ("nightly_file_unreadable", r"nightly\.json unreadable \((?P<error>\w+)\)"),
+    # the nightly fetch's own refusals (backtest/nightly.py); any other is `nightly_refused`
+    ("nightly_in_session", r"refused during the regular session"),
+    ("nightly_low_disk", r"(?P<free_mb>[0-9]+) MB free, below \[backtest\] "
+                         r"nightly_min_free_disk_mb (?P<min_mb>[0-9]+)"),
+    ("nightly_no_pool", r"no current/pool\.csv yet: pass --seed with a folder made by fetch-all"),
+    ("nightly_pool_empty", r".+pool\.csv is empty"),
+    ("nightly_too_many_missing",
+     r"(?P<count>[0-9]+) sessions missing after (?P<day>" + _DAY + r"), more than \[backtest\] "
+     r"nightly_max_new_sessions (?P<max>[0-9]+): run fetch-all instead"),
+    ("nightly_no_session_ahead", r"no session within (?P<days>[0-9]+) days after (?P<day>"
+     + _DAY + ")"),
+    ("nightly_stopped_before_open",
+     r"stopped at \S+, before the next session \(\[backtest\] "
+     r"nightly_stop_minutes_before_open\); current is unchanged"),
+    # the bot's status file and account file as the API reads them (api/server.py, api/flow.py)
+    ("no_status_file", r"the bot has not written a status file"),
+    ("status_file_invalid", r"status file is invalid \((?P<detail>.+)\)"),
+    ("status_from_future", r"status file is dated in the future"),
+    ("account_file_invalid", r"account file is invalid \((?P<detail>.+)\)"),
+    ("past_day_reconciliation",
+     r"only the latest reconciliation is kept; it is not recorded per day"),
+    ("past_day_status", r"only the latest status is kept; it is not recorded per day"),
+    ("broker_read_other_day", r"the latest broker read was on (?P<day>" + _DAY + ")"),
+    ("status_other_day", r"the latest status was written on (?P<day>" + _DAY + ")"),
+    # a screener chip's change and universe outcome (api/flow.py, data/discovery.py Cause)
+    ("row_without_price", r"the captured row has no price"),
+    ("row_without_pre_close", r"the captured row has no pre_close"),
+    ("price_not_number", r"the captured price is not a number: (?P<value>.+)"),
+    ("pre_close_not_number", r"the captured pre_close is not a number: (?P<value>.+)"),
+    ("pre_close_not_positive", r"the captured pre_close is not positive: (?P<value>" + _NUM
+     + ")"),
+    ("universe_conflicting_rows", r"CONFLICTING_ROWS: (?P<measured>.+)"),
+    ("universe_exchange", r"EXCHANGE_NOT_ALLOWED: (?P<measured>.+)"),
+    ("universe_currency", r"CURRENCY_NOT_ALLOWED: (?P<measured>.+)"),
+    ("universe_type_unknown", r"SECURITY_TYPE_UNKNOWN: (?P<measured>.+)"),
+    ("universe_type", r"SECURITY_TYPE_NOT_ALLOWED: (?P<measured>.+)"),
+    # the latest size (api/contract.latest_size)
+    ("binding_not_proven", r"not proven by the record: the planned loss, the notional cap or "
+                           r"the daily room"),
+    # a chart without candles (api/chart.py)
+    ("no_chart_bars", r"no (?P<interval>\S+) bars from (?P<source>\S+) for (?P<symbol>\S+) in "
+                      r"range (?P<range>\S+)"),
+    # the AI advisor's folder and an answer it refused (api/advisor.py, advisor/proposal.py);
+    # any other refusal of a run is `advisor_refused`
+    ("no_advisor_runs", r"no advisor run yet: the proposals folder does not exist"),
+    ("proposals_unreadable", r"proposals folder unreadable \((?P<error>\w+)\)"),
+    ("run_folder_misnamed", r"the folder name is not <UTC time>-<strategy name>"),
+    ("run_folder_unreadable", r"folder unreadable \((?P<error>\w+)\)"),
+    ("run_file_missing", r"no (?P<file>[\w.-]+\.json) \(a run written before the apps read runs, "
+                         r"or an interrupted one\)"),
+    ("run_file_invalid", r"(?P<file>[\w.-]+\.json): (?P<error>\w+)(?:: .*)?"),
+    ("run_file_wrong_schema", r"(?P<file>[\w.-]+\.json) is not (?P<schema>\S+)"),
+    ("answer_not_json", r"answer is not JSON: (?P<detail>.+)"),
+    ("answer_off_schema", r"answer does not match the proposal schema"),
+    ("changes_not_list", r"changes is not a list"),
+    ("too_many_changes", r"(?P<count>[0-9]+) changes proposed, at most (?P<max>[0-9]+) allowed"),
+    ("change_malformed", r"malformed change: (?P<detail>.+)"),
+    ("change_twice", _KEY + r" changed twice"),
+    ("change_fixed_section",
+     _KEY + r": \[strategy\] name and version are not the model's to change"),
+    ("change_unknown_key", _KEY + r": no such key in the base strategy\.toml"),
+    ("change_not_toml", _KEY + r": not a TOML value: (?P<value>.+)"),
+    ("change_other_kind",
+     _KEY + r": new value (?P<value>.+) is a (?P<kind>\w+), current is (?P<current_kind>\w+)"),
+    ("change_same_value", _KEY + r": new value equals the current value (?P<value>.+)"),
+    ("answer_empty", r"no changes, no idea and no no_change_reason"),
+    ("idea_off_schema", r"new_strategy_idea does not match the schema"),
+    ("idea_incomplete", r"new_strategy_idea lacks (?P<fields>.+)"),
+    ("idea_name_wrong", r"new_strategy_idea name (?P<name>.+) is not like 'name-v1'"),
+    ("version_not_whole", r"(?P<file>.+): version (?P<version>.+) is not a whole number"),
+    ("no_strategy_named", r"no strategy folder named (?P<strategy>\S+) under (?P<folder>.+)"),
+    # an operator command's outcome (runtime/service.py) and a command file the bot refused
+    # (api/contract.read_inbox); an emergency's steps are `command_step`
+    ("command_after_stop", r"read after stop-bot (?P<command>\S+): the bot is stopping"),
+    ("close_in_progress", r"a close is in progress; send stop-bot again after it completes"),
+    ("trades_still_open", r"(?P<count>[0-9]+) trade\(s\) open or entering; flatten first \(or "
+                          r"send emergency\), then stop-bot"),
+    ("no_open_position", r"no open position in (?P<symbol>\S+)"),
+    ("close_refused_before", r"closing order refused before for (?P<trades>.+): look in the "
+                             r"Webull app, then clear the fence"),
+    ("close_held_outside_session",
+     r"a close of (?P<trades>.+) was due outside the regular session and was not sent \(fence "
+     r"market-closed\); the stop stays: close it in the Webull app, or clear the fence in the "
+     r"regular session"),
+    ("close_not_sent_now", r"no closing order is sent now: " + _CLOSE_REFUSAL + r"; the stops "
+                           r"stay\. Close the position in the Webull app"),
+    ("nothing_open", r"nothing open"),
+    ("entry_cancels_requested", r"(?P<count>[0-9]+) entry cancel\(s\) requested"),
+    ("step_done", r"done"),
+    ("steps_done", r"steps done: (?P<steps>.*)"),
+    ("every_step_ran", r"not run: none"),
+    ("steps_not_run", r"not run: (?P<steps>.+)"),
+    ("command_file_unreadable", r"unreadable command file: (?P<detail>.+)"),
+    ("command_file_misnamed", r"file name does not match command_id"),
+    ("command_from_future", r"requested (?P<seconds>" + _NUM + r") s in the future"),
+    ("command_expired", r"expired: requested (?P<seconds>" + _NUM + r") s ago \(limit "
+                        r"(?P<limit>" + _NUM + r") s\)"),
     # a display part that failed unexpectedly: `TypeName: message`
     ("display_failed", r"(?P<error>" + _ERROR + r"): (?P<detail>.*)"),
 )
 _WIRE_PARAMS = ("time", "until", "since")
+# One step of an emergency command and what it did (runtime/service.py EMERGENCY_STEPS).
+_COMMAND_STEP = re.compile(r"(?P<step>entry-stop-on|cancel-own-orders|flatten): (?P<cause>.+)")
+COMMAND_STEP = "command_step"
 _FENCE_CAUSE = re.compile(r"(?P<fence>[a-z-]+(?::\S+)?): (?P<cause>.+)")
 _SEPARATOR = "; "
 
@@ -418,6 +539,13 @@ def _ny_wire(text: str) -> str:
 def _prose_one(text: str) -> Reason:
     found = _first(_PROSE, text)
     if found.code == UNRECOGNIZED:
+        # An emergency's step with its own outcome (`<step>: <cause>`).
+        step = _COMMAND_STEP.fullmatch(text)
+        if step is not None:
+            inner = _prose_one(step["cause"])
+            if inner.code not in (UNRECOGNIZED, COMMAND_STEP):
+                return Reason(COMMAND_STEP, {"step": step["step"], "step_code": inner.code,
+                                             **inner.params})
         # A clean-day fault quoting a fence's own cause (`<fence name>: <cause>`).
         match = _FENCE_CAUSE.fullmatch(text)
         if match is not None:
@@ -455,3 +583,21 @@ def prose_reasons(text: str | None) -> tuple[Reason, ...]:
         found.append(reason)
         start = end
     return tuple(found)
+
+
+# Causes whose writer can quote any refusal of a deeper layer (a nightly fetch's BacktestError,
+# an advisor run's AdvisorError): a text in no known shape reads as one of these, the whole text
+# its `detail`, so the apps always have a sentence to put it in.
+NIGHTLY_REFUSED = "nightly_refused"
+ADVISOR_REFUSED = "advisor_refused"
+
+
+def prose_reasons_or(text: str | None, otherwise: str) -> tuple[Reason, ...]:
+    """`prose_reasons`, or one `otherwise` reason with the whole text as `detail` when any part
+    is in no known shape; none for an empty text (an advisor run that was not refused)."""
+    if not text:
+        return ()
+    found = prose_reasons(text)
+    if all(r.code != UNRECOGNIZED for r in found):
+        return found
+    return (Reason(otherwise, {"detail": text}),)

@@ -143,12 +143,18 @@ def test_every_refusal_shape_has_a_sentence_naming_only_values_the_bot_sends():
 PROSE_IN_BOT_WORDS = {"simulation_outcome", "display_failed"}
 
 
+# Codes a cause in no known shape reads as, in a field whose writer quotes a deeper layer's
+# refusals (reasons.prose_reasons_or): the whole text is their `detail`.
+PROSE_FALLBACKS = {reasons.NIGHTLY_REFUSED: [{"detail"}], reasons.ADVISOR_REFUSED: [{"detail"}]}
+
+
 def test_every_prose_shape_has_a_sentence_naming_only_values_the_bot_sends():
     sent = {
         code: shapes
         for code, shapes in shape_params(reasons._PROSE).items()
         if code not in PROSE_IN_BOT_WORDS
     }
+    sent.update(PROSE_FALLBACKS)
     assert_sentences_fit_shapes(sent, load_reasons().codes("ProseReason"))
 
 

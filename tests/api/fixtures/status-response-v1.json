@@ -97,7 +97,8 @@
         "requested_at": "2026-11-16T15:00:00.123Z",
         "processed_at": "2026-11-16T15:00:00.123Z",
         "outcome": "done",
-        "cause": null
+        "cause": null,
+        "cause_codes": []
       }
     ],
     "realized_loss_today_usd": "1.60",
@@ -138,5 +139,6 @@
   "unavailable_cause": null,
   "summary": "The bot already has a trade open.",
   "poll_seconds": "3",
-  "api_version": 1
+  "api_version": 1,
+  "unavailable_cause_codes": []
 }
