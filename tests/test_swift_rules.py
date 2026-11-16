@@ -510,6 +510,68 @@ def test_truncation_rule_flags_modifiers_that_cut_or_shrink_text(tmp_path):
     assert [line for line, _ in found] == [1, 2, 3, 4, 5]
 
 
+def test_result_rule_flags_a_hand_picked_result_colour(tmp_path):
+    source = (
+        "Text(t).foregroundStyle(value >= 0 ? Palette.profitText : Palette.lossText)\n"
+        "let tone: Tone = result < 0 ? .loss : .profit\n"
+        "color: amount <= 0 ? Palette.loss : Palette.profit\n"
+        "x > 0 ? .profit : x < 0 ? .loss : nil\n"
+        "Text(t).foregroundStyle(Palette.result(value))\n"
+        "let tone = Tone.result(value)\n"
+        "candle.isUp ? Palette.profit : Palette.loss\n"
+        "// value >= 0 ? Palette.profit : Palette.loss in a comment\n"
+        "reachable ? Palette.profitText : Palette.lossText\n"
+    )
+    found = load().result_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4]
+
+
+def test_format_rule_flags_numbers_formatted_outside_the_design_system(tmp_path):
+    source = (
+        "Text(change.formatted(.percent.precision(.fractionLength(2))))\n"
+        "value.formatted(.number.notation(.compactName))\n"
+        "value.formatted(.currency(code: \"USD\"))\n"
+        "Text(cell.day, format: .number)\n"
+        "static let price = FloatingPointFormatStyle<Double>.number\n"
+        "let f = NumberFormatter()\n"
+        "String(format: \"%.2f\", x)\n"
+        "Text(Money.price(x)) + Text(Percent.signed(fraction: f))\n"
+        ".accessibilityValue(Text(share, format: .percent.precision(.fractionLength(0))))\n"
+        "date.formatted(.dateTime.month())\n"
+        "// value.formatted(.number) in a comment\n"
+    )
+    found = load().format_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_stop_symbol_rule_wants_the_shared_stop_symbols(tmp_path):
+    source = (
+        'static let verifiedSymbol = "checkmark.shield.fill"\n'
+        'Image(systemName: "shield")\n'
+        'Label("x", systemImage: "xmark.shield")\n'
+        "Image(systemName: StopState.levelSymbol)\n"
+        'static let environment = "shield" // symbol: the environment, not a stop\n'
+        "// symbol: a lock screen badge\n"
+        'Image(systemName: "lock.shield")\n'
+        'Image(systemName: "hourglass")\n'
+    )
+    found = load().stop_symbol_violations(write(tmp_path, source))
+    assert found == [(1, "checkmark.shield.fill"), (2, "shield"), (3, "xmark.shield")]
+
+
+def test_meaning_rules_apply_to_the_apps_only(tmp_path, monkeypatch):
+    module = load()
+    for folder in ("apps/macos/Tickr", "apps/ios/Tickr", "apps/shared/Sources/TickrDesign"):
+        (tmp_path / folder).mkdir(parents=True)
+        source = 'let c = v >= 0 ? Palette.profit : Palette.loss\nlet s = "shield"\n'
+        write(tmp_path / folder, source)
+    monkeypatch.setattr(module, "REPO", tmp_path)
+    found = module.collect()
+    apps = ["apps/ios/Tickr/View.swift", "apps/macos/Tickr/View.swift"]
+    assert sorted(found["result"]) == apps
+    assert sorted(found["stopsymbol"]) == apps
+
+
 def test_apps_have_no_control_look_of_their_own(tmp_path):
     source = (
         "struct TitleBarButtonStyle: ButtonStyle {\n"
