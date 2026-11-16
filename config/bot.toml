@@ -384,12 +384,13 @@ capture_dir = "capture"
 # Strategy module per strategy NAME, as "name=importable.module" (the module exposes create(values)); an observer folder
 # strategies/<folder>/strategy.toml names its strategy in [strategy] name; read by observers.loader.
 strategy_modules = ["price-action-v1=tickr.strategy.price_action_v1", "price-action-v2=tickr.strategy.price_action_v2", "price-action-v3=tickr.strategy.price_action_v3", "volume-shock-v1=tickr.strategy.volume_shock_v1", "noise-band-v1=tickr.strategy.noise_band_v1"]
-# Most observer strategies [strategy] observers may list (each one costs loop time per bar); read by observers.loader.
+# Most observer strategies [strategy] observers may list (each costs observer-process time per bar, not the trading
+# thread's); read by observers.loader.
 max_observers = 4
 # Seconds one observer evaluation may take; slower = that observer is switched off for the run with a cause; read by observers.runner.
 max_evaluation_seconds = 0.5
-# Evaluations waiting for the observer worker thread; when full, a new one is dropped and recorded (never blocks trading);
-# read by observers.runner.
+# Evaluations waiting for the observer process; when full, the rest of that pass is dropped for the observers and
+# journaled as observers-dropped (never blocks trading, observers go on with the next pass); read by observers.runner.
 queue_size = 256
 # Seconds an observer's WATCH or ENTER keeps its symbol on the L1 stream, counted from the start of the bar it was decided
 # on (180 = that bar, the next one while the worker is mid-bar, and one minute of pass timing); read by runtime.service.
@@ -397,6 +398,13 @@ watching_seconds = 180
 # Decision records folder relative to [run] data_dir; files go to <decisions_dir>/<environment>/<NY date>/decisions.jsonl;
 # written by observers.log for observer and active-strategy decisions (runtime.entries).
 decisions_dir = "decisions"
+# Seconds a symbol may go unevaluated before the bot and the observer process forget its bars (it is sent whole again
+# if it comes back), so their memory stays bounded over the day; read by observers.runner.
+forget_symbol_seconds = 600
+# Most symbols per pass whose whole history (prior sessions and today's bars) is sent to the observer process; the
+# others wait for a later pass (recorded as dropped), so the first passes of the day never send everything at once;
+# count; read by observers.runner.
+history_sends_per_pass = 30
 
 [advisor]
 # NAME of the environment variable holding the Anthropic API key (the SDK reads it itself; only ANTHROPIC_API_KEY works);

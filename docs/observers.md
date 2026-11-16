@@ -134,45 +134,49 @@ Notes for both candidates (from the trading-core review of `strategy/simple.py`)
   trade per signal (`skipped_same_signal`); the `outcomes` research command still measures
   every ENTER record.
 
-## Engine wiring (to do in the engine, not here)
+## Where observers run
 
-```python
-from tickr.observers.loader import load_observers
-from tickr.observers.log import DecisionLog
-from tickr.observers.runner import ObserverSet
+The bot builds the observers again in a child process it owns (`ObserverSet(...,
+process=ProcessSpec(...))` in `cli.py`; `observers/runner.py`), so their evaluation never
+competes with the trading thread for Python's interpreter lock. Measured on 150 symbols with 6
+observers (2026-11-16, synthetic M1 bars, 5 prior sessions): with the old worker thread the
+trading thread ran about 2x slower while observers worked and handing over a pass took about
+1.2 s; with the process it takes about 0.05 s and the trading thread is not slowed.
 
-settings = config.observers
-observers = ObserverSet(load_observers(config), DecisionLog.from_config(config),
-                        settings.max_evaluation_seconds, settings.queue_size,
-                        config.risk.max_quote_age_seconds, config.risk.max_clock_skew_seconds)
-
-# per evaluation, right after the active strategy decided on `context` at time `now`:
-for failure in observers.on_evaluation(context, now):   # only "queue full: dropped"
-    journal("observer-dropped", failure)
-# on every engine step:
-for failure in observers.take_failures():
-    journal("observer-off", failure)                     # and alert once
-# at shutdown:
-observers.close(timeout)                                  # False = a hung observer
-```
-
-- `on_evaluation` never evaluates on the caller's thread and never blocks: it freezes the
-  context (bars as tuples, position removed) and puts it on a bounded queue (`queue_size`).
-  One worker thread evaluates the observers in order and writes their records. When the queue
-  is full the evaluation is dropped and returned as a failure.
-- On the worker, an exception, a contract break (wrong tag or symbol) or an evaluation slower
-  than `max_evaluation_seconds` switches that observer off for the run; a failed log write
-  switches all of them off. `take_failures()` hands these to the trading thread. A hung
-  observer keeps the worker busy; the queue then overflows and further evaluations are dropped
-  and recorded, still without blocking trading.
-- The active decision should be written through the same log, `observers.log.append(record)`
-  (role `active`, admission `taken` / `refused` + cause, `not_applicable` for non-ENTER), so the
-  daily report has both sides in one file. The log is thread-safe (one lock, whole lines).
-- `on_evaluation` raises ValueError only for a caller bug (decision time before the bar ended).
-- The log flushes each line but does not fsync: research data, not trading state.
-
-Files: `<data_dir>/<decisions_dir>/<environment>/<NY date>/decisions.jsonl`, one decision record
-per line (format in `docs/research.md`).
+- Per evaluation the bot sends only the bars of the symbol the child does not have yet (all of
+  them again when an earlier bar changed, a provider revision) and the prior sessions only when
+  they changed, so the first pass of the day carries the history and later ones one bar each.
+- Observer records are compact: an observer's IGNORE of a symbol is written only when its
+  cause (the first failed rule) differs from that observer's previous record of the symbol, so a
+  symbol refused all day for one reason is one line, not one a minute (6 variants on about 150
+  symbols would otherwise add about 350k lines a day). Every WATCH, ENTER, HOLD and EXIT is
+  written. A bar with no observer record therefore means "IGNORE for the cause last written";
+  the diff against the active strategy already treats an absent bar like an IGNORE, and
+  observer IGNORE counts in the daily report count these changes, not bars.
+- The child appends its records to the same `decisions.jsonl` (each line is one unbuffered
+  append, so the bot's and the child's lines never interleave) and reports back which observers
+  it switched off and which symbols each one is watching.
+- A full queue (`[observers] queue_size`) drops the rest of that pass for the observers and
+  writes one `observers-dropped` journal row with the count; they go on with the next pass.
+- An exception, a contract break or a slow evaluation switches that one observer off
+  (`observer-failure` row), as before. A child that ends on its own switches the observers off
+  for the run with one `observers-stopped` row and alert; trading goes on.
+- The child forgets a symbol it has not been sent for `[observers] forget_symbol_seconds`
+  (the bot forgets it too and sends the whole history again if it comes back), so memory follows
+  the symbols in play, not every symbol seen today.
+- At most `[observers] history_sends_per_pass` whole histories go out in one pass; the rest of
+  that pass is dropped (`observers-dropped`) and those symbols get their history in a later pass,
+  so the first pass of the day never holds the trading thread on one large hand-over.
+- The trading thread never waits on the child: answers come back over a one-way pipe read by a
+  separate thread of the bot, so a child that dies in the middle of a message only makes that
+  thread see the end of the pipe. The inbox never holds the bot's exit (its feeder thread is not
+  joined), and a child that does not stop at shutdown is killed.
+- The child exits when the bot stops it at shutdown or when the bot's process is gone (it
+  watches a pipe whose other end only the bot holds). It starts without the credential
+  variables in its environment and never talks to the broker.
+- `decisions.jsonl` must be on a local file system: the bot and the child rely on appends
+  being atomic. A partial write is ended with a newline so the next line stays readable.
+- `ObserverSet` without `process` runs the same worker on a thread (tests).
 
 ## Daily report
 

@@ -29,8 +29,10 @@ class Observer:
         self.raises = raises
         self.gate = gate
         self.seen: list[str] = []
+        self.entered = threading.Event()
 
     def evaluate(self, context: SymbolContext) -> Decision:
+        self.entered.set()
         if self.gate is not None:
             self.gate.wait(5)
         self.seen.append(context.symbol)
@@ -96,24 +98,42 @@ def test_observers_get_the_contexts_and_failures_are_journaled(tmp_path):
     observers.close(5)
 
 
-def test_queue_overflow_switches_observers_off_with_one_alert(tmp_path):
+def test_queue_overflow_drops_the_rest_of_the_pass_and_observers_go_on(tmp_path):
     gate = threading.Event()
     observer = Observer(gate=gate)
-    bot, observers = wire(tmp_path, observer, ["A", "B", "C"], queue_size=1)
+    bot, observers = wire(tmp_path, observer, ["A"], queue_size=1)
     try:
-        bot.service._evaluate()  # A runs (blocked), B waits in the queue, C overflows
-        assert bot.service.observers is None
-        (stopped,) = bot.store.journal(service.OBSERVERS_STOPPED)
-        # The hung observer did not finish.
-        assert stopped.body == {"error": "queue-full", "finished": False}
-        failures = bot.store.journal(service.OBSERVER_FAILURE)
-        assert any("queue full" in f.body["cause"] for f in failures)
-        alerts = [a.body for a in bot.store.journal(ALERT)]
-        assert [a["kind"] for a in alerts] == [AlertKind.OBSERVERS_STOPPED.value]
-        bot.service._evaluate()  # nothing more is fed or alerted
-        assert len(bot.store.journal(ALERT)) == 1
+        bot.service._evaluate()
+        assert observer.entered.wait(5)  # the worker is inside A's evaluation, held
+        bot.service.evaluator.symbols = ["A", "B", "C", "D"]
+        bot.service._evaluate()  # A waits in the queue; B, C and D are dropped
+        assert bot.service.observers is observers
+        (dropped,) = bot.store.journal(service.OBSERVERS_DROPPED)
+        assert dropped.body["dropped"] == 3
+        assert bot.store.journal(service.OBSERVERS_STOPPED) == []
+        assert bot.store.journal(service.OBSERVER_FAILURE) == []
+        assert bot.store.journal(ALERT) == []
+        gate.set()
+        assert observers.wait_idle(5)
+        bot.service._evaluate()  # the next pass is fed again (the small queue drops some)
+        assert observers.wait_idle(5)
+        assert observer.seen[:3] == ["A", "A", "A"]
+        assert bot.service.observers is observers  # drops never stop them
     finally:
         gate.set()
+        observers.close(5)
+
+
+def test_an_ended_observer_process_switches_observers_off_with_one_alert(tmp_path):
+    bot, observers = wire(tmp_path, Observer(), ["ABC"])
+    observers._process = type("Ended", (), {"is_alive": lambda self: False,
+                                            "exitcode": -9})()  # what a killed child looks like
+    bot.service._evaluate()
+    assert bot.service.observers is None
+    (stopped,) = bot.store.journal(service.OBSERVERS_STOPPED)
+    assert stopped.body["error"] == "process-ended"
+    assert [a.body["kind"] for a in bot.store.journal(ALERT)] == [
+        AlertKind.OBSERVERS_STOPPED.value]
 
 
 def test_an_error_in_the_hook_switches_observers_off_and_the_loop_goes_on(tmp_path):

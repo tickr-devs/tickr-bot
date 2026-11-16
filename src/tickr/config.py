@@ -253,6 +253,8 @@ class ObserversConfig:
     queue_size: int
     watching_seconds: Decimal
     decisions_dir: str
+    forget_symbol_seconds: Decimal
+    history_sends_per_pass: int
 
 
 @dataclass(frozen=True)
@@ -522,6 +524,10 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         )
     if built["observers"].watching_seconds <= 0:
         raise ConfigError("[observers] watching_seconds must be above 0")
+    if built["observers"].forget_symbol_seconds <= 0:
+        raise ConfigError("[observers] forget_symbol_seconds must be above 0")
+    if built["observers"].history_sends_per_pass < 1:
+        raise ConfigError("[observers] history_sends_per_pass must be at least 1")
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "
@@ -669,6 +675,15 @@ def _authorization_valid(config: Config, env: EnvironmentConfig) -> GateResult:
     if record["config_digest"] != config.digest:
         return GateResult(False, "owner authorization does not match the current config digest")
     return GateResult(True, "owner authorization valid")
+
+
+def credential_variables(config: Config) -> frozenset[str]:
+    """The NAMES of every environment variable the configuration says holds a credential or a
+    private detail (rule 4): processes that need none of them are started without them."""
+    names = {config.advisor.api_key_variable, config.alerts.imessage_recipient_variable}
+    for env in config.environments.values():
+        names |= {env.app_key_variable, env.app_secret_variable, env.account_variable}
+    return frozenset(names)
 
 
 def trading_gate(config: Config) -> GateResult:

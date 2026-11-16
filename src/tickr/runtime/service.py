@@ -39,6 +39,7 @@ from tickr.config import Config, trading_gate
 from tickr.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
 from tickr.engine.loop import drain
 from tickr.engine.manual import flatten_deadline
+from tickr.observers.runner import DROPPED
 from tickr.risk.admission import Admission, AdmissionLimits, session_refusal
 from tickr.risk.causes import AdmissionCause
 from tickr.runtime import stopmarker
@@ -68,6 +69,7 @@ EMERGENCY_STEPS = ("entry-stop-on", "cancel-own-orders", "flatten")
 CLOSE_IN_PROGRESS = "a close is in progress; send stop-bot again after it completes"
 OBSERVER_FAILURE = "observer-failure"
 OBSERVERS_STOPPED = "observers-stopped"
+OBSERVERS_DROPPED = "observers-dropped"  # one row per pass with evaluations the observers dropped
 OBSERVERS_NOT_LOADED = "observers-not-loaded"
 EVALUATION_FAILED = "evaluation-failed"
 EVALUATION_SKIPPED = "evaluation-skipped"  # one row per protect-first episode
@@ -465,41 +467,47 @@ class Service:
 
     def _feed_observers(self) -> None:
         """The contexts the active strategy just saw go to the observers, after all broker
-        work of this pass. Failures are journaled every pass. A full queue (a hung observer)
-        or any error here switches the observers off for the run, with one alert; trading
-        goes on."""
+        work of this pass. Failures are journaled every pass. What the observers cannot take now
+        (a full queue: the worker is behind; or the pass's cap on whole histories) is dropped,
+        journaled as one `observers-dropped` row with the count; they go on with the next pass.
+        A worker process that ended, or any error here, switches the observers off for the run,
+        with one alert; trading goes on."""
         observers, evaluator = self.observers, self.evaluator
         if observers is None or evaluator is None:
             return
         try:
-            overflow = self._hand_over(observers, evaluator)
+            self._hand_over(observers, evaluator)
+            alive = observers.alive
         except Exception as exc:  # noqa: BLE001 - observers never end the trading loop
             self._stop_observers(observers, {"error": type(exc).__name__, "detail": str(exc)},
                                  f"observer hook failed ({type(exc).__name__}): observers "
                                  "switched off for this run")
             return
-        if overflow:
-            self._stop_observers(observers, {"error": "queue-full"},
-                                 "observer queue full: observers switched off for this run")
+        if not alive:
+            self._stop_observers(observers, {"error": "process-ended"},
+                                 "observer process ended: observers switched off for this run")
 
-    def _hand_over(self, observers: ObserverSet, evaluator: Evaluator) -> bool:
-        """Queue this pass's contexts and journal worker failures; True on queue overflow."""
-        overflow = False
+    def _hand_over(self, observers: ObserverSet, evaluator: Evaluator) -> None:
+        """Queue this pass's contexts (those the observers cannot take now are dropped) and
+        journal the drops (one row with the count) and the worker's failures."""
         at = evaluator.evaluated_at
+        dropped = 0
         if at is not None:
             for context in evaluator.contexts:
                 if observers.on_evaluation(context, at):
-                    overflow = True
-                    break
-        failures = observers.take_failures()
-        if failures:
+                    dropped += 1
+        failures = [f for f in observers.take_failures() if not f.cause.startswith(DROPPED)]
+        if failures or dropped:
             store = self.engine.store
             with store.transaction():
+                if dropped:
+                    store.append(OBSERVERS_DROPPED, {"at": at.isoformat() if at else None,
+                                                     "dropped": dropped},
+                                 run_id=self.engine.run_id)
                 for f in failures:
                     store.append(OBSERVER_FAILURE, {"folder": f.folder, "identity": f.identity,
                                                     "at": f.at.isoformat(), "cause": f.cause},
                                  run_id=self.engine.run_id)
-        return overflow
 
     def _stop_observers(self, observers: ObserverSet, body: dict[str, object],
                         text: str) -> None:

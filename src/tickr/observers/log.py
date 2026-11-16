@@ -3,8 +3,10 @@
 Path: <data_dir>/<decisions_dir>/<environment>/<NY date>/decisions.jsonl.
 
 One line per decision in the format of `tickr.research.records` (the research tools read
-these files directly). Lines are appended and flushed one by one; the file of a previous day
-is closed when the first record of a new day arrives. Lines are flushed but NOT fsynced: a
+these files directly). Each line is appended with one unbuffered write to a file opened for
+appending, so the bot and its observer process can append to the same file without
+interleaving lines; the file of a previous day is closed when the first record of a new day
+arrives. Lines are flushed but NOT fsynced: a
 power loss can drop the last records. These are research data, not trading state; the trading
 journal (store.py) keeps its own durability.
 """
@@ -12,10 +14,10 @@ journal (store.py) keeps its own durability.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import date
 from pathlib import Path
-from typing import TextIO
 
 from tickr.archive import existing, open_text
 from tickr.calendar import ny_date_of
@@ -25,13 +27,14 @@ from tickr.research.records import DecisionRecord, record_from_mapping, record_t
 from tickr.strategy.base import Role
 
 FILE_NAME = "decisions.jsonl"
+FILE_MODE = 0o644  # protocol: owner read/write, others read (as open() made it)
 
 
 class DecisionLog:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self._day: date | None = None
-        self._handle: TextIO | None = None
+        self._fd: int | None = None
         self._lock = threading.Lock()
 
     @classmethod
@@ -85,23 +88,31 @@ class DecisionLog:
             self._append(line, ny_date_of(record.bar_start))
 
     def _append(self, line: str, day: date) -> None:
-        if day != self._day or self._handle is None:
+        if day != self._day or self._fd is None:
             self._close()
             path = self.path(day)
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._handle = open(path, "a", encoding="utf-8")
+            self._fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, FILE_MODE)
             self._day = day
-        self._handle.write(line + "\n")
-        self._handle.flush()
+        data = (line + "\n").encode("utf-8")
+        written = os.write(self._fd, data)
+        if written != len(data):
+            # End the fragment (best effort) so the next line, of either process, never joins
+            # it; readers then refuse only that one malformed line.
+            try:
+                os.write(self._fd, b"\n")
+            except OSError:
+                pass
+            raise OSError(f"decision line written partly ({written} of {len(data)} bytes)")
 
     def close(self) -> None:
         with self._lock:
             self._close()
 
     def _close(self) -> None:
-        if self._handle is not None:
-            self._handle.close()
-        self._handle = None
+        if self._fd is not None:
+            os.close(self._fd)
+        self._fd = None
         self._day = None
 
 
