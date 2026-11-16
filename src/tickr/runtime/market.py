@@ -24,7 +24,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from tickr.api import contract as api
-from tickr.calendar import CalendarRefused, SessionCalendar
+from tickr.archive import existing, open_text
+from tickr.calendar import CalendarRefused, SessionCalendar, ny_date_of
 from tickr.config import Config
 from tickr.data.base import (
     MarketData,
@@ -33,7 +34,7 @@ from tickr.data.base import (
     ScreenerRow,
     StreamNotice,
 )
-from tickr.data.capture import CaptureError, CaptureWriter
+from tickr.data.capture import DISCOVERY_FILE, CaptureError, CaptureWriter
 from tickr.data.discovery import (
     Candidate,
     DiscoveryResult,
@@ -41,6 +42,7 @@ from tickr.data.discovery import (
     NoStrategy,
     RefusedSymbols,
     discover,
+    latest_refusals,
     pass_record,
 )
 from tickr.data.health import FanOut, StreamHealth, StreamState
@@ -53,6 +55,8 @@ STREAM_TRANSPORT = "stream-transport"
 STREAM_ERROR = "stream-error"
 DISCOVERY = "discovery"
 DISCOVERY_FAILED = "discovery-failed"
+# The day's discovery.jsonl could not seed the refused-symbol memory (the bot starts with it empty).
+REFUSED_SYMBOLS_UNREAD = "refused-symbols-unread"
 STREAM_SUBSCRIPTIONS = "stream-subscriptions"
 STREAM_LOST_EXIT = "stream-lost"
 DISCOVERY_THREAD = "tickr-discovery"
@@ -270,6 +274,30 @@ class MarketRuntime:
         self._discovery_anchor: datetime | None = None  # interval counted from here
         self._worker = DiscoveryWorker(spawn)  # the discovery pass in flight, if any
         self._started = now()
+        self._seed_refused_symbols()
+
+    def _seed_refused_symbols(self) -> None:
+        """Start the refused-symbol memory from today's latest discovery pass record, so a
+        restart does not split the same refused chunks again on its first pass. Unreadable:
+        journaled once with the cause, and the memory starts empty (it only saves requests)."""
+        if self.capture is None:
+            return
+        path = existing(self.capture.path(ny_date_of(self._started), DISCOVERY_FILE))
+        if path is None:
+            return
+        try:
+            with open_text(path) as handle:
+                found = latest_refusals(handle.readlines(), str(path))
+        except Exception as exc:  # noqa: BLE001 - any unreadable record (a truncated .gz twin
+            # raises EOFError) must never stop the bot from starting; it only costs requests
+            with self.engine.store.transaction():
+                self.engine.store.append(REFUSED_SYMBOLS_UNREAD,
+                                         {"detail": str(exc)[
+                                             :self.config.market_data.failure_detail_max_chars]},
+                                         run_id=self.engine.run_id)
+            return
+        if found is not None:
+            self._refused_symbols.seed(*found)
 
     def bind(self) -> None:
         """Bind the stream listener before the stream starts, so the first connect is seen."""

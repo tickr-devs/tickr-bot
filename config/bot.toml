@@ -358,7 +358,7 @@ stream_reserved_subscribe_requests = 10
 candidate_retry_seconds = 300
 # Seconds a symbol a market-data route refused as unknown (SymbolsRefused) stays refused without a request before
 # discovery asks for it again (also forgotten when the next regular session starts); read by data.discovery via
-# runtime.market.
+# runtime.market. Kept across restarts through the day's discovery.jsonl pass records.
 refused_symbol_recheck_seconds = 900
 # Most characters of an error's text kept in a `discovery-failed` journal row's `detail` (longer text is cut, and the
 # row says how long the whole text was); read by runtime.market.

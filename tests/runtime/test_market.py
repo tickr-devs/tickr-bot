@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -21,6 +21,7 @@ from tickr.observers.loader import load_active
 from tickr.runtime.market import (
     DISCOVERY,
     DISCOVERY_FAILED,
+    REFUSED_SYMBOLS_UNREAD,
     STREAM_ERROR,
     STREAM_LOST_EXIT,
     STREAM_SUBSCRIPTIONS,
@@ -47,7 +48,8 @@ def in_place(run):
 
 class Rig:
     def __init__(self, tmp_path: Path, now: datetime = MONDAY_11,
-                 source: FakeMarketData | None = None, spawn=in_place) -> None:
+                 source: FakeMarketData | None = None, spawn=in_place,
+                 capture=None) -> None:
         self.broker = FakeBroker()
         self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
         self.engine = Engine(self.store, self.broker, CFG, "mkt00001",
@@ -58,7 +60,7 @@ class Rig:
         self.inbox = StreamInbox()
         self.market = MarketRuntime(self.engine, CFG, self.source,
                                     health=StreamHealth.from_config(CFG), inbox=self.inbox,
-                                    capture=None, calendar=CALENDAR,
+                                    capture=capture, calendar=CALENDAR,
                                     today_bars=TodayBars(), now=lambda: self.now,
                                     monotonic=lambda: self.clock, spawn=spawn)
         self.market.screen = load_active(CFG).strategy  # set by the caller once loaded
@@ -780,3 +782,53 @@ def test_each_discovery_pass_is_appended_to_the_day_capture(tmp_path):
     records = [json.loads(line) for line in lines]
     assert len(records) == 2 and all(r["provider"] == "fake" for r in records)
     assert records[0]["stopped"] is None and records[0]["not_reached"] == []
+
+
+def _discovery_file(tmp_path, text):
+    from tickr.calendar import ny_date_of
+    from tickr.data.capture import DISCOVERY_FILE, CaptureWriter
+
+    writer = CaptureWriter(tmp_path / "capture", "webull")
+    path = writer.path(ny_date_of(MONDAY_11), DISCOVERY_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, "utf-8")
+    return writer
+
+
+def test_a_restart_seeds_refused_symbols_from_the_days_discovery_record(tmp_path):
+    import json
+
+    from tickr.data.discovery import Stage
+
+    session = MONDAY_11.replace(hour=9, minute=30).astimezone(UTC)
+    at = (MONDAY_11 - timedelta(minutes=1)).astimezone(UTC)
+    record = {"session_open": session.isoformat(), "refused_symbols": [
+        {"symbol": "DJT", "stage": "snapshot", "refused_at": at.isoformat()}]}
+    rig = Rig(tmp_path, capture=_discovery_file(tmp_path, json.dumps(record) + "\n"))
+    active = rig.market._refused_symbols.active(session, MONDAY_11, timedelta(seconds=900))
+    assert active == {"DJT": Stage.SNAPSHOT}
+    assert rig.store.journal(REFUSED_SYMBOLS_UNREAD) == []
+
+
+def test_an_unreadable_discovery_record_is_journaled_and_the_memory_starts_empty(tmp_path):
+    rig = Rig(tmp_path, capture=_discovery_file(tmp_path, "{broken\n"))
+    (row,) = rig.store.journal(REFUSED_SYMBOLS_UNREAD)
+    assert "discovery.jsonl:1" in row.body["detail"]
+    assert rig.market._refused_symbols.remembered() == ()
+
+
+def test_a_truncated_archived_discovery_record_never_stops_the_start(tmp_path):
+    import gzip
+
+    from tickr.calendar import ny_date_of
+    from tickr.data.capture import DISCOVERY_FILE, CaptureWriter
+
+    writer = CaptureWriter(tmp_path / "capture", "webull")
+    plain = writer.path(ny_date_of(MONDAY_11), DISCOVERY_FILE)
+    plain.parent.mkdir(parents=True, exist_ok=True)
+    whole = gzip.compress(b'{"session_open": "x"}\n' * 50)
+    plain.with_name(plain.name + ".gz").write_bytes(whole[: len(whole) // 2])  # truncated
+    rig = Rig(tmp_path, capture=writer)
+    (row,) = rig.store.journal(REFUSED_SYMBOLS_UNREAD)
+    assert row.body["detail"]
+    assert rig.market._refused_symbols.remembered() == ()

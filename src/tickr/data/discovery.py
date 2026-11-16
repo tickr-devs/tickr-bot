@@ -50,6 +50,7 @@ same symbols again.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -161,6 +162,10 @@ class DiscoveryResult:
     movers_measured: bool = False
     """Whether the active strategy defines fast movers (`FastMovers`); without it `movers` is
     empty because nothing was measured, not because nothing moved."""
+    session_open: datetime | None = None
+    """The regular session the pass ran in (keys the refused-symbol memory)."""
+    refused_symbols: tuple[RefusedSymbol, ...] = ()
+    """Every refusal the session memory still held when the pass ended (`RefusedSymbols`)."""
 
     @property
     def evaluated(self) -> int:
@@ -230,14 +235,39 @@ def _chunks(items: Sequence[str], size: int) -> list[Sequence[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+@dataclass(frozen=True)
+class RefusedSymbol:
+    """One symbol a market-data route refused as unknown: which stage, when."""
+
+    symbol: str
+    stage: Stage
+    at: datetime
+
+
 class RefusedSymbols:
     """Symbols a market-data route refused as unknown, with the stage that refused them and
     when. A refusal is forgotten `recheck` after it was recorded, so the symbol is asked again,
-    and every refusal is forgotten when the next regular session (keyed by its open) starts."""
+    and every refusal is forgotten when the next regular session (keyed by its open) starts.
+
+    Every pass record (`pass_record`, the day's discovery.jsonl) carries the session open and
+    the refusals still remembered at its end, so a restarted bot seeds this memory from the
+    day's latest record (`seed`) instead of splitting the same chunks again on its first pass
+    (2026-11-16: the first pass after each restart stopped on the snapshot budget)."""
 
     def __init__(self) -> None:
         self._session: datetime | None = None
         self._refused: dict[str, tuple[Stage, datetime]] = {}
+
+    def seed(self, session_open: datetime, refused: Sequence[RefusedSymbol]) -> None:
+        """Start from refusals recorded earlier in the session `session_open` (their own times
+        still apply: `active` forgets them `recheck` after they were recorded)."""
+        self._session = session_open
+        self._refused = {r.symbol: (r.stage, r.at) for r in refused}
+
+    def remembered(self) -> tuple[RefusedSymbol, ...]:
+        """The refusals remembered now, by symbol (what a pass record carries)."""
+        return tuple(RefusedSymbol(symbol, stage, at)
+                     for symbol, (stage, at) in sorted(self._refused.items()))
 
     def active(self, session_open: datetime, now: datetime,
                recheck: timedelta) -> dict[str, Stage]:
@@ -416,7 +446,8 @@ def discover(
         not_reached = tuple(i.symbol for i in universe if i.symbol not in decided)
         return DiscoveryResult(started, tuple(read), merged, len(universe),
                                tuple(candidates), tuple(rejections), stop, tuple(instruments),
-                               not_reached, tuple(movers), isinstance(screen, FastMovers))
+                               not_reached, tuple(movers), isinstance(screen, FastMovers),
+                               session_open, memory.remembered())
 
     if stopped is not None:
         return result([], stopped)
@@ -525,6 +556,35 @@ def _signal(signal: Signal) -> dict[str, Any]:
             "fired": signal.fired}
 
 
+def latest_refusals(lines: Sequence[str],
+                    where: str) -> tuple[datetime, tuple[RefusedSymbol, ...]] | None:
+    """(session open, refusals) of the newest complete pass record among `lines` (a day's
+    discovery.jsonl, oldest first) that carries them; None when no record does (none yet, or
+    only records written before they were kept). A last line without its newline is still
+    being written and is skipped. Raises ValueError naming `where` and the line for a record
+    that does not parse."""
+    for number in range(len(lines), 0, -1):
+        text = lines[number - 1]
+        if number == len(lines) and not text.endswith("\n"):
+            continue
+        if not text.strip():
+            continue
+        try:
+            record = json.loads(text)
+            if "refused_symbols" not in record:
+                return None
+            session = datetime.fromisoformat(record["session_open"])
+            refused = tuple(RefusedSymbol(r["symbol"], Stage(r["stage"]),
+                                          datetime.fromisoformat(r["refused_at"]))
+                            for r in record["refused_symbols"])
+        except (ValueError, KeyError, TypeError) as exc:  # JSONDecodeError is a ValueError
+            raise ValueError(f"{where}:{number}: {exc}") from exc
+        if session.tzinfo is None or any(r.at.tzinfo is None for r in refused):
+            raise ValueError(f"{where}:{number}: a time has no UTC offset")
+        return session, refused
+    return None
+
+
 def pass_record(result: DiscoveryResult, finished_at: datetime) -> dict[str, Any]:
     """One discovery pass as a JSON object (Decimal values as strings, times ISO-8601 UTC):
     the screeners read, where it stopped, every instrument's sources, every refusal with its
@@ -550,6 +610,9 @@ def pass_record(result: DiscoveryResult, finished_at: datetime) -> dict[str, Any
         "candidates": [c.instrument.symbol for c in result.candidates],
         "not_reached": list(result.not_reached),
         "movers_measured": result.movers_measured,
+        "session_open": None if result.session_open is None else at(result.session_open),
+        "refused_symbols": [{"symbol": r.symbol, "stage": r.stage.value, "refused_at": at(r.at)}
+                            for r in result.refused_symbols],
         "movers": [{"symbol": m.symbol, "bar_start": at(m.bar_start), "close": str(m.close),
                     "low": str(m.low), "bar_dollar_volume": str(m.bar_dollar_volume),
                     "volume_ratio": _signal(m.volume_ratio), "move_atr": _signal(m.move_atr),

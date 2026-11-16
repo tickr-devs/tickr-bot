@@ -13,11 +13,13 @@ from tickr.data.base import FakeMarketData, ScreenerKind, SymbolsRefused
 from tickr.data.discovery import (
     Cause,
     DiscoverySettings,
+    RefusedSymbol,
     RefusedSymbols,
     Stage,
     StopCause,
     completed_session_bars,
     discover,
+    latest_refusals,
     merge,
     pass_record,
 )
@@ -481,3 +483,48 @@ def test_pass_record_is_plain_json_with_every_outcome():
     mover = record["movers"][0]
     assert mover["symbol"] == "AAA" and mover["spike_up"] is True
     assert mover["volume_ratio"]["fired"] is True and mover["volume_ratio"]["threshold"] == "3"
+
+
+def test_a_restart_seeds_the_refusals_from_the_last_pass_record_and_splits_nothing():
+    """2026-11-16: the first pass after each restart split DJT's chunk again and stopped on the
+    snapshot budget. The pass record carries the remembered refusals; a new memory seeded from
+    the day's latest record asks the rest in one request."""
+    md = Unknown(snapshot={"S02"})
+    five(md)
+    first = discover(md, settings(), Screen(), OPEN, lambda: NOW, None, RefusedSymbols())
+    lines = [json.dumps(pass_record(first, NOW)) + "\n"]
+    seeded = RefusedSymbols()
+    seeded.seed(*latest_refusals(lines, "discovery.jsonl"))
+    md.calls.clear()
+    later = NOW + timedelta(seconds=30)
+    second = discover(md, settings(), Screen(), OPEN, lambda: later, None, seeded)
+    assert [len(a) for m, a in md.calls if m == "snapshot"] == [4]  # no split
+    (refusal,) = [r for r in second.rejections if r.cause is Cause.SYMBOL_REFUSED]
+    assert refusal.symbol == "S02" and "earlier this session" in refusal.measured
+
+
+def test_seeded_refusals_keep_their_own_time_and_session():
+    md = Unknown(snapshot={"S02"})
+    five(md)
+    memory = RefusedSymbols()
+    memory.seed(OPEN, (RefusedSymbol("S02", Stage.SNAPSHOT, NOW - timedelta(seconds=899)),))
+    assert memory.active(OPEN, NOW, timedelta(seconds=900)) == {"S02": Stage.SNAPSHOT}
+    assert memory.active(OPEN, NOW + timedelta(seconds=1), timedelta(seconds=900)) == {}
+    memory.seed(OPEN, (RefusedSymbol("S02", Stage.SNAPSHOT, NOW),))
+    assert memory.active(OPEN + timedelta(days=1), NOW, timedelta(seconds=900)) == {}
+
+
+def test_latest_refusals_reads_the_newest_complete_record():
+    def line(symbols, at="2026-11-13T15:00:00+00:00"):
+        return json.dumps({"session_open": "2026-11-13T14:30:00+00:00", "refused_symbols": [
+            {"symbol": s, "stage": "snapshot", "refused_at": at} for s in symbols]}) + "\n"
+    found = latest_refusals([line(["A"]), line(["A", "B"]), line(["C"])[:-1]], "f")
+    assert found is not None
+    session, refused = found
+    assert session == OPEN and [r.symbol for r in refused] == ["A", "B"]  # half line skipped
+    assert latest_refusals([json.dumps({"candidates": []}) + "\n"], "f") is None  # older format
+    assert latest_refusals([], "f") is None
+    with pytest.raises(ValueError, match="f:1"):
+        latest_refusals(["{not json\n"], "f")
+    with pytest.raises(ValueError, match="UTC offset"):
+        latest_refusals([line(["A"], at="2026-11-13T15:00:00")], "f")
