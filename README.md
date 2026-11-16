@@ -1,7 +1,7 @@
 # Tickr
 
 Single-owner intraday trading bot for US common stocks on Webull OpenAPI.
-Renamed from Aperture on 2026-11-15; a Mac set up under the old name moves with `ops/migrate-from-aperture.sh` (docs/operations.md).  <!-- rename-keep -->
+Renamed from Aperture on 2026-11-15.  <!-- rename-keep -->
 
 - What v1 does: [`docs/spec-v1.md`](docs/spec-v1.md)
 - Rules for contributors and agents: [`CLAUDE.md`](CLAUDE.md)

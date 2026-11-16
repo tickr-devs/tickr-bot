@@ -135,14 +135,6 @@ def test_refused_while_a_bot_process_holds_the_lock_even_if_stopped(api, setting
     assert _start(server, Runner())[0].status == 202  # released: a clean stop leaves no pid
 
 
-def test_refused_while_a_bot_from_before_the_rename_holds_its_old_lock(api, settings):
-    server, _ = api
-    with SingleInstanceLock(settings.start.legacy_lock_file):
-        runner = Runner()
-        resp, body = _start(server, runner)
-        assert resp.status == 409 and runner.calls == []
-
-
 def test_an_unreadable_lock_file_is_a_typed_refusal(api, settings):
     server, _ = api
     settings.start.lock_file.mkdir(parents=True)  # reading a folder fails with an OSError

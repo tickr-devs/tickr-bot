@@ -6,11 +6,8 @@ from decimal import Decimal
 import pytest
 
 from tickr.store import (
-    DATABASE_FILE,
-    LEGACY_DATABASE_FILE,
     MIGRATIONS,
     EnvironmentMismatch,
-    LegacyDatabaseError,
     Store,
 )
 
@@ -174,25 +171,3 @@ def test_a_database_with_runs_of_another_environment_is_refused(tmp_path):
         store.require_environment("two")
     store.close()
 
-
-def test_open_refuses_a_new_database_next_to_the_pre_rename_one(tmp_path):
-    Store.open(tmp_path / LEGACY_DATABASE_FILE, busy_timeout_seconds=0).close()
-    with pytest.raises(LegacyDatabaseError, match="legacy-database-name"):
-        Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0)
-    assert not (tmp_path / DATABASE_FILE).exists()
-    Store.open(tmp_path / "other.sqlite3", busy_timeout_seconds=0).close()
-    (tmp_path / "other.sqlite3").rename(tmp_path / DATABASE_FILE)
-    with pytest.raises(LegacyDatabaseError):  # both names present: still refused
-        Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0)
-
-
-def test_open_refuses_beside_a_leftover_pre_rename_wal_file(tmp_path):
-    (tmp_path / (LEGACY_DATABASE_FILE + "-wal")).write_bytes(b"")
-    with pytest.raises(LegacyDatabaseError):
-        Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0)
-
-
-def test_open_uses_the_renamed_database_once_it_exists(tmp_path):
-    Store.open(tmp_path / LEGACY_DATABASE_FILE, busy_timeout_seconds=0).close()
-    (tmp_path / LEGACY_DATABASE_FILE).rename(tmp_path / DATABASE_FILE)
-    Store.open(tmp_path / DATABASE_FILE, busy_timeout_seconds=0).close()

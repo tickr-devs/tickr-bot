@@ -20,10 +20,6 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    If `git status --short` lists `config/bot.toml` (you changed a setting), the pull stops with
    "local changes would be overwritten". Then: `git stash`, `git pull`, `git stash pop`, and
    step 3 tells you whether the merged file is valid.
-   If the Mac still runs the old name (jobs `local.aperture.*`, `~/.config/aperture`), the
-   pull brings the rename to Tickr: stop here and run `sh ops/migrate-from-aperture.sh` in the
-   same sitting (dry run first, then `--apply`). After such a pull the old launchd jobs no
-   longer start and nothing alerts. The repository folder may keep its old name.
    The API job runs all the time and keeps the old code until it is started again. Restart it
    after every pull, before the bot runs: an API on old code cannot read the status of a bot
    on new code (the status now names the strategy of each trade).

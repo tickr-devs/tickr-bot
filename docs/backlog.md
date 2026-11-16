@@ -67,7 +67,7 @@ research runs and candidates: they go on in every later version and never gate a
   day; replay and backtests use the measured value instead of the fixed 0.05%. Stop overshoot: read
   trade prints (`ticks/list`) after the session for symbols with own fills, since Webull triggers
   stops on the last trade (old #087).
-- **R6** Pre-registered R21 test (screener rank 21 and lower, `aperture/b4b5/preregistered.txt` in
+- **R6** Pre-registered R21 test (screener rank 21 and lower, `tickr/b4b5/preregistered.txt` in
   project files) on the May-Aug data, run once exactly as registered.
 - **R7** Recheck on recorded live days: screener rank and source vs outcome (old Q46), acceleration
   check (old #153-33). Both studied on history 2026-11-15 (`docs/strategy-ledger.md`): rank fades,

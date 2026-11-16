@@ -35,20 +35,3 @@ def test_recorded_holder(tmp_path):
     path.write_text("99999999")  # crashed bot, process gone
     assert recorded_holder(path) is None
 
-
-def test_held_legacy_lock_refuses_and_releases_own(tmp_path):
-    legacy = tmp_path / "old.lock"
-    with SingleInstanceLock(legacy):  # a bot of the pre-rename code
-        with pytest.raises(AlreadyRunning, match="old.lock"):
-            SingleInstanceLock(tmp_path / "new.lock", legacy).acquire()
-        with SingleInstanceLock(tmp_path / "new.lock"):
-            pass  # the refused attempt did not keep its own lock
-
-
-def test_unheld_legacy_lock_does_not_block_and_is_kept(tmp_path):
-    legacy = tmp_path / "old.lock"
-    legacy.write_text("99999999")
-    with SingleInstanceLock(tmp_path / "new.lock", legacy):
-        assert legacy.exists()
-    with SingleInstanceLock(tmp_path / "new.lock", tmp_path / "missing.lock"):
-        pass

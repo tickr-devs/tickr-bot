@@ -30,7 +30,6 @@ from tickr.engine.manual import (
     run_until_closed,
 )
 from tickr.lock import (
-    LEGACY_LOCK_FILE,
     LOCK_FILE,
     AlreadyRunning,
     SingleInstanceLock,
@@ -179,7 +178,7 @@ def _engine(path: Path, broker: Broker | None = None,
     may already send cancels or orders)."""
     cfg = config_module.load(path)
     database, lock_path = data_paths(cfg)
-    with SingleInstanceLock(lock_path, lock_path.with_name(LEGACY_LOCK_FILE)):
+    with SingleInstanceLock(lock_path):
         store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds)
         _require_environment(store, cfg)
         run_id = store.start_run(environment=cfg.environment_name, config_digest=cfg.digest,
@@ -372,7 +371,7 @@ def _maintain(args: argparse.Namespace) -> int:
         calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
     except CalendarRefused as exc:
         raise ManualRefused(f"calendar unreadable: {exc}") from exc
-    with SingleInstanceLock(lock_path, lock_path.with_name(LEGACY_LOCK_FILE)):
+    with SingleInstanceLock(lock_path):
         try:
             return maintain.run(cfg, calendar, database, ny_date_of(NOW()), apply=args.apply,
                                 out=print)
@@ -464,7 +463,7 @@ def _run(path: Path) -> int:
         return 3
     strategy = service.strategy_id(cfg)
     database, lock_path = data_paths(cfg)
-    with SingleInstanceLock(lock_path, lock_path.with_name(LEGACY_LOCK_FILE)):
+    with SingleInstanceLock(lock_path):
         store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds,
                            now=NOW)
         _require_environment(store, cfg)

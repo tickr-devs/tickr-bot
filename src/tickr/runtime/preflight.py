@@ -51,9 +51,7 @@ from tickr.store import (
     DATABASE_FILE,
     MIGRATIONS,
     EnvironmentMismatch,
-    LegacyDatabaseError,
     Store,
-    legacy_database_beside,
 )
 
 STRATEGY_FILE = "strategy.toml"
@@ -85,7 +83,6 @@ class PreflightCause(StrEnum):
     STOPPED_BY_OPERATOR = "stopped-by-operator"
     DATABASE_OTHER_ENVIRONMENT = "database-other-environment"
     DATABASE_UNREADABLE = "database-unreadable"
-    LEGACY_DATABASE_NAME = LegacyDatabaseError.cause
 
 
 class CheckName(StrEnum):
@@ -287,12 +284,6 @@ def _check_stop_marker(cfg: config_module.Config) -> Check:
 def _check_database(cfg: config_module.Config) -> Check:
     """Read-only: never creates, migrates or writes the bot's database."""
     database = cfg.root / cfg.run.data_dir / DATABASE_FILE
-    legacy = legacy_database_beside(database)
-    if legacy is not None:
-        return Check(CheckName.DATABASE, False,
-                     f"{legacy} is still there (database under the product's old name): run "
-                     "the Mac migration script first (docs/operations.md)",
-                     PreflightCause.LEGACY_DATABASE_NAME)
     if not database.exists():
         return Check(CheckName.DATABASE, True, "not created yet")
     try:

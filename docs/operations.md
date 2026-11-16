@@ -212,15 +212,6 @@ schedule, so it can stay installed; kickstart it again after recreating the venv
 macOS. If no dialog appears and the send fails, open System Settings > Privacy & Security >
 Automation and allow Messages for the listed program.
 
-## Moving a Mac from the old name
-
-The product had another name until 2026-11-15. A Mac installed under it moves with one script
-(dry run first, then `--apply`); its header says what it moves and why. **Pull the rename and
-run the script in one sitting, flat, outside market hours:** after a pull without it the old
-launchd jobs fail at import and nothing alerts. The bot refuses to start
-next to the old database file (`legacy-database-name`) until it has run.
-The script: `ops/migrate-from-aperture.sh`.  <!-- rename-keep -->
-
 ## Everyday commands
 
 ```sh

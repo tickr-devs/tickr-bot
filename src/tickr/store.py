@@ -20,27 +20,6 @@ from typing import Any
 
 # Database file name inside [run] data_dir (structural: the bot, the CLI and the API all use it).
 DATABASE_FILE = "tickr.sqlite3"
-# Name the database had before the product was renamed to Tickr (2026-11-15). Store.open refuses
-# while a file under this name sits beside the database; the Mac migration script renames it:
-# ops/migrate-from-aperture.sh  (rename-keep)
-LEGACY_DATABASE_FILE = "aperture.sqlite3"  # rename-keep
-
-
-class LegacyDatabaseError(RuntimeError):
-    """A database under the pre-rename name sits beside this one (migration not done)."""
-
-    cause = "legacy-database-name"
-
-
-def legacy_database_beside(path: Path) -> Path | None:
-    """The pre-rename database file (or its WAL/SHM file) beside `path`, if any is there."""
-    if path.name != DATABASE_FILE:
-        return None
-    for suffix in ("", "-wal", "-shm"):
-        legacy = path.with_name(LEGACY_DATABASE_FILE + suffix)
-        if legacy.exists():
-            return legacy
-    return None
 
 _SCHEMA_V1 = (
     """CREATE TABLE runs (
@@ -199,11 +178,6 @@ class Store:
         `<name>.pre-v<N>.sqlite3` (verified) and only then migrated.
         """
         path = Path(path)
-        legacy = legacy_database_beside(path)
-        if legacy is not None:
-            raise LegacyDatabaseError(
-                f"{LegacyDatabaseError.cause}: {legacy} exists; "
-                "run ops/migrate-from-aperture.sh before starting")  # rename-keep
         path.parent.mkdir(parents=True, exist_ok=True)
         existed = path.exists() and path.stat().st_size > 0
         db = sqlite3.connect(str(path), isolation_level=None,

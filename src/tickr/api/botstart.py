@@ -34,7 +34,7 @@ from pathlib import Path
 
 from tickr.api.contract import BotStartV1, BotState, StatusResponseV1
 from tickr.config import Config
-from tickr.lock import LEGACY_LOCK_FILE, LOCK_FILE, recorded_holder
+from tickr.lock import LOCK_FILE, recorded_holder
 
 UID_PLACEHOLDER = "{uid}"
 
@@ -62,7 +62,6 @@ class StartSettings:
     timeout_seconds: float
     stop_marker: Path
     lock_file: Path  # the bot's single-instance lock (lock.LOCK_FILE under data_dir)
-    legacy_lock_file: Path  # its name before the rename, which an older bot may still hold
 
     @classmethod
     def from_config(cls, cfg: Config) -> StartSettings:
@@ -70,8 +69,7 @@ class StartSettings:
         data = cfg.root / cfg.run.data_dir
         return cls(tuple(part.replace(UID_PLACEHOLDER, uid) for part in cfg.api.start_bot_command),
                    float(cfg.api.start_bot_timeout_seconds),
-                   data / cfg.runtime.stop_marker_file, data / LOCK_FILE,
-                   data / LEGACY_LOCK_FILE)
+                   data / cfg.runtime.stop_marker_file, data / LOCK_FILE)
 
 
 def _note(line: str) -> None:
@@ -89,7 +87,7 @@ def start_bot(settings: StartSettings, state: StatusResponseV1, now: datetime,
     if status is not None and not state.stale and status.bot_state is not BotState.STOPPED:
         raise StartRefused("conflict", f"the bot is {status.bot_state.value}: nothing to start")
     try:
-        pid = recorded_holder(settings.lock_file) or recorded_holder(settings.legacy_lock_file)
+        pid = recorded_holder(settings.lock_file)
     except OSError as exc:
         raise StartRefused("unavailable", f"the bot's lock file could not be read "
                            f"({type(exc).__name__}): nothing was started") from exc
