@@ -227,8 +227,6 @@ idempotency_key_ttl_seconds = 86400
 replay_settings_file = "config/replay.toml"
 # Most simulated trades (ENTERs, oldest first) GET /observers lists per observer; more = cut, with `trades_truncated` true; read by the api server (api/observer_results.py).
 observer_trades_max_rows = 100
-# Most rows GET /watching returns (the closest first; the answer's `total` counts them all); read by the api server.
-watching_max_rows = 8
 # Latest journal rows GET /journal returns (oldest first; `last_seq` is the newest row's number); read by the api server.
 journal_rows = 40
 # Command POST /commands/start-bot runs to start the bot job through launchd ("{uid}" = this user's id); kickstart

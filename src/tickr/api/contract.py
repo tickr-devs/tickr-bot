@@ -1639,8 +1639,8 @@ class LatestSizeV1:
 
 @dataclass(frozen=True)
 class WatchingV1:
-    """GET /watching?date=: the symbols the active strategy is closest to entering on, closest
-    first, at most `[api] watching_max_rows`; `total` counts them before the cap.
+    """GET /watching?date=: every symbol the active strategy is watching on the day, closest
+    first; `total` is the number of rows.
     `latest_size`: see LatestSizeV1, null when no decision of the day was sized."""
 
     day: date
@@ -1713,8 +1713,8 @@ def shown_check(check: Check, places: int) -> CheckV1:
                    shown(check.threshold, threshold_way), check.passed, check.note)
 
 
-def watching_document(day: date, records: tuple[DecisionRecord, ...], max_rows: int,
-                      places: int, check_places: int) -> WatchingV1:
+def watching_document(day: date, records: tuple[DecisionRecord, ...], places: int,
+                      check_places: int) -> WatchingV1:
     """`records`: active-strategy records of `day`. The latest decision per symbol unless it is
     ENTER, HOLD or EXIT (entering or in a position); closest first, then by symbol."""
     latest = {r.symbol: r for r in _oldest_first(records)}
@@ -1732,7 +1732,7 @@ def watching_document(day: date, records: tuple[DecisionRecord, ...], max_rows: 
             closeness=value, closeness_cause=cause, quote_age_seconds=None,
             quote_age_cause=QUOTE_AGE_NOT_RECORDED))
     rows.sort(key=lambda w: (w.closeness is None, -(w.closeness or 0), w.symbol))
-    return WatchingV1(day=day, total=len(rows), rows=tuple(rows[:max_rows]),
+    return WatchingV1(day=day, total=len(rows), rows=tuple(rows),
                       latest_size=latest_size(records))
 
 

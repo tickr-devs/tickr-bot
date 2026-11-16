@@ -177,7 +177,6 @@ class ApiConfig:
     idempotency_key_ttl_seconds: int
     replay_settings_file: str
     observer_trades_max_rows: int
-    watching_max_rows: int
     journal_rows: int
     start_bot_command: tuple[str, ...]
     start_bot_timeout_seconds: Decimal

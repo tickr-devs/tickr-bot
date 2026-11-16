@@ -131,12 +131,11 @@ def test_watching_latest_per_symbol_closest_first_without_enters_or_observers(ap
     assert body["rows"][3]["decisive_check"] is None
 
 
-def test_watching_is_capped_by_config_and_ties_go_by_symbol(cfg):
+def test_watching_lists_every_symbol_and_ties_go_by_symbol():
     records = tuple(_watch(s, i, check("1", ">=", "2")) for i, s in enumerate("EDCBA"))
-    document = contract.watching_document(DAY, records, 3, 4, 4)
+    document = contract.watching_document(DAY, records, 4, 4)
     assert document.total == 5
-    assert [r.symbol for r in document.rows] == ["A", "B", "C"]
-    assert cfg.api.watching_max_rows > 0
+    assert [r.symbol for r in document.rows] == ["A", "B", "C", "D", "E"]
 
 
 @pytest.mark.parametrize(("measured", "operator", "threshold", "shown"), [
@@ -148,10 +147,10 @@ def test_watching_is_capped_by_config_and_ties_go_by_symbol(cfg):
 ])
 def test_watching_decisive_check_rounds_away_from_passing(measured, operator, threshold, shown):
     records = (_watch("ABCD", 0, check(measured, operator, threshold, "rule")),)
-    document = contract.watching_document(DAY, records, 3, 4, 4)
+    document = contract.watching_document(DAY, records, 4, 4)
     row = document.rows[0]
     assert (str(row.decisive_check.measured), str(row.decisive_check.threshold)) == shown
-    unrounded = contract.watching_document(DAY, records, 3, 4, 12).rows[0]
+    unrounded = contract.watching_document(DAY, records, 4, 12).rows[0]
     assert row.closeness == unrounded.closeness  # computed from the recorded values
 
 
@@ -173,7 +172,7 @@ def test_latest_size_is_the_newest_recorded_quantity_with_its_structured_binding
     risk = check("0.335", ">", "0", contract.SIZING_RISK_RULE)
     risk = Check(risk.rule, risk.measured, risk.operator, risk.threshold, True)
     records = (_watch("ABCD", 0, sized), _watch("QRST", 4, PASS, room, risk, small))
-    latest = contract.watching_document(DAY, records, 3, 4, 4).latest_size
+    latest = contract.watching_document(DAY, records, 4, 4).latest_size
     assert (latest.symbol, latest.quantity, latest.binding, latest.binding_cause) == (
         "QRST", Decimal("37"), contract.SizeBinding.DAILY_ROOM, None)  # floor(12.5/0.335) = 37
     # Planned 100 lowered to room 95, risk 0.10: by loss 950, but the notional cap (5000 at
@@ -182,11 +181,11 @@ def test_latest_size_is_the_newest_recorded_quantity_with_its_structured_binding
                      Check(contract.DAILY_ROOM_RULE, Decimal(95), "<", Decimal(100), True),
                      Check(contract.SIZING_RISK_RULE, Decimal("0.10"), ">", Decimal(0), True),
                      Check(contract.QUANTITY_RULE, Decimal(100), ">=", Decimal(1), True)),)
-    latest = contract.watching_document(DAY, capped, 3, 4, 4).latest_size
+    latest = contract.watching_document(DAY, capped, 4, 4).latest_size
     assert (latest.binding, latest.binding_cause) == (None, contract.BINDING_NOT_RECORDED)
     without_risk = (_watch("QRST", 6, PASS, room, small),)  # simple.py records no sizing risk
-    assert contract.watching_document(DAY, without_risk, 3, 4, 4).latest_size.binding is None
-    assert contract.watching_document(DAY, (_watch("ABCD", 0, FAIL),), 3, 4, 4
+    assert contract.watching_document(DAY, without_risk, 4, 4).latest_size.binding is None
+    assert contract.watching_document(DAY, (_watch("ABCD", 0, FAIL),), 4, 4
                                       ).latest_size is None
 
 

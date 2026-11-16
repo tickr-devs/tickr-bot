@@ -151,7 +151,6 @@ class ApiSettings:
     journal_rows: int  # GET /journal: latest journal rows served
     advisor_dir: Path  # [advisor] proposals_dir: one folder per AI advisor run, GET /advisor
     advisor_runs: int  # GET /advisor: newest runs served
-    watching_max_rows: int
     closeness_places: int  # decimal places of GET /watching closeness
     check_places: int  # decimal places of check values in every document that shows checks
     change_pct_places: int  # decimal places of GET /flow change_pct
@@ -220,8 +219,6 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
                           "command_max_age_seconds, so a repeat can never queue a command twice")
     if api.observer_trades_max_rows <= 0:
         raise ConfigError("[api] observer_trades_max_rows must be positive")
-    if api.watching_max_rows <= 0:
-        raise ConfigError("[api] watching_max_rows must be positive")
     if api.journal_rows <= 0:
         raise ConfigError("[api] journal_rows must be positive")
     if api.start_bot_timeout_seconds <= 0:
@@ -284,7 +281,6 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         simulation=SimulationPaths.from_config(cfg),
         observer_trades_max_rows=api.observer_trades_max_rows,
         universe=DiscoverySettings.from_config(cfg),
-        watching_max_rows=api.watching_max_rows,
         journal_rows=api.journal_rows,
         advisor_dir=data / cfg.advisor.proposals_dir,
         advisor_runs=api.advisor_runs,
@@ -1077,8 +1073,8 @@ class Handler(BaseHTTPRequestHandler):
                     day, today, cache.records(day, today, role=Role.ACTIVE), log.path(day))
             elif path == "/watching":
                 document = contract.watching_document(
-                    day, cache.records(day, today, role=Role.ACTIVE), settings.watching_max_rows,
-                    settings.closeness_places, settings.check_places)
+                    day, cache.records(day, today, role=Role.ACTIVE), settings.closeness_places,
+                    settings.check_places)
             elif path == "/flow":
                 document = self._flow(day, today, cache.records(day, today, role=Role.ACTIVE))
             else:
