@@ -93,7 +93,12 @@ A build never leaves a fixture a start would take but should not:
   stored; nothing is recorded, and the next start builds again. The archive is written as
   `.<digest>.tar.xz.partial` (manifest last) and gets its name only once complete and checked; a
   start never reads a partial file, and the next build deletes one a killed writer left.
-- **Refused**: the day not flat at the clock, the bot failing, or the new archive failing the
+  An outside stop that comes less than `[orders] shutdown_deadline_seconds` (bot.toml) of
+  simulated time before the session's own stop can count as reaching it: the bot's drain keeps
+  the simulated clock moving, and when it passes that stop, the day it leaves runs up to it. That is harmless: the
+  stored day is the same as after the build's own stop.
+- **Refused**: the day not flat at the clock, the bot failing (a non-zero exit on a past
+  session or on the demo day, even before its stop), or the new archive failing the
   same checks a start runs on it (manifest, extraction, the store's forward migrations, done in a
   scratch folder). Nothing is stored, the previous build is kept, and the cause is recorded in
   `demo-fixture/<digest>.refused`. A start then serves the previous build and says so once,

@@ -293,7 +293,8 @@ def _demo_day(session: Session, world: World, cfg: config_module.Config,
     reached = _stop_at(world, ny(session.day, scenario.clock))
     log(f"demo: session {session.day.isoformat()} (the demo day, up to {scenario.clock})")
     code = session.run(world)
-    _require_reached(reached, session, scenario.clock)
+    if code == 0:  # a failing bot is the build's refusal (FixtureRefused), not an interruption
+        _require_reached(reached, session, scenario.clock)
     return code
 
 
@@ -340,9 +341,9 @@ def replay(repo: Path, scenario: Scenario, today: date,
         log(f"demo: session {session.day.isoformat()} (past)")
         reached = _stop_at(world, ny(session.day, scenario.past_stop))
         code = session.run(world)
+        if code != 0:  # deterministic: building again gives the same, so it is recorded
+            raise FixtureRefused(f"the bot ended {session.day} with exit code {code}")
         _require_reached(reached, session, scenario.past_stop)
-        if code != 0:
-            raise DemoRefused(f"the bot ended {session.day} with exit code {code}")
     raise AssertionError("unreachable: the loop ends on the demo day")
 
 
@@ -440,8 +441,8 @@ def build_fixture(repo: Path, scenario: Scenario, today: date,
         for leftover in folder.glob(f".*{PARTIAL_SUFFIX}"):  # a build killed while writing
             leftover.unlink()
         refusal_path(repo, inputs).unlink(missing_ok=True)  # an explicit build tries again
-        cfg, day, code = replay(repo, building, today, log)
         try:
+            cfg, day, code = replay(repo, building, today, log)
             archive = _store_fixture(repo, scenario, inputs, cfg, day, code)
         except FixtureRefused as exc:
             refusal_path(repo, inputs).write_text(f"{exc}\n", "utf-8")

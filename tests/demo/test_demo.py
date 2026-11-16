@@ -902,3 +902,18 @@ def test_a_build_the_start_would_refuse_is_not_stored_and_not_tried_again(
     assert demo.recorded_refusal(root, inputs) is None
     assert [p.name for p in (root / demo.FIXTURE_DIR).iterdir()] == [
         demo.fixture_path(root, inputs).name]
+
+
+def test_a_bot_failing_on_a_past_day_is_a_recorded_refusal(tmp_path, monkeypatch, first_start):
+    """A non-zero exit of the bot on a past session (here before its stop) is the build's
+    refusal, not an interruption: recorded like the others, so no start builds it again."""
+    root, previous = _stale_repo(tmp_path, first_start)
+    short = _short_day(root)
+    scenario = replace(short, past=(short.today,))
+    inputs = demo.fixture_inputs(root, scenario)
+    monkeypatch.setattr(demo.Session, "run", lambda self, world: 3)  # `tickr run` refused
+    with pytest.raises(demo.FixtureRefused, match="exit code 3"):
+        demo.build_fixture(root, scenario, SUNDAY, log=lambda line: None)
+    assert "exit code 3" in demo.recorded_refusal(root, inputs)
+    assert sorted(p.name for p in (root / demo.FIXTURE_DIR).iterdir()) == sorted(
+        [previous.name, demo.refusal_path(root, inputs).name])
