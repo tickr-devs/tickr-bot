@@ -17,8 +17,13 @@ are strings (never floats); times are ISO-8601 UTC. Every record carries `provid
   gainers and losers rank by) for the screener reads outside discovery: the recorder's reads
   in the pre-market (the pre-open preload uses them) and the post-market (runtime.screeners).
   Together the two files hold every screener list the bot received.
+- profiles.jsonl: instrument profile rows as read (`instrument_id`, `symbol`, the complete
+  provider row `fields`: shortable, easy_to_borrow, the margin requirements ...), for the
+  screeners' instruments (runtime.profiles): when first listed that day and again, at most every
+  `[market_data] profile_refresh_seconds`, for the losers and the big gainers.
 - events.jsonl: what the screener files cannot show by themselves: `screener-skipped` (a kind
-  not read: `kind`, `cause` such as "budget" or the error type, `source`), `bot-start` and
+  not read: `kind`, `cause` such as "budget" or the error type, `source`), `profiles-skipped`
+  (profiles due and not read: the refused request's `symbols`, `cause`, `waiting`), `bot-start` and
   `bot-stop` (with the run's end `cause`), so a gap in the lists is either marked or is a time
   the bot was not running.
 - discovery.jsonl: one line per discovery pass (`tickr.data.discovery.pass_record`): every
@@ -46,7 +51,13 @@ from typing import IO, Any
 from tickr.archive import GZ_SUFFIX, open_text
 from tickr.calendar import ny_date_of
 from tickr.config import Config
-from tickr.data.base import ScreenerKind, ScreenerRow, ScreenerSession, StreamNotice
+from tickr.data.base import (
+    InstrumentProfile,
+    ScreenerKind,
+    ScreenerRow,
+    ScreenerSession,
+    StreamNotice,
+)
 from tickr.replay.bars import BAR_KEYS, parse_bar
 from tickr.replay.errors import BarFileError
 from tickr.types import Bar, Quote
@@ -59,6 +70,8 @@ DISCOVERY_FILE = "discovery.jsonl"
 SCREENER_RECORDED_FILE = "screener-recorded.jsonl"
 EVENTS_FILE = "events.jsonl"
 SCREENER_SKIPPED = "screener-skipped"
+PROFILES_FILE = "profiles.jsonl"
+PROFILES_SKIPPED = "profiles-skipped"
 BOT_START = "bot-start"
 BOT_STOP = "bot-stop"
 NOTICE_STATUS_TYPE = "1001"
@@ -182,6 +195,14 @@ class CaptureWriter:
             records = [{**r, "session": session.value} for r in records]
         with self._lock:
             self._append(day, file, records)
+
+    def profiles(self, profiles: Sequence[InstrumentProfile], provider: str,
+                 receipt_time: datetime) -> None:
+        records = [{"instrument_id": p.instrument_id, "symbol": p.symbol,
+                    "fields": dict(p.fields), "provider": provider,
+                    "receipt_time": _time(receipt_time)} for p in profiles]
+        with self._lock:
+            self._append(_day(receipt_time), PROFILES_FILE, records)
 
     def screener_skipped(self, kinds: Sequence[ScreenerKind], cause: str, source: str,
                          receipt_time: datetime) -> None:

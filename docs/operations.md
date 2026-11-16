@@ -534,7 +534,8 @@ loads the prior-session history of the screener recorder's symbols (below), one 
 20 symbols per loop pass. Each batch that settled symbols writes a `history-preload` row
 (`symbols`, `loaded`, `refused`, `requests`, `queued`); a failed history read writes one with
 `error` and the preload pauses `history_preload_retry_seconds` (a budget refusal pauses
-silently).
+silently). History refusals of the strategy's symbols are `history-refused` rows, once a
+symbol a day.
 
 ### Screener lists outside the regular session
 
@@ -543,13 +544,29 @@ From the pre-market open to the regular open, and from the regular close to the 
 screener_record_seconds`, on the first loop pass of a minute, and appends them as they came to
 `<capture>/<date>/screener-recorded.jsonl` (discovery's own reads in the regular session stay in
 `screener.jsonl`). There the gainers and losers rank by the pre-market's or the post-market's
-change (`[market_data] premarket_gainers_losers_rank_type`, `postmarket_gainers_losers_rank_type`),
-and each record says which in `session`. A list not read, because the request budget was spent or the read failed, is
-written to `events.jsonl` in the same folder as one `screener-skipped` row per list (`kind`,
-`cause` (`budget` or the error's type) and `source` (`recorder` or `discovery`). The same file
-has a `bot-start` and a `bot-stop` row for each run (`run_id`, `code_version`, the stop's
-`cause`), so a gap in the lists can be told apart from a bot that was not running. History refusals of the strategy's symbols are `history-refused` rows, once a
-symbol a day.
+change (`[market_data] premarket_gainers_losers_rank_type`,
+`postmarket_gainers_losers_rank_type`), and each record says which in `session`. A list not
+read, because the request budget was spent or the read failed, is written to `events.jsonl` in
+the same folder as one `screener-skipped` row per list: `kind`, `cause` (`budget` or the error's
+type) and `source` (`recorder` or `discovery`). The same file has a `bot-start` and a `bot-stop`
+row for each run (`run_id`, `code_version`, the stop's `cause`), so a gap in the lists can be
+told apart from a bot that was not running.
+
+### Instrument profiles of the listed stocks
+
+With each round of lists (a discovery pass, or a recorder round), the bot reads the instrument
+profiles of the listed instruments and appends them to `profiles.jsonl` in the same folder:
+`shortable`, `easy_to_borrow`, `marginable` and the short margin requirements, as Webull sent
+them (Webull states no borrow quantity). Each instrument is read once a day when first listed,
+and again every `[market_data] profile_refresh_seconds` while it is a loser or a gainer up at
+least `profile_refresh_gainer_move_percent`. At most `profile_max_requests_per_round` requests
+are sent a round, leaving `profile_reserve_requests` of the route free for discovery. A refused
+or failed request ends its round with a `profiles-skipped` row in `events.jsonl` (that request's
+`symbols`, its `cause`, and how many more were `waiting`); the round cap alone writes one with
+cause `round-cap`. What was not read is asked again in the next round. The reads run on a thread
+of their own, after a discovery pass is collected: neither the pass, its candidates nor the loop
+waits for them. A capture that cannot be written is a `capture-failed` journal row (`what`:
+`screener-recorder` or `profile-recorder`); the bot goes on.
 
 When a decision sends an entry (or asks an exit) in the middle of a minute, the symbols left in
 that minute are put aside (`evaluation-stopped`, stage `protect-first`, with `remaining` and

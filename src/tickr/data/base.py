@@ -43,6 +43,18 @@ class ScreenerSession(StrEnum):
 
 
 @dataclass(frozen=True)
+class InstrumentProfile:
+    """One instrument profile row: identity, the type discovery filters on, and the complete
+    provider row (`fields`, every value a string: shortable, easy_to_borrow, the margin
+    requirements, status ...) for capture."""
+
+    instrument_id: str
+    symbol: str
+    security_type: str | None
+    fields: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ScreenerRow:
     """One screener row. `rank` counts from 1 in provider order.
 
@@ -166,6 +178,12 @@ class MarketData(Protocol):
     def screener(self, kind: ScreenerKind,
                  session: ScreenerSession = ScreenerSession.REGULAR) -> list[ScreenerRow]: ...
 
+    def profiles(self, symbols: Sequence[str], *,
+                 budget_reserve: int = 0) -> list[InstrumentProfile]:
+        """The instrument profile rows of `symbols` (several rows per symbol possible; match by
+        instrument_id), leaving `budget_reserve` requests of the route free."""
+        ...
+
     def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
         """Up to `count` most recent M1 bars per symbol, oldest first per symbol.
 
@@ -225,6 +243,7 @@ class FakeMarketData:
         self._bars: dict[str, list[Bar]] = {}
         self._history: dict[tuple[str, BarSpan], list[SessionBar]] = {}
         self._quotes: dict[str, Quote] = {}
+        self._profiles: dict[str, list[InstrumentProfile]] = {}
         self._limits: dict[str, int] = {}
         self._bars_delay: Decimal | None = None
         self.calls: list[tuple[str, tuple[str, ...]]] = []
@@ -237,6 +256,9 @@ class FakeMarketData:
         return self._provider
 
     # -- scripting
+    def set_profile(self, profile: InstrumentProfile) -> None:
+        self._profiles.setdefault(profile.symbol, []).append(profile)
+
     def set_screener(self, kind: ScreenerKind, rows: list[ScreenerRow]) -> None:
         self._rows[kind] = list(rows)
 
@@ -277,6 +299,11 @@ class FakeMarketData:
         self._call("screener", [kind.value] if session is ScreenerSession.REGULAR
                    else [kind.value, session.value])
         return list(self._rows.get(kind, []))
+
+    def profiles(self, symbols: Sequence[str], *,
+                 budget_reserve: int = 0) -> list[InstrumentProfile]:
+        self._call("profiles", symbols)
+        return [p for s in symbols for p in self._profiles.get(s, [])]
 
     def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
         self.bars_reserves.append(budget_reserve)

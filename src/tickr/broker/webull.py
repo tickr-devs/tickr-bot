@@ -61,6 +61,7 @@ from tickr.config import BARS_ROUTE, Config, GateResult, check_chart_slice, trad
 from tickr.data.base import (
     BarSpan,
     DelayedData,
+    InstrumentProfile,
     MarketDataError,
     QuoteListener,
     ScreenerKind,
@@ -1000,32 +1001,39 @@ def read_screener(body: Any, kind: ScreenerKind) -> list[ScreenerRow]:
     return rows
 
 
-@dataclass(frozen=True)
-class Profile:
-    instrument_id: str
-    symbol: str
-    security_type: str | None
+def _field_text(value: Any) -> str:
+    """A provider value as capture text: booleans in their JSON spelling ("true", not
+    Python's "True"), everything else as `str` (strings as sent, numbers as written)."""
+    if isinstance(value, bool):
+        return json.dumps(value)
+    return str(value)
 
 
-def read_profiles(body: Any) -> dict[str, Profile]:
-    """Instrument profile rows (`{data: [...]}`, probe M1) -> {instrument_id: Profile}.
+def read_profiles(body: Any) -> dict[str, InstrumentProfile]:
+    """Instrument profile rows (`{data: [...]}`, probe M1) -> {instrument_id: InstrumentProfile}.
 
     Identity is the instrument_id: one symbol may return several rows (OPENW returned a stale
     and a current id), and the caller matches the screener row's id, never the first symbol hit.
     A row without `sub_category` has an unknown type (None)."""
-    profiles: dict[str, Profile] = {}
+    profiles: dict[str, InstrumentProfile] = {}
     for index, item in enumerate(_unwrap_list(body, "profiles")):
         where = f"profiles[{index}]"
-        profile = Profile(
+        profile = InstrumentProfile(
             instrument_id=str(_require(item, "instrument_id", where)),
             symbol=str(_require(item, "symbol", where)),
             security_type=(None if _optional(item, SECURITY_TYPE_KEY) is None
                            else str(item[SECURITY_TYPE_KEY])),
+            fields={str(k): _field_text(v) for k, v in item.items() if v is not None},
         )
         previous = profiles.get(profile.instrument_id)
-        if previous is not None and previous != profile:
-            raise MalformedResponse(f"{where}: instrument {profile.instrument_id} listed twice "
-                                    "with different contents")
+        if previous is not None:
+            # The same instrument twice must agree on what discovery uses; other fields of a
+            # repeat are not compared, and the first row is the one captured.
+            if (previous.symbol, previous.security_type) != (profile.symbol,
+                                                             profile.security_type):
+                raise MalformedResponse(f"{where}: instrument {profile.instrument_id} listed "
+                                        "twice with different contents")
+            continue
         profiles[profile.instrument_id] = profile
     return profiles
 
@@ -1233,6 +1241,18 @@ class WebullMarketData:
             return replace(row, security_type=known[1] if same else None)
 
         return [typed(r) for r in rows]
+
+    def profiles(self, symbols: Sequence[str], *,
+                 budget_reserve: int = 0) -> list[InstrumentProfile]:
+        """Every profile row of `symbols`, `profile_symbols_per_request` per request. Rows of
+        symbols not asked are dropped."""
+        found: list[InstrumentProfile] = []
+        for start in range(0, len(symbols), self._profile_chunk):
+            chunk = list(symbols[start:start + self._profile_chunk])
+            rows = read_profiles(self._read(Route.PROFILES, {
+                "symbols": ",".join(chunk), "category": self._category}, budget_reserve))
+            found.extend(p for p in rows.values() if p.symbol in chunk)
+        return found
 
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
         body = self._read(Route.SNAPSHOT, {

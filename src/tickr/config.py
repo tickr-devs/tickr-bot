@@ -236,6 +236,10 @@ class MarketDataConfig:
     history_cache_max_age_days: int
     history_preload_minutes_before_open: int
     screener_record_seconds: Decimal
+    profile_refresh_seconds: Decimal
+    profile_refresh_gainer_move_percent: Decimal
+    profile_max_requests_per_round: int
+    profile_reserve_requests: int
     history_preload_retry_seconds: Decimal
     stream_reconnect_delay_seconds: Decimal
     stream_max_symbols: int
@@ -515,6 +519,12 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if run.code_version_timeout_seconds <= 0:
         raise ConfigError("[run] code_version_timeout_seconds must be above 0")
     md: MarketDataConfig = built["market_data"]
+    if (md.profile_refresh_seconds <= 0 or md.profile_refresh_gainer_move_percent <= 0
+            or md.profile_max_requests_per_round < 1 or md.profile_reserve_requests < 0):
+        raise ConfigError("[market_data] profile_refresh_seconds and "
+                          "profile_refresh_gainer_move_percent must be above 0, "
+                          "profile_max_requests_per_round at least 1 and "
+                          "profile_reserve_requests at least 0")
     if md.refused_symbol_recheck_seconds <= 0:
         raise ConfigError("[market_data] refused_symbol_recheck_seconds must be above 0")
     if md.failure_detail_max_chars < 1:

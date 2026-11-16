@@ -366,6 +366,18 @@ history_preload_minutes_before_open = 30
 # captured to screener-recorded.jsonl for research; the pre-open preload takes its symbols from these rounds (3 screener
 # requests per round, well inside the route's 30 per minute); read by runtime.screeners.
 screener_record_seconds = 60
+# Seconds before a loser's or big gainer's instrument profile (shortable, easy_to_borrow, margins) is read and captured
+# again; every screener instrument is captured once a day when first listed; read by runtime.profiles.
+profile_refresh_seconds = 300
+# Move from the previous close, in percent of it, from which a gainer's profile is refreshed like a loser's; read by
+# runtime.profiles.
+profile_refresh_gainer_move_percent = 20
+# Most instrument-profile requests the profile recorder sends per screener round (each up to
+# profile_symbols_per_request symbols); the rest wait for the next round; read by runtime.profiles.
+profile_max_requests_per_round = 3
+# Instrument-profile requests the profile recorder leaves free in the route's minute window, for discovery's
+# security-type lookups; read by runtime.profiles.
+profile_reserve_requests = 10
 # Seconds the pre-open preload pauses after a budget refusal or a failed read before its next batch; read by
 # runtime.preload.
 history_preload_retry_seconds = 60

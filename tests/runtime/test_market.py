@@ -30,7 +30,7 @@ from tickr.runtime.market import (
     StreamInbox,
 )
 from tickr.store import Store
-from tickr.types import Quote
+from tickr.types import Bar, Quote
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
@@ -854,3 +854,65 @@ def test_a_recorder_capture_not_written_is_journaled_and_the_round_not_used(tmp_
     (row,) = rig.store.journal(CAPTURE_FAILED)
     assert row.body == {"what": "screener-recorder", "error": "CaptureError",
                         "detail": "screener-recorded.jsonl: disk full"}
+
+
+def test_a_discovery_pass_and_the_recorder_capture_the_listed_profiles(tmp_path):
+    from tickr.calendar import ny_date_of
+    from tickr.data.base import InstrumentProfile
+    from tickr.data.capture import PROFILES_FILE, CaptureWriter
+
+    source = FakeMarketData()
+    writer = CaptureWriter(tmp_path / "capture", source.provider)
+    rig = Rig(tmp_path, source=source, capture=writer)
+    for symbol in ("ABC", "XYZ"):
+        source.set_profile(InstrumentProfile(f"id-{symbol}", symbol, "COMMON_STOCK",
+                                             {"shortable": "true"}))
+    source.set_screener(ScreenerKind.GAINERS, [
+        ScreenerRow(ScreenerKind.GAINERS, 1, "id-ABC", "ABC", "NSQ", "USD", "COMMON_STOCK", {})])
+    rig.market.tick()  # a discovery pass in the regular session
+    source.set_screener(ScreenerKind.GAINERS, [
+        ScreenerRow(ScreenerKind.GAINERS, 1, "id-XYZ", "XYZ", "NSQ", "USD", None, {})])
+    day = CALENDAR.day(MONDAY_11.date())
+    assert rig.market.record_screeners(day, day.regular_close) is not None
+    path = writer.path(ny_date_of(MONDAY_11), PROFILES_FILE)
+    captured = [json.loads(x) for x in path.read_text("utf-8").splitlines()]
+    assert [(c["symbol"], c["fields"]) for c in captured] == [
+        ("ABC", {"shortable": "true"}), ("XYZ", {"shortable": "true"})]
+
+
+def test_a_slow_or_failing_profile_route_never_delays_or_changes_the_collected_pass(tmp_path):
+    import threading
+
+    from tickr.data.base import InstrumentProfile
+    from tickr.data.capture import CaptureWriter
+    from tickr.runtime.market import CAPTURE_FAILED
+    from tickr.runtime.profiles import profile_thread
+
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowProfiles(FakeMarketData):
+        def profiles(self, symbols, *, budget_reserve=0):
+            entered.set()
+            assert release.wait(5)
+            raise MalformedResponse("profiles: timed out")
+
+    source = SlowProfiles()
+    writer = CaptureWriter(tmp_path / "capture", source.provider)
+    rig = Rig(tmp_path, source=source, capture=writer)
+    rig.market.profiles._spawn = profile_thread  # its own thread, as in the bot
+    rig.market.screen = PassAll()
+    source.set_profile(InstrumentProfile("id-ABC", "ABC", "COMMON_STOCK", {}))
+    source.set_screener(ScreenerKind.GAINERS, [
+        ScreenerRow(ScreenerKind.GAINERS, 1, "id-ABC", "ABC", "NSQ", "USD", "COMMON_STOCK", {})])
+    source.set_quote(Quote("ABC", D("10.00"), D("10.01"), D(1), D(1), rig.now, rig.now))
+    source.add_bars([Bar("ABC", rig.now - timedelta(minutes=2), D(10), D(10), D(10), D(10),
+                         D(100))])
+    rig.market.tick()
+    assert entered.wait(5)  # the profile read is hanging on its own thread ...
+    assert rig.market.candidates() == ["ABC"]  # ... and the pass was collected all the same
+    (row,) = rig.store.journal(DISCOVERY)
+    assert row.body["candidates"] == ["ABC"]
+    release.set()
+    assert rig.market.close(5)
+    rig.market.tick()  # the failed round is not journaled: a read failure is an event
+    assert rig.store.journal(CAPTURE_FAILED) == []

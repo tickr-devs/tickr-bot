@@ -456,3 +456,25 @@ def test_discovery_bars_leave_the_reserve_and_send_nothing_when_refused():
     assert caught.value.cause == "reserved"  # type: ignore[attr-defined]
     md.bars(["A"], 5)  # evaluation (no reserve) still reads
     assert md.budget.usage(Route.BARS.path).used == 3  # type: ignore[attr-defined]
+
+
+def test_profiles_keep_the_short_and_margin_fields_of_the_recorded_rows():
+    profiles = read_profiles(recorded("instruments_stocks_profiles_list_mixed_types.json"))
+    aapl = next(p for p in profiles.values() if p.symbol == "AAPL")
+    assert aapl.fields["shortable"] == "true" and aapl.fields["easy_to_borrow"] == "true"
+    assert aapl.fields["margin_requirement_short"] == "0.5000000000"
+    grabw = next(p for p in profiles.values() if p.symbol == "GRABW")
+    assert grabw.fields["shortable"] == "false"
+
+
+def test_profile_reads_chunk_leave_the_reserve_and_drop_symbols_not_asked():
+    md, transport = adapter(
+        ok({"data": [profile("A"), profile("B")]}),
+        ok({"data": [profile("C"), profile("ZZZ")]}),
+        limit=3, chunk=2)
+    got = md.profiles(["A", "B", "C"], budget_reserve=1)
+    assert [p.symbol for p in got] == ["A", "B", "C"]
+    assert [p for _, p in transport.sent] == [
+        {"symbols": "A,B", "category": "US_STOCK"}, {"symbols": "C", "category": "US_STOCK"}]
+    with pytest.raises(RateLimited):
+        md.profiles(["D"], budget_reserve=1)  # the last request of the window is kept free

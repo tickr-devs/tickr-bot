@@ -166,6 +166,8 @@ class DiscoveryResult:
     """The regular session the pass ran in (keys the refused-symbol memory)."""
     refused_symbols: tuple[RefusedSymbol, ...] = ()
     """Every refusal the session memory still held when the pass ended (`RefusedSymbols`)."""
+    screened: tuple[ScreenerRow, ...] = ()
+    """Every screener row the pass read, in list order (the profile recorder's input)."""
 
     @property
     def evaluated(self) -> int:
@@ -462,7 +464,7 @@ def discover(
         return DiscoveryResult(started, tuple(read), merged, len(universe),
                                tuple(candidates), tuple(rejections), stop, tuple(instruments),
                                not_reached, tuple(movers), isinstance(screen, FastMovers),
-                               session_open, memory.remembered())
+                               session_open, memory.remembered(), tuple(rows))
 
     if stopped is not None:
         return result([], stopped)
