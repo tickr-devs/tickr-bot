@@ -3,70 +3,150 @@
 balance read (docs/api.md).
 
 Positions and orders come only from `Engine.broker_view`, which a successful `reconcile()`
-sets. `Balances` reads the account's balance (and, once, its kind) after a successful
-reconciliation, at most once per `[orders] balance_read_seconds`: display only, no limit or
-decision reads it, and a failed read never stops the loop. Account ids never enter the
+sets. Balances, the account's kind and today's fills come from `AccountReads`, which reads them
+on its own thread: display only, no limit or decision reads them, and the loop never waits on
+them. Account ids never enter the
 document: the broker rows carry none we copy.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import date, datetime
+from typing import Any, Protocol
 
 from tickr.api import contract as api
-from tickr.broker.base import AccountBalance, BrokerError
+from tickr.broker.base import AccountBalance, AccountSnapshot, BrokerError, BrokerFill
+from tickr.calendar import ny_date_of
 from tickr.engine.core import Engine, Fence
 from tickr.runtime.dayend import records_agree
-from tickr.runtime.protection import busy
 
 # Journal row when a balance read fails: one per stretch of failures (the next success ends it).
 BALANCE_READ_FAILED = "balance-read-failed"
+# The same for the read of today's fills (order history).
+FILLS_READ_FAILED = "fills-read-failed"
+# The same for an unexpected error in the display reads' own thread (it keeps running).
+ACCOUNT_READS_FAILED = "account-reads-failed"
+THREAD_NAME = "tickr-account-reads"
 
 
-@dataclass
+class DisplayReads(Protocol):
+    """The broker reads behind the account file's balances and fills: display only."""
+
+    def account(self) -> AccountSnapshot: ...
+
+    def balance(self) -> AccountBalance: ...
+
+    def fills_today(self, day: date) -> list[BrokerFill]: ...
+
+
+@dataclass(frozen=True)
 class Balances:
-    """The latest successful balance read and the account's kind, refreshed by `refresh`."""
+    """The latest successful display reads: balance, the account's kind, today's fills."""
 
     balance: AccountBalance | None = None
     read_at: datetime | None = None
     label: str | None = None
-    _label_read: bool = False  # the accounts list was read once (label may still be None)
-    _attempt_at: datetime | None = None
-    _failing: bool = False
+    fills: tuple[BrokerFill, ...] = ()
+    fills_read_at: datetime | None = None
 
-    def refresh(self, engine: Engine, now: datetime) -> None:
-        """Read the balance when the last attempt is at least `[orders] balance_read_seconds`
-        old, and the account's kind until one accounts read succeeds. Skipped while a trade
-        needs the loop (`protection.busy`: an entry working, an exit in progress, a fill not
-        yet covered by a verified stop), so a slow balance route never delays protection.
-        A failed balance read keeps the last good one (the document carries its time) and is
-        journaled once per stretch; a failed accounts read only leaves the kind unknown."""
-        interval = timedelta(seconds=float(engine.config.orders.balance_read_seconds))
-        if self._attempt_at is not None and now - self._attempt_at < interval:
-            return
-        if busy(engine) is not None:
-            return
-        self._attempt_at = now
+
+class AccountReads:
+    """The display reads (balance, the account's kind once, today's fills), made on their own
+    daemon thread every `[orders] balance_read_seconds`, so a slow or paging broker route never
+    delays the trading loop: the loop only takes the latest snapshot and journals the failures
+    collected since its last look. Nothing decides on these numbers. The thread touches no
+    engine or store state; a failed read keeps the last good one (the document carries its
+    time) and is reported once per stretch of failures."""
+
+    def __init__(self, broker: DisplayReads, interval_seconds: float,
+                 now: Callable[[], datetime]) -> None:
+        self._broker = broker
+        self._interval = interval_seconds
+        self._now = now
+        self._lock = threading.Lock()
+        self._snapshot = Balances()
+        self._label_read = False  # the accounts list was read once (the label may be None)
+        self._failing: dict[str, bool] = {}
+        self._failures: list[tuple[str, dict[str, str]]] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, name=THREAD_NAME, daemon=True)
+            self._thread.start()
+
+    def stop(self, timeout_seconds: float) -> None:
+        """Ask the thread to end and wait at most `timeout_seconds` (a read in flight ends
+        by its own HTTP timeout; the thread is a daemon either way)."""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout_seconds)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.read_once()
+            except Exception as exc:  # noqa: BLE001 - the display thread must outlive a bug
+                self._report(ACCOUNT_READS_FAILED, exc)
+            self._stop.wait(self._interval)
+
+    def read_once(self) -> None:
+        """One round of reads (called by the thread; tests call it directly)."""
+        now = self._now()
         if not self._label_read:
             try:
-                self.label = engine.broker.account().label
-                self._label_read = True
+                label = self._broker.account().label
             except BrokerError:
-                pass  # display only: tried again at the next balance read
+                pass  # display only: tried again next round
+            else:
+                self._label_read = True
+                self._update(label=label)
         try:
-            balance = engine.broker.balance()
+            balance = self._broker.balance()
         except BrokerError as exc:
-            if not self._failing:
-                with engine.store.transaction():
-                    engine.store.append(BALANCE_READ_FAILED,
-                                        {"error": type(exc).__name__, "detail": str(exc)},
-                                        run_id=engine.run_id)
-            self._failing = True
-            return
-        self._failing = False
-        self.balance, self.read_at = balance, now
+            self._report(BALANCE_READ_FAILED, exc)
+        else:
+            self._recovered(BALANCE_READ_FAILED)
+            self._update(balance=balance, read_at=now)
+        try:
+            fills = self._broker.fills_today(ny_date_of(now))
+        except BrokerError as exc:
+            self._report(FILLS_READ_FAILED, exc)
+        else:
+            self._recovered(FILLS_READ_FAILED)
+            self._update(fills=tuple(fills), fills_read_at=now)
+
+    def _update(self, **changes: Any) -> None:
+        with self._lock:
+            self._snapshot = replace(self._snapshot, **changes)
+
+    def _report(self, kind: str, exc: Exception) -> None:
+        with self._lock:
+            if not self._failing.get(kind):
+                self._failures.append((kind, {"error": type(exc).__name__, "detail": str(exc)}))
+            self._failing[kind] = True
+
+    def _recovered(self, kind: str) -> None:
+        with self._lock:
+            self._failing[kind] = False
+
+    def snapshot(self) -> Balances:
+        with self._lock:
+            return self._snapshot
+
+    def journal_failures(self, engine: Engine) -> None:
+        """On the loop thread: journal the failures reported since the last call."""
+        with self._lock:
+            failures, self._failures = self._failures, []
+        if failures:
+            with engine.store.transaction():
+                for kind, body in failures:
+                    engine.store.append(kind, body, run_id=engine.run_id)
 
 
 # Fences that say the broker and the bot's records disagree, or that an order's state is not
@@ -138,8 +218,10 @@ def record_reconcile(engine: Engine, disagreed_before: bool) -> bool:
 
 
 def account_document(engine: Engine, read_at: datetime,
-                     balances: Balances) -> api.AccountV1 | None:
-    """The document for the latest reconciliation, or None when it did not read the broker."""
+                     balances: Balances | None) -> api.AccountV1 | None:
+    """The document for the latest reconciliation, or None when it did not read the broker.
+    `balances` None: no display reads run (their fields stay null and the fills empty)."""
+    balances = balances if balances is not None else Balances()
     view = engine.broker_view
     causes = mismatch_causes(engine)
     if view is None or causes is None:
@@ -150,7 +232,9 @@ def account_document(engine: Engine, read_at: datetime,
         read_at=read_at,
         equity_usd=None if b is None else b.net_liquidation,
         buying_power_usd=None if b is None else b.day_buying_power,
-        positions=tuple(api.AccountPosition(p.symbol, p.quantity, p.average_cost)
+        positions=tuple(api.AccountPosition(p.symbol, p.quantity, p.average_cost,
+                                            p.last_price, p.market_value,
+                                            p.unrealized_profit_loss, p.day_profit_loss)
                         for p in view.positions if p.quantity != 0),
         orders=tuple(api.AccountOrder(
             client_order_id=o.client_order_id or None, symbol=o.symbol, side=str(o.side),
@@ -169,4 +253,9 @@ def account_document(engine: Engine, read_at: datetime,
         margin_calls=None if b is None else b.margin_calls,
         day_trades_left=None if b is None else b.day_trades_left,
         account_label=balances.label,
+        fills_read_at=balances.fills_read_at,
+        fills=tuple(api.AccountFill(
+            client_order_id=f.client_order_id, symbol=f.symbol, side=f.side, type=f.order_type,
+            quantity=f.filled_quantity, price=f.filled_price, filled_at=f.filled_at,
+            fees_usd=f.fees, ours=f.client_order_id in ours) for f in balances.fills),
     )

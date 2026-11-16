@@ -59,12 +59,60 @@
                     "type": "null"
                   }
                 ]
+              },
+              "last_price": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "market_value_usd": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unrealized_pl_usd": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "day_pl_usd": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
               "symbol",
               "quantity",
-              "avg_price"
+              "avg_price",
+              "last_price",
+              "market_value_usd",
+              "unrealized_pl_usd",
+              "day_pl_usd"
             ],
             "additionalProperties": false
           }
@@ -260,6 +308,96 @@
             }
           ]
         },
+        "fills_read_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "client_order_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "symbol": {
+                "type": "string"
+              },
+              "side": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string",
+                "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+              },
+              "price": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "filled_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fees_usd": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ours": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "client_order_id",
+              "symbol",
+              "side",
+              "type",
+              "quantity",
+              "price",
+              "filled_at",
+              "fees_usd",
+              "ours"
+            ],
+            "additionalProperties": false
+          }
+        },
         "schema_version": {
           "type": "integer",
           "const": 1
@@ -283,6 +421,8 @@
         "margin_calls",
         "day_trades_left",
         "account_label",
+        "fills_read_at",
+        "fills",
         "schema_version"
       ],
       "additionalProperties": false

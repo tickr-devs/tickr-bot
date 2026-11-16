@@ -322,10 +322,14 @@ def test_route_limits_parsed():
     assert gated.route_limits["/trading/orders/get"] == (2, config.Decimal(2))
 
 
+# The Sandbox table's route_limits line in config/bot.toml, replaced by the tests below.
+SANDBOX_ROUTE_LIMITS = 'route_limits = { "/trading/orders/historical-orders/list" = [10, 60] }'
+
+
 @pytest.mark.parametrize("bad", ["[0, 30]", "[10]", '["10", 30]', "[10, -1]", "5"])
 def test_bad_route_limit_refused(tmp_path, bad):
     new = f'route_limits = {{ "/x" = {bad} }}'
-    text = BOT.read_text("utf-8").replace("route_limits = {}", new, 1)
+    text = BOT.read_text("utf-8").replace(SANDBOX_ROUTE_LIMITS, new, 1)
     with pytest.raises(config.ConfigError, match="route_limits"):
         config.load(_copy(tmp_path, text))
 
@@ -421,7 +425,7 @@ def test_chart_slice_is_checked_when_the_config_loads(tmp_path):
     with pytest.raises(config.ConfigError, match="must be below the bars route limit"):
         config.load(_copy_in(tmp_path, "big", _chart_on(text)))
     window = BOT.read_text("utf-8").replace(
-        "route_limits = {}", f'route_limits = {{ "{config.BARS_ROUTE}" = [50, 30] }}', 1)
+        SANDBOX_ROUTE_LIMITS, f'route_limits = {{ "{config.BARS_ROUTE}" = [50, 30] }}', 1)
     assert config.load(_copy_in(tmp_path, "window-off", window)).chart.webull_enabled is False
     with pytest.raises(config.ConfigError, match="per 60 s"):
         config.load(_copy_in(tmp_path, "window", _chart_on(window)))

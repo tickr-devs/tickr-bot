@@ -8,12 +8,20 @@
       {
         "symbol": "ABCD",
         "quantity": "10",
-        "avg_price": "12.34"
+        "avg_price": "12.34",
+        "last_price": null,
+        "market_value_usd": null,
+        "unrealized_pl_usd": null,
+        "day_pl_usd": null
       },
       {
         "symbol": "EFGH",
         "quantity": "5",
-        "avg_price": null
+        "avg_price": null,
+        "last_price": null,
+        "market_value_usd": null,
+        "unrealized_pl_usd": null,
+        "day_pl_usd": null
       }
     ],
     "orders": [
@@ -52,6 +60,31 @@
     "margin_calls": null,
     "day_trades_left": null,
     "account_label": null,
+    "fills_read_at": "2026-11-16T14:59:40.123Z",
+    "fills": [
+      {
+        "client_order_id": "ap-0000-x",
+        "symbol": "WXYZ",
+        "side": "SELL",
+        "type": "STOP_LOSS",
+        "quantity": "20",
+        "price": "5.02",
+        "filled_at": "2026-11-16T14:20:00.123Z",
+        "fees_usd": "0.07",
+        "ours": true
+      },
+      {
+        "client_order_id": "ap-0001-e",
+        "symbol": "ABCD",
+        "side": "BUY",
+        "type": "LIMIT",
+        "quantity": "10",
+        "price": "12.34",
+        "filled_at": "2026-11-16T14:48:00.123Z",
+        "fees_usd": "0",
+        "ours": true
+      }
+    ],
     "schema_version": 1
   },
   "age_seconds": "40.000",

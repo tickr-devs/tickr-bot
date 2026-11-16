@@ -41,7 +41,7 @@ from tickr.engine.manual import flatten_deadline
 from tickr.risk.admission import Admission, AdmissionLimits, session_refusal
 from tickr.risk.causes import AdmissionCause
 from tickr.runtime import stopmarker
-from tickr.runtime.account import Balances, account_document, record_reconcile
+from tickr.runtime.account import AccountReads, account_document, record_reconcile
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.dayend import DayEnd
 from tickr.runtime.protection import LatencyLog, busy
@@ -130,7 +130,8 @@ class Service:
                  paths: ServicePaths, market: MarketRuntime | None = None,
                  evaluator: Evaluator | None = None, entries_off: str | None = None,
                  observers: ObserverSet | None = None,
-                 watch: Watch | None = None) -> None:
+                 watch: Watch | None = None,
+                 account_reads: AccountReads | None = None) -> None:
         self.engine = engine
         self.market = market
         self.evaluator = evaluator
@@ -152,7 +153,8 @@ class Service:
         self._skipping: str | None = None  # cause of the current protect-first episode
         self.stopped_by: str | None = None  # command_id of an obeyed stop-bot command
         self._account_failing = False  # the last account file write failed (journaled once)
-        self.balances = Balances()  # the latest balance read, shown in the account file
+        # Balances, account kind and today's fills, read on their own thread (display only).
+        self.account_reads = account_reads
         # The records disagreed with the broker on the last successful reconciliation
         # (record_reconcile: a disagreement is recorded once two passes in a row show it).
         self._disagreed = False
@@ -742,8 +744,11 @@ class Service:
         """After a successful reconciliation: what it read from the broker (docs/api.md)."""
         if self.paths.account is None:
             return
-        self.balances.refresh(self.engine, self.now())
-        document = account_document(self.engine, self.now(), self.balances)
+        balances = None
+        if self.account_reads is not None:
+            self.account_reads.journal_failures(self.engine)
+            balances = self.account_reads.snapshot()
+        document = account_document(self.engine, self.now(), balances)
         if document is None:
             return
         try:

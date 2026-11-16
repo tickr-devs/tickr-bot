@@ -1,0 +1,45 @@
+{
+  "source": "sandbox 2026-11-16 15:17 UTC, GET /trading/orders/open-orders/list; the bot's working STOP_LOSS SELL DAY CORE, unfilled (fees are the broker's estimate); order ids replaced",
+  "status": 200,
+  "body": {
+    "data": [
+      {
+        "client_order_id": "ap-6e324fb0-t1-s2",
+        "combo_order_id": "ORDERID00000000000000002",
+        "combo_type": "NORMAL",
+        "orders": [
+          {
+            "client_order_id": "ap-6e324fb0-t1-s2",
+            "commission": {},
+            "entrust_type": "QTY",
+            "fees": [
+              {
+                "actual_value": "0.06",
+                "receivable_value": "0.06",
+                "type": "SEC_FEE"
+              },
+              {
+                "actual_value": "0.01",
+                "receivable_value": "0.01",
+                "type": "FINRA_FEE"
+              }
+            ],
+            "filled_quantity": "0",
+            "instrument_type": "EQUITY",
+            "order_id": "ORDERID00000000000000002",
+            "order_type": "STOP_LOSS",
+            "place_time": "1794842226664",
+            "place_time_at": "2026-11-16T15:17:06.664Z",
+            "side": "SELL",
+            "status": "SUBMITTED",
+            "stop_price": "38.04",
+            "support_trading_session": "CORE",
+            "symbol": "TSCO",
+            "time_in_force": "DAY",
+            "total_quantity": "64"
+          }
+        ]
+      }
+    ]
+  }
+}

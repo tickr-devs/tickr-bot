@@ -1,0 +1,29 @@
+{
+  "source": "sandbox 2026-11-16 15:17 UTC, GET /trading/assets/balances/get?total_asset_currency=USD; Individual Margin account holding TSCO 64",
+  "status": 200,
+  "body": {
+    "account_currency_assets": [
+      {
+        "cash_balance": "997539.84",
+        "currency": "USD",
+        "day_buying_power": "3997534.08",
+        "day_profit_loss": "6.40",
+        "market_value": "2466.56",
+        "net_liquidation_value": "1000006.40",
+        "night_trading_buying_power": "997539.84",
+        "option_buying_power": "998769.92",
+        "overnight_buying_power": "1997539.84",
+        "unrealized_profit_loss": "6.40"
+      }
+    ],
+    "day_trades_left": "UNLIMITED",
+    "maintenance_margin": "614.56",
+    "open_margin_calls": [],
+    "total_asset_currency": "USD",
+    "total_cash_balance": "997539.84",
+    "total_day_profit_loss": "6.40",
+    "total_market_value": "2466.56",
+    "total_net_liquidation_value": "1000006.40",
+    "total_unrealized_profit_loss": "6.40"
+  }
+}

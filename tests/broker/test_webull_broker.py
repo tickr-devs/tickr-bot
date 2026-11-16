@@ -62,7 +62,8 @@ PREFIXES = ("ap-", "probe-")
 def broker(*responses, limit=DEFAULT_LIMIT, max_pages=3, gate=OPEN_GATE):
     transport = ScriptedTransport(*responses)
     budget = RequestBudget(limit, clock=lambda: 0.0)
-    b = WebullBroker(transport, budget, max_pages, MAX_CID, PREFIXES, lambda: gate)
+    b = WebullBroker(transport, budget, max_pages, MAX_CID, PREFIXES, lambda: gate,
+                     history_max_pages=max_pages)
     return b, transport, budget
 
 
@@ -359,7 +360,7 @@ def test_gate_is_asked_on_every_send():
     answers = [OPEN_GATE, GateResult(False, "authorization removed")]
     transport = ScriptedTransport(WireResponse(200, {"client_order_id": "ap-1", "order_id": "X"}))
     b = WebullBroker(transport, RequestBudget(DEFAULT_LIMIT, clock=lambda: 0.0), 3, MAX_CID,
-                     PREFIXES, lambda: answers.pop(0))
+                     PREFIXES, lambda: answers.pop(0), history_max_pages=3)
     b.place(limit_buy())
     with pytest.raises(Refused):
         b.place(limit_buy("ap-2"))

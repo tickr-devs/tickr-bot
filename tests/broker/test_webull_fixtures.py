@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import date
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -294,3 +295,100 @@ def test_balance_refuses_non_ascii_digits():
     b, _, _ = broker(balance_with(day_trades_left="\u00b2"))
     with pytest.raises(MalformedResponse):
         b.balance()
+
+
+# --- a position, its working stop and the filled entry (recorded 2026-11-16) ------------------
+
+TRADE_DAY = date(2026, 11, 16)
+
+
+def test_recorded_long_position():
+    b, _, _ = broker(load("positions_one_long.json"))
+    (p,) = b.positions()
+    assert (p.symbol, p.quantity, p.average_cost) == ("TSCO", D(64), D("38.44"))
+    assert (p.last_price, p.market_value) == (D("38.54"), D("2466.56"))
+    assert (p.unrealized_profit_loss, p.day_profit_loss) == (D("6.40"), D("6.40"))
+
+
+def test_unreadable_position_display_fields_are_unknown():
+    body = copy.deepcopy(load("positions_one_long.json").body)
+    body[0]["last_price"] = "--"
+    del body[0]["market_value"]
+    b, _, _ = broker(WireResponse(200, body))
+    (p,) = b.positions()
+    assert (p.quantity, p.last_price, p.market_value) == (D(64), None, None)
+
+
+def test_recorded_working_stop_is_our_live_stop():
+    b, _, _ = broker(load("open_orders_working_stop.json"))
+    (stop,) = b.open_orders()
+    assert (stop.symbol, stop.side, stop.order_type) == ("TSCO", Side.SELL, OrderType.STOP_LOSS)
+    assert stop.state is OrderState.ACCEPTED and stop.raw_status == "SUBMITTED"
+    assert (stop.quantity, stop.filled_quantity, stop.stop_price) == (D(64), D(0), D("38.04"))
+    assert stop.limit_price is None
+
+
+def test_recorded_fill_in_history():
+    b, t, _ = broker(load("historical_orders_fill_and_stop.json"))
+    (fill,) = b.fills_today(TRADE_DAY)  # the working stop has no fill
+    assert [r for r, _ in t.sent] == [Route.HISTORY]
+    assert (fill.client_order_id, fill.symbol, fill.side, fill.order_type) == (
+        "ap-6e324fb0-t1-e1", "TSCO", "BUY", "LIMIT")
+    assert (fill.filled_quantity, fill.filled_price, fill.fees) == (D(64), D("38.44"), D(0))
+    assert fill.filled_at is not None and fill.filled_at.isoformat().startswith("2026-11-16T15:17")
+
+
+def test_recorded_filled_entry_detail():
+    body = load("historical_orders_fill_and_stop.json").body
+    rows, bad = read_order_rows(body, own, lambda c: c.startswith("ap-"), "h")
+    assert bad == []
+    entry = next(r for r in rows if r.order_type is OrderType.LIMIT)
+    assert entry.state is OrderState.FILLED
+    assert (entry.average_fill_price, entry.limit_price) == (D("38.44"), D("38.51"))
+
+
+def test_fill_fees_sum_and_unreadable_fee():
+    body = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    stop = body["data"][0]["orders"][0]
+    stop["filled_quantity"] = "64"
+    stop["filled_price"] = "38.04"
+    stop["filled_time_at"] = "2026-11-16T15:40:00.000Z"
+    b, _, _ = broker(WireResponse(200, copy.deepcopy(body)))
+    fees = {f.order_type: f.fees for f in b.fills_today(TRADE_DAY)}
+    assert fees["STOP_LOSS"] == D("0.07")
+    stop["fees"][0]["actual_value"] = "n/a"
+    b, _, _ = broker(WireResponse(200, body))
+    fees = {f.order_type: f.fees for f in b.fills_today(TRADE_DAY)}
+    assert fees["STOP_LOSS"] is None
+
+
+def test_history_refuses_a_row_without_its_fill():
+    body = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    del body["data"][1]["orders"][0]["filled_quantity"]
+    b, _, _ = broker(WireResponse(200, body))
+    with pytest.raises(MalformedResponse):
+        b.fills_today(TRADE_DAY)
+
+
+def test_fills_of_another_new_york_day_are_left_out():
+    b, _, _ = broker(load("historical_orders_fill_and_stop.json"))
+    assert b.fills_today(date(2026, 11, 17)) == []
+
+
+def test_a_filled_row_without_its_time_refuses():
+    body = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    body["data"][1]["orders"][0]["filled_time_at"] = "soon"
+    b, _, _ = broker(WireResponse(200, body))
+    with pytest.raises(MalformedResponse):
+        b.fills_today(TRADE_DAY)
+
+
+def test_history_pages_until_no_key_and_refuses_a_repeated_key():
+    page = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    first = {**copy.deepcopy(page), "pagination_key": "k1"}
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    assert len(b.fills_today(TRADE_DAY)) == 2
+    assert [p for _, p in t.sent] == [{}, {"pagination_key": "k1"}]
+    b, _, _ = broker(WireResponse(200, first), WireResponse(200, first))
+    with pytest.raises(BrokerReadFailed):
+        b.fills_today(TRADE_DAY)

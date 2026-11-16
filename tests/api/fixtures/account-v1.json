@@ -6,7 +6,11 @@
     {
       "symbol": "ABCD",
       "quantity": "10",
-      "avg_price": "12.34"
+      "avg_price": "12.34",
+      "last_price": "12.40",
+      "market_value_usd": "124.00",
+      "unrealized_pl_usd": "0.60",
+      "day_pl_usd": "0.60"
     }
   ],
   "orders": [
@@ -34,5 +38,30 @@
   "margin_calls": 0,
   "day_trades_left": null,
   "account_label": "Individual Margin",
+  "fills_read_at": "2026-11-16T14:59:40.123Z",
+  "fills": [
+    {
+      "client_order_id": "ap-0000-x",
+      "symbol": "WXYZ",
+      "side": "SELL",
+      "type": "STOP_LOSS",
+      "quantity": "20",
+      "price": "5.02",
+      "filled_at": "2026-11-16T14:20:00.123Z",
+      "fees_usd": "0.07",
+      "ours": true
+    },
+    {
+      "client_order_id": "ap-0001-e",
+      "symbol": "ABCD",
+      "side": "BUY",
+      "type": "LIMIT",
+      "quantity": "10",
+      "price": "12.34",
+      "filled_at": "2026-11-16T14:48:00.123Z",
+      "fees_usd": "0",
+      "ours": true
+    }
+  ],
   "schema_version": 1
 }

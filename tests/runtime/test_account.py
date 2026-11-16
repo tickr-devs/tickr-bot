@@ -4,6 +4,8 @@ status carries the daily loss numbers and every tracked position."""
 from __future__ import annotations
 
 import json
+import threading
+import time
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
@@ -12,12 +14,14 @@ from tickr.api import contract as api
 from tickr.broker.base import AccountBalance, BrokerError
 from tickr.broker.fake import FakeBroker
 from tickr.engine.core import BrokerView, Fence, TradeState
-from tickr.runtime import account as account_module
 from tickr.runtime import entries, service
 from tickr.runtime.account import (
+    ACCOUNT_READS_FAILED,
     BALANCE_READ_FAILED,
+    FILLS_READ_FAILED,
     NOT_AGREED,
     RECONCILE_CHECKED,
+    AccountReads,
     record_reconcile,
 )
 from tickr.types import OrderDetail, OrderState, OrderType, Position, Side
@@ -237,14 +241,20 @@ FUNDS = AccountBalance(net_liquidation=D("1000.50"), cash=D("980.50"), market_va
                        maintenance_margin=D("5"), margin_calls=0, day_trades_left=None)
 
 
-def balance_rows(bot: Bot) -> list:
-    return bot.engine.store.query("SELECT body FROM journal WHERE kind = ?",
-                                  (BALANCE_READ_FAILED,))
+def with_reads(bot: Bot, broker: FakeBroker) -> AccountReads:
+    reads = AccountReads(broker, float(CFG.orders.balance_read_seconds), lambda: bot.now)
+    bot.service.account_reads = reads
+    return reads
+
+
+def failure_rows(bot: Bot, kind: str) -> list:
+    return bot.engine.store.query("SELECT body FROM journal WHERE kind = ?", (kind,))
 
 
 def test_the_balance_and_account_kind_reach_the_document(tmp_path):
     broker = FakeBroker(funds=FUNDS, account_label="Individual Margin")
     bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    with_reads(bot, broker).read_once()
     bot.engine.recover()
     bot.service.write_account()
     doc = read(bot)
@@ -257,44 +267,37 @@ def test_the_balance_and_account_kind_reach_the_document(tmp_path):
     assert doc.balance_read_at == bot.now
 
 
-def test_the_balance_is_read_at_most_once_per_interval(tmp_path):
-    broker = FakeBroker(funds=FUNDS)
-    bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+def test_without_display_reads_the_balance_is_null(tmp_path):
+    bot = with_account(Bot(tmp_path, broker=FakeBroker(funds=FUNDS)), tmp_path)
     bot.engine.recover()
-    interval = CFG.orders.balance_read_seconds
     bot.service.write_account()
-    first = bot.now
-    bot.now += timedelta(seconds=float(interval) - 1)
-    bot.service.write_account()
-    assert broker.balance_reads == 1
-    assert read(bot).balance_read_at == first  # the document says how old the balance is
-    bot.now += timedelta(seconds=1)
-    bot.service.write_account()
-    assert broker.balance_reads == 2 and read(bot).balance_read_at == bot.now
+    doc = read(bot)
+    assert doc.equity_usd is None and doc.fills == () and doc.account_label is None
 
 
 def test_a_failed_balance_read_keeps_the_last_one_and_is_journaled_once(tmp_path):
     broker = FakeBroker(funds=FUNDS)
     bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    reads = with_reads(bot, broker)
     bot.engine.recover()
-    bot.service.write_account()
+    reads.read_once()
     good = bot.now
     broker.funds = None  # every read fails from now on
     for _ in range(3):
         bot.now += timedelta(seconds=float(CFG.orders.balance_read_seconds))
+        reads.read_once()
         bot.service.write_account()
     doc = read(bot)
     assert doc.equity_usd == D("1000.50") and doc.balance_read_at == good
     assert doc.read_at == bot.now  # positions and orders stay current
-    assert len(balance_rows(bot)) == 1
+    assert len(failure_rows(bot, BALANCE_READ_FAILED)) == 1
     assert not bot.engine.fences()  # display only: nothing blocks trading
     broker.funds = FUNDS
-    bot.now += timedelta(seconds=float(CFG.orders.balance_read_seconds))
-    bot.service.write_account()
+    reads.read_once()
     broker.funds = None
-    bot.now += timedelta(seconds=float(CFG.orders.balance_read_seconds))
+    reads.read_once()
     bot.service.write_account()
-    assert len(balance_rows(bot)) == 2  # a new stretch of failures
+    assert len(failure_rows(bot, BALANCE_READ_FAILED)) == 2  # a new stretch of failures
 
 
 def test_an_open_limit_order_shows_its_limit_price(tmp_path):
@@ -310,33 +313,20 @@ def test_an_open_limit_order_shows_its_limit_price(tmp_path):
 
 
 def test_an_older_bots_file_reads_as_no_balance(tmp_path):
-    bot = with_account(Bot(tmp_path, broker=FakeBroker(funds=FUNDS)), tmp_path)
+    broker = FakeBroker(funds=FUNDS)
+    bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    with_reads(bot, broker).read_once()
     bot.engine.recover()
     bot.service.write_account()
     raw = json.loads(bot.paths.account.read_text("utf-8"))
     for key in ("balance_read_at", "cash_usd", "positions_value_usd", "unrealized_pl_usd",
                 "day_pl_usd", "overnight_buying_power_usd", "maintenance_margin_usd",
-                "margin_calls", "day_trades_left", "account_label"):
+                "margin_calls", "day_trades_left", "account_label", "fills_read_at", "fills"):
         del raw[key]
     raw["equity_usd"] = raw["buying_power_usd"] = None
     bot.paths.account.write_text(json.dumps(raw), "utf-8")
     doc = read(bot)
-    assert doc.balance_read_at is None and doc.cash_usd is None and doc.account_label is None
-
-
-def test_no_balance_read_while_a_trade_needs_the_loop(tmp_path, monkeypatch):
-    broker = FakeBroker(funds=FUNDS)
-    bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
-    bot.engine.recover()
-    bot.service.balances.refresh(bot.engine, bot.now)
-    assert broker.balance_reads == 1
-    bot.now += timedelta(seconds=float(CFG.orders.balance_read_seconds))
-    with monkeypatch.context() as patched:
-        patched.setattr(account_module, "busy", lambda engine: "t1: entry working")
-        bot.service.balances.refresh(bot.engine, bot.now)
-    assert broker.balance_reads == 1  # skipped; tried again on the next pass
-    bot.service.balances.refresh(bot.engine, bot.now)
-    assert broker.balance_reads == 2
+    assert doc.balance_read_at is None and doc.cash_usd is None and doc.fills == ()
 
 
 def test_a_failed_accounts_read_never_blocks_the_balance(tmp_path):
@@ -346,8 +336,99 @@ def test_a_failed_accounts_read_never_blocks_the_balance(tmp_path):
 
     broker = NoAccounts(funds=FUNDS)
     bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    with_reads(bot, broker).read_once()
     bot.engine.recover()
     bot.service.write_account()
     doc = read(bot)
     assert doc.equity_usd == D("1000.50") and doc.account_label is None
-    assert balance_rows(bot) == []
+    assert failure_rows(bot, BALANCE_READ_FAILED) == []
+
+
+def test_positions_values_and_todays_fills_reach_the_document(tmp_path):
+    broker = FakeBroker(funds=FUNDS)
+    broker.holdings["XYZ"] = Position("XYZ", D(5), D(3), last_price=D("3.10"),
+                                      market_value=D("15.50"), unrealized_profit_loss=D("0.50"),
+                                      day_profit_loss=D("0.50"))
+    broker.orders["manual-3"] = OrderDetail("manual-3", "XYZ", Side.BUY, OrderType.LIMIT, D(5),
+                                            D(5), D(3), OrderState.FILLED, "FILLED")
+    bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    with_reads(bot, broker).read_once()
+    bot.engine.recover()
+    bot.service.write_account()
+    doc = read(bot)
+    (position,) = doc.positions
+    assert (position.last_price, position.market_value_usd) == (D("3.10"), D("15.50"))
+    assert (position.unrealized_pl_usd, position.day_pl_usd) == (D("0.50"), D("0.50"))
+    (fill,) = doc.fills
+    assert (fill.client_order_id, fill.symbol, fill.quantity, fill.price, fill.ours) == (
+        "manual-3", "XYZ", D(5), D(3), False)
+    assert doc.fills_read_at == bot.now
+
+
+def test_a_failed_fills_read_never_blocks_the_balance(tmp_path):
+    class NoHistory(FakeBroker):
+        def fills_today(self, day):
+            raise BrokerError("history route paused")
+
+    broker = NoHistory(funds=FUNDS)
+    bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    with_reads(bot, broker).read_once()
+    bot.engine.recover()
+    bot.service.write_account()
+    doc = read(bot)
+    assert doc.equity_usd == D("1000.50") and doc.fills == () and doc.fills_read_at is None
+    assert len(failure_rows(bot, FILLS_READ_FAILED)) == 1
+
+
+def test_the_loop_never_waits_on_a_slow_display_read(tmp_path):
+    release = threading.Event()
+    entered = threading.Event()
+
+    class SlowBalance(FakeBroker):
+        def balance(self):
+            entered.set()
+            release.wait()  # a broker route that hangs
+            return FUNDS
+
+    broker = SlowBalance()
+    bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    reads = with_reads(bot, broker)
+    reads.start()
+    try:
+        assert entered.wait(timeout=WAIT_SECONDS)
+        bot.engine.recover()
+        bot.service.write_account()  # returns while the read still hangs
+        assert read(bot).equity_usd is None
+        release.set()
+    finally:
+        release.set()
+        reads.stop(WAIT_SECONDS)
+
+
+def test_an_unexpected_error_in_the_display_thread_is_journaled_and_it_goes_on(tmp_path):
+    class Broken(FakeBroker):
+        calls = 0
+
+        def balance(self):
+            Broken.calls += 1
+            raise ValueError("bug")
+
+    broker = Broken()
+    bot = with_account(Bot(tmp_path, broker=broker), tmp_path)
+    reads = AccountReads(broker, 0.0, lambda: bot.now)  # no pause between rounds
+    bot.service.account_reads = reads
+    reads.start()
+    try:
+        deadline = time.monotonic() + WAIT_SECONDS
+        while Broken.calls < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        reads.stop(WAIT_SECONDS)
+    assert Broken.calls >= 2  # the thread survived the first error
+    bot.engine.recover()
+    bot.service.write_account()
+    assert len(failure_rows(bot, ACCOUNT_READS_FAILED)) == 1
+
+
+# Test data: the most a test waits for the display thread, seconds.
+WAIT_SECONDS = 5

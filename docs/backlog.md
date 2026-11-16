@@ -170,8 +170,8 @@ owner decision plus the authorization file (rule 5), never a code change.
 
 - **M1** Production readiness view: authorization record form, readiness checklist
   (`docs/api-planned.md` section 3), enabling day.
-- **M2** Account page completeness: per-position market value and P&L, order history with fees
-  (balances, buying power and the account kind are shown since 2026-11-16).
+- **M2** Account page completeness: done 2026-11-16 (balances, account kind, per-position P&L,
+  today's fills with fees); left: fee evidence on real fills against the backtest assumptions.
 - **M3** gRPC trade events (faster fill and order updates than polling), if the probe shows they are
   reliable.
 - **M4** Slippage and fill quality on real fills against the Sandbox and backtest assumptions (R5

@@ -328,6 +328,7 @@ class EnvironmentConfig:
     token_check_duration_seconds: int
     token_check_interval_seconds: int
     open_orders_max_pages: int
+    history_max_pages: int
     route_limits: dict[str, tuple[int, Decimal]]
 
     @property

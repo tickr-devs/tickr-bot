@@ -130,9 +130,9 @@ reconcile_proof_seconds = 300
 # clean: a longer stretch without a recorded reconciliation (bot down, hours of failed reads) makes
 # the date unknown. Must be above reconcile_proof_seconds; read by api.cleanday (GET /days).
 reconcile_max_gap_seconds = 900
-# Least seconds between two balance reads (equity, cash, buying power, P&L: display only, in the
-# account file after a successful reconciliation; one GET on the balance route each time); read by
-# runtime.account.
+# Seconds between two rounds of the account display reads (balance, account kind once, today's
+# fills from the order history), made on their own thread so the loop never waits on them; display
+# only, shown in the account file; read by runtime.account.
 balance_read_seconds = 60
 
 [probe]
@@ -575,8 +575,12 @@ token_check_duration_seconds = 300
 token_check_interval_seconds = 5
 # Maximum pages read when listing open orders; more pages = refuse as incomplete; read by the broker adapter.
 open_orders_max_pages = 20
-# Route-specific limits "<route path>" = [requests, window seconds]; empty = every route uses requests_per_route_per_minute; read by the request budget.
-route_limits = {}
+# Maximum pages of the order history read for today's fills (a display read on its own thread); more pages =
+# refuse as incomplete, keeping the last good list; read by the broker adapter.
+history_max_pages = 5
+# Route-specific limits "<route path>" = [requests, window seconds]; a route not listed uses requests_per_route_per_minute;
+# the order history (display only, today's fills) is kept well under the Sandbox 30 per 60 s; read by the request budget.
+route_limits = { "/trading/orders/historical-orders/list" = [10, 60] }
 
 [environments.production]
 # May this process send trading requests in this environment; false until the owner enables Production.
@@ -619,5 +623,8 @@ token_check_duration_seconds = 300
 token_check_interval_seconds = 5
 # Maximum pages read when listing open orders; more pages = refuse as incomplete; read by the broker adapter.
 open_orders_max_pages = 20
+# Maximum pages of the order history read for today's fills (a display read on its own thread); more pages =
+# refuse as incomplete, keeping the last good list; read by the broker adapter.
+history_max_pages = 5
 # Route-specific limits "<route path>" = [requests, window seconds] (docs, unverified; never assume the looser value); read by the request budget.
-route_limits = { "/trading/accounts/list" = [10, 30], "/trading/orders/get" = [2, 2], "/trading/orders/open-orders/list" = [2, 2], "/trading/assets/positions/list" = [2, 2], "/trading/orders/place" = [600, 60], "/trading/orders/cancel" = [600, 60], "/trading/orders/replace" = [600, 60] }
+route_limits = { "/trading/accounts/list" = [10, 30], "/trading/orders/get" = [2, 2], "/trading/orders/open-orders/list" = [2, 2], "/trading/assets/positions/list" = [2, 2], "/trading/orders/historical-orders/list" = [1, 2], "/trading/orders/place" = [600, 60], "/trading/orders/cancel" = [600, 60], "/trading/orders/replace" = [600, 60] }

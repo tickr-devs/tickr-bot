@@ -113,6 +113,13 @@ class OrderDetail:
 
 @dataclass(frozen=True)
 class Position:
+    """A broker position. The fields after `average_cost` are display only (recorded
+    2026-11-16): nothing decides on them, and None means not shown or unreadable."""
+
     symbol: str
     quantity: Decimal
     average_cost: Decimal | None
+    last_price: Decimal | None = None
+    market_value: Decimal | None = None
+    unrealized_profit_loss: Decimal | None = None
+    day_profit_loss: Decimal | None = None

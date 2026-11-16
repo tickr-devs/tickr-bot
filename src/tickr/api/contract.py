@@ -321,6 +321,26 @@ class AccountPosition:
     symbol: str
     quantity: Decimal
     avg_price: Decimal | None  # null when the broker row does not show it
+    # Added after v1 shipped (2026-11-16), display only; null when not shown or unreadable.
+    last_price: Decimal | None = _added_later(None)
+    market_value_usd: Decimal | None = _added_later(None)
+    unrealized_pl_usd: Decimal | None = _added_later(None)
+    day_pl_usd: Decimal | None = _added_later(None)
+
+
+@dataclass(frozen=True)
+class AccountFill:
+    """One of today's orders with a fill, as the broker's order history lists it."""
+
+    client_order_id: str | None
+    symbol: str
+    side: str  # the broker's word (BUY, SELL, ...)
+    type: str  # the broker's word (LIMIT, STOP_LOSS, MARKET, ...)
+    quantity: Decimal  # filled
+    price: Decimal | None  # average fill price; null when not shown
+    filled_at: datetime | None
+    fees_usd: Decimal | None  # sum of the broker's actual fees; null when unreadable
+    ours: bool
 
 
 @dataclass(frozen=True)
@@ -364,6 +384,9 @@ class AccountV1:
     margin_calls: int | None = _added_later(None)  # open margin calls the broker lists
     day_trades_left: int | None = _added_later(None)  # null with a balance read: no limit
     account_label: str | None = _added_later(None)  # the broker's name for the account kind
+    # Today's fills from the broker's order history, read with the balance; empty until read.
+    fills_read_at: datetime | None = _added_later(None)
+    fills: tuple[AccountFill, ...] = _added_later(())
     schema_version: int = _const(ACCOUNT_SCHEMA_VERSION)
 
 

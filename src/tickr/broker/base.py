@@ -7,6 +7,7 @@ No other module may import a broker SDK. Implementations return typed results an
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -77,11 +78,31 @@ class AccountBalance:
     day_trades_left: int | None  # None: the broker says unlimited
 
 
+@dataclass(frozen=True)
+class BrokerFill:
+    """One of today's orders with a fill, from the broker's order history. Display only.
+    `fees` sums the broker's actual fee values; None when a fee is unreadable."""
+
+    client_order_id: str | None
+    symbol: str
+    side: str
+    order_type: str
+    filled_quantity: Decimal
+    filled_price: Decimal | None
+    filled_at: datetime | None
+    fees: Decimal | None
+
+
 class Broker(Protocol):
     def account(self) -> AccountSnapshot: ...
 
     def balance(self) -> AccountBalance:
         """One read of the account's balances. Raises BrokerError when it cannot be read."""
+        ...
+
+    def fills_today(self, day: date) -> list[BrokerFill]:
+        """The orders filled on New York date `day`, oldest first. Raises BrokerError when
+        they cannot be read in full."""
         ...
 
     def positions(self) -> list[Position]: ...

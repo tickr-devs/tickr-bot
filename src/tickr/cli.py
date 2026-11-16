@@ -471,6 +471,7 @@ def _run(path: Path) -> int:
     from tickr.data.health import StreamHealth
     from tickr.observers.errors import ObserverError
     from tickr.runtime import service
+    from tickr.runtime.account import AccountReads
     from tickr.runtime.alerts import Alerter, AlertKind, token_pending_text
     from tickr.runtime.market import MarketRuntime, StreamInbox
     from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
@@ -499,6 +500,7 @@ def _run(path: Path) -> int:
         capture: CaptureWriter | None = None
         observers: ObserverSet | None = None
         watch: Watch | None = None
+        account_reads: AccountReads | None = None
         try:
             alerter = Alerter(cfg.alerts, f"Tickr {cfg.environment_name}",
                               NOTIFIER(cfg.alerts), clock=NOW)
@@ -540,12 +542,17 @@ def _run(path: Path) -> int:
             if wired is not None:
                 evaluator, observers = wired
                 market.screen = evaluator.strategy  # discovery applies its liquidity rules
+            # Display reads (balance, account kind, today's fills) on their own thread.
+            account_reads = AccountReads(adapters.broker,
+                                         float(cfg.orders.balance_read_seconds), NOW)
             bot = service.Service(engine, now=NOW, calendar=calendar, strategy=strategy,
                                   paths=service.ServicePaths.from_config(cfg), market=market,
                                   evaluator=evaluator, entries_off=entries_off,
-                                  observers=observers, watch=watch)
+                                  observers=observers, watch=watch,
+                                  account_reads=account_reads)
             market.bind()
             adapters.start_stream()
+            account_reads.start()
             clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP,
                             monotonic=MONOTONIC)
             how = (f"operator command {bot.stopped_by}" if bot.stopped_by is not None
@@ -554,6 +561,8 @@ def _run(path: Path) -> int:
         finally:
             # Each step guarded: a failing SDK disconnect must not skip recording the run end.
             for step in ((adapters.stop_stream if adapters is not None else None),
+                         ((lambda: account_reads.stop(0)) if account_reads is not None
+                          else None),
                          (capture.close if capture is not None else None),
                          (_closer(observers, cfg) if observers is not None else None),
                          (watch.flush_alerts if watch is not None else None),

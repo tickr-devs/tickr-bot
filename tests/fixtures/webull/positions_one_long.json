@@ -1,0 +1,22 @@
+{
+  "source": "sandbox 2026-11-16 15:17 UTC, GET /trading/assets/positions/list; the bot's first Sandbox position (TSCO 64 long, its stop working); position id replaced",
+  "status": 200,
+  "body": [
+    {
+      "cost": "2460.16",
+      "cost_price": "38.44",
+      "currency": "USD",
+      "day_profit_loss": "6.40",
+      "day_realized_profit_loss": "0.00",
+      "instrument_type": "EQUITY",
+      "last_price": "38.54",
+      "market_value": "2466.56",
+      "position_id": "POSITIONID00000000000000001",
+      "proportion": "1.0000",
+      "quantity": "64",
+      "symbol": "TSCO",
+      "unrealized_profit_loss": "6.40",
+      "unrealized_profit_loss_rate": "0.0026"
+    }
+  ]
+}

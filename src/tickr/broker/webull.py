@@ -46,6 +46,7 @@ from tickr.broker.base import (
     AccountSnapshot,
     Acknowledgement,
     BrokerError,
+    BrokerFill,
     OrderNotFound,
     OutcomeUnknown,
     RateLimited,
@@ -114,6 +115,7 @@ class Route(Enum):
 
     ACCOUNTS = ("GET", "/trading/accounts/list", False)
     BALANCE = ("GET", "/trading/assets/balances/get", False)
+    HISTORY = ("GET", "/trading/orders/historical-orders/list", False)
     POSITIONS = ("GET", "/trading/assets/positions/list", False)
     OPEN_ORDERS = ("GET", "/trading/orders/open-orders/list", False)
     ORDER_DETAIL = ("GET", "/trading/orders/get", False)
@@ -336,10 +338,10 @@ def read_order(item: Any, is_own: IsOwnAccount, where: str) -> OrderDetail:
 
     Field names are the recorded ones (tests/fixtures/webull). `filled_quantity` is required:
     an order whose fill we cannot read is one we cannot reason about. Status/quantity
-    contradictions map to UNKNOWN (broker/status.py). `filled_price` has not been observed
-    on a fill yet (no fill recorded so far), so it stays optional; so do `limit_price`
-    (recorded on a LIMIT row; read on LIMIT rows only, display only), `stop_price` (no
-    working stop recorded yet; named like the recorded `limit_price`) and `order_id`."""
+    contradictions map to UNKNOWN (broker/status.py). `filled_price` is recorded on a
+    filled row and absent on an unfilled one, so it stays optional; so do `limit_price`
+    (recorded on a LIMIT row; read on LIMIT rows only, display only), `stop_price`
+    (recorded on the working stop, 2026-11-16) and `order_id`."""
     _check_account(item, is_own, where)
     raw_status = str(_require(item, "status", where)).strip()
     quantity = _decimal_field(item, "total_quantity", where)
@@ -425,9 +427,10 @@ def read_order_rows(
 
 
 def read_positions(body: Any, is_own: IsOwnAccount) -> list[Position]:
-    """Positions: a bare array (recorded empty). Non-empty rows are not recorded yet; the
-    old bot read `symbol` and `quantity`. The average-cost field name is unproven, so it is
-    optional and read as `cost_price`."""
+    """Positions: a bare array (recorded empty and with one long row,
+    tests/fixtures/webull/positions_one_long.json). `symbol` and `quantity` are required;
+    `cost_price` is the average cost. Last price, market value and P&L are display only:
+    absent or unreadable is None, never a refusal."""
     where = "positions"
     result: list[Position] = []
     for index, row in enumerate(_unwrap_list(body, where)):
@@ -438,8 +441,80 @@ def read_positions(body: Any, is_own: IsOwnAccount) -> list[Position]:
                 symbol=str(_require(row, "symbol", here)),
                 quantity=_decimal_field(row, "quantity", here),
                 average_cost=_optional_decimal(row, "cost_price", here),
+                last_price=_display_decimal(row, "last_price", here),
+                market_value=_display_decimal(row, "market_value", here),
+                unrealized_profit_loss=_display_decimal(row, "unrealized_profit_loss", here),
+                day_profit_loss=_display_decimal(row, "day_profit_loss", here),
             )
         )
+    return result
+
+
+def _display_time(row: Mapping[str, Any], key: str) -> datetime | None:
+    """An ISO time shown and never decided on (`filled_time_at`): None when unreadable."""
+    value = _optional(row, key)
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _fees(row: Mapping[str, Any], where: str) -> Decimal | None:
+    """Sum of the row's `fees[].actual_value`; None when the list or a value is unreadable."""
+    fees = row.get("fees")
+    if not isinstance(fees, list):
+        return None
+    total = Decimal(0)
+    for fee in fees:
+        if not isinstance(fee, Mapping):
+            return None
+        value = _display_decimal(fee, "actual_value", where)
+        if value is None:
+            return None
+        total += value
+    return total
+
+
+def read_fills(body: Any, is_own: IsOwnAccount, day: date) -> list[BrokerFill]:
+    """Order history page `{"data": [combo{..., "orders": [row...]}]}` (recorded,
+    tests/fixtures/webull/historical_orders_fill_and_stop.json) -> the rows filled on New York
+    date `day` (the route's default window is several days, SDK). `symbol`,
+    `filled_quantity` and, on a filled row, `filled_time_at` are required (the day of a fill
+    whose time is unreadable is unknown); price and fees are display only."""
+    where = "history"
+    result: list[BrokerFill] = []
+    for index, combo in enumerate(_unwrap_list(body, where)):
+        here = f"{where}[{index}]"
+        _check_account(combo, is_own, here)
+        nested = _require(combo, "orders", here)
+        if not isinstance(nested, list):
+            raise MalformedResponse(f"{here}: 'orders' is not a list")
+        for i, row in enumerate(nested):
+            row_where = f"{here}.orders[{i}]"
+            _check_account(row, is_own, row_where)
+            filled = _decimal_field(row, "filled_quantity", row_where)
+            if filled <= 0:
+                continue
+            filled_at = _display_time(row, "filled_time_at")
+            if filled_at is None:
+                raise MalformedResponse(f"{row_where}: filled row without a readable "
+                                        "'filled_time_at'")
+            if ny_date_of(filled_at) != day:
+                continue
+            cid = _optional(row, "client_order_id")
+            result.append(BrokerFill(
+                client_order_id=None if cid is None else str(cid),
+                symbol=str(_require(row, "symbol", row_where)),
+                side=str(_optional(row, "side") or ""),
+                order_type=str(_optional(row, "order_type") or ""),
+                filled_quantity=filled,
+                filled_price=_display_decimal(row, "filled_price", row_where),
+                filled_at=filled_at,
+                fees=_fees(row, row_where),
+            ))
     return result
 
 
@@ -647,9 +722,14 @@ class WebullBroker:
         own_client_order_id_prefixes: tuple[str, ...],
         gate: Callable[[], GateResult],
         clock: Callable[[], float] = time.monotonic,
+        *,
+        history_max_pages: int,
     ) -> None:
         if open_orders_max_pages < 1:
             raise AdapterConfigError("open_orders_max_pages must be at least 1")
+        if history_max_pages < 1:
+            raise AdapterConfigError("history_max_pages must be at least 1")
+        self._history_max_pages = history_max_pages
         if not own_client_order_id_prefixes or not all(own_client_order_id_prefixes):
             raise AdapterConfigError("own client order id prefixes must be non-empty")
         self._own_prefixes = own_client_order_id_prefixes
@@ -700,6 +780,25 @@ class WebullBroker:
 
     def positions(self) -> list[Position]:
         return read_positions(self._read(Route.POSITIONS, {}), self._transport.is_own_account)
+
+    def fills_today(self, day: date) -> list[BrokerFill]:
+        """The history's default window (no `start_time`; its format is unproven), every page
+        by `pagination_key` (SDK `list_order_history`) up to `history_max_pages`, kept to the
+        fills of `day`; a partial list refuses. Display only, called off the loop thread."""
+        fills: list[BrokerFill] = []
+        params: dict[str, Any] = {}
+        seen_keys: set[str] = set()
+        for _page in range(self._history_max_pages):
+            body = self._read(Route.HISTORY, params)
+            fills.extend(read_fills(body, self._transport.is_own_account, day))
+            next_key = _optional(body, "pagination_key") if isinstance(body, Mapping) else None
+            if next_key is None:
+                return sorted(fills, key=lambda f: f.filled_at or datetime.min.replace(tzinfo=UTC))
+            if str(next_key) in seen_keys:
+                raise BrokerReadFailed(Route.HISTORY.name, None, "PAGINATION_REPEATED")
+            seen_keys.add(str(next_key))
+            params = {"pagination_key": str(next_key)}
+        raise BrokerReadFailed(Route.HISTORY.name, None, "PAGE_LIMIT_REACHED")
 
     def open_orders(self) -> list[OrderDetail]:
         orders: list[OrderDetail] = []
@@ -2180,6 +2279,7 @@ def broker_from_config(config: Config, transport: Transport | None = None,
         config.orders.client_order_id_max_length,
         (config.orders.client_order_id_prefix, config.orders.probe_client_order_id_prefix),
         gate=lambda: trading_gate(config),
+        history_max_pages=config.environment.history_max_pages,
     )
 
 

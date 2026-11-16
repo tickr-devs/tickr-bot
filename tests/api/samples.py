@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from tickr.api.contract import (
+    AccountFill,
     AccountOrder,
     AccountPosition,
     AccountV1,
@@ -85,7 +86,8 @@ def account(read_at: datetime = T0, **overrides) -> AccountV1:
         read_at=read_at,
         equity_usd=Decimal("100123.40"),
         buying_power_usd=Decimal("400493.60"),
-        positions=(AccountPosition("ABCD", Decimal("10"), Decimal("12.34")),),
+        positions=(AccountPosition("ABCD", Decimal("10"), Decimal("12.34"), Decimal("12.40"),
+                                   Decimal("124.00"), Decimal("0.60"), Decimal("0.60")),),
         orders=(AccountOrder("ap-0001-s", "ABCD", "SELL", "STOP_LOSS", "ACCEPTED",
                              Decimal("10"), None, Decimal("11.90"), True),),
         matches_records=True,
@@ -100,6 +102,12 @@ def account(read_at: datetime = T0, **overrides) -> AccountV1:
         margin_calls=0,
         day_trades_left=None,
         account_label="Individual Margin",
+        fills_read_at=read_at - timedelta(seconds=20),
+        fills=(AccountFill("ap-0000-x", "WXYZ", "SELL", "STOP_LOSS", Decimal("20"),
+                           Decimal("5.02"), read_at - timedelta(minutes=40), Decimal("0.07"),
+                           True),
+               AccountFill("ap-0001-e", "ABCD", "BUY", "LIMIT", Decimal("10"), Decimal("12.34"),
+                           read_at - timedelta(minutes=12), Decimal("0"), True)),
     )
     values.update(overrides)
     return AccountV1(**values)
