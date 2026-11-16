@@ -269,7 +269,9 @@ lab_replay_outside_session_only = true
 trade_whatif_outside_session_only = true
 
 [market_data]
-# Seconds between discovery passes in the regular session; read by runtime (discovery scheduler).
+# Seconds between discovery passes in the regular session, counted from the start of the minute the pass began, so with
+# 60 every pass starts in the first loop pass of a minute and its bars reads (kept in data.todaybars) serve the strategy's
+# evaluation of the minute just completed; read by runtime.market (discovery scheduler).
 discovery_interval_seconds = 60
 # Seconds the L1 transport may stay down with a position open, in the regular session, before the position is closed
 # through the normal exit path (spec 6: stream loss with a position = market exit); read by runtime.market.
@@ -296,19 +298,22 @@ gainers_losers_rank_type = "DAY_1"
 top_actives_rank_type = "RELATIVE_VOLUME_10D"
 # Symbols per snapshot request (Webull docs: at most 100); read by data.discovery.
 snapshot_symbols_per_request = 100
-# Symbols per M1 bars request (Webull docs: 20); read by data.discovery.
+# Symbols per M1 bars request (Webull docs: 20; probe 2026-11-16: 21 refused with HTTP 417); read by data.discovery,
+# data.history (history pages) and runtime.evaluation.
 bars_symbols_per_request = 20
 # M1 bars requested per symbol in discovery (one regular session = 390 minutes); read by data.discovery.
 bars_per_symbol = 390
 # Requests of the bars route window (shared with the evaluation of positions, WATCH symbols and candidates, and their
-# history pages) every discovery bars read must leave free, count; below the bars route limit of every environment
-# (checked when config loads). Discovery stops its pass ("bars budget") rather than take them; read by data.discovery.
+# history pages) every discovery bars read and every pre-open history preload page must leave free, count; below the
+# bars route limit of every environment (checked when config loads). Discovery stops its pass ("bars budget") rather than
+# take them; read by data.discovery and runtime.preload.
 discovery_bars_reserve_requests = 12
-# M1 bars asked per prior-session history request, per symbol (SDK maximum 1200; one regular session = 390);
-# read by data.history.
+# M1 bars asked per prior-session history request, per symbol (SDK maximum 1200; probe 2026-11-16: count is per symbol,
+# 20 symbols x 1200 served in one response; one regular session = 390); read by data.history.
 history_bars_per_request = 1200
-# Most history requests for one symbol per (symbol, day, sessions) before refusing with PAGE_LIMIT (five sessions need
-# two at 1200 per request); read by data.history.
+# Most history pages at a symbol's own end time per (symbol, day, sessions) before refusing with PAGE_LIMIT (five sessions
+# need two at 1200 per request; pages where a thinner symbol is only carried along in its batch do not count); read by
+# data.history.
 history_max_pages_per_symbol = 4
 # Most calendar days walked back to find the requested prior sessions (weekends and holidays are skipped); read by
 # data.history.
@@ -323,6 +328,16 @@ history_dir = "history"
 # Days, counted back from today's New York date, a day folder of the prior-session history cache is kept; `tickr
 # maintain --apply` deletes older ones (the bot only reads today's folder); at least 1; read by maintain.
 history_cache_max_age_days = 2
+# Minutes before the regular open from which the bot loop loads the prior-session history of the symbols on the screeners
+# (universe-filtered), so candidates have it at the open (9:00 ET on a normal day, owner 2026-11-16); 0 = no preload;
+# read by runtime.preload.
+history_preload_minutes_before_open = 30
+# Seconds between two screener reads of the pre-open preload (each adds the symbols not seen yet to its queue); read by
+# runtime.preload.
+history_preload_screener_seconds = 300
+# Seconds the pre-open preload pauses after a budget refusal or a failed read before its next batch; read by
+# runtime.preload.
+history_preload_retry_seconds = 60
 # Most discovery candidates (best first) kept on the L1 stream besides the position and the strategy's WATCH symbols, so
 # a candidate has a fresh quote the minute the strategy first says ENTER; count. At most stream_max_symbols minus
 # stream_reserved_symbols (checked when config loads); read by runtime.market.

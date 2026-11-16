@@ -15,6 +15,7 @@ from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow
 from tickr.data.capture import DISCOVERY_FILE, CaptureWriter
 from tickr.data.discovery import NoStrategy
 from tickr.data.health import StreamHealth
+from tickr.data.todaybars import TodayBars
 from tickr.engine.core import Engine
 from tickr.observers.loader import load_active
 from tickr.runtime.market import (
@@ -52,7 +53,8 @@ class Rig:
         self.inbox = StreamInbox()
         self.market = MarketRuntime(self.engine, CFG, self.source,
                                     health=StreamHealth.from_config(CFG), inbox=self.inbox,
-                                    capture=None, calendar=CALENDAR, now=lambda: self.now,
+                                    capture=None, calendar=CALENDAR,
+                                    today_bars=TodayBars(), now=lambda: self.now,
                                     monotonic=lambda: self.clock)
         self.market.screen = load_active(CFG).strategy  # set by the caller once loaded
 
@@ -149,12 +151,81 @@ def test_discovery_runs_on_its_interval_in_the_session(tmp_path):
     assert rig.market.discovery is not None
 
 
+def test_discovery_starts_only_in_a_minutes_first_pass_after_its_interval(tmp_path):
+    rig = Rig(tmp_path, now=MONDAY_11 + timedelta(seconds=25))  # startup mid-minute
+    rig.market.tick()
+    assert len(rig.store.journal(DISCOVERY)) == 1
+    rig.advance(INTERVAL - 25)  # 11:01:00: first pass of a minute, but 35 s after the start
+    rig.market.tick()
+    assert len(rig.store.journal(DISCOVERY)) == 1
+    rig.advance(30)  # 11:01:30: interval over, but not a minute's first pass
+    rig.market.tick()
+    assert len(rig.store.journal(DISCOVERY)) == 1
+    rig.advance(30.4)  # 11:02:00.4: first pass of the minute, 95 s after the start
+    rig.market.tick()
+    assert len(rig.store.journal(DISCOVERY)) == 2
+    rig.advance(59.8)  # 11:03:00.2: 59.8 s after that start, counted from its minute
+    rig.market.tick()
+    assert len(rig.store.journal(DISCOVERY)) == 3
+    rig.advance(1)
+    rig.market.tick()  # the same minute again: never twice
+    assert len(rig.store.journal(DISCOVERY)) == 3
+
+
 def test_discovery_waits_while_protection_needs_the_loop(tmp_path):
     rig = Rig(tmp_path)
     rig.market.tick(discover=False)
     assert rig.source.calls == [] and rig.store.journal(DISCOVERY) == []
-    rig.market.tick()  # due at once once allowed again
+    rig.advance(1)
+    rig.market.tick()  # allowed again mid-minute: waits for the next minute's first pass
+    assert rig.store.journal(DISCOVERY) == []
+    rig.advance(INTERVAL - 1)
+    rig.market.tick()
     assert len(rig.store.journal(DISCOVERY)) == 1
+
+
+class PassAll:
+    """Liquidity rules that refuse nothing."""
+
+    name, version = "all", "1"
+
+    def quote_liquidity(self, quote):
+        return ()
+
+    def session_liquidity(self, session_bars):
+        return ()
+
+
+def test_a_pass_stopped_by_the_bars_budget_keeps_the_candidates_it_did_not_reach(tmp_path):
+    from tickr.types import Bar
+
+    rig = Rig(tmp_path)
+    rig.market.screen = PassAll()
+    rows = [ScreenerRow(ScreenerKind.GAINERS, n, f"id-{s}", s, "NSQ", "USD", "COMMON_STOCK", {})
+            for n, s in enumerate(["ABC", "DEF"], start=1)]
+    rig.source.set_screener(ScreenerKind.GAINERS, rows)
+    for symbol in ("ABC", "DEF"):
+        rig.source.set_quote(Quote(symbol, D("10.00"), D("10.01"), D(1), D(1), rig.now, rig.now))
+        rig.source.add_bars([Bar(symbol, rig.now - timedelta(minutes=2), D(10), D(10), D(10),
+                                 D(10), D(100))])
+    rig.market.tick()
+    assert rig.market.candidates() == ["ABC", "DEF"]
+    rig.source.limit("bars", 1)  # the next pass is refused its bars read
+    rig.advance(INTERVAL)
+    for symbol in ("ABC", "DEF"):
+        rig.source.set_quote(Quote(symbol, D("10.00"), D("10.01"), D(1), D(1), rig.now, rig.now))
+    rig.market.tick()
+    assert rig.market.candidates() == ["ABC", "DEF"]  # not reached: kept, not dropped
+    row = rig.store.journal(DISCOVERY)[-1]
+    assert row.body["kept"] == ["ABC", "DEF"] and row.body["candidates"] == ["ABC", "DEF"]
+    assert "bars budget" in row.body["summary"] and "kept 2 earlier" in row.body["summary"]
+    rig.source.set_screener(ScreenerKind.GAINERS, rows[:1])  # DEF left the screener
+    rig.source.limit("bars", 100)
+    rig.advance(INTERVAL)
+    for symbol in ("ABC", "DEF"):
+        rig.source.set_quote(Quote(symbol, D("10.00"), D("10.01"), D(1), D(1), rig.now, rig.now))
+    rig.market.tick()
+    assert rig.market.candidates() == ["ABC"]  # a complete pass replaces the list
 
 
 def test_without_a_strategy_discovery_captures_but_keeps_no_candidate(tmp_path):

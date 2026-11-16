@@ -420,7 +420,9 @@ class Service:
         allowed = self._protect_first()
         started = monotonic()
         if self.market is not None:
-            self.market.tick(discover=allowed)  # after the engine's broker work of this pass
+            # After the engine's broker work of this pass. With an evaluator, discovery runs
+            # inside its minute, after the positions' and WATCH symbols (Evaluator.tick).
+            self.market.tick(discover=allowed and self.evaluator is None)
             self._guard_entries()  # every pass: it protects a working entry
         if not allowed:
             return
@@ -437,10 +439,8 @@ class Service:
         subscriptions (spec 6), and the observers' WATCH symbols a lower tier of them."""
         if self.evaluator is None or self.market is None:
             return
-        found = self.market.discovery
-        candidates = [] if found is None else [c.instrument.symbol for c in found.candidates]
         try:
-            self.evaluator.tick(candidates)
+            self.evaluator.tick(self.market)
         except Exception as exc:  # noqa: BLE001 - evaluation never ends the trading loop
             with self.engine.store.transaction():
                 self.engine.store.append(EVALUATION_FAILED, {"error": type(exc).__name__,

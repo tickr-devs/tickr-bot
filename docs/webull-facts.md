@@ -69,7 +69,7 @@ Not usable for US accounts: per-execution list (HK only), position details (JP o
 ## Market data shapes (probe 2026-11-10)
 - Screeners (`/market-data/screeners/gainers-losers/list`, `/market-data/screeners/top-actives/list`): bare JSON array of exactly 200 rows, not paginated; 20 keys: `amplitude, change, change_ratio, close, currency, currency_code, exchange_code, high, instrument_id, low, market_value, name, open, pe_ttm, pre_close, price, relative_volume_10d, symbol, turnover_rate, volume`; all values strings; no provider timestamp; `turnover` absent; `relative_volume_10d` missing in 33-68 of 200 rows. Losers = gainers route with `direction=ASC`.
 - Snapshot (`/market-data/stocks/snapshots/list`, up to 100 symbols): strings except `last_trade_time`, `quote_time` (epoch ms numbers); keys include `ask, ask_size, bid, bid_size, price, volume, open, high, low, pre_close, trade_status, list_status, quote_time, last_trade_time`; `extend_hour_*` with `extend_hour_required` (sometimes missing in PRE); `trade_status` seen `ATH`, `CLS`; on weekends returns HTTP 200 with Friday's quote.
-- Bars (POST `/market-data/stocks/bars/list`): 20 symbols per request (docs); count max 1200 (SDK) vs 1650 (docs), request at most 1200; shape `result[] {delay_minutes, instrument_id, symbol, result[] {time, open, high, low, close, volume, trading_session}}`; unadjusted; default RTH only. `delay_minutes` reveals delayed data.
+- Bars (POST `/market-data/stocks/bars/list`): 20 symbols per request (docs; probe M6); count per symbol, max 1200 (SDK, probe M6) vs 1650 (docs), request at most 1200; shape `result[] {delay_minutes, instrument_id, symbol, result[] {time, open, high, low, close, volume, trading_session}}`; unadjusted; default RTH only. `delay_minutes` reveals delayed data.
 - L1 stream: MQTT + POST `/market-data/streaming/subscribe`; protobuf, all-string fields: `Quote {basic{symbol, instrument_id, timestamp ms, trading_session}, asks[], bids[]}`; `notice` JSON 1001 (status), 1002 (entitlement pre-empted). The SDK reconnects every 10 s forever but does NOT resubscribe; the adapter must resubscribe the full set on every connect.
 - Categories (SDK `webull/data/common/category.py`): US_STOCK, US_OPTION, HK_STOCK, US_ETF, HK_ETF, CN_STOCK, US_CRYPTO, US_FUTURES, US_EVENT, HK_FUTURES. Screeners take `category` (docstring: "Enum values: US_STOCK"). ETFs have their own category, but that a US_STOCK screener never lists ETFs or warrants is UNPROVEN. No screener or snapshot row states a security type (fixtures `market_data/`); the adapter looks it up in the instrument profile `sub_category` (M1 below).
 - Bars request (SDK): `symbols, category, timespan (M1...), count`, optional `real_time_required` (default off: only finalized minute bars), `trading_sessions`, `start_time`/`end_time` in epoch ms. Bar `time` format: see M2 below.
@@ -124,7 +124,17 @@ Route: SDK `get_batch_history_bar(["AAPL"], "US_STOCK", "M1", ...)` → `POST /m
 Fixtures:
 - `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1_window_pre_rth.json` — 09:00–10:00 window (PRE→RTH boundary, extra 08:59 bar); trimmed to 6 of 61 bars (full file is on the owner's Mac evidence folder).
 - `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1_end_time_all_sessions_trimmed.json` — 12 representative bars of a 1200-bar all-sessions response; `_meta.trimmed` says so.
-- **How Tickr uses it:** `WebullMarketData.bars_before` sends `end_time` only (never `start_time`, so the extra bar never arrives) and omits `trading_sessions` (RTH only; any other session is refused). `data.history` pages back with `end_time` = oldest bar start; its INCOMPLETE and NO_PROGRESS refusals remain as guards should the behaviour change.
+- **How Tickr uses it:** `WebullMarketData.bars_before` sends `end_time` only (never `start_time`, so the extra bar never arrives) and omits `trading_sessions` (RTH only; any other session is refused). `data.history` pages back with `end_time` = oldest bar start (for a batch of symbols, the latest of their oldest bars, see M6); its INCOMPLETE and NO_PROGRESS refusals remain as guards should the behaviour change.
+
+## M6 — bars route batch limits (probed 2026-11-16 Sandbox read-only)
+
+Route: `POST /market-data/stocks/bars/list` (M1, `end_time` given, no `start_time`).
+- **At most 20 symbols per request:** 21 or more are refused whole with HTTP `417`, `ILLEGAL_PARAMETER`, "symbols size must be between 1 and 20".
+- **`count` is per symbol:** a request of 20 symbols with count 1200 and `end_time` returned 1200 M1 bars for each of the 20 symbols in one response.
+- **Served maximum 1200 M1 bars per symbol:** asked 1650 (the docs' M1 maximum), got 1200. Tickr asks at most 1200 (`[market_data] history_bars_per_request`).
+- `end_time` exclusive as in M4.
+- Rate limits: Sandbox 30 requests per 60 s per route (our config); docs say Production market data 60/min (Display) or 300/min (Non-Display), unverified. Quotas stay config values per environment (`requests_per_route_per_minute`, `route_limits`), never code.
+- **How Tickr uses it:** `data.history` reads the prior sessions of up to 20 symbols per request and pages each batch back together (`MarketData.bars_before(symbols, end, count)`); the backtest's `WebullHistory.minute_bars` does the same offline.
 
 ## M5 — a screener symbol the snapshot and bars routes refuse (seen live 2026-11-16, Sandbox, read-only)
 

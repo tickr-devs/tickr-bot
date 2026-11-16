@@ -1182,22 +1182,24 @@ class WebullMarketData:
         }, budget_reserve)
         return read_bars(body)
 
-    def bars_before(self, symbol: str, end: datetime, count: int) -> list[Bar]:
-        """One history page: `end_time` (epoch ms) with `count` (probe M4: end_time is exclusive,
-        the newest bar starts at end - 1 min; order newest first). `start_time` is never sent: it
-        returns an extra bar at start - 1 min. The reply is still checked: another symbol is
-        refused and a bar starting at or after `end` is dropped."""
+    def bars_before(self, symbols: Sequence[str], end: datetime, count: int, *,
+                    budget_reserve: int = 0) -> list[Bar]:
+        """One history page for up to 20 symbols: `end_time` (epoch ms) with `count` per symbol
+        (probe M4: end_time is exclusive, the newest bar starts at end - 1 min; order newest
+        first; probe 2026-11-16: count is per symbol, 20 symbols at most). `start_time` is never
+        sent: it returns an extra bar at start - 1 min. The reply is still checked: a symbol not
+        asked is refused and a bar starting at or after `end` is dropped."""
         if end.tzinfo is None or end.utcoffset() is None:
             raise ValueError(f"naive end time {end!r}")
         body = self._read(Route.BARS, {
-            "symbols": [symbol],
+            "symbols": list(symbols),
             "category": self._category,
             "timespan": BARS_TIMESPAN_M1,
             "count": str(count),
             "end_time": int(end.timestamp() * MILLISECONDS_PER_SECOND),
-        })
+        }, budget_reserve)
         bars = read_bars(body)
-        stray = sorted({b.symbol for b in bars} - {symbol})
+        stray = sorted({b.symbol for b in bars} - set(symbols))
         if stray:
             raise MalformedResponse(f"bars: symbols not requested: {', '.join(stray)}")
         return [b for b in bars if b.start < end]
@@ -1445,8 +1447,8 @@ class WebullHistory:
 
     def minute_bars(self, symbols: Sequence[str], end: datetime, count: int) -> list[Bar]:
         """Up to `count` regular-session M1 bars per symbol starting before `end` (probe M4:
-        end_time is exclusive). Whether `count` applies per symbol or per request is unproven;
-        the caller pages until each symbol reaches its window, so either way is correct."""
+        end_time is exclusive; probe 2026-11-16: `count` applies per symbol). The caller pages
+        until each symbol reaches its window."""
         bars = read_bars(self._read(Route.BARS, self._bars_params(
             symbols, BARS_TIMESPAN_M1, end, count), "minutes"))
         self._only(symbols, {b.symbol for b in bars})

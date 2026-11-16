@@ -224,6 +224,9 @@ class MarketDataConfig:
     failure_detail_max_chars: int
     history_dir: str
     history_cache_max_age_days: int
+    history_preload_minutes_before_open: int
+    history_preload_screener_seconds: Decimal
+    history_preload_retry_seconds: Decimal
     stream_reconnect_delay_seconds: Decimal
     stream_max_symbols: int
     stream_reserved_symbols: int
@@ -502,6 +505,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if md.history_cache_max_age_days < 1:
         raise ConfigError("[market_data] history_cache_max_age_days must be at least 1 (today's "
                           "cache is in use)")
+    if (md.history_preload_minutes_before_open < 0 or md.history_preload_screener_seconds <= 0
+            or md.history_preload_retry_seconds <= 0):
+        raise ConfigError("[market_data] history_preload_minutes_before_open must be at least 0, "
+                          "history_preload_screener_seconds and history_preload_retry_seconds "
+                          "above 0")
     if (md.candidate_subscriptions + md.observer_subscriptions
             > md.stream_max_symbols - md.stream_reserved_symbols):
         raise ConfigError(

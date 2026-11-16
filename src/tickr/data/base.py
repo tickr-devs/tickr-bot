@@ -14,7 +14,7 @@ provider row as strings so the capture file can record it verbatim for later rep
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -94,6 +94,24 @@ class SymbolsRefused(MarketDataError):
         self.code = code
 
 
+def read_without_refused[T](read: Callable[[Sequence[str]], list[T]], symbols: Sequence[str],
+                           found: Callable[[str], None]) -> list[T]:
+    """`read(symbols)`; when the route refuses the request for an unknown symbol
+    (`SymbolsRefused`), the symbols are split in halves until each refused symbol is alone, and
+    `found(symbol)` is called for it at once, so a split the budget interrupts still keeps what
+    it isolated. Returns the rows read. Every split is a new request; RateLimited and
+    DelayedData propagate. Used by discovery (snapshot, bars) and history (bars pages)."""
+    try:
+        return read(symbols)
+    except SymbolsRefused:
+        if len(symbols) == 1:
+            found(symbols[0])
+            return []
+    middle = len(symbols) // 2
+    left = read_without_refused(read, symbols[:middle], found)
+    return left + read_without_refused(read, symbols[middle:], found)
+
+
 class SubscriptionLimit(MarketDataError):
     """A stream subscribe was refused for the per-connection symbol limit. The symbols already
     subscribed stay subscribed (probe M3); the refused ones were not added."""
@@ -148,9 +166,13 @@ class MarketData(Protocol):
         """
         ...
 
-    def bars_before(self, symbol: str, end: datetime, count: int) -> list[Bar]:
-        """Up to `count` regular-session M1 bars of one symbol that START strictly before the
-        aware `end`, oldest first. One page of history; `tickr.data.history` pages and caches."""
+    def bars_before(self, symbols: Sequence[str], end: datetime, count: int, *,
+                    budget_reserve: int = 0) -> list[Bar]:
+        """Up to `count` regular-session M1 bars PER SYMBOL (probe 2026-11-16) of each of
+        `symbols` (at most `[market_data] bars_symbols_per_request`) that START strictly before
+        the aware `end`, oldest first per symbol. One request: one page of history for all of
+        them; `tickr.data.history` pages and caches. `budget_reserve` as for `bars`. Refused
+        whole as `SymbolsRefused` when one symbol is unknown to the route."""
         ...
 
     def history_bars(self, symbol: str, span: BarSpan, end: datetime,
@@ -196,7 +218,7 @@ class FakeMarketData:
         self._limits: dict[str, int] = {}
         self._bars_delay: Decimal | None = None
         self.calls: list[tuple[str, tuple[str, ...]]] = []
-        self.bars_reserves: list[int] = []  # budget_reserve of each bars call
+        self.bars_reserves: list[int] = []  # budget_reserve of each bars and bars_before call
         self.subscribed: set[str] = set()
         self._listener: QuoteListener | None = None
 
@@ -251,13 +273,18 @@ class FakeMarketData:
             raise DelayedData(symbols, self._bars_delay)
         return [bar for symbol in symbols for bar in self._bars.get(symbol, [])[-count:]]
 
-    def bars_before(self, symbol: str, end: datetime, count: int) -> list[Bar]:
-        self._call("bars_before", [symbol])
+    def bars_before(self, symbols: Sequence[str], end: datetime, count: int, *,
+                    budget_reserve: int = 0) -> list[Bar]:
+        self.bars_reserves.append(budget_reserve)
+        self._call("bars_before", symbols)
         if self._bars_delay is not None:
-            raise DelayedData([symbol], self._bars_delay)
-        older = sorted((b for b in self._bars.get(symbol, []) if b.start < end),
-                       key=lambda b: b.start)
-        return older[-count:] if count > 0 else []
+            raise DelayedData(symbols, self._bars_delay)
+        out: list[Bar] = []
+        for symbol in symbols:
+            older = sorted((b for b in self._bars.get(symbol, []) if b.start < end),
+                           key=lambda b: b.start)
+            out.extend(older[-count:] if count > 0 else [])
+        return out
 
     def history_bars(self, symbol: str, span: BarSpan, end: datetime,
                      count: int) -> list[SessionBar]:

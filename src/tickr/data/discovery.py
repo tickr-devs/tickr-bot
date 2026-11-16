@@ -42,6 +42,10 @@ Each pass also measures the active strategy's fast movers (when the strategy def
 `FastMovers`) on the session bars it already read, and the result keeps every instrument's
 outcome: candidate, refused with its cause, or not reached when the pass stopped early.
 `pass_record` turns a result into the line the bot appends to the day's `discovery.jsonl`.
+
+Every bars read is also kept in `TodayBars` (data/todaybars.py) with the time it was sent, so the
+strategy's evaluation of a minute that was over before the read reuses it instead of reading the
+same symbols again.
 """
 
 from __future__ import annotations
@@ -55,8 +59,15 @@ from typing import Any, Protocol
 
 from tickr.broker.base import RateLimited
 from tickr.config import Config
-from tickr.data.base import DelayedData, MarketData, ScreenerKind, ScreenerRow, SymbolsRefused
+from tickr.data.base import (
+    DelayedData,
+    MarketData,
+    ScreenerKind,
+    ScreenerRow,
+    read_without_refused,
+)
 from tickr.data.movers import Mover, Signal
+from tickr.data.todaybars import TodayBars
 from tickr.strategy.base import Check, FastMovers, Liquidity
 from tickr.types import Bar, Quote
 
@@ -219,23 +230,6 @@ def _chunks(items: Sequence[str], size: int) -> list[Sequence[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def _read_without_refused[T](read: Callable[[Sequence[str]], list[T]], symbols: Sequence[str],
-                             found: Callable[[str], None]) -> list[T]:
-    """`read(symbols)`; when the route refuses the request for an unknown symbol, the chunk is
-    split in halves until each refused symbol is alone, and `found(symbol)` is called for it at
-    once, so a split the budget interrupts still keeps what it isolated. Returns the rows read.
-    Every split is a new request; RateLimited and DelayedData propagate."""
-    try:
-        return read(symbols)
-    except SymbolsRefused:
-        if len(symbols) == 1:
-            found(symbols[0])
-            return []
-    middle = len(symbols) // 2
-    left = _read_without_refused(read, symbols[:middle], found)
-    return left + _read_without_refused(read, symbols[middle:], found)
-
-
 class RefusedSymbols:
     """Symbols a market-data route refused as unknown, with the stage that refused them and
     when. A refusal is forgotten `recheck` after it was recorded, so the symbol is asked again,
@@ -374,10 +368,12 @@ def discover(
     clock: Callable[[], datetime],
     capture: CaptureSink | None = None,
     refused_symbols: RefusedSymbols | None = None,
+    today_bars: TodayBars | None = None,
 ) -> DiscoveryResult:
     """Run one discovery pass with `screen` (the active strategy) as the liquidity rules.
     `clock` returns the aware current time. `refused_symbols` carries the symbols refused as
-    unknown from pass to pass within the session (a fresh memory when None)."""
+    unknown from pass to pass within the session (a fresh memory when None). Every bars read
+    is also kept in `today_bars` (with the time it was sent) for the strategy's evaluation."""
     memory = refused_symbols if refused_symbols is not None else RefusedSymbols()
     refused = memory.active(session_open, clock(), settings.refused_symbol_recheck)
 
@@ -444,7 +440,7 @@ def discover(
     for chunk in _chunks(asked, settings.snapshot_symbols_per_request):
         unknown: list[str] = []
         try:
-            quotes = _read_without_refused(source.snapshot, chunk,
+            quotes = read_without_refused(source.snapshot, chunk,
                                            refused_by(Stage.SNAPSHOT, unknown))
         except RateLimited as exc:
             return result([], Stopped(Stage.SNAPSHOT, StopCause.BUDGET, str(exc)))
@@ -467,8 +463,9 @@ def discover(
     entries = {i.symbol: (i, q) for i, q in quote_ok}
     for chunk in _chunks([i.symbol for i, _ in quote_ok], settings.bars_symbols_per_request):
         unknown = []
+        sent = clock()  # before the request: a bar not finished by then is never complete
         try:
-            bars = _read_without_refused(
+            bars = read_without_refused(
                 lambda symbols: source.bars(symbols, settings.bars_per_symbol,
                                             budget_reserve=settings.bars_budget_reserve), chunk,
                 refused_by(Stage.BARS, unknown))
@@ -477,6 +474,8 @@ def discover(
         except DelayedData as exc:
             return result(candidates, Stopped(Stage.BARS, StopCause.DELAYED_DATA, str(exc)))
         chunk = [s for s in chunk if s not in unknown]
+        if today_bars is not None:
+            today_bars.put(session_open, chunk, bars, sent)
         now = clock()
         completed = [b for b in bars if b.symbol in entries and b.start + BAR_LENGTH <= now]
         if capture is not None:

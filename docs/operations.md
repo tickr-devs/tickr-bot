@@ -344,6 +344,14 @@ only the Detail and positions reads and the protection step. One `evaluation-ski
 the start of each such stretch. A pass whose market upkeep, discovery and strategy took longer
 than `[runtime] evaluation_budget_seconds` journals `evaluation-slow`.
 
+Before the open (from `[market_data] history_preload_minutes_before_open`, 9:00 ET) the bot
+reads the screeners and loads the prior-session history of their symbols, one batch of up to 20
+symbols per loop pass. Each batch that settled symbols writes a `history-preload` row
+(`symbols`, `loaded`, `refused`, `requests`, `queued`); a failed screener or history read writes
+one with `error` and the preload pauses `history_preload_retry_seconds` (a budget refusal
+pauses silently). History refusals of the strategy's symbols are `history-refused` rows, once a
+symbol a day.
+
 When a decision sends an entry (or asks an exit) in the middle of a minute, the symbols left in
 that minute are put aside (`evaluation-stopped`, stage `protect-first`, with `remaining` and
 their quotes at that moment). On the first pass the strategy may run again they are evaluated

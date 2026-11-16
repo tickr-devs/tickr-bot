@@ -97,6 +97,12 @@ class StubMarket:
     def tick(self, *, discover: bool = True) -> None:
         self.discovers.append(discover)
 
+    def discover(self) -> None:
+        self.discovers[-1] = True  # run by the evaluation in this pass
+
+    def candidates(self) -> list[str]:
+        return []
+
     def freshness(self, last_broker_read_at):
         return api.Freshness(last_broker_read_at, None, api.StreamHealth.OFF)
 
@@ -112,7 +118,8 @@ class StubEvaluator:
         self.seconds = 0.0
         self.enter = True
 
-    def tick(self, candidates) -> None:
+    def tick(self, market) -> None:
+        market.discover()
         self.calls.append(self.rig.passes)
         if self.enter:
             self.enter = False

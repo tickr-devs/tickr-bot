@@ -1,16 +1,26 @@
 """Run the active strategy once per completed minute (spec 5) and hand each decision to the
 entry desk with exactly the bar and quote the strategy saw.
 
-Per completed minute, in the regular session: the open positions' symbols, then the WATCH
-symbols, then the latest discovery candidates. Today's completed regular-session M1 bars come
-from `MarketData.bars`, the prior sessions from `HistoryReader` (once per symbol per day, then
-cached). A history refusal is not an error here: the strategy gets no prior sessions and
-refuses with its own cause, and the decision is recorded like any other. A budget refusal,
-delayed data or a failed read stops the remaining symbols for this minute (journaled); a
-strategy exception is journaled and that symbol skipped. As soon as a decision leaves an order
+Per completed minute, in the regular session, its bar fixed once: first the open positions'
+symbols and the WATCH symbols, with their own today's-bars read and their own history call, so
+a position's decision never waits behind discovery or the candidates; then, unless a decision
+now needs the loop, discovery (`MarketRuntime.discover`, when due) and the latest discovery
+candidates, 20 at a time. Today's completed regular-session M1 bars come from `TodayBars` when
+a read was sent after the minute was over by our clock (discovery's, data/todaybars.py), else
+from `MarketData.bars` (only the symbols missing). As with any read, completeness trusts the
+local clock: a bar the provider publishes late is absent, and the strategy decides on the
+previous bar. The prior sessions come from `HistoryReader`, one call per group of 20 (the symbols
+already known for the day cost nothing, the new ones go 20 per request), then cached. Before
+the open, `HistoryPreload` (runtime/preload.py) loads the screeners' symbols' history.
+A history refusal is not an error here: the strategy gets no prior sessions and refuses with
+its own cause, and the decision is recorded like any other. A budget refusal, delayed data or
+a failed read (bars or history) stops the rest of the minute (journaled); a strategy exception
+is journaled and that symbol skipped. An unexpected exception before the positions' symbols
+are done leaves the minute to the next pass. As soon as a decision leaves an order
 needing the loop (an entry sent, an exit asked; runtime/protection.py), the rest of the minute
-waits (journaled with the symbols left and their quotes at that moment), so the fill and its
-stop are not kept waiting behind more reads. On the first pass the service runs the strategy
+(candidates included) waits (journaled with the symbols left and their quotes at that
+moment), so the fill and its stop are not kept waiting behind more reads. On the first pass
+the service runs the strategy
 again, that remainder is evaluated on the same bar (bars cut at it), the saved quotes and the
 daily loss budget of that minute (never the room left at replay time), for
 the record only: an ENTER is recorded `not_evaluated`, nothing is sent or asked, the WATCH set
@@ -24,15 +34,18 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Protocol
 
 from tickr.broker.base import BrokerError
 from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar
 from tickr.config import Config
 from tickr.data.base import MarketData, MarketDataError
-from tickr.data.history import HistoryReader, HistoryUnavailable, SessionHistory
+from tickr.data.history import HistoryRead, HistoryReader, SessionHistory
+from tickr.data.todaybars import TodayBars
 from tickr.engine.core import Engine, Leg
 from tickr.runtime.entries import EntryDesk, daily_loss_room
 from tickr.runtime.market import StreamInbox
+from tickr.runtime.preload import HistoryPreload
 from tickr.runtime.protection import busy
 from tickr.strategy.base import PositionView, Strategy, SymbolContext, Verdict
 from tickr.types import Bar, Quote
@@ -45,6 +58,18 @@ HISTORY_REFUSED = "history-refused"
 PROTECT_FIRST = "protect-first"
 REMAINDER = "evaluation-remainder"
 Remainder = tuple[datetime, dict[str, Quote | None], Decimal | None]
+
+
+class CandidateSource(Protocol):
+    """What the evaluation needs of `runtime.market.MarketRuntime`."""
+
+    def discover(self) -> None:
+        """One discovery pass when due (it decides); its bars reads go to TodayBars."""
+        ...
+
+    def candidates(self) -> list[str]:
+        """The latest discovery's candidate symbols, best first."""
+        ...
 
 
 def _quote_body(quote: Quote | None) -> dict[str, str] | None:
@@ -70,7 +95,7 @@ def _chunks(items: Sequence[str], size: int) -> list[Sequence[str]]:
 class Evaluator:
     def __init__(self, engine: Engine, config: Config, source: MarketData, *,
                  strategy: Strategy, desk: EntryDesk, history: HistoryReader,
-                 inbox: StreamInbox, calendar: SessionCalendar,
+                 inbox: StreamInbox, calendar: SessionCalendar, today_bars: TodayBars,
                  now: Callable[[], datetime]) -> None:
         self.engine = engine
         self.config = config
@@ -78,6 +103,8 @@ class Evaluator:
         self.strategy = strategy
         self.desk = desk
         self.history = history
+        self.today_bars = today_bars  # shared with discovery
+        self.preload = HistoryPreload(engine, config, source, history)
         self.inbox = inbox
         self.calendar = calendar
         self.now = now
@@ -126,9 +153,11 @@ class Evaluator:
             return None
         return room
 
-    def tick(self, candidates: Sequence[str]) -> None:
+    def tick(self, market: CandidateSource) -> None:
         """Once per loop pass; does work only when a new minute has completed or a minute's
-        remainder waits (then only that, this pass)."""
+        remainder waits (then only that, this pass). A new minute, its bar fixed once: first
+        the positions' and WATCH symbols (their own reads); then, unless a decision now needs
+        the loop, `market.discover()` (it runs only when due) and the candidates."""
         self.contexts = []
         now = self.now()
         self.evaluated_at = now
@@ -139,16 +168,29 @@ class Evaluator:
             day = self.calendar.day_at(now)
         except CalendarRefused:
             return
+        if now < day.regular_open:
+            self.preload.tick(day, now)  # reads only; nothing before the open decides
+            return
         if not day.in_regular_session(now):
             return
         bar_start = now.replace(second=0, microsecond=0) - M1
-        if bar_start < day.regular_open or bar_start == self._last_bar:
+        new = bar_start >= day.regular_open and bar_start != self._last_bar
+        first: list[str] = []
+        if new:
+            positions = self._positions()
+            self._budget = self._loss_budget(now)
+            first = list(dict.fromkeys([*sorted(positions), *sorted(self.watch)]))
+            stopped = self._run(first, bar_start, day.regular_open, positions, late=None,
+                                rest=lambda: [s for s in market.candidates()
+                                              if s not in first])
+            self._last_bar = bar_start  # only once the positions' minute is done
+            if stopped:
+                return
+        market.discover()
+        if not new:
             return
-        self._last_bar = bar_start
-        positions = self._positions()
-        self._budget = self._loss_budget(now)
-        ordered = list(dict.fromkeys([*sorted(positions), *sorted(self.watch), *candidates]))
-        self._run(ordered, bar_start, day.regular_open, positions, now, late=None)
+        later = [s for s in market.candidates() if s not in first]
+        self._run(later, bar_start, day.regular_open, self._positions(), late=None)
 
     def _finish_remainder(self, now: datetime) -> None:
         assert self._remainder is not None
@@ -165,48 +207,86 @@ class Evaluator:
                                                "stage": "remainder", "symbols": symbols,
                                                "error": exc.cause})
             return
-        self._run(symbols, bar_start, regular_open, self._positions(), now, late=quotes)
+        self._run(symbols, bar_start, regular_open, self._positions(), late=quotes)
 
     def _run(self, ordered: list[str], bar_start: datetime, regular_open: datetime,
-             positions: dict[str, PositionView], now: datetime,
-             late: dict[str, Quote | None] | None) -> None:
-        """Evaluate `ordered` on the bar starting at `bar_start`. `late`: a remainder, for the
-        record only, with the quotes saved when it was put aside."""
+             positions: dict[str, PositionView], late: dict[str, Quote | None] | None,
+             rest: Callable[[], list[str]] = list) -> bool:
+        """Evaluate `ordered` on the bar starting at `bar_start`, 20 symbols at a time (their
+        today's bars, then their prior sessions in one history call). `late`: a remainder, for
+        the record only, with the quotes saved when it was put aside. `rest()`: symbols after
+        `ordered` that a stop or a put-aside also concerns. True when the minute stopped (a
+        failed read, or a decision that needs the loop)."""
         today = bar_start.astimezone(NEW_YORK).date()
         md = self.config.market_data
         stage = "remainder-" if late is not None else ""
-        for n, chunk in enumerate(_chunks(ordered, md.bars_symbols_per_request)):
-            left = ordered[n * md.bars_symbols_per_request:]
-            try:
-                bars = self.source.bars(list(chunk), md.bars_per_symbol)
-            except (MarketDataError, BrokerError) as exc:  # RateLimited, DelayedData included
+        size = md.bars_symbols_per_request
+        for n, chunk in enumerate(_chunks(ordered, size)):
+            left = list(ordered[n * size:])
+            now = self.now()
+            read = self._today_bars(list(chunk), bar_start, regular_open)
+            if isinstance(read, Exception):  # RateLimited, DelayedData, a failed read
                 self._stopped(late, {"bar_start": bar_start.isoformat(),
-                                     "stage": stage + "bars", "error": type(exc).__name__},
-                              left)
-                return
-            for i, symbol in enumerate(chunk):
-                own = [b for b in bars if b.symbol == symbol
-                       and regular_open <= b.start <= bar_start and b.start + M1 <= now]
-                if not own:
-                    if late is not None:
-                        self._stopped(late, {"bar_start": bar_start.isoformat(),
-                                             "stage": "remainder-no-bars"}, [symbol])
-                    continue
-                error, history = self._history(symbol, today)
+                                     "stage": stage + "bars", "error": type(read).__name__},
+                              left + rest())
+                return True
+            owns: dict[str, list[Bar]] = {}
+            for symbol in chunk:
+                own = [b for b in read[symbol]
+                       if regular_open <= b.start <= bar_start and b.start + M1 <= now]
+                if own:
+                    owns[symbol] = own
+                elif late is not None:
+                    self._stopped(late, {"bar_start": bar_start.isoformat(),
+                                         "stage": "remainder-no-bars"}, [symbol])
+            if not owns:
+                continue
+            histories = self.history.prior_sessions(list(owns), today, md.history_sessions)
+            for symbol in owns:
+                error, history = self._history(histories, symbol, today)
                 if error is not None:
+                    after = left[left.index(symbol):]
                     self._stopped(late, {"bar_start": bar_start.isoformat(),
                                          "stage": stage + "history", "symbol": symbol,
-                                         "error": error}, left[i:])
-                    return
+                                         "error": error}, after + rest())
+                    return True
                 if late is not None:
-                    self._evaluate(symbol, own, history, positions.get(symbol), now,
+                    self._evaluate(symbol, owns[symbol], history, positions.get(symbol), now,
                                    late_quote=late.get(symbol), late=True)
                     continue
-                self._evaluate(symbol, own, history, positions.get(symbol), now)
+                self._evaluate(symbol, owns[symbol], history, positions.get(symbol), now)
                 cause = busy(self.engine)
                 if cause is not None:  # an entry or exit just went out: protect it first
-                    self._put_aside(bar_start, symbol, cause, left[i + 1:])
-                    return
+                    after = left[left.index(symbol) + 1:]
+                    self._put_aside(bar_start, symbol, cause, after + rest())
+                    return True
+        return False
+
+    def _today_bars(self, chunk: list[str], bar_start: datetime,
+                    regular_open: datetime) -> dict[str, tuple[Bar, ...]] | Exception:
+        """Today's bars of `chunk`: discovery's read when it was sent after the minute was
+        over, else one read here of the symbols missing (kept for later minutes and
+        remainders too). The read's error is returned, not raised."""
+        md = self.config.market_data
+        found: dict[str, tuple[Bar, ...]] = {}
+        missing: list[str] = []
+        for symbol in chunk:
+            kept = self.today_bars.complete(regular_open, symbol, bar_start + M1)
+            if kept is None:
+                missing.append(symbol)
+            else:
+                found[symbol] = kept
+        if not missing:
+            return found
+        sent = self.now()  # before the request (see TodayBars)
+        try:
+            bars = self.source.bars(missing, md.bars_per_symbol)
+        except (MarketDataError, BrokerError) as exc:  # RateLimited, DelayedData included
+            return exc
+        self.today_bars.put(regular_open, missing, bars, sent)
+        for symbol in missing:
+            found[symbol] = tuple(b for b in bars if b.symbol == symbol)
+        return found
 
     def _stopped(self, late: dict[str, Quote | None] | None, body: dict[str, object],
                  left: list[str]) -> None:
@@ -226,21 +306,23 @@ class Evaluator:
         if remaining:
             self._remainder = (bar_start, quotes, self._budget)
 
-    def _history(self, symbol: str, today: date) -> tuple[str | None, SessionHistory | None]:
-        """(error type, prior sessions). History None when refused (recorded once a day); an
-        error (budget, delayed data, a failed or malformed read) stops this minute: the next
-        minute tries again."""
-        try:
-            return None, self.history.prior_sessions(symbol, today,
-                                                     self.config.market_data.history_sessions)
-        except HistoryUnavailable as exc:
+    def _history(self, read: HistoryRead, symbol: str,
+                 today: date) -> tuple[str | None, SessionHistory | None]:
+        """(error type, prior sessions) of `symbol` in this minute's history read. History
+        None when refused (recorded once a day); an error (budget, delayed data, a failed or
+        malformed read) that left it unknown stops this minute: the next minute tries again."""
+        found = read.found.get(symbol)
+        if found is not None:
+            return None, found
+        refused = read.refused.get(symbol)
+        if refused is not None:
             if (symbol, today) not in self._history_refused:
                 self._history_refused.add((symbol, today))
-                self._journal(HISTORY_REFUSED, {"symbol": symbol, "cause": exc.cause,
-                                                "detail": exc.detail})
+                self._journal(HISTORY_REFUSED, {"symbol": symbol, "cause": refused.cause,
+                                                "detail": refused.detail})
             return None, None
-        except (MarketDataError, BrokerError) as exc:  # RateLimited, DelayedData included
-            return type(exc).__name__, None
+        assert read.error is not None  # neither found nor refused: the error stopped it
+        return type(read.error).__name__, None
 
     def _evaluate(self, symbol: str, today_bars: list[Bar], history: SessionHistory | None,
                   position: PositionView | None, now: datetime, *,

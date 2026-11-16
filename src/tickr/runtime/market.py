@@ -1,5 +1,7 @@
 """Market data for the bot loop (spec 6): the L1 stream's events, the subscription set, stream
-health, discovery on its interval, and the market exit when the stream is lost with a position.
+health, discovery on its interval (each pass starting at a minute's start, its bars reads kept in
+`TodayBars` for the strategy's evaluation), and the market exit when the stream is lost with a
+position.
 
 Stream callbacks arrive on the provider's thread. They only touch `StreamInbox` (a lock and a
 few dicts); everything that writes the database happens on the trading loop in `tick()`.
@@ -23,6 +25,7 @@ from tickr.data.base import MarketData, MarketDataError, QuoteListener, StreamNo
 from tickr.data.capture import CaptureWriter
 from tickr.data.discovery import (
     Candidate,
+    DiscoveryResult,
     DiscoverySettings,
     NoStrategy,
     RefusedSymbols,
@@ -30,6 +33,7 @@ from tickr.data.discovery import (
     pass_record,
 )
 from tickr.data.health import FanOut, StreamHealth, StreamState
+from tickr.data.todaybars import TodayBars
 from tickr.engine.core import Engine, Leg
 from tickr.strategy.base import Liquidity
 from tickr.types import Quote
@@ -104,8 +108,8 @@ class DiscoveryState:
 class MarketRuntime:
     def __init__(self, engine: Engine, config: Config, source: MarketData, *,
                  health: StreamHealth, inbox: StreamInbox, capture: CaptureWriter | None,
-                 calendar: SessionCalendar | None, now: Callable[[], datetime],
-                 monotonic: Callable[[], float]) -> None:
+                 calendar: SessionCalendar | None, today_bars: TodayBars,
+                 now: Callable[[], datetime], monotonic: Callable[[], float]) -> None:
         self.engine = engine
         self.config = config
         self.source = source
@@ -113,6 +117,7 @@ class MarketRuntime:
         self.inbox = inbox
         self.capture = capture
         self.calendar = calendar
+        self.today_bars = today_bars  # discovery's bars reads, shared with the evaluation
         self.now = now
         self.monotonic = monotonic
         listeners: list[QuoteListener] = [health, inbox]
@@ -134,7 +139,9 @@ class MarketRuntime:
         self._observers_next_sync = monotonic()  # observer tier changes at most once until then
         self._observers_applied: set[str] = set()  # the observer tier as last chosen
         self._optional: set[str] = set()  # subscribed through subscribe_optional
-        self._next_discovery = monotonic()
+        self._pass_minute: datetime | None = None  # the minute of the latest loop pass
+        self._first_pass = False  # this loop pass is the first of its minute (or the first)
+        self._discovery_anchor: datetime | None = None  # interval counted from here
         self._started = now()
 
     def bind(self) -> None:
@@ -147,13 +154,23 @@ class MarketRuntime:
     # --- one pass, called by the service after the engine's broker work ---------------------
 
     def tick(self, *, discover: bool = True) -> None:
-        """`discover=False` while protection needs the loop (runtime/protection.py): the
-        stream, subscriptions and the stream-loss exit still run; discovery waits."""
+        """`discover=False` while protection needs the loop (runtime/protection.py), and
+        whenever the strategy's evaluation runs discovery itself (`discover()`, after the
+        positions and WATCH symbols of the minute): the stream, subscriptions and the
+        stream-loss exit still run."""
+        minute = self.now().replace(second=0, microsecond=0)
+        self._first_pass = minute != self._pass_minute
+        self._pass_minute = minute
         self._journal_stream_events()
         self._sync_subscriptions()  # new candidates: on the next pass, a second later
         self._exit_on_stream_loss()
         if discover:
-            self._discover_if_due()
+            self.discover()
+
+    def candidates(self) -> list[str]:
+        """The symbols of the latest discovery's candidates, best first."""
+        found = self.discovery
+        return [] if found is None else [c.instrument.symbol for c in found.candidates]
 
     def _journal_stream_events(self) -> None:
         events = self.inbox.take_events()
@@ -337,18 +354,31 @@ class MarketRuntime:
             if trade.symbol in positions and not trade.exit_requested:
                 self.engine.request_exit(trade.trade_id, STREAM_LOST_EXIT)
 
-    def _discover_if_due(self) -> None:
-        if self.monotonic() < self._next_discovery:
+    def discover(self) -> None:
+        """One discovery pass, in the regular session, only in the first loop pass of a minute
+        (after `tick` of that pass) and at least `discovery_interval_seconds` after the
+        previous start, so the bars route's 60 s window is not asked twice for a whole pass.
+        The interval is counted from the start of the minute the previous pass began in (the
+        first pass of a minute starts a fraction of a second after it, so counting from the
+        exact start would skip every other minute), except after the bot's very first pass,
+        which may be mid-minute: then from that exact start. With 60 s every pass starts at
+        the start of a minute, so its bars reads were sent after the minute just completed and
+        the evaluation of that minute reuses them (TodayBars)."""
+        if not self._first_pass:
             return
+        self._first_pass = False  # at most once per loop pass
         now = self.now()
+        interval = timedelta(seconds=float(self.config.market_data.discovery_interval_seconds))
+        if self._discovery_anchor is not None and now - self._discovery_anchor < interval:
+            return
         regular, session_open = self._in_regular_session(now)
         if not regular or session_open is None:
             return
-        self._next_discovery = (self.monotonic()
-                                + float(self.config.market_data.discovery_interval_seconds))
+        startup = self._discovery_anchor is None and now - self._started < interval
+        self._discovery_anchor = now if startup else now.replace(second=0, microsecond=0)
         try:
             result = discover(self.source, self.settings, self.screen, session_open,
-                              self.now, self.capture, self._refused_symbols)
+                              self.now, self.capture, self._refused_symbols, self.today_bars)
         except (MarketDataError, BrokerError) as exc:  # MalformedResponse is a BrokerError
             # `detail` is the error's own text: the route, HTTP status and provider error code
             # for a failed read (never a body, credential or account id), cut to
@@ -361,15 +391,32 @@ class MarketRuntime:
             with self.engine.store.transaction():
                 self.engine.store.append(DISCOVERY_FAILED, body, run_id=self.engine.run_id)
             return  # tried again at the next interval
-        self.discovery = DiscoveryState(now, result.summary(), result.candidates)
+        candidates, kept = self._with_earlier(result)
+        summary = result.summary()
+        if kept:
+            summary += f"; kept {len(kept)} earlier candidates not reached"
+        self.discovery = DiscoveryState(now, summary, candidates)
         if self.capture is not None:
             finished = self.now()
             self.capture.discovery(pass_record(result, finished), finished)
         with self.engine.store.transaction():
             self.engine.store.append(DISCOVERY, {
-                "summary": result.summary(), "evaluated": result.evaluated,
-                "candidates": [c.instrument.symbol for c in result.candidates]},
+                "summary": summary, "evaluated": result.evaluated,
+                "candidates": [c.instrument.symbol for c in candidates], "kept": kept},
                 run_id=self.engine.run_id)
+
+    def _with_earlier(self, result: DiscoveryResult) -> tuple[tuple[Candidate, ...], list[str]]:
+        """A pass that stopped early (bars budget, delayed data, a screener or snapshot
+        budget) never shrinks the candidate list by what it did not reach: the previous
+        pass's candidates whose symbol this pass neither accepted nor refused stay, after this
+        pass's own. Returns the candidates and the symbols kept from before."""
+        if result.stopped is None or self.discovery is None:
+            return result.candidates, []
+        reached = ({c.instrument.symbol for c in result.candidates}
+                   | {r.symbol for r in result.rejections})
+        earlier = tuple(c for c in self.discovery.candidates
+                        if c.instrument.symbol not in reached)
+        return result.candidates + earlier, [c.instrument.symbol for c in earlier]
 
     # --- status ----------------------------------------------------------------------------
 
