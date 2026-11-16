@@ -41,7 +41,7 @@ from tickr.engine.manual import flatten_deadline
 from tickr.risk.admission import Admission, AdmissionLimits, session_refusal
 from tickr.risk.causes import AdmissionCause
 from tickr.runtime import stopmarker
-from tickr.runtime.account import account_document, record_reconcile
+from tickr.runtime.account import Balances, account_document, record_reconcile
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.dayend import DayEnd
 from tickr.runtime.protection import LatencyLog, busy
@@ -151,6 +151,7 @@ class Service:
         self._skipping: str | None = None  # cause of the current protect-first episode
         self.stopped_by: str | None = None  # command_id of an obeyed stop-bot command
         self._account_failing = False  # the last account file write failed (journaled once)
+        self.balances = Balances()  # the latest balance read, shown in the account file
         # The records disagreed with the broker on the last successful reconciliation
         # (record_reconcile: a disagreement is recorded once two passes in a row show it).
         self._disagreed = False
@@ -739,7 +740,8 @@ class Service:
         """After a successful reconciliation: what it read from the broker (docs/api.md)."""
         if self.paths.account is None:
             return
-        document = account_document(self.engine, self.now())
+        self.balances.refresh(self.engine, self.now())
+        document = account_document(self.engine, self.now(), self.balances)
         if document is None:
             return
         try:

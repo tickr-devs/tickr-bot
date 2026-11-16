@@ -113,7 +113,7 @@ Platform checks (old group B):
   never block exits; probe first how a halt and the LULD band show in snapshot, profile and stream
   (old #158). Depends on Q2.
 - **T9** Money in the account as an admission check: buying power, settled cash, intraday margin
-  (`buying_power_usd` is read but always empty today). The pattern day trader rule is being replaced
+  (the account file shows the broker's buying power since 2026-11-16, display only). The pattern day trader rule is being replaced
   by an intraday margin standard (FINRA 4210 amendments effective 2026-06-04, broker phase-in to
   2027-10-20); check what the account enforces.
 - **T10** Price collar: refuse an entry whose price is implausibly far from the last completed bar
@@ -165,7 +165,8 @@ owner decision plus the authorization file (rule 5), never a code change.
 
 - **M1** Production readiness view: authorization record form, readiness checklist
   (`docs/api-planned.md` section 3), enabling day.
-- **M2** Account page completeness: balances, buying power, every broker field; fee evidence.
+- **M2** Account page completeness: per-position market value and P&L, order history with fees
+  (balances, buying power and the account kind are shown since 2026-11-16).
 - **M3** gRPC trade events (faster fill and order updates than polling), if the probe shows they are
   reliable.
 - **M4** Slippage and fill quality on real fills against the Sandbox and backtest assumptions (R5

@@ -1,19 +1,73 @@
 """The account-v1 document: what one successful reconciliation read from the broker
-(positions, then open orders) and whether it agreed with the bot's records (docs/api.md).
+(positions, then open orders) and whether it agreed with the bot's records, plus the latest
+balance read (docs/api.md).
 
-Built only from `Engine.broker_view`, which a successful `reconcile()` sets; nothing here calls
-the broker. The adapter reads no balance, so equity and buying power are null (unknown).
-Account ids never enter the document: the broker rows carry none we copy.
+Positions and orders come only from `Engine.broker_view`, which a successful `reconcile()`
+sets. `Balances` reads the account's balance (and, once, its kind) after a successful
+reconciliation, at most once per `[orders] balance_read_seconds`: display only, no limit or
+decision reads it, and a failed read never stops the loop. Account ids never enter the
+document: the broker rows carry none we copy.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from tickr.api import contract as api
+from tickr.broker.base import AccountBalance, BrokerError
 from tickr.engine.core import Engine, Fence
 from tickr.runtime.dayend import records_agree
+from tickr.runtime.protection import busy
+
+# Journal row when a balance read fails: one per stretch of failures (the next success ends it).
+BALANCE_READ_FAILED = "balance-read-failed"
+
+
+@dataclass
+class Balances:
+    """The latest successful balance read and the account's kind, refreshed by `refresh`."""
+
+    balance: AccountBalance | None = None
+    read_at: datetime | None = None
+    label: str | None = None
+    _label_read: bool = False  # the accounts list was read once (label may still be None)
+    _attempt_at: datetime | None = None
+    _failing: bool = False
+
+    def refresh(self, engine: Engine, now: datetime) -> None:
+        """Read the balance when the last attempt is at least `[orders] balance_read_seconds`
+        old, and the account's kind until one accounts read succeeds. Skipped while a trade
+        needs the loop (`protection.busy`: an entry working, an exit in progress, a fill not
+        yet covered by a verified stop), so a slow balance route never delays protection.
+        A failed balance read keeps the last good one (the document carries its time) and is
+        journaled once per stretch; a failed accounts read only leaves the kind unknown."""
+        interval = timedelta(seconds=float(engine.config.orders.balance_read_seconds))
+        if self._attempt_at is not None and now - self._attempt_at < interval:
+            return
+        if busy(engine) is not None:
+            return
+        self._attempt_at = now
+        if not self._label_read:
+            try:
+                self.label = engine.broker.account().label
+                self._label_read = True
+            except BrokerError:
+                pass  # display only: tried again at the next balance read
+        try:
+            balance = engine.broker.balance()
+        except BrokerError as exc:
+            if not self._failing:
+                with engine.store.transaction():
+                    engine.store.append(BALANCE_READ_FAILED,
+                                        {"error": type(exc).__name__, "detail": str(exc)},
+                                        run_id=engine.run_id)
+            self._failing = True
+            return
+        self._failing = False
+        self.balance, self.read_at = balance, now
+
 
 # Fences that say the broker and the bot's records disagree, or that an order's state is not
 # known; any of them means "does not match".
@@ -83,24 +137,36 @@ def record_reconcile(engine: Engine, disagreed_before: bool) -> bool:
     return disagree
 
 
-def account_document(engine: Engine, read_at: datetime) -> api.AccountV1 | None:
+def account_document(engine: Engine, read_at: datetime,
+                     balances: Balances) -> api.AccountV1 | None:
     """The document for the latest reconciliation, or None when it did not read the broker."""
     view = engine.broker_view
     causes = mismatch_causes(engine)
     if view is None or causes is None:
         return None
     ours = {o.client_order_id for o in engine.orders()}
+    b = balances.balance
     return api.AccountV1(
         read_at=read_at,
-        equity_usd=None,
-        buying_power_usd=None,
+        equity_usd=None if b is None else b.net_liquidation,
+        buying_power_usd=None if b is None else b.day_buying_power,
         positions=tuple(api.AccountPosition(p.symbol, p.quantity, p.average_cost)
                         for p in view.positions if p.quantity != 0),
         orders=tuple(api.AccountOrder(
             client_order_id=o.client_order_id or None, symbol=o.symbol, side=str(o.side),
             type=str(o.order_type), status=str(o.state), quantity=o.quantity,
-            limit_price=None, stop_price=o.stop_price, ours=o.client_order_id in ours)
+            limit_price=o.limit_price, stop_price=o.stop_price, ours=o.client_order_id in ours)
             for o in view.open_orders),
         matches_records=not causes,
         mismatch="; ".join(causes) or None,
+        balance_read_at=balances.read_at,
+        cash_usd=None if b is None else b.cash,
+        positions_value_usd=None if b is None else b.market_value,
+        unrealized_pl_usd=None if b is None else b.unrealized_profit_loss,
+        day_pl_usd=None if b is None else b.day_profit_loss,
+        overnight_buying_power_usd=None if b is None else b.overnight_buying_power,
+        maintenance_margin_usd=None if b is None else b.maintenance_margin,
+        margin_calls=None if b is None else b.margin_calls,
+        day_trades_left=None if b is None else b.day_trades_left,
+        account_label=balances.label,
     )

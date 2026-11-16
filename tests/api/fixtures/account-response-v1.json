@@ -2,8 +2,8 @@
   "served_at": "2026-11-16T15:00:04.123Z",
   "account": {
     "read_at": "2026-11-16T15:00:00.123Z",
-    "equity_usd": null,
-    "buying_power_usd": null,
+    "equity_usd": "100123.40",
+    "buying_power_usd": "400493.60",
     "positions": [
       {
         "symbol": "ABCD",
@@ -26,6 +26,16 @@
     ],
     "matches_records": true,
     "mismatch": null,
+    "balance_read_at": "2026-11-16T14:59:40.123Z",
+    "cash_usd": "99999.40",
+    "positions_value_usd": "124.00",
+    "unrealized_pl_usd": "0.60",
+    "day_pl_usd": "-1.00",
+    "overnight_buying_power_usd": "200246.80",
+    "maintenance_margin_usd": "31.00",
+    "margin_calls": 0,
+    "day_trades_left": null,
+    "account_label": "Individual Margin",
     "schema_version": 1
   },
   "age_seconds": "4.000",

@@ -143,8 +143,13 @@ def documents() -> dict[str, object]:
         orders=(AccountOrder("ap-0001-s", "ABCD", "SELL", "STOP_LOSS", "ACCEPTED",
                              Decimal("10"), None, Decimal("11.90"), True),
                 AccountOrder("manual-1", "EFGH", "BUY", "LIMIT", "ACCEPTED", Decimal("5"),
-                             None, None, False)),
+                             Decimal("19.80"), None, False)),
         matches_records=False,
+        # No balance read has succeeded yet: every balance field is null.
+        equity_usd=None, buying_power_usd=None, balance_read_at=None, cash_usd=None,
+        positions_value_usd=None, unrealized_pl_usd=None, day_pl_usd=None,
+        overnight_buying_power_usd=None, maintenance_margin_usd=None, margin_calls=None,
+        day_trades_left=None, account_label=None,
         mismatch="foreign-position:EFGH: position not opened by this bot; "
                  "foreign-order:manual-1: open order not in our records")
     command = CommandV1("3f2c9a7e-5b1d-4c8e-9a0f-1e2d3c4b5a69", CommandKind.FLATTEN,

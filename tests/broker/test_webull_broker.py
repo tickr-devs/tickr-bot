@@ -310,6 +310,16 @@ def test_account_present_only_for_own_id():
     assert not b.account().account_present
 
 
+def test_account_label_is_the_own_rows():
+    b, _, _ = broker(
+        WireResponse(200, [{"account_id": "SOMEONE", "account_label": "Crypto"},
+                           {"account_id": OWN, "account_label": "Individual Margin"}]),
+        WireResponse(200, [{"account_id": OWN}]),
+    )
+    assert b.account().label == "Individual Margin"
+    assert b.account().label is None
+
+
 def test_all_errors_are_broker_errors():
     for cls in (BrokerReadFailed, MalformedResponse, BudgetExhausted):
         assert issubclass(cls, BrokerError)

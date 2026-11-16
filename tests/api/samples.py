@@ -81,13 +81,23 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
 def account(read_at: datetime = T0, **overrides) -> AccountV1:
     values = dict(
         read_at=read_at,
-        equity_usd=None,
-        buying_power_usd=None,
+        equity_usd=Decimal("100123.40"),
+        buying_power_usd=Decimal("400493.60"),
         positions=(AccountPosition("ABCD", Decimal("10"), Decimal("12.34")),),
         orders=(AccountOrder("ap-0001-s", "ABCD", "SELL", "STOP_LOSS", "ACCEPTED",
                              Decimal("10"), None, Decimal("11.90"), True),),
         matches_records=True,
         mismatch=None,
+        balance_read_at=read_at - timedelta(seconds=20),
+        cash_usd=Decimal("99999.40"),
+        positions_value_usd=Decimal("124.00"),
+        unrealized_pl_usd=Decimal("0.60"),
+        day_pl_usd=Decimal("-1.00"),
+        overnight_buying_power_usd=Decimal("200246.80"),
+        maintenance_margin_usd=Decimal("31.00"),
+        margin_calls=0,
+        day_trades_left=None,
+        account_label="Individual Margin",
     )
     values.update(overrides)
     return AccountV1(**values)

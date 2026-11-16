@@ -98,7 +98,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol on one date, oldest first. |
 | GET | `/chart?symbol=<ticker>&interval=<1m\|5m\|30m\|1h\|1d\|1w\|1mo>&range=<1d\|5d\|1m\|3m\|1y>` | `200` `chart-v1`: candles of any US stock from market data; `400`, `429` `rate_limited`, `503` `unavailable`. |
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
-| GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, and whether they matched its records. `503 unavailable` when the file is missing, invalid or dated in the future. |
+| GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, whether they matched its records, and the latest balances. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. |
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
@@ -255,8 +255,8 @@ the cause.
   does not show it).
 - `orders`: every open order the broker listed. `side`, `type` and `status` are the bot's names
   (`BUY`/`SELL`; `MARKET`/`LIMIT`/`STOP_LOSS`; `ACCEPTED`, `PARTIALLY_FILLED`, ...). `ours` is
-  true when the client order id is one of the bot's own. `limit_price` is not read yet and is
-  always null.
+  true when the client order id is one of the bot's own. `limit_price` is the broker's, read on
+  LIMIT rows only (null on every other type).
 - `matches_records` is true only when the broker's positions equal what the bot's open trades
   expect and its open orders are exactly the bot's live orders (the same test as the day-end
   record), AND no fence says otherwise: foreign position or order, quantity mismatch,
@@ -264,8 +264,21 @@ the cause.
   `mismatch` lists those fences' causes (`name: cause; ...`), or one plain sentence when only
   the comparison fails. `resurrected` is an operator fence that stays until it is cleared, so
   `mismatch` may describe something the broker has already resolved.
-- `equity_usd` and `buying_power_usd` are always null in this version: the adapter does not read
-  the account balance (the balance response shape is unproven, docs/webull-facts.md).
+- Balances come from the latest successful balance read (`GET /trading/assets/balances/get`,
+  docs/webull-facts.md), made after a successful reconciliation at most once per
+  `[orders] balance_read_seconds`; `balance_read_at` is when it succeeded. All are null until
+  one succeeds. A failed read keeps the previous values (with their `balance_read_at`), is
+  journaled once per stretch (`balance-read-failed`) and never blocks anything: balances are
+  display only, and no limit or decision reads them (limits live in the platform settings).
+  - `equity_usd`: net liquidation value (cash plus positions at market).
+  - `buying_power_usd`: day (intraday) buying power; `overnight_buying_power_usd`: overnight.
+  - `cash_usd`, `positions_value_usd` (positions at market), `unrealized_pl_usd`, `day_pl_usd`
+    (the broker's day profit or loss), `maintenance_margin_usd`.
+  - `margin_calls`: how many open margin calls the broker lists.
+  - `day_trades_left`: day trades the broker still allows; null with a balance read means no
+    limit (`UNLIMITED`).
+  - `account_label`: the broker's name for the account kind ("Individual Margin"), read once
+    from the accounts list; null until read. Never the account id or number.
 - No account id or broker order id is ever in the document.
 
 ### History (read-only)

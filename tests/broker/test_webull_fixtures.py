@@ -215,3 +215,82 @@ def test_detail_reads_order_id_and_optional_stop_price():
     stop = read_order_detail(with_row(order_type="STOP_LOSS", side="SELL", status="SUBMITTED",
                                       limit_price=None, stop_price="98.50"), CID, own)
     assert stop.stop_price == D("98.50") and stop.order_type is OrderType.STOP_LOSS
+
+
+# --- balance (recorded 2026-11-16) -------------------------------------------------------------
+
+
+def test_recorded_balance():
+    b, t, _ = broker(load("balance.json"))
+    got = b.balance()
+    assert [(r, p) for r, p in t.sent] == [(Route.BALANCE, {"total_asset_currency": "USD"})]
+    assert got.net_liquidation == D("1000000.00") and isinstance(got.net_liquidation, D)
+    assert (got.cash, got.market_value) == (D("1000000.00"), D("0.00"))
+    assert (got.unrealized_profit_loss, got.day_profit_loss) == (D("0.00"), D("0.00"))
+    assert (got.day_buying_power, got.overnight_buying_power) == (D("4000000"), D("2000000.00"))
+    assert (got.maintenance_margin, got.margin_calls) == (D("0.00"), 0)
+    assert got.day_trades_left is None  # "UNLIMITED"
+
+
+def balance_with(**changes) -> WireResponse:
+    body = copy.deepcopy(load("balance.json").body)
+    for key, value in changes.items():
+        if value is None:
+            body.pop(key)
+        else:
+            body[key] = value
+    return WireResponse(200, body)
+
+
+def test_balance_day_trades_left_number():
+    b, _, _ = broker(balance_with(day_trades_left="3"))
+    assert b.balance().day_trades_left == 3
+
+
+@pytest.mark.parametrize("changes", [
+    {"total_asset_currency": "HKD"},
+    {"total_net_liquidation_value": None},
+    {"total_cash_balance": "n/a"},
+    {"day_trades_left": "some"},
+    {"day_trades_left": None},
+    {"open_margin_calls": None},
+    {"account_currency_assets": []},
+    {"account_currency_assets": "USD"},
+])
+def test_balance_refuses_unexpected_shapes(changes):
+    b, _, _ = broker(balance_with(**changes))
+    with pytest.raises(MalformedResponse):
+        b.balance()
+
+
+def test_balance_refuses_a_missing_buying_power():
+    body = copy.deepcopy(load("balance.json").body)
+    del body["account_currency_assets"][0]["day_buying_power"]
+    b, _, _ = broker(WireResponse(200, body))
+    with pytest.raises(MalformedResponse):
+        b.balance()
+
+
+def test_balance_read_failure_is_typed():
+    b, _, _ = broker(WireResponse(500, {"error_code": "X"}))
+    with pytest.raises(BrokerReadFailed):
+        b.balance()
+
+
+def test_open_order_row_carries_its_limit_price():
+    rows, _ = read_order_rows(load("historical_orders_cancelled_limit.json").body, own,
+                              lambda c: True, "h")
+    assert rows[0].limit_price == D("100.00")
+
+
+def test_an_unreadable_limit_price_is_unknown_never_a_refusal():
+    body = load("historical_orders_cancelled_limit.json").body
+    body["data"][0]["orders"][0]["limit_price"] = "--"
+    rows, bad = read_order_rows(body, own, lambda c: True, "h")
+    assert bad == [] and rows[0].limit_price is None
+
+
+def test_balance_refuses_non_ascii_digits():
+    b, _, _ = broker(balance_with(day_trades_left="\u00b2"))
+    with pytest.raises(MalformedResponse):
+        b.balance()

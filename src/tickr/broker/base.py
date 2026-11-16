@@ -57,10 +57,32 @@ class ReplaceAck:
 class AccountSnapshot:
     account_present: bool
     trading_permitted: bool
+    label: str | None = None  # the broker's name for the account kind ("Individual Margin")
+
+
+@dataclass(frozen=True)
+class AccountBalance:
+    """The account's money as the broker reports it, in USD. Display only: nothing in the bot
+    decides on it (limits live in the platform settings)."""
+
+    net_liquidation: Decimal  # cash plus positions at market: the account's equity
+    cash: Decimal
+    market_value: Decimal  # positions at market
+    unrealized_profit_loss: Decimal
+    day_profit_loss: Decimal
+    day_buying_power: Decimal
+    overnight_buying_power: Decimal
+    maintenance_margin: Decimal
+    margin_calls: int  # open margin calls listed
+    day_trades_left: int | None  # None: the broker says unlimited
 
 
 class Broker(Protocol):
     def account(self) -> AccountSnapshot: ...
+
+    def balance(self) -> AccountBalance:
+        """One read of the account's balances. Raises BrokerError when it cannot be read."""
+        ...
 
     def positions(self) -> list[Position]: ...
 

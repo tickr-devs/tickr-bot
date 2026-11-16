@@ -127,6 +127,10 @@ reconcile_proof_seconds = 300
 # clean: a longer stretch without a recorded reconciliation (bot down, hours of failed reads) makes
 # the date unknown. Must be above reconcile_proof_seconds; read by api.cleanday (GET /days).
 reconcile_max_gap_seconds = 900
+# Least seconds between two balance reads (equity, cash, buying power, P&L: display only, in the
+# account file after a successful reconciliation; one GET on the balance route each time); read by
+# runtime.account.
+balance_read_seconds = 60
 
 [probe]
 # Shares per probe order (owner 2026-11-14); read by the probe command.

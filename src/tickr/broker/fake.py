@@ -7,8 +7,10 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
 from tickr.broker.base import (
+    AccountBalance,
     AccountSnapshot,
     Acknowledgement,
+    BrokerError,
     OrderNotFound,
     OutcomeUnknown,
     RateLimited,
@@ -39,12 +41,21 @@ class FakeBroker:
     replaced: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
     _next_id: int = 1
     place_budget: int | None = None  # None = unlimited; else place requests can_place admits
+    funds: AccountBalance | None = None  # what balance() returns; None = the read fails
+    account_label: str | None = None
+    balance_reads: int = 0
 
     def script(self, *outcomes: str) -> None:
         self.outcomes.extend(outcomes)
 
     def account(self) -> AccountSnapshot:
-        return AccountSnapshot(self.account_present, self.trading_permitted)
+        return AccountSnapshot(self.account_present, self.trading_permitted, self.account_label)
+
+    def balance(self) -> AccountBalance:
+        self.balance_reads += 1
+        if self.funds is None:
+            raise BrokerError("no balance scripted")
+        return self.funds
 
     def positions(self) -> list[Position]:
         return [p for p in self.holdings.values() if p.quantity != 0]
@@ -80,6 +91,7 @@ class FakeBroker:
             state=OrderState.ACCEPTED,
             raw_status="SUBMITTED",
             stop_price=request.stop_price,
+            limit_price=request.limit_price,
         )
         if outcome == "unknown":
             raise OutcomeUnknown("scripted: reply lost after acceptance")

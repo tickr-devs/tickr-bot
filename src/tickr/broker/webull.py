@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from tickr.broker.base import (
+    AccountBalance,
     AccountSnapshot,
     Acknowledgement,
     BrokerError,
@@ -112,6 +113,7 @@ class Route(Enum):
     """Webull routes this adapter uses: (HTTP method, path, mutates broker state)."""
 
     ACCOUNTS = ("GET", "/trading/accounts/list", False)
+    BALANCE = ("GET", "/trading/assets/balances/get", False)
     POSITIONS = ("GET", "/trading/assets/positions/list", False)
     OPEN_ORDERS = ("GET", "/trading/orders/open-orders/list", False)
     ORDER_DETAIL = ("GET", "/trading/orders/get", False)
@@ -295,6 +297,14 @@ def _optional_decimal(obj: Mapping[str, Any], key: str, where: str) -> Decimal |
     return None if value is None else to_decimal(value, f"{where}.{key}")
 
 
+def _display_decimal(obj: Mapping[str, Any], key: str, where: str) -> Decimal | None:
+    """A number shown and never decided on: None when absent or unreadable."""
+    try:
+        return _optional_decimal(obj, key, where)
+    except MalformedResponse:
+        return None
+
+
 def _enum_field[E: Enum](obj: Mapping[str, Any], key: str, enum: type[E], where: str) -> E:
     raw = str(_require(obj, key, where))
     try:
@@ -327,23 +337,31 @@ def read_order(item: Any, is_own: IsOwnAccount, where: str) -> OrderDetail:
     Field names are the recorded ones (tests/fixtures/webull). `filled_quantity` is required:
     an order whose fill we cannot read is one we cannot reason about. Status/quantity
     contradictions map to UNKNOWN (broker/status.py). `filled_price` has not been observed
-    on a fill yet (no fill recorded so far), so it stays optional; so do `stop_price` (no
+    on a fill yet (no fill recorded so far), so it stays optional; so do `limit_price`
+    (recorded on a LIMIT row; read on LIMIT rows only, display only), `stop_price` (no
     working stop recorded yet; named like the recorded `limit_price`) and `order_id`."""
     _check_account(item, is_own, where)
     raw_status = str(_require(item, "status", where)).strip()
     quantity = _decimal_field(item, "total_quantity", where)
     filled = _decimal_field(item, "filled_quantity", where)
+    order_type = _enum_field(item, "order_type", OrderType, where)
+    # Display only: read on LIMIT rows, the one type it was recorded on, and an unreadable
+    # value is shown as unknown: nothing decides on it, so it can never make one of our
+    # orders unreadable.
+    limit_price = _display_decimal(item, "limit_price", where) \
+        if order_type is OrderType.LIMIT else None
     return OrderDetail(
         client_order_id=str(_require(item, "client_order_id", where)),
         symbol=str(_require(item, "symbol", where)),
         side=_enum_field(item, "side", Side, where),
-        order_type=_enum_field(item, "order_type", OrderType, where),
+        order_type=order_type,
         quantity=quantity,
         filled_quantity=filled,
         average_fill_price=_optional_decimal(item, "filled_price", where),
         state=map_status(raw_status, quantity, filled),
         raw_status=raw_status,
         stop_price=_optional_decimal(item, "stop_price", where),
+        limit_price=limit_price,
         broker_order_id=None if _optional(item, "order_id") is None else str(item["order_id"]),
     )
 
@@ -450,7 +468,58 @@ def read_accounts(body: Any, is_own: Callable[[str], bool]) -> AccountSnapshot:
     # Being listed for this App Key is what makes trading requests possible; Webull exposes
     # no separate permission flag in this route.
     present = len(own) == 1
-    return AccountSnapshot(account_present=present, trading_permitted=present)
+    label = _optional(own[0], "account_label") if present else None
+    return AccountSnapshot(account_present=present, trading_permitted=present,
+                           label=None if label is None else str(label))
+
+
+# The currency the balance read asks its totals in (`total_asset_currency`), and the currency
+# row it reads the buying powers from: the bot trades US stocks in USD.
+BALANCE_CURRENCY = "USD"
+# `day_trades_left` when the broker sets no limit (probe 2026-11-16).
+DAY_TRADES_UNLIMITED = "UNLIMITED"
+
+
+def read_balance(body: Any, is_own: IsOwnAccount) -> AccountBalance:
+    """Balance body (recorded 2026-11-16, tests/fixtures/webull/balance.json): `total_*` sums in
+    `total_asset_currency`, and one `account_currency_assets[]` row per currency holding the
+    buying powers. Every field we show is required; anything unexpected refuses the read."""
+    where = "balance"
+    if not isinstance(body, Mapping):
+        raise MalformedResponse(f"{where}: expected an object")
+    _check_account(body, is_own, where)
+    currency = str(_require(body, "total_asset_currency", where))
+    if currency != BALANCE_CURRENCY:
+        raise MalformedResponse(f"{where}: totals in {currency!r}, not {BALANCE_CURRENCY}")
+    rows = _require(body, "account_currency_assets", where)
+    if not isinstance(rows, list):
+        raise MalformedResponse(f"{where}: 'account_currency_assets' is not a list")
+    usd = [r for r in rows if isinstance(r, Mapping) and r.get("currency") == BALANCE_CURRENCY]
+    if len(usd) != 1:
+        raise MalformedResponse(f"{where}: expected one {BALANCE_CURRENCY} row, found {len(usd)}")
+    row, row_where = usd[0], f"{where}.account_currency_assets[{BALANCE_CURRENCY}]"
+    calls = body.get("open_margin_calls")
+    if not isinstance(calls, list):
+        raise MalformedResponse(f"{where}: 'open_margin_calls' is not a list")
+    left = str(_require(body, "day_trades_left", where)).strip()
+    if left == DAY_TRADES_UNLIMITED:
+        trades_left = None
+    elif left.isascii() and left.isdigit():
+        trades_left = int(left)
+    else:
+        raise MalformedResponse(f"{where}.day_trades_left: unsupported value {left!r}")
+    return AccountBalance(
+        net_liquidation=_decimal_field(body, "total_net_liquidation_value", where),
+        cash=_decimal_field(body, "total_cash_balance", where),
+        market_value=_decimal_field(body, "total_market_value", where),
+        unrealized_profit_loss=_decimal_field(body, "total_unrealized_profit_loss", where),
+        day_profit_loss=_decimal_field(body, "total_day_profit_loss", where),
+        day_buying_power=_decimal_field(row, "day_buying_power", row_where),
+        overnight_buying_power=_decimal_field(row, "overnight_buying_power", row_where),
+        maintenance_margin=_decimal_field(body, "maintenance_margin", where),
+        margin_calls=len(calls),
+        day_trades_left=trades_left,
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -621,6 +690,11 @@ class WebullBroker:
 
     def account(self) -> AccountSnapshot:
         return read_accounts(self._read(Route.ACCOUNTS, {}), self._transport.is_own_account)
+
+    def balance(self) -> AccountBalance:
+        return read_balance(
+            self._read(Route.BALANCE, {"total_asset_currency": BALANCE_CURRENCY}),
+            self._transport.is_own_account)
 
     def positions(self) -> list[Position]:
         return read_positions(self._read(Route.POSITIONS, {}), self._transport.is_own_account)

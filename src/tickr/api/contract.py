@@ -339,12 +339,25 @@ class AccountV1:
     account ids."""
 
     read_at: datetime
-    equity_usd: Decimal | None
-    buying_power_usd: Decimal | None
+    # Balances: the latest successful balance read (`balance_read_at`), all null until one
+    # succeeds. Display only: no limit or decision uses them.
+    equity_usd: Decimal | None  # net liquidation value: cash plus positions at market
+    buying_power_usd: Decimal | None  # day (intraday) buying power
     positions: tuple[AccountPosition, ...]
     orders: tuple[AccountOrder, ...]
     matches_records: bool
     mismatch: str | None  # what disagrees, in plain words; null when matches_records
+    # Added after v1 shipped (2026-11-16): a file from an older bot reads as no balance read.
+    balance_read_at: datetime | None = _added_later(None)
+    cash_usd: Decimal | None = _added_later(None)
+    positions_value_usd: Decimal | None = _added_later(None)  # positions at market
+    unrealized_pl_usd: Decimal | None = _added_later(None)
+    day_pl_usd: Decimal | None = _added_later(None)
+    overnight_buying_power_usd: Decimal | None = _added_later(None)
+    maintenance_margin_usd: Decimal | None = _added_later(None)
+    margin_calls: int | None = _added_later(None)  # open margin calls the broker lists
+    day_trades_left: int | None = _added_later(None)  # null with a balance read: no limit
+    account_label: str | None = _added_later(None)  # the broker's name for the account kind
     schema_version: int = _const(ACCOUNT_SCHEMA_VERSION)
 
 
