@@ -15,10 +15,6 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 NAME = re.compile(r"^    name:")
 SEPARATOR = "-"
-# The former names of the four required checks, which still report beside the new ones until
-# main's ruleset lists the new names. Remove each with its job; nothing may be added here.
-LEGACY = {"ci.yml": {"test"}, "ios-app.yml": {"build"}, "macos-app.yml": {"build-and-test"},
-          "swift-rules.yml": {"check"}}
 
 
 def jobs_of(text: str) -> tuple[list[str], list[str]]:
@@ -44,13 +40,11 @@ def test_every_job_id_says_what_it_checks_and_is_used_once():
     for path in files:
         ids, renamed = jobs_of(path.read_text("utf-8"))
         assert ids, f"{path.name}: no jobs found"
-        legacy = LEGACY.get(path.name, set())
-        assert legacy <= set(ids), f"{path.name}: drop {legacy - set(ids)} from LEGACY"
         for job in ids:
             if job in seen:
                 problems.append(f"{path.name}: job `{job}` is also in {seen[job]}")
             seen[job] = path.name
-            if job not in legacy and SEPARATOR not in job:
+            if SEPARATOR not in job:
                 problems.append(
                     f"{path.name}: job `{job}` does not say what it checks (name the platform "
                     "or subject and the action, like `ios-build-and-test`)")
