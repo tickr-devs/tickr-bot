@@ -441,6 +441,21 @@ def test_history_page_shapes_name_no_order_and_follow_the_pages():
     assert len(b.history_page_shapes(1)) == 1 and len(t.sent) == 1
 
 
+def test_history_window_shape_sends_start_time_and_names_no_order():
+    page = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    b, t, _ = broker(WireResponse(200, page))
+    shape = b.history_window_shape("2026-11-16T05:00:00.000Z")
+    assert [p for _, p in t.sent] == [{"start_time": "2026-11-16T05:00:00.000Z"}]
+    assert (shape["status"], shape["rows"], shape["own_rows"], shape["next_page"]) == (
+        200, 2, 2, False)
+    assert shape["oldest"] <= shape["newest"]
+    assert "ap-" not in json.dumps(shape) and "TSCO" not in json.dumps(shape)
+    b, _, _ = broker(WireResponse(417, {"error_code": "OPENAPI_PARAM_ERR", "message": "x"}))
+    refused = b.history_window_shape("bad")
+    assert (refused["status"], refused["error_code"]) == (417, "OPENAPI_PARAM_ERR")
+    assert "rows" not in refused
+
+
 # --- cash activities: the exact trade amounts (recorded 2026-11-16) ---------------------------
 
 

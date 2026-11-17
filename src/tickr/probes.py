@@ -32,6 +32,9 @@ Section H, account read only (the adapter reads the account id itself; it is nev
 - `history` (H2): how many rows one order-history page holds and in which order they come, read
   page by page up to `[probe] history_max_pages`. Next to a running bot only while its status
   and last broker read show it flat (the bot's own history reads share the route).
+- `history-since` (H2b): whether the order history takes `start_time` (today's New York
+  midnight, written three ways) and then lists only today's orders, so one page could cover a
+  day of 20 slots. Read only, flat as above.
 
 Every request is sent once and never repeated. Evidence goes to
 `<data_dir>/<[probe] evidence_dir>/<NY date>/<probe>-<UTC time>/`: one JSON line per request and
@@ -48,6 +51,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
+from datetime import time as dt_time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -66,7 +70,13 @@ from tickr.broker.webull import (
     chart_probe_market_data_from_config,
     tick_probe_stream_from_config,
 )
-from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
+from tickr.calendar import (
+    NEW_YORK,
+    CalendarCause,
+    CalendarRefused,
+    SessionCalendar,
+    ny_date_of,
+)
 from tickr.cli import data_paths
 from tickr.config import Config, ConfigError
 from tickr.data.base import BarSpan, MarketData, MarketDataError, ScreenerKind, SymbolsRefused
@@ -74,6 +84,7 @@ from tickr.engine import tick_probe
 from tickr.engine.core import Fence
 from tickr.lock import AlreadyRunning, SingleInstanceLock, recorded_holder
 
+MS_PER_SECOND = 1000  # unit factor: epoch milliseconds
 # One bar is enough: the probes count requests and answers, never prices.
 BARS_PER_READ = 1
 
@@ -527,6 +538,48 @@ def history(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
     return verdict, folder
 
 
+def start_time_encodings(start: datetime) -> list[tuple[str, str]]:
+    """`start` (aware) written the ways the history's `start_time` might take it: the SDK's
+    documented pattern yyyy-MM-dd'T'HH:mm:ss.SSSZ (Java `Z`: +0000), the same with a literal
+    Z, and epoch milliseconds (as the bars route takes its times)."""
+    utc = start.astimezone(UTC)
+    stamp = utc.strftime("%Y-%m-%dT%H:%M:%S.000")
+    return [("iso-offset", stamp + "+0000"), ("iso-z", stamp + "Z"),
+            ("epoch-ms", str(int(utc.timestamp() * MS_PER_SECOND)))]
+
+
+def history_since(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
+                  out: Callable[[str], None] = print) -> tuple[str, Path]:
+    """H2b: does the history take `start_time`, in which format, and does it then list only
+    orders placed since then? One read per encoding of today's New York midnight. Read only.
+    Next to a running bot only while it is flat (its own history reads share the route).
+    Passed when an encoding is accepted and every row it lists is from today."""
+    _, lock_path = data_paths(cfg)
+    if recorded_holder(lock_path) is not None:
+        _refuse_while_exposed(cfg, now())
+    started = now()
+    midnight = datetime.combine(started.astimezone(NEW_YORK).date(), dt_time(), NEW_YORK)
+    client = broker(cfg)
+    folder = evidence_folder(cfg, "history-since", started)
+    shapes = []
+    for name, value in start_time_encodings(midnight):
+        shape = {"encoding": name, **client.history_window_shape(value)}
+        _append(folder / "reads.jsonl", shape)
+        shapes.append(shape)
+    honored = [s["encoding"] for s in shapes if s.get("rows") is not None and (
+        s["oldest"] is None or datetime.fromisoformat(s["oldest"]) >= midnight)]
+    (folder / SUMMARY_FILE).write_text(json.dumps({
+        "probe": "history-since", "environment": cfg.environment_name,
+        "started_at": started.isoformat(), "start": midnight.isoformat(),
+        "reads": shapes, "honored": honored}, indent=1, sort_keys=True) + "\n", "utf-8")
+    for s in shapes:
+        out(f"h2_since {s['encoding']}: HTTP {s['status']}"
+            + (f" {s.get('error_code')}" if s.get("rows") is None else
+               f", rows {s['rows']} (own {s['own_rows']}), oldest {s['oldest']}, "
+               f"next page {s['next_page']}"))
+    return (PASSED if honored else UNFINISHED), folder
+
+
 # --------------------------------------------------------------------------------------------
 # Command line
 # --------------------------------------------------------------------------------------------
@@ -552,6 +605,9 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_parser(name, help=text).add_argument("symbol")
     sub.add_parser("history", help="H2: order-history page size and row order (read only; "
                    "next to a running bot only while it is flat)")
+    sub.add_parser("history-since", help="H2b: does the order history take start_time, "
+                   "and in which format (read only; next to a running bot only while it is "
+                   "flat)")
     sub.add_parser("tick", help="K: trade-by-trade stream and its symbol cap. Only with the "
                    "bot stopped").add_argument("symbols", nargs="+")
     worker = sub.add_parser("chart-limit-worker", help="one process of chart-limit (internal)")
@@ -570,6 +626,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "history":
             verdict, folder = history(cfg, now=NOW, broker=HISTORY_BROKER)
             print(f"history: {verdict}; evidence in {folder}")
+            return EXIT_ANSWERED if verdict == PASSED else EXIT_NO_ANSWER
+        if args.command == "history-since":
+            verdict, folder = history_since(cfg, now=NOW, broker=HISTORY_BROKER)
+            print(f"history-since: {verdict}; evidence in {folder}")
             return EXIT_ANSWERED if verdict == PASSED else EXIT_NO_ANSWER
         if args.command == "tick":
             code, folder = tick(cfg, args.symbols, now=NOW, sleep=SLEEP, market=LIMIT_MARKET,

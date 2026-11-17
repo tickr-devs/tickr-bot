@@ -114,6 +114,8 @@ ORDER_TRIGGER_PRICE_TYPE = "PRICE"
 
 SDK_API_VERSION = "v3"
 SDK_LOGGER_PREFIX = "webull"
+# Query parameter of the order history's window start (SDK `list_order_history`, v3).
+HISTORY_START_PARAM = "start_time"
 LOGGING_OFF = logging.CRITICAL + 1
 SECONDS_PER_MINUTE = 60
 
@@ -952,6 +954,28 @@ class WebullBroker:
                 break
             params = {"pagination_key": str(next_key)}
         return pages
+
+    def history_window_shape(self, start_time: str) -> dict[str, Any]:
+        """Probe H2b (python -m tickr.probes history-since), read only: one history request
+        with `start_time` (SDK `list_order_history`; its format is unproven) and what it
+        answered: HTTP status and error code, or how many rows (ours among them), the oldest
+        and newest `place_time_at` and whether a next page is offered. No id, symbol, price or
+        account field is returned."""
+        response = self._send(Route.HISTORY, {HISTORY_START_PARAM: start_time})
+        shape: dict[str, Any] = {"start_time": start_time, "status": response.status}
+        if not response.ok:
+            return {**shape, "error_code": response.error_code}
+        combos = _unwrap_list(response.body, "history")
+        rows = [row for combo in combos if isinstance(combo, Mapping)
+                for row in (combo.get("orders") or []) if isinstance(row, Mapping)]
+        times = sorted(str(row.get("place_time_at") or "") for row in rows)
+        next_key = (_optional(response.body, "pagination_key")
+                    if isinstance(response.body, Mapping) else None)
+        return {**shape, "rows": len(rows),
+                "own_rows": sum(1 for row in rows
+                                if self._is_own_order(str(row.get("client_order_id") or ""))),
+                "oldest": times[0] if times else None, "newest": times[-1] if times else None,
+                "next_page": next_key is not None}
 
     def open_orders(self) -> list[OrderDetail]:
         orders: list[OrderDetail] = []
