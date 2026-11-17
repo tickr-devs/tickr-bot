@@ -329,7 +329,7 @@ def test_recorded_working_stop_is_our_live_stop():
     assert stop.fees == D("0.07")  # the broker's estimate already listed: SEC 0.06 + FINRA 0.01
 
 
-WINDOW = {"start_time": "2026-11-16T05:00:00.000Z", "end_time": "2026-11-16T21:30:00.000Z"}
+WINDOW = {"start_time": "2026-11-16T05:00:00.000Z", "end_time": "2026-11-17T05:00:00.000Z"}
 
 
 def test_recorded_fill_in_history():
@@ -380,10 +380,11 @@ def test_fills_of_another_new_york_day_are_left_out():
                      wall=datetime(2026, 11, 18, 1, tzinfo=UTC))
     assert b.fills_today(date(2026, 11, 17)) == []  # rows the window should not have listed
     assert t.sent == [(Route.HISTORY, {"start_time": "2026-11-17T05:00:00.000Z",
-                                       "end_time": "2026-11-18T01:00:00.000Z"})]
+                                       "end_time": "2026-11-18T05:00:00.000Z"})]
 
 
 def test_history_window_ends_at_the_next_midnight_and_refuses_a_day_not_begun():
+    # The end is the next midnight whatever the time (H2b edges: a future end is accepted).
     b, t, _ = broker(load("historical_orders_fill_and_stop.json"),
                      wall=datetime(2026, 11, 20, 12, tzinfo=UTC))
     b.fills_today(TRADE_DAY)

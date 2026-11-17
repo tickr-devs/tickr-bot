@@ -115,7 +115,8 @@ ORDER_TRIGGER_PRICE_TYPE = "PRICE"
 SDK_API_VERSION = "v3"
 # The order history's window (probe H2b, 2026-11-17): `start_time` is refused unless
 # `end_time` comes with it, and both must be UTC yyyy-MM-dd'T'HH:mm:ss.SSS'Z' (+0000 and epoch
-# ms are refused); with both it lists only orders placed inside the window.
+# ms are refused); with both it lists only orders placed inside the window (it filters on the
+# placing time), and the end may lie in the future (H2b edges, 2026-11-17).
 HISTORY_START_PARAM = "start_time"
 HISTORY_END_PARAM = "end_time"
 MICROSECONDS_PER_MILLISECOND = 1000
@@ -860,12 +861,14 @@ class WebullBroker:
             raise Refused(GATE_CLOSED, result.cause)
 
     def _history_window(self, day: date) -> dict[str, str]:
-        """The history query for New York date `day`: its midnight to the earlier of the next
-        midnight and now (probe H2b). A day that has not begun is refused, never read."""
+        """The history query for New York date `day`: its midnight to the next midnight, an
+        end in the future while the day runs (probe H2b edges: accepted, and it lists what an
+        end at now lists), so no clock skew between us and the broker, nor an exclusive end,
+        can leave out an order placed just before the read. A day that has not begun on our
+        clock is refused, never read."""
         start = datetime.combine(day, datetime.min.time(), NEW_YORK)
-        end = min(self._wall(), datetime.combine(day + timedelta(days=1),
-                                                 datetime.min.time(), NEW_YORK))
-        if end <= start:
+        end = datetime.combine(day + timedelta(days=1), datetime.min.time(), NEW_YORK)
+        if self._wall() <= start:
             raise BrokerReadFailed(Route.HISTORY.name, None, "HISTORY_DAY_NOT_BEGUN")
         return {HISTORY_START_PARAM: _history_time(start), HISTORY_END_PARAM: _history_time(end)}
 
