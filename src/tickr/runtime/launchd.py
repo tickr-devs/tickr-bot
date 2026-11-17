@@ -9,11 +9,18 @@ Every job runs from one folder, `{{RELEASE}}`: on the Mac the stable link `<rele
 start (`cd -P`) and runs the interpreter and config inside the folder it resolved to, by their
 paths relative to it (`{{PYTHON}}`, `{{CONFIG}}`): a switch of the link never changes the code
 under a process that already runs.
+
+The API job is the one network-facing job: it gets no credential at all unless `[chart]
+webull_enabled` is true, and then ONLY the active environment's Webull app key and app secret
+(`api_credential_variables`). Its shell reads each of the two from the env file in a subshell of
+its own (`credentials_prefix`) and exports just that value, so neither the API process nor its
+shell ever holds the account id or any other line of the env file.
 """
 
 from __future__ import annotations
 
 import re
+import shlex
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -251,8 +258,45 @@ def _inside(name: str, path: Path) -> str:
     return escape(path.as_posix())
 
 
-def values(runtime: RuntimeConfig, paths: Paths) -> dict[str, str]:
-    """Placeholder values, already XML-safe."""
+# A POSIX shell variable name: the only form a name taken from config may have before it is
+# written into the API job's shell command (protocol constant of sh).
+_SHELL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def api_credential_variables(config: Config) -> tuple[str, ...]:
+    """The NAMES of the env-file variables the API job receives: none unless `[chart]
+    webull_enabled`; then the active environment's app key and app secret only, which the chart
+    client needs (broker/webull.py chart_market_data_from_config reads no account id). Never the
+    account id, never another environment's, never any other credential."""
+    if not config.chart.webull_enabled:
+        return ()
+    env = config.environment
+    names = (env.app_key_variable, env.app_secret_variable)
+    section = f"[environments.{config.environment_name}]"
+    for key, name in zip(("app_key_variable", "app_secret_variable"), names, strict=True):
+        if not _SHELL_NAME.match(name):
+            raise ConfigError(f"{section} {key} must be a shell variable name, got {name!r}")
+    if len(set(names)) != len(names) or env.account_variable in names:
+        raise ConfigError(f"{section} app_key_variable, app_secret_variable and account_variable "
+                          "must be three different names")
+    return names
+
+
+def credentials_prefix(names: tuple[str, ...], env_file: Path) -> str:
+    """Shell text (not yet XML-escaped) that sets and exports each of `names` from `env_file`,
+    and nothing else. Each value is read in a subshell that sources the file and prints only that
+    one variable; the file's own output and errors are discarded (they could carry a value). An
+    unset or empty value is not exported, so the reader names it as missing. Empty for no names:
+    the job then never reads the file."""
+    source = shlex.quote(str(env_file))
+    reads = [f"{name}=$(. {source} >/dev/null 2>&1 </dev/null; printf '%s' \"${{{name}-}}\"); "
+             f'[ -n "${name}" ] && export {name}; ' for name in names]
+    return "".join(reads)
+
+
+def values(runtime: RuntimeConfig, paths: Paths,
+           api_variables: tuple[str, ...]) -> dict[str, str]:
+    """Placeholder values, already XML-safe. `api_variables`: `api_credential_variables`."""
     sched = schedule(runtime)
     for name in ("release", "env_file", "log_dir"):
         if not Path(getattr(paths, name)).is_absolute():
@@ -263,6 +307,7 @@ def values(runtime: RuntimeConfig, paths: Paths) -> dict[str, str]:
         "CONFIG": _inside("config", paths.config),
         "ENV_FILE": escape(str(paths.env_file)),
         "LOG_DIR": escape(str(paths.log_dir)),
+        "API_CREDENTIALS": escape(credentials_prefix(api_variables, paths.env_file)),
         "PREFLIGHT_CALENDAR": _calendar_xml(sched.preflight, sched.weekdays),
         "BOT_CALENDAR": _calendar_xml(sched.bot, sched.weekdays),
         "WATCHDOG_CALENDAR": _calendar_xml(sched.watchdog, sched.weekdays),

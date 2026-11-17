@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Tickr local API: always on, binds the loopback address from [api] in bot.toml.
-     Needs no credentials, so no credentials file is sourced.
+     Credentials: none while [chart] webull_enabled is false (the credentials placeholder
+     renders empty and the env file is never read). While it is true, ONLY the active
+     environment's Webull app key and app secret (for the chart client), each read from the
+     env file in a subshell that prints just that one value; the account id and every other
+     line of the env file never reach this job's shell or the API process
+     (runtime/launchd.py api_credential_variables). Re-render and reinstall after a change of
+     [chart] webull_enabled or [run] environment.
      It runs the release its folder argument resolves to at the start (cd -P), so a
      release switch never changes the code under a running job (runtime/release.py).
      Rendered by `python -m tickr.runtime render-launchd`; see docs/operations.md. -->
@@ -15,7 +21,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>cd -P "$0" || exit; exec "$PWD/$1" -m tickr.api --config "$PWD/$2"</string>
+    <string>{{API_CREDENTIALS}}cd -P "$0" || exit; exec "$PWD/$1" -m tickr.api --config "$PWD/$2"</string>
     <string>{{RELEASE}}</string>
     <string>{{PYTHON}}</string>
     <string>{{CONFIG}}</string>

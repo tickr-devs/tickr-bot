@@ -235,7 +235,8 @@ def _render(args: argparse.Namespace) -> int:
         release=args.release, config=args.config.resolve().relative_to(cfg.root),
         env_file=args.env_file, log_dir=args.log_dir)
     written = launchd.render_all(cfg.root / TEMPLATE_DIR, args.out,
-                                 launchd.values(cfg.runtime, paths))
+                                 launchd.values(cfg.runtime, paths,
+                                               launchd.api_credential_variables(cfg)))
     for path in written:
         print(path)
     return 0

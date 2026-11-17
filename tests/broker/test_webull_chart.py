@@ -12,6 +12,7 @@ import pytest
 
 from tickr import config
 from tickr.api.chart import place
+from tickr.broker import webull
 from tickr.broker.base import RateLimited
 from tickr.broker.budget import BudgetExhausted
 from tickr.broker.webull import (
@@ -127,6 +128,22 @@ def test_bot_bars_slice_is_unchanged_while_charts_are_off():
     assert budget.limit_for(BARS_PATH).max_requests == cfg.environment.requests_per_route_per_minute
     with pytest.raises(AdapterConfigError, match="webull_enabled"):
         chart_market_data_from_config(cfg, Scripted())
+
+
+def test_chart_client_builds_a_market_data_only_transport(monkeypatch):
+    """The API's chart client is built with `market_data_only`, so it never reads the account id
+    variable (tests/broker/test_webull_sdk.py): the launchd API job is given only the app key and
+    secret (runtime/launchd.py api_credential_variables), never the account id."""
+    built: list[dict[str, Any]] = []
+
+    def fake_transport(settings, *args, **kwargs):
+        built.append({"account_env": settings.account_id_env, **kwargs})
+        return Scripted()
+
+    monkeypatch.setattr(webull, "SdkTransport", fake_transport)
+    cfg = enabled()
+    chart_market_data_from_config(cfg)
+    assert built == [{"account_env": cfg.environment.account_variable, "market_data_only": True}]
 
 
 def test_chart_slice_is_carved_from_a_route_specific_bars_limit():

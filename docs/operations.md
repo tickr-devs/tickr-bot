@@ -15,7 +15,7 @@ renders the job files, reads them, and loads them. Manual trades and the Sandbox
 The bot job has one starter besides its schedule: near the flatten time the watchdog may start it once a day (see "Watchdog", `watchdog-restarted-bot`).
 | test-alert | `local.tickr.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
 | nightly-fetch | `local.tickr.nightly-fetch` | `[runtime] nightly_fetch_start_local` on `launch_weekdays` (after the close); stops itself before the next open | never |
-| api | `local.tickr.api` | at login, always on, loopback only | launchd keeps it alive |
+| api | `local.tickr.api` | at login, always on, loopback only; with `[chart] webull_enabled` it holds the app key and secret only (see "The API job and the Webull keys") | launchd keeps it alive |
 
 Times in `[runtime]` are the **Mac's local time**. The calendar decides whether there is a
 session: on weekends, market closures and half days (unless `half_days_enabled`) preflight reports
@@ -186,6 +186,38 @@ done
 
 `render-launchd` refuses (exit 2) when the env file is missing or has any group or other
 permission bit: `chmod 600` it first.
+
+### The API job and the Webull keys
+
+The API is the one job that listens on the network (loopback, and the remote listener when
+configured), so it gets as little as possible. While `[chart] webull_enabled` is false it gets no
+credential: its plist never names the env file. While it is true, the chart client in the API
+(GET /chart) needs the active environment's Webull app key and app secret, and the API job gets
+exactly those two variables, named by `[environments.<env>] app_key_variable` and
+`app_secret_variable` of `[run] environment`, and nothing else: never `account_variable` (the
+chart client reads no account id), never another environment's keys, never the alert recipient,
+the advisor key or any other line of the env file. Its shell reads each of the two in a
+subshell that sources the env file and prints only that one value (the file's own output is
+discarded), then exports it; the API process itself never reads the env file. The Lab replay
+child the API starts gets none of the credential variables.
+
+The variable names are fixed when the plist is rendered: after changing `[chart]
+webull_enabled` or `[run] environment`, render again and reinstall the API job only:
+
+```sh
+cd ~/Development/Tickr
+.venv/bin/python -m tickr.runtime render-launchd \
+    --release ~/Development/Tickr-releases/live \
+    --env-file ~/.config/tickr/env \
+    --log-dir ~/Library/Logs/Tickr \
+    --out data/launchd
+# Read data/launchd/local.tickr.api.plist (it names the two variables, never a value), then:
+launchctl bootout gui/$(id -u)/local.tickr.api
+cp data/launchd/local.tickr.api.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tickr.api.plist
+```
+
+`bootstrap` starts the API at once (`RunAtLoad`); the bot and the other jobs are not touched.
 
 The nightly fetch is loaded on its own, and only when no other history fetch is running on the
 Mac: both draw on the same Webull request budget. Its first run seeds `nightly/current/` from a

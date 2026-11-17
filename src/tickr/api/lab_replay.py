@@ -40,7 +40,7 @@ from tickr.api import contract as api
 from tickr.backtest.errors import BacktestError
 from tickr.backtest.universe import POOL_FILE, read_pool
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar
-from tickr.config import Config
+from tickr.config import Config, credential_variables
 from tickr.observers.errors import ObserverError
 from tickr.observers.loader import STRATEGIES_DIR, STRATEGY_FILE, parse_modules, read_identity
 
@@ -76,6 +76,10 @@ class LabReplaySettings:
     active: str  # [strategy] active: its folder under strategies/
     observers: tuple[str, ...]  # [strategy] observers: folders under strategies/
     modules: tuple[str, ...]  # [observers] strategy_modules: name=module
+    # NAMES of the credential variables (config.credential_variables) the child never gets: the
+    # API holds the Webull app key and secret while [chart] webull_enabled (runtime/launchd.py),
+    # and a replay runs strategy code that needs no credential.
+    scrub: frozenset[str]
 
     @classmethod
     def from_config(cls, cfg: Config, config_path: Path | None) -> LabReplaySettings:
@@ -88,7 +92,8 @@ class LabReplaySettings:
             outside_session_only=cfg.api.lab_replay_outside_session_only,
             calendar=(cfg.root / cfg.session.calendar_file).parent,
             active=cfg.strategy.active, observers=tuple(cfg.strategy.observers),
-            modules=tuple(cfg.observers.strategy_modules))
+            modules=tuple(cfg.observers.strategy_modules),
+            scrub=credential_variables(cfg))
 
 
 Spawn = Callable[..., Any]  # subprocess.Popen, or a fake in tests
@@ -385,10 +390,13 @@ class LabReplay:
     def _spawn(self, run: Path, leg: dict[str, Any], sessions: int, day: date | None) -> Any:
         folder = run / leg["dir"]
         folder.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        for name in self.settings.scrub:
+            env.pop(name, None)
         with open(folder / LOG, "w", encoding="utf-8") as log:
             child = self.spawn(self._command(run, leg, sessions, day), cwd=self.settings.root,
                                stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                               start_new_session=True)
+                               start_new_session=True, env=env)
         return child
 
     def _spawn_later(self, run: Path, current: dict[str, Any], index: int, sessions: int,

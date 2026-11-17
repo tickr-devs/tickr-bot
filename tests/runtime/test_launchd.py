@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import plistlib
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,7 +21,8 @@ PATHS = launchd.Paths(release=Path("/Users/o/Tickr-releases/live"),
 def _render(config_path: Path, repo: Path, out: Path) -> dict[str, dict]:
     cfg = config_module.load(config_path)
     written = launchd.render_all(repo / "ops" / "launchd", out,
-                                 launchd.values(cfg.runtime, PATHS))
+                                 launchd.values(cfg.runtime, PATHS,
+                                                launchd.api_credential_variables(cfg)))
     return {p.name: plistlib.loads(p.read_bytes()) for p in written}
 
 
@@ -58,7 +62,9 @@ def test_api_always_on_and_preflight_scheduled(config_path, repo, tmp_path):
     jobs = _render(config_path, repo, tmp_path / "out")
     api = jobs["local.tickr.api.plist"]
     assert api["KeepAlive"] is True and api["RunAtLoad"] is True
-    assert "ENV_FILE" not in str(api) and str(PATHS.env_file) not in str(api)
+    # The env file is never a job argument of the API: at most the two chart variables are
+    # read from it inside the shell command (test_api_job_environment_* below).
+    assert str(PATHS.env_file) not in api["ProgramArguments"][3:]
     preflight = jobs["local.tickr.preflight.plist"]
     assert preflight["KeepAlive"] is False
     assert len(preflight["StartCalendarInterval"]) == len(
@@ -106,7 +112,7 @@ def test_relative_path_refused(config_path):
     for name in ("log_dir", "release"):
         bad = launchd.Paths(**{**vars(PATHS), name: Path("logs")})
         with pytest.raises(config_module.ConfigError, match="absolute"):
-            launchd.values(cfg.runtime, bad)
+            launchd.values(cfg.runtime, bad, ())
 
 
 @pytest.mark.parametrize("config", ["/Users/o/Tickr/config/bot.toml", "../config/bot.toml"])
@@ -114,7 +120,7 @@ def test_config_outside_the_release_refused(config_path, config):
     cfg = config_module.load(config_path)
     bad = launchd.Paths(**{**vars(PATHS), "config": Path(config)})
     with pytest.raises(config_module.ConfigError, match="relative to the release"):
-        launchd.values(cfg.runtime, bad)
+        launchd.values(cfg.runtime, bad, ())
 
 
 @pytest.mark.parametrize("key,value,match", [
@@ -224,3 +230,125 @@ def test_bad_watchdog_start_refused(config_path):
     config_path.write_text(text, "utf-8")
     with pytest.raises(config_module.ConfigError, match="watchdog_start_local"):
         launchd.schedule(config_module.load(config_path).runtime)
+
+
+# --- what the API job's environment holds (charts on: the two chart variables, else none) -------
+
+# Names of a fake env file that are never the active environment's app key or secret: every
+# other credential the config names, plus unrelated lines.
+_OTHER_LINES = ("TICKR_REMOTE_TOKEN", "SOME_OTHER_SECRET", "PLAIN_SETTING")
+_FAKE_PYTHON = '''#!{python}
+import json
+import os
+
+names = sorted(os.environ)
+with open(os.path.join(os.getcwd(), "seen.json"), "w", encoding="utf-8") as out:
+    json.dump({{"names": names, "values": {{n: os.environ.get(n) for n in {wanted!r}}}}}, out)
+'''
+
+
+def _with_charts(cfg: config_module.Config, enabled: bool) -> config_module.Config:
+    from dataclasses import replace
+
+    return replace(cfg, chart=replace(cfg.chart, webull_enabled=enabled))
+
+
+def _fake_env_file(folder: Path, cfg: config_module.Config) -> tuple[Path, set[str]]:
+    """An env file with a dummy value for every credential the config names (every
+    environment), unrelated lines, an exported line and output of its own. No real secret."""
+    names = set(config_module.credential_variables(cfg)) | set(_OTHER_LINES)
+    lines = ["echo 'env file noise on stdout'", "echo 'env file noise on stderr' >&2"]
+    for index, name in enumerate(sorted(names)):
+        prefix = "export " if index % 2 else ""
+        lines.append(f"{prefix}{name}='dummy-{name.lower()}'")
+    env_file = folder / "env 'quoted' & more"  # a path the shell must quote
+    env_file.write_text("\n".join(lines) + "\n", "utf-8")
+    env_file.chmod(0o600)
+    return env_file, names
+
+
+def _run_api_job(cfg: config_module.Config, repo: Path, tmp_path: Path) -> dict:
+    """Render the plists for `cfg`, then run the API job's command exactly as launchd would,
+    from a minimal environment, with a fake interpreter that records which variable NAMES it
+    was started with (and the values of the two chart variables only, all dummies)."""
+    release = tmp_path / "release"
+    (release / ".venv" / "bin").mkdir(parents=True)
+    env_file, _ = _fake_env_file(tmp_path, cfg)
+    env = cfg.environment
+    wanted = (env.app_key_variable, env.app_secret_variable)
+    python = release / ".venv" / "bin" / "python"
+    python.write_text(_FAKE_PYTHON.format(python=sys.executable, wanted=wanted), "utf-8")
+    python.chmod(0o755)
+    paths = launchd.Paths(release=release, config=Path("config/bot.toml"), env_file=env_file,
+                          log_dir=tmp_path / "logs")
+    out = tmp_path / "out"
+    launchd.render_all(repo / "ops" / "launchd", out,
+                       launchd.values(cfg.runtime, paths, launchd.api_credential_variables(cfg)))
+    job = plistlib.loads((out / "local.tickr.api.plist").read_bytes())
+    launch_env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}  # as launchd starts a job
+    done = subprocess.run(job["ProgramArguments"], env=launch_env, cwd=tmp_path,
+                          capture_output=True, text=True, timeout=30, check=False)
+    assert done.returncode == 0, done.stderr
+    # The env file's own output never reaches the job's log.
+    assert "noise" not in done.stdout + done.stderr
+    return json.loads((release / "seen.json").read_text("utf-8"))
+
+
+def test_api_job_environment_with_charts_on_holds_exactly_the_key_and_secret(config_path, repo,
+                                                                            tmp_path):
+    cfg = _with_charts(config_module.load(config_path), True)
+    env = cfg.environment
+    on = _run_api_job(cfg, repo, tmp_path / "on")
+    off = _run_api_job(_with_charts(cfg, False), repo, tmp_path / "off")
+    _, file_names = _fake_env_file(tmp_path, cfg)
+    wanted = {env.app_key_variable, env.app_secret_variable}
+    assert set(on["names"]) & file_names == wanted
+    assert set(on["names"]) - set(off["names"]) == wanted
+    assert env.account_variable not in on["names"]
+    assert on["values"] == {name: f"dummy-{name.lower()}" for name in wanted}
+
+
+def test_api_job_environment_with_charts_off_holds_no_env_file_variable(config_path, repo,
+                                                                       tmp_path):
+    cfg = _with_charts(config_module.load(config_path), False)
+    seen = _run_api_job(cfg, repo, tmp_path)
+    _, file_names = _fake_env_file(tmp_path, cfg)
+    assert not set(seen["names"]) & file_names
+    assert launchd.api_credential_variables(cfg) == ()
+
+
+def test_api_job_with_charts_off_never_reads_the_env_file(config_path, repo, tmp_path):
+    cfg = _with_charts(config_module.load(config_path), False)
+    written = launchd.render_all(repo / "ops" / "launchd", tmp_path,
+                                 launchd.values(cfg.runtime, PATHS, ()))
+    api = next(p for p in written if p.name == "local.tickr.api.plist")
+    assert str(PATHS.env_file).split()[0] not in api.read_text("utf-8")
+
+
+def test_api_credential_variables_are_the_active_key_and_secret_only(config_path):
+    cfg = _with_charts(config_module.load(config_path), True)
+    env = cfg.environment
+    names = launchd.api_credential_variables(cfg)
+    assert names == (env.app_key_variable, env.app_secret_variable)
+    others = config_module.credential_variables(cfg) - set(names)
+    assert env.account_variable in others and not others & set(names)
+
+
+@pytest.mark.parametrize("key,value,match", [
+    ("app_key_variable", "KEY; touch /tmp/x", "shell variable name"),
+    ("app_secret_variable", "$(id)", "shell variable name"),
+    ("app_secret_variable", "", "shell variable name"),
+    ("app_key_variable", "ACCOUNT_SAME", "three different names"),
+])
+def test_api_credential_variables_refuse_unsafe_or_shared_names(config_path, key, value, match):
+    from dataclasses import replace
+
+    cfg = _with_charts(config_module.load(config_path), True)
+    env = cfg.environment
+    changed = {key: value}
+    if value == "ACCOUNT_SAME":
+        changed = {key: env.account_variable}
+    bad = replace(cfg, environments={**cfg.environments,
+                                     cfg.environment_name: replace(env, **changed)})
+    with pytest.raises(config_module.ConfigError, match=match):
+        launchd.api_credential_variables(bad)

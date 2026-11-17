@@ -46,14 +46,16 @@ class Child:
 class Spawner:
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], dict]] = []
+        self.envs: list[dict[str, str] | None] = []  # each child's environment, apart
         self.children: list[Child] = []
 
     @property
     def child(self) -> Child:
         return self.children[-1]
 
-    def __call__(self, command, **kwargs):
+    def __call__(self, command, env=None, **kwargs):
         self.calls.append((command, kwargs))
+        self.envs.append(env)
         self.children.append(Child())
         return self.child
 
@@ -131,6 +133,24 @@ def test_idle_get_and_refusals_answer_409_with_one_cause(cfg):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_the_replay_child_never_gets_a_credential_variable(cfg, spawner, monkeypatch):
+    # The API holds the Webull app key and secret while [chart] webull_enabled
+    # (runtime/launchd.py); the replay child runs strategy code and gets none of them.
+    names = config.credential_variables(cfg)
+    env = cfg.environment
+    assert {env.app_key_variable, env.app_secret_variable, env.account_variable} <= names
+    for name in names:
+        monkeypatch.setenv(name, "dummy-not-a-secret")
+    monkeypatch.setenv("TICKR_TEST_PLAIN", "kept")
+    _pool(cfg)
+    spawn = spawner()
+    _lab(cfg, SATURDAY, spawn).start()
+    child_env = spawn.envs[0]
+    assert child_env is not None
+    assert not names & set(child_env)
+    assert child_env["TICKR_TEST_PLAIN"] == "kept"
 
 
 def test_start_runs_the_niced_backtest_then_reports_done(cfg, spawner):

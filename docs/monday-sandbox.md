@@ -168,8 +168,10 @@ limit of 30 requests per 60 s per route that the bot uses.
   bot has left the chart its slice of the bars limit. If you want C1 on Monday, set it on
   Sunday evening and do not touch the config after the bot starts. The API does
   not become a second Webull client by that setting: it builds no chart client until this
-  probe is recorded as passed (GET /chart answers 503 and says so), and the launchd API job
-  is not given the Webull keys anyway. If that 503 names an unfinished run or a summary it
+  probe is recorded as passed (GET /chart answers 503 and says so). With the chart on, the
+  launchd API job is given the active environment's app key and app secret only (never the
+  account id; docs/operations.md, "The API job and the Webull keys"), and only after its plist
+  is rendered and reinstalled with the chart on. If that 503 names an unfinished run or a summary it
   cannot read, run the probe again; for an unreadable one, first delete that run's folder
   under `data/probes/`. Then, any time the bot
   runs: `python -m tickr.probes chart-client SYM`. It reads one bar every 30 s for 10
