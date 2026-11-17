@@ -1000,7 +1000,11 @@ def test_status_names_the_ordinary_reasons_admission_refuses_entries(tmp_path, n
 
 
 def test_status_says_calmly_that_the_position_limit_is_used(tmp_path):
+    from dataclasses import replace
+
     bot = Bot(tmp_path, broker=FakeBroker())
+    bot.engine.config = bot.service.config = replace(  # one slot, taken by the trade below
+        CFG, risk=replace(CFG.risk, max_open_positions=1))
     bot.service.market, bot.service.evaluator = StubMarket(), StubEvaluator()  # type: ignore[assignment]
     bot.engine.recover()
     bot.service.state = api.BotState.RUNNING

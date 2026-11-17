@@ -116,7 +116,8 @@ def check_timings(config: Config) -> None:
     0 < [orders] shutdown_deadline_seconds < [runtime] stop_alert_after_seconds
       < [runtime] bot_exit_timeout_seconds;
     and unless a reconcile pass fits inside the day-end grace:
-    [orders] reconcile_interval_seconds < [session] flatten_grace_seconds;
+    [orders] reconcile_interval_seconds < [session] flatten_grace_seconds, and the flatten of
+    every slot plus a reconcile pass fits in it too (bound below);
     and unless both watchdog checks fall between the bot's day-end check and the close:
     flatten_grace_seconds < watchdog_after_flatten_seconds and
     watchdog_after_flatten_seconds + watchdog_before_close_seconds
@@ -178,6 +179,13 @@ def check_timings(config: Config) -> None:
             f"[risk] max_open_positions x [orders] max_stops_per_trade x 2 x detail_poll_seconds "
             f"({flatten} s) must fit between the flatten and [session] "
             f"close_order_cutoff_seconds ({window - cutoff} s)")
+    # The day-end check reads the broker `grace` after the flatten time: every slot's flatten
+    # and one reconcile pass after it must be done by then, or a sound flatten alerts.
+    if not flatten + config.orders.reconcile_interval_seconds < grace:
+        raise ConfigError(
+            f"[session] flatten_grace_seconds ({grace}) must be above the flatten of every slot "
+            f"({flatten} s) plus [orders] reconcile_interval_seconds "
+            f"({config.orders.reconcile_interval_seconds})")
     # Entries of every slot may fill in the same poll (resting limits). One Detail read per
     # poll serves their fills in turn; each fill's stops go out at once and the next poll's
     # open-orders read verifies every new stop it lists (a stop may be listed up to

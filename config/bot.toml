@@ -51,9 +51,10 @@ min_daily_room_usd = 10
 # time, up to [orders] max_stops_per_trade each, two [orders] detail_poll_seconds per stop) must fit before [session]
 # close_order_cutoff_seconds, and every slot's entry filling in one poll must get its verified stops within [orders]
 # max_unprotected_seconds less a poll ((slots + 1) x [orders] detail_poll_seconds: one Detail read per fill, then one
-# open-orders read verifies the new stops, up to [orders] stop_listing_polls late; 7 slots at 3 s and 30 s) (both checked by the start-time checks,
-# runtime.launchd.check_timings); read by safety, the engine and the status.
-max_open_positions = 1
+# open-orders read verifies the new stops, up to [orders] stop_listing_polls late; 6 slots at 3 s, 2 polls and 30 s) (both
+# checked by the start-time checks, runtime.launchd.check_timings). 6 since 2026-11-17 (owner; probe T L2 recorded): the
+# most the fills-together bound allows; 20 needs fills read in bulk; read by safety, the engine and the status.
+max_open_positions = 6
 # Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.
 max_quote_age_seconds = 5
 # Allowed lead of the provider clock over ours, seconds: a quote time up to this far ahead counts as age 0, further ahead = refuse; read by safety.
@@ -81,8 +82,10 @@ last_entry_minutes_before_close = 20
 # the flatten of every slot, one stop at a time, before close_order_cutoff_seconds); read by runtime.
 flatten_minutes_before_close = 10
 # Seconds after the flatten time before broker reads must show nothing of ours left (alert not-flat-after-flatten,
-# day-end record); keep it above [orders] reconcile_interval_seconds; read by runtime.dayend.
-flatten_grace_seconds = 120
+# day-end record); must cover the flatten of every slot ([risk] max_open_positions x [orders] max_stops_per_trade x 2 x
+# detail_poll_seconds, 144 s at 6 slots) plus [orders] reconcile_interval_seconds (start-time check,
+# runtime.launchd.check_timings); read by runtime.dayend.
+flatten_grace_seconds = 180
 # Seconds before the regular close (the calendar's early close on a half day) from which no closing MARKET order is sent
 # until the next regular open: the trade keeps its broker stop, the engine sets the market-closed fence and the owner gets
 # the flatten-after-close alert; keep it below the flatten-to-close time; read by engine.manual.close_refusal.
@@ -163,10 +166,10 @@ max_unprotected_seconds = 30
 # time (checked by runtime.launchd.check_timings, at least 3); read by the engine and the start-time checks.
 max_stops_per_trade = 4
 # Open-orders reads (one per [orders] detail_poll_seconds) a new stop may be missing from after it was placed: Webull
-# listed the bot's first stop about 3 s after its entry filled (2026-11-16, docs/webull-facts.md), so 1 until a probe
-# measures it; the list is read every poll while a new stop is unverified, and the start-time checks add this to the
-# fills-together bound; read by runtime.launchd.check_timings.
-stop_listing_polls = 1
+# lists a stop 3.1-3.8 s after its place answer (probe T L1/L2, 2026-11-17, docs/webull-facts.md), longer than one
+# poll, so a read right after the place and the next one may both miss it: 2; the list is read every poll while a new
+# stop is unverified, and the start-time checks add this to the fills-together bound; read by runtime.launchd.check_timings.
+stop_listing_polls = 2
 # Seconds an order's Detail reads may keep failing (no answered read in between) before the engine sets the
 # detail-unreadable fence (entries blocked, alert at once): the order's state is then unknown, a stop is no longer
 # counted as verified and an entry or close no longer excuses a quantity mismatch; read by the engine.
@@ -665,9 +668,9 @@ nightly_fetch_out = "data/nightly"
 # A fetch-all folder the nightly job starts from while its folder has no current/ yet, relative to the repo root;
 # read by runtime.launchd.
 nightly_fetch_seed = "data/backtest"
-# First watchdog broker check this many seconds after the flatten time (15:57:30 ET on a normal day); must be above
+# First watchdog broker check this many seconds after the flatten time (15:54 ET on a normal day); must be above
 # [session] flatten_grace_seconds so the bot's own day-end check comes first; read by runtime.watchdog.
-watchdog_after_flatten_seconds = 150
+watchdog_after_flatten_seconds = 240
 # Last watchdog broker check this many seconds before the regular close (15:59 ET on a normal day); read by runtime.watchdog.
 watchdog_before_close_seconds = 60
 # Seconds between watchdog checks, during the regular session, that the bot runs whenever the database shows an open trade;

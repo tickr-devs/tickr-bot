@@ -25,7 +25,7 @@ from tickr.types import OrderDetail, OrderState, OrderType, Position, Side
 MONDAY_OPEN = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)  # 09:30 ET
 STATUS_EXAMPLE = Path(__file__).resolve().parents[1] / "api" / "fixtures" / "status-v1.example.json"
 MORNING = datetime(2026, 11, 16, 14, 5, tzinfo=UTC)       # 09:05 ET, the job's start
-FIRST = datetime(2026, 11, 16, 20, 52, 30, tzinfo=UTC)    # 15:50 ET flatten + 150 s
+FIRST = datetime(2026, 11, 16, 20, 54, tzinfo=UTC)    # 15:50 ET flatten + 240 s
 LAST = datetime(2026, 11, 16, 20, 59, tzinfo=UTC)         # 16:00 ET close - 60 s
 
 
@@ -127,7 +127,7 @@ def test_check_times_follow_the_calendar(cfg):
     assert watchdog.check_times(cfg, normal) == (FIRST, LAST)
     half = watchdog.market_day(cfg, datetime(2026, 11, 27, 15, tzinfo=UTC))  # closes 13:00 ET
     first, last = watchdog.check_times(cfg, half)
-    assert first.astimezone(NEW_YORK).strftime("%H:%M:%S") == "12:52:30"
+    assert first.astimezone(NEW_YORK).strftime("%H:%M:%S") == "12:54:00"
     assert last.astimezone(NEW_YORK).strftime("%H:%M:%S") == "12:59:00"
 
 
@@ -153,7 +153,7 @@ def test_position_and_order_alert_at_both_checks_without_any_trading_request(cfg
     assert len(recorder.shown) == 2  # each text names its check time: not deduplicated
     assert all("watchdog-not-flat" in s and "position ABCD 10" in s
                and "order ap-1-s ABCD SELL STOP_LOSS" in s for s in recorder.shown)
-    assert "15:52:30 ET" in recorder.shown[0] and "15:59:00 ET" in recorder.shown[1]
+    assert "15:54:00 ET" in recorder.shown[0] and "15:59:00 ET" in recorder.shown[1]
     assert broker.sent == [] and broker.replaced == []
     assert not hasattr(watchdog.ReadOnlyBroker(broker), "place")
 

@@ -300,7 +300,7 @@ def test_a_partial_entry_at_the_last_entry_time_is_protected_then_flattened(tmp_
     # Late in the day only a much hotter run makes the cumulative relative volume pass.
     add(r, "BBB", "20", ("15:18", "15:33", D("24.50"), HOT * 10))
     ex.pieces["BBB"] = [Piece(D(10)), Piece(None, at("16:30"))]  # the rest would never fill
-    assert r.run_until("15:53") == 0
+    assert r.run_until("15:54") == 0  # the day-end check reads the broker 180 s after 15:50
 
     (trade,) = r.trades()
     assert trade["close_cause"] == "session-flatten"

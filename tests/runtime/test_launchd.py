@@ -173,6 +173,19 @@ def test_flatten_grace_must_cover_a_reconcile_pass(config_path):
         launchd.check_timings(cfg)
 
 
+def test_flatten_grace_must_cover_the_flatten_of_every_slot(config_path):
+    cfg = config_module.load(config_path)
+    flatten = (cfg.risk.max_open_positions * cfg.orders.max_stops_per_trade * 2
+               * cfg.orders.detail_poll_seconds)
+    grace = flatten + cfg.orders.reconcile_interval_seconds  # not above: refused
+    text = re.sub(r"(?m)^flatten_grace_seconds = .*$", f"flatten_grace_seconds = {grace}",
+                  config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    cfg = config_module.load(config_path)
+    with pytest.raises(config_module.ConfigError, match="flatten of every slot"):
+        launchd.check_timings(cfg)
+
+
 @pytest.mark.parametrize("value", ["600", "-1"])
 def test_close_order_cutoff_must_leave_the_flatten_its_close(config_path, value):
     text = re.sub(r"(?m)^close_order_cutoff_seconds = .*$",

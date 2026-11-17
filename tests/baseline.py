@@ -27,6 +27,9 @@ PINNED: dict[tuple[str, str], str] = {
     ("strategy", "observers"): '["price-action-v3-relvol-1.5", "price-action-v3-relvol-1.75"]',
     ("risk", "planned_loss_usd"): "50",
     ("risk", "max_daily_loss_usd"): "300",
+    # The rehearsals and the demo script one trade at a time; several slots have their own
+    # tests (tests/runtime/test_several_positions.py).
+    ("risk", "max_open_positions"): "1",
 }
 
 _SECTION = re.compile(r"^\[([A-Za-z0-9_.]+)\]\s*$")

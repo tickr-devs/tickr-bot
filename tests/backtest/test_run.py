@@ -153,7 +153,9 @@ def test_bot_view_applies_live_sizing_positions_and_the_daily_ceiling():
               trade("E", 15, 16, "10", "9", "60"),  # planned loss 60 > 50
               trade("F", 17, 18, "100", "99", "30"),  # notional 3000 > 2500
               trade("G", 19, 20, "10", "9")]       # room 0 < min_daily_room_usd
-    view = bot_view(trades, cfg())
+    one_slot = cfg()
+    one_slot = replace(one_slot, risk=replace(one_slot.risk, max_open_positions=1))
+    view = bot_view(trades, one_slot)  # B overlaps A: refused with one slot
     assert view["trades"] == 3 and view["total_usd"] == Decimal(-300)
     assert view["sized_down_to_daily_room"] == 1
     assert view["refused"] == {"DAILY_CEILING": 1, "NOTIONAL_OVER_CAP": 1,

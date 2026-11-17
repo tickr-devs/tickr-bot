@@ -20,6 +20,7 @@ from pathlib import Path
 from time import monotonic
 
 import pytest
+from baseline import write_baseline
 
 from tickr import config
 from tickr.api import contract as api
@@ -69,6 +70,7 @@ HOT = D(30000)
 def repo(tmp_path: Path) -> Path:
     for part in ("config", "strategies"):
         shutil.copytree(ROOT / part, tmp_path / part)
+    write_baseline(tmp_path / "config" / "bot.toml")  # one slot: the demo scripts one trade at once
     return tmp_path
 
 

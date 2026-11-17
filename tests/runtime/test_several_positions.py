@@ -179,10 +179,6 @@ def test_config_refuses_a_slot_count_outside_1_to_the_reserved_stream_slots(tmp_
         config.load(path, ROOT)
 
 
-def test_the_shipped_config_keeps_one_slot():
-    assert CFG.risk.max_open_positions == 1
-
-
 MAX = CFG.market_data.stream_reserved_symbols  # the most slots config allows
 POLL = float(CFG.orders.detail_poll_seconds)
 SYMBOLS = [f"S{n:02d}" for n in range(MAX)]
