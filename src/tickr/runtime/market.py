@@ -85,6 +85,8 @@ class StreamInbox:
         self._lock = threading.Lock()
         self._latest: dict[str, Quote] = {}
         self._events: deque[tuple[str, dict[str, Any]]] = deque()
+        # When the transport last came up (connect or reconnect); None before the first.
+        self._connected_at: datetime | None = None
 
     def on_quote(self, quote: Quote) -> None:
         with self._lock:
@@ -94,6 +96,8 @@ class StreamInbox:
 
     def on_transport(self, up: bool, at: datetime, detail: str) -> None:
         with self._lock:
+            if up:
+                self._connected_at = at
             self._events.append((STREAM_TRANSPORT, {"up": up, "at": at.isoformat(),
                                                     "detail": detail}))
 
@@ -118,6 +122,12 @@ class StreamInbox:
         """A copy of the newest quote of every symbol (for the quotes file thread)."""
         with self._lock:
             return dict(self._latest)
+
+    def connected_at(self) -> datetime | None:
+        """When the transport last came up: a quote received before it predates a gap in the
+        stream, so it may no longer be its symbol's market (for the quotes file thread)."""
+        with self._lock:
+            return self._connected_at
 
     def forget(self, symbol: str) -> None:
         with self._lock:

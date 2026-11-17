@@ -100,7 +100,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, whether they matched its records, and the latest balances. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/quotes` | `200` `quotes-response-v1`: the newest valid L1 quote of every symbol on the bot's quote stream (`quotes-v1`, see "GET /quotes" below); `503` `unavailable` while the bot has written no quotes file or it is invalid. |
-| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is the oldest `/quotes` quote (by `quoted_at`) clients show as a live price, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. |
+| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. |
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
@@ -362,15 +362,21 @@ received_at}]}`, every symbol on its L1 quote stream (open positions, the strate
 symbols, candidates and observer symbols) whose newest quote is valid (a bid above zero and not
 above the ask), by symbol. `quoted_at` is the provider's time, `received_at` the bot's. A thread
 of its own looks at the stream every `[api] quotes_write_seconds` and rewrites the file (temp
-file + rename, like status) only when a quote changed, so the trading loop never waits for it and
-the file's own age says nothing; each quote's `quoted_at` says how live it is. A failed write keeps
+file + rename, like status) only when a quote changed or another arrived, so the trading loop never
+waits for it. `stream_received_at` (added after version 1 shipped; `null` before the first quote)
+is the newest receipt of any quote the stream holds: a symbol's newest quote is replaced on every
+change and dropped when the symbol is unsubscribed, so while the stream delivers it is the
+symbol's market however long it has not changed. `stream_connected_at` (added after version 1
+shipped; `null` before the first connect) is when the transport last came up: the inbox keeps its
+quotes across a reconnect, so a quote whose `received_at` is before it predates the gap and is not
+shown as live, however fresh other symbols keep `stream_received_at`. A failed write keeps
 the old file and is journaled once per stretch (`quotes-write-failed`). Display only: no decision
 reads it.
 
 The apps read it every `settings.quotes_poll_seconds` and show a symbol's price at its `bid`
-(what a long position would sell at) while `quoted_at` is at most
-`settings.live_quote_max_age_seconds` old on the bot's clock; an older quote, or none, is not
-shown as live (an open position then shows its captured one-minute bars, dated). From the stream
+(what a long position would sell at) while `stream_received_at` (from a bot without it, the
+quote's `quoted_at`) is at most `settings.live_quote_max_age_seconds` old on the bot's clock;
+otherwise, or without a quote, nothing is shown as live (an open position then shows its captured one-minute bars, dated). From the stream
 to the screen this takes at most about `quotes_write_seconds` + `quotes_poll_seconds` plus the
 request.
 

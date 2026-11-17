@@ -419,14 +419,17 @@ def documents() -> dict[str, object]:
                                   datetime(2026, 11, 16, 14, 41, 2, 250000, tzinfo=UTC),
                                   "no 1d bars from webull for ABCD in range 1y", ()),
         "account-v1": account(),
-        # ABCD quoted 1 s after T0; EFGH's quote is from a quiet minute.
+        # ABCD quoted 1 s after T0; EFGH's quote is from a quiet minute, still its market while
+        # the stream delivers (last receipt: ABCD's).
         "quotes-response-v1": QuotesResponseV1(T0 + timedelta(seconds=2), QuotesV1(
             T0 + timedelta(milliseconds=1700), (
                 LiveQuote("ABCD", Decimal("12.50"), Decimal("12.52"), T0 + timedelta(seconds=1),
                           T0 + timedelta(milliseconds=1200)),
                 LiveQuote("EFGH", Decimal("3.4100"), Decimal("3.4300"),
                           T0 - timedelta(minutes=2), T0 - timedelta(minutes=2) +
-                          timedelta(milliseconds=300))))),
+                          timedelta(milliseconds=300))),
+            stream_received_at=T0 + timedelta(milliseconds=1200),
+            stream_connected_at=T0 - timedelta(minutes=10))),
         "account-v1.mismatch": mismatch,
         "account-response-v1": AccountResponseV1(T0 + timedelta(seconds=4), account(),
                                                  Decimal("4.000"), False),

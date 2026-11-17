@@ -488,6 +488,15 @@ class QuotesV1:
     written_at: datetime
     quotes: tuple[LiveQuote, ...]  # by symbol
     schema_version: int = _const(QUOTES_SCHEMA_VERSION)
+    # When the stream last delivered a quote of any symbol (added after version 1 shipped; null
+    # before the first). A symbol's newest quote stays its market while the stream delivers: it
+    # is replaced on every change and dropped when the symbol is unsubscribed, so the apps judge
+    # liveness by this, not by each quote's own age (a quote that has not changed is current).
+    stream_received_at: datetime | None = _added_later(None)
+    # When the stream's transport last came up (added after version 1 shipped; null before the
+    # first connect). The inbox keeps quotes across a reconnect, so a quote whose `received_at`
+    # is before this predates the gap and is not shown as live, whatever other symbols deliver.
+    stream_connected_at: datetime | None = _added_later(None)
 
 
 @dataclass(frozen=True)
@@ -887,8 +896,9 @@ class SettingsV1:
     broker_read_max_age_seconds: Decimal
     broker_read_warn_seconds: Decimal
     api_version: int = _const(API_VERSION)
-    # Oldest live quote (GET /quotes, by `quoted_at`) clients show as a live price ([api]
-    # live_quote_max_age_seconds); older ones are not shown as live.
+    # Seconds since the stream last delivered any quote (GET /quotes `stream_received_at`, or a
+    # quote's `quoted_at` from a bot without it) past which clients show no live price ([api]
+    # live_quote_max_age_seconds).
     # Added after v1 shipped (2026-11-17); null from an older API, and then no quote is live.
     live_quote_max_age_seconds: Decimal | None = _added_later(None)
     # Seconds between two client reads of GET /quotes ([api] quotes_poll_seconds). Added after

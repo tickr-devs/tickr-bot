@@ -385,10 +385,11 @@ status_stale_seconds = 15
 # broker_read_max_age_seconds); keep it above [orders] reconcile_interval_seconds and below broker_read_max_age_seconds;
 # read by the api server and returned to clients at GET /settings.
 broker_read_warn_seconds = 15
-# Oldest live quote (GET /quotes, by its quoted_at on the bot's clock) the apps show as a live price, in seconds,
-# above 0; an older quote is not shown as live and the apps use the captured one-minute bars or the screener's price
-# instead (one bar long: past it a bar is as current as the quote). Read by the api server and returned to clients
-# at GET /settings.
+# Seconds since the bot's quote stream last delivered any quote (GET /quotes stream_received_at, on the bot's clock)
+# past which the apps show no quote as a live price, above 0; while it delivers, a symbol's newest quote is its market
+# however long it has not changed. Without a live quote the apps use the captured one-minute bars or the screener's
+# price instead (one bar long: past it a bar is as current as the quote). Read by the api server and returned to
+# clients at GET /settings.
 live_quote_max_age_seconds = 60
 # Live quotes file the bot writes (the newest valid quote of every symbol on its quote stream) and the API serves at
 # GET /quotes, relative to data_dir; read by the bot's quotes file thread and the api server.

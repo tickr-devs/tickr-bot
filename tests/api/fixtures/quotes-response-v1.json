@@ -18,7 +18,9 @@
         "received_at": "2026-11-16T14:58:00.423Z"
       }
     ],
-    "schema_version": 1
+    "schema_version": 1,
+    "stream_received_at": "2026-11-16T15:00:01.323Z",
+    "stream_connected_at": "2026-11-16T14:50:00.123Z"
   },
   "api_version": 1
 }
