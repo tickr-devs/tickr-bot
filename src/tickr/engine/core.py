@@ -1236,13 +1236,17 @@ class Engine:
         (a kept stop filling while a scale-out's stops are released). 1: a stop or entry
         whose cancel waits for Detail, not read since that cancel (a stop's position may have
         no stop until the read confirms it, and its close waits for it; an entry's read shows
-        its last fills, which need their stops). 2: the other live orders in a
+        its last fills, which need their stops), and a stop never read (entries filling in
+        the same poll each get their stops verified before the next entry is read, so the
+        first fills are not left waiting behind the last). 2: the other live orders in a
         moved symbol, not read since the move. 3: the common queue. Once each per event:
         after that read the order is back in the common queue, so a lasting disagreement
         (shares bought by hand) never starves the others. A read stamped at the same instant
         as the event may have come before it (a step reads, then cancels): it does not count
         as the read after it."""
         if self._awaits_cancel_read(row):
+            return 1
+        if row.leg is Leg.STOP and row.live and not row.verified and row.last_detail_at is None:
             return 1
         moved = self._moved.get(row.symbol)
         if moved is not None and row.live and (row.last_detail_at or 0.0) <= moved[2]:

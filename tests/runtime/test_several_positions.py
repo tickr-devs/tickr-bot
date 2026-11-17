@@ -16,7 +16,7 @@ from tickr import config
 from tickr.broker.base import BrokerError
 from tickr.broker.fake import FakeBroker
 from tickr.config import GateResult
-from tickr.engine.core import Engine, EntryRefused, Fence, Leg, TradeState
+from tickr.engine.core import STOPS_PER_FILL, Engine, EntryRefused, Fence, Leg, TradeState
 from tickr.observers.log import DecisionLog
 from tickr.runtime import launchd
 from tickr.runtime.entries import EntryDesk, slots_in_use
@@ -222,6 +222,50 @@ def test_at_the_most_slots_a_fill_gets_a_verified_stop_in_two_polls(tmp_path, fi
     steps = steps_until(desk, lambda: any(s.verified for s in desk.stops(symbol)))
     assert steps <= 2
     assert steps * POLL < float(CFG.orders.max_unprotected_seconds) / 2
+
+
+def fill_together(desk: Desk, symbols: list[str]) -> list[int]:
+    """Fill every entry in the same poll; the polls after which each position's stops are all
+    verified, in order."""
+    for symbol in symbols:
+        entry = desk.engine.orders(desk.trade_of(symbol).trade_id)[0]
+        desk.broker.fill(entry.client_order_id, D(10), D("10.05"))
+    done: dict[str, int] = {}
+    for step in range(1, 4 * len(symbols) + 1):
+        desk.step()
+        for symbol in symbols:
+            stops = desk.stops(symbol)
+            if symbol not in done and stops and all(s.verified for s in stops) and sum(
+                    (s.quantity for s in stops), D(0)) == 10:
+                done[symbol] = step
+    return sorted(done.values())
+
+
+# The most slots the start-time check lets through: a fill's read plus up to two stop reads
+# each, within `max_unprotected_seconds` less a poll.
+BURST = int((float(CFG.orders.max_unprotected_seconds) - POLL) / ((1 + STOPS_PER_FILL) * POLL))
+
+
+def test_entries_filling_in_the_same_poll_get_their_stops_in_turn(tmp_path):
+    """Every working entry fills at once: each fill is read, then its new stop, before the
+    next fill, so the k-th position has a verified stop after 2 k polls, not after all the
+    fills were read."""
+    desk = full(tmp_path, filled=0)
+    assert fill_together(desk, SYMBOLS) == [2 * k for k in range(1, MAX + 1)]
+
+
+def test_split_fills_in_the_same_poll_are_protected_in_time_at_the_allowed_slots(tmp_path):
+    """With a scale-out each fill gets two stops: three reads each. At the slot count the
+    start-time check allows, the last position is fully stopped within
+    `max_unprotected_seconds` with a poll to spare."""
+    desk = Desk(tmp_path, wide(BURST, max_daily_loss_usd=D(MAX * 10)))
+    symbols = SYMBOLS[:BURST]
+    for symbol in symbols:
+        assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
+    desk.step(2 * BURST)
+    done = fill_together(desk, symbols)
+    assert done == [(1 + STOPS_PER_FILL) * k for k in range(1, BURST + 1)]
+    assert done[-1] * POLL <= float(CFG.orders.max_unprotected_seconds) - POLL
 
 
 def test_at_the_most_slots_a_stop_out_is_seen_in_one_poll(tmp_path):
@@ -450,3 +494,17 @@ def test_config_refuses_a_poll_too_slow_for_the_flatten_of_every_slot(tmp_path):
     path.write_text(text, "utf-8")
     with pytest.raises(config.ConfigError, match="close_order_cutoff_seconds"):
         launchd.check_timings(config.load(path, ROOT))
+
+
+def test_config_refuses_more_slots_than_fills_it_can_protect_in_time(tmp_path):
+    text = (ROOT / "config" / "bot.toml").read_text("utf-8")
+    for count, refused in ((BURST, False), (BURST + 1, True)):
+        changed = re.sub(r"(?m)^max_open_positions = \d+", f"max_open_positions = {count}", text)
+        (tmp_path / "config").mkdir(exist_ok=True)
+        path = tmp_path / "config" / "bot.toml"
+        path.write_text(changed, "utf-8")
+        if refused:
+            with pytest.raises(config.ConfigError, match="max_unprotected_seconds"):
+                launchd.check_timings(config.load(path, ROOT))
+        else:
+            launchd.check_timings(config.load(path, ROOT))

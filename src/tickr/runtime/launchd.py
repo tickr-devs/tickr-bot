@@ -20,6 +20,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from tickr.config import Config, ConfigError, RuntimeConfig
+from tickr.engine.core import STOPS_PER_FILL
 
 TEMPLATE_SUFFIX = ".plist.template"
 # The nightly fetch writes its outcome here, in [runtime] nightly_fetch_out (backtest/nightly.py);
@@ -122,7 +123,10 @@ def check_timings(config: Config) -> None:
     0 <= [session] close_order_cutoff_seconds < flatten_minutes_before_close (in seconds) and
     max_open_positions x max_stops_per_trade x 2 x detail_poll_seconds <= that time minus
     the cutoff, with max_stops_per_trade >= 3 (the cap holds only with several slots; one
-    slot's position has the whole window)."""
+    slot's position has the whole window);
+    and unless every slot's entry can fill in the same poll and still have its stops verified
+    in time, with a poll to spare: max_open_positions x (1 + STOPS_PER_FILL) x
+    detail_poll_seconds <= [orders] max_unprotected_seconds - detail_poll_seconds."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -168,6 +172,18 @@ def check_timings(config: Config) -> None:
             f"[risk] max_open_positions x [orders] max_stops_per_trade x 2 x detail_poll_seconds "
             f"({flatten} s) must fit between the flatten and [session] "
             f"close_order_cutoff_seconds ({window - cutoff} s)")
+    # Entries of every slot may fill in the same poll (resting limits). One Detail read per
+    # poll serves them in turn: the entry's fill, then each of its new stops (two across a
+    # scale-out boundary), before the next entry, so the last fill waits that long for its
+    # verified stops; a poll is kept spare (a fill seen a poll late).
+    poll = config.orders.detail_poll_seconds
+    burst = config.risk.max_open_positions * (1 + STOPS_PER_FILL) * poll
+    limit = config.orders.max_unprotected_seconds - poll
+    if burst > limit:
+        raise ConfigError(
+            f"[risk] max_open_positions x (1 + {STOPS_PER_FILL} stops) x [orders] "
+            f"detail_poll_seconds ({burst} s) must not exceed [orders] max_unprotected_seconds "
+            f"less one poll ({limit} s): fills arriving together are protected one at a time")
     restart = runtime.watchdog_restart_before_flatten_seconds
     entry_gap = (config.session.last_entry_minutes_before_close
                  - config.session.flatten_minutes_before_close) * SECONDS_PER_MINUTE

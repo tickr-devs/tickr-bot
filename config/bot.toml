@@ -45,8 +45,10 @@ min_daily_room_usd = 10
 # losses are reserved against it). 1 until the owner enables several positions (backlog X1); at most
 # [market_data] stream_reserved_symbols (each position keeps a stream slot), and the session flatten (one stop at a
 # time, up to [orders] max_stops_per_trade each, two [orders] detail_poll_seconds per stop) must fit before [session]
-# close_order_cutoff_seconds (checked by the start-time checks, runtime.launchd.check_timings); read by safety, the
-# engine and the status.
+# close_order_cutoff_seconds, and every slot's entry filling in one poll must get its verified stops within [orders]
+# max_unprotected_seconds less a poll (slots x 3 x [orders] detail_poll_seconds: one read for the fill, one per stop,
+# up to 2; 3 slots at 3 s and 30 s) (both checked by the start-time checks, runtime.launchd.check_timings); read by
+# safety, the engine and the status.
 max_open_positions = 1
 # Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.
 max_quote_age_seconds = 5
