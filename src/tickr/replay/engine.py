@@ -321,6 +321,8 @@ class _SessionReplay:
             prior_sessions=self.prior,
             quote=self._quote(bar),
             position=view,
+            # Replay input is the recorded session itself: its bars are the whole session.
+            session_open=self.session_clock.regular_open,
         )
         decision = self.strategy.evaluate(context)
         _check_decision(self.strategy, self.symbol, decision)

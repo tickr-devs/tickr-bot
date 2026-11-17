@@ -443,6 +443,17 @@ def test_the_worker_gets_only_new_bars_and_rebuilds_the_same_context(tmp_path):
     assert all(s.prior_sessions == prior for s in fake.seen)
 
 
+def test_the_worker_gets_the_proven_session_open(tmp_path):
+    fake = Fake()
+    observers, _ = observer_set(tmp_path, fake)
+    for opened in (START, None):
+        ctx = SymbolContext("ABC", bars(3), (), session_open=opened)
+        assert observers.on_evaluation(ctx, START + 3 * M1) == ()
+        assert settle(observers) == ()
+    assert observers.close(5)
+    assert [s.session_open for s in fake.seen] == [START, None]
+
+
 def test_a_dropped_evaluation_is_sent_whole_next_time(tmp_path):
     hung = Blocking()
     observers, _ = observer_set(tmp_path, hung, queue_size=1)

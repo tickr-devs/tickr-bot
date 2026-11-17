@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from tickr.calendar import NEW_YORK
-from tickr.data.todaybars import TodayBars
+from tickr.data.todaybars import TodayBars, reaches_open
 from tickr.types import Bar
 
 OPEN = datetime(2026, 11, 16, 9, 30, tzinfo=NEW_YORK)
@@ -69,3 +69,13 @@ def test_puts_from_two_threads_keep_every_symbol():
     for t in threads:
         t.join()
     assert len(kept) == 400
+
+
+def test_a_read_proves_the_session_from_the_open_only_by_reaching_it():
+    """Minutes without trades have no bar, so a missing 09:30 bar proves nothing: the read
+    must reach back to the open or earlier, or hold fewer bars than asked (no older one)."""
+    late_start = [bar("A", m) for m in (3, 4, 5)]  # first trade 09:33
+    assert not reaches_open(late_start, OPEN, 3)  # full read: older bars may exist
+    assert reaches_open(late_start, OPEN, 4)  # fewer than asked: nothing older exists
+    assert reaches_open([bar("A", -1), *late_start], OPEN, 4)  # reaches before the open
+    assert reaches_open([bar("A", 0), bar("A", 1)], OPEN, 2)  # starts at the open

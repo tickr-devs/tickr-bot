@@ -114,7 +114,9 @@ Notes for both candidates (from the trading-core review of `strategy/simple.py`)
   about 37 to 50 USD, not a constant 50: compare results in R or per share. The platform's
   tick rounding of the stop can refuse an entry whose loss-based size binds (fails closed).
 - Both refuse a session whose bars do not start at 09:30 (`session_from_open`), which holds
-  while `[market_data] bars_per_symbol` covers the whole session.
+  while `[market_data] bars_per_symbol` covers the whole session. A thin stock with no trade
+  at 09:30 has no 09:30 bar and is refused all day (docs/webull-facts.md); strategies built
+  from blocks use the platform's proof of the session instead (docs/strategy-blocks.md).
 - The previous close is the last bar of the latest fetched prior session, not the official
   close.
 - Observers' WATCH and ENTER symbols (for `[observers] watching_seconds` after the bar they

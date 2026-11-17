@@ -21,6 +21,11 @@ with its tests; every later strategy that uses it needs none.
 | `[sizing]` | (fixed) | `max_position_notional_usd`, `planned_loss_usd` | Quantity is the smaller of notional / entry top and planned loss / (entry top - stop + spread). |
 
 All `[[signal]]` blocks must pass on the last completed M1 bar of the regular session, so a
-signal can fire again after an exit (re-entry). Any `[[exit]]` block firing answers EXIT. The
+signal can fire again after an exit (re-entry). Before them, `session_whole` requires the
+platform's proof that the bars hold the whole session from the regular open
+(`SymbolContext.session_open`: the bars read reached back to the open, or returned fewer bars
+than asked). A missing 09:30 bar is not a refusal: minutes without trades have no bar, about
+one thin stock in ten has none at 09:30 (docs/webull-facts.md), and every block counts time by
+the clock, not by bars. Any `[[exit]]` block firing answers EXIT. The
 platform's rules still apply on top: slots, daily loss ceiling, symbol pause after a loss,
 last entry time, session flatten, a broker stop for every position.

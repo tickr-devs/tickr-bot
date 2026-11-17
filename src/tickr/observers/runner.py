@@ -156,7 +156,7 @@ class _Encoder:
             sent_prior) == len(prior) and all(
             len(a) == len(b) and _same(a, b) for a, b in zip(sent_prior, prior, strict=True))
         message = ("eval", symbol, at, context.quote, None if same_prior else prior, base, tail,
-                   tuple(stale))
+                   tuple(stale), context.session_open)
 
         def commit() -> None:
             for name in stale:
@@ -214,7 +214,7 @@ class _Worker:
             send(("done", events))
 
     def _handle(self, item: tuple[Any, ...], events: list[tuple[Any, ...]]) -> None:
-        _, symbol, at, quote, prior, base, tail, forget = item
+        _, symbol, at, quote, prior, base, tail, forget, session_open = item
         for name in forget:
             self._bars.pop(name, None)
             self._prior.pop(name, None)
@@ -227,7 +227,8 @@ class _Worker:
         bars.extend(tail)
         if prior is not None:
             self._prior[symbol] = prior
-        context = SymbolContext(symbol, tuple(bars), self._prior.get(symbol, ()), quote)
+        context = SymbolContext(symbol, tuple(bars), self._prior.get(symbol, ()), quote,
+                                session_open=session_open)
         self._evaluate(context, at, events)
 
     def _off(self, observer: LoadedStrategy, at: datetime, cause: str,

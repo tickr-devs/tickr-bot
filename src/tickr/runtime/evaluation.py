@@ -44,7 +44,7 @@ from tickr.calendar import NEW_YORK, CalendarRefused, MarketDay, SessionCalendar
 from tickr.config import Config
 from tickr.data.base import MarketData, MarketDataError, ScreenerRow
 from tickr.data.history import HistoryRead, HistoryReader, SessionHistory
-from tickr.data.todaybars import TodayBars
+from tickr.data.todaybars import TodayBars, reaches_open
 from tickr.engine.core import Engine, Leg
 from tickr.runtime.entries import EntryDesk, daily_loss_room
 from tickr.runtime.market import StreamInbox
@@ -282,11 +282,14 @@ class Evaluator:
                               left + rest())
                 return True
             owns: dict[str, list[Bar]] = {}
+            whole: set[str] = set()
             for symbol in chunk:
                 own = [b for b in read[symbol]
                        if regular_open <= b.start <= bar_start and b.start + M1 <= now]
                 if own:
                     owns[symbol] = own
+                    if reaches_open(read[symbol], regular_open, md.bars_per_symbol):
+                        whole.add(symbol)
                 elif late is not None:
                     self._stopped(late, {"bar_start": bar_start.isoformat(),
                                          "stage": "remainder-no-bars"}, [symbol])
@@ -303,9 +306,11 @@ class Evaluator:
                     return True
                 if late is not None:
                     self._evaluate(symbol, owns[symbol], history, positions.get(symbol), now,
+                                   regular_open if symbol in whole else None,
                                    late_quote=late.get(symbol), late=True)
                     continue
-                self._evaluate(symbol, owns[symbol], history, positions.get(symbol), now)
+                self._evaluate(symbol, owns[symbol], history, positions.get(symbol), now,
+                               regular_open if symbol in whole else None)
                 cause = busy(self.engine)
                 if cause is not None:  # an entry or exit just went out: protect it first
                     after = left[left.index(symbol) + 1:]
@@ -376,8 +381,9 @@ class Evaluator:
         return type(read.error).__name__, None
 
     def _evaluate(self, symbol: str, today_bars: list[Bar], history: SessionHistory | None,
-                  position: PositionView | None, now: datetime, *,
-                  late_quote: Quote | None = None, late: bool = False) -> None:
+                  position: PositionView | None, now: datetime,
+                  session_open: datetime | None, *, late_quote: Quote | None = None,
+                  late: bool = False) -> None:
         prior = () if history is None else tuple(history.bars_of(d) for d in history.sessions)
         bars = ([] if history is None else list(history.bars)) + today_bars
         quote = late_quote if late else self.inbox.latest(symbol)
@@ -389,7 +395,8 @@ class Evaluator:
             quote = usable_quote(quote, self.now(),
                                  timedelta(seconds=float(risk.max_quote_age_seconds)),
                                  timedelta(seconds=float(risk.max_clock_skew_seconds)))
-        context = SymbolContext(symbol, tuple(bars), prior, quote, position, self._budget)
+        context = SymbolContext(symbol, tuple(bars), prior, quote, position, self._budget,
+                                session_open)
         try:
             decision = self.strategy.evaluate(context)
         except Exception as exc:  # noqa: BLE001 - a strategy bug never ends the loop

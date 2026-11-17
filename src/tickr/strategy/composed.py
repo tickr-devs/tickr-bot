@@ -27,6 +27,7 @@ from datetime import datetime
 from decimal import ROUND_FLOOR, Decimal
 from typing import Any
 
+from tickr.calendar import ny_date_of
 from tickr.strategy import indicators as ind
 from tickr.strategy import price_action_v1 as v1
 from tickr.strategy import simple
@@ -64,14 +65,16 @@ def _below_hundred(value: Any) -> Decimal:
 
 # --- signal blocks: (session bars, regular session from 09:30, oldest first) -> Check --------
 
-SignalBlock = Callable[[Sequence[Bar]], Check]
+SignalBlock = Callable[[Sequence[Bar], datetime], Check]
+"""A signal block decides on the session's bars and the session's regular open."""
 
 
 def minutes_after_open(minutes: int) -> SignalBlock:
-    """The last bar started at least `minutes` after the regular open."""
+    """The last bar started at least `minutes` after the regular open (by the clock: minutes
+    without trades have no bar)."""
 
-    def check(session: Sequence[Bar]) -> Check:
-        since = (session[-1].start - session[0].start) // M1
+    def check(session: Sequence[Bar], session_open: datetime) -> Check:
+        since = (session[-1].start - session_open) // M1
         return v1._check("minutes_after_open", Decimal(since), ">=", Decimal(minutes))
     return check
 
@@ -79,7 +82,7 @@ def minutes_after_open(minutes: int) -> SignalBlock:
 def new_session_high() -> SignalBlock:
     """The last bar closed above every earlier bar's high of the session."""
 
-    def check(session: Sequence[Bar]) -> Check:
+    def check(session: Sequence[Bar], session_open: datetime) -> Check:
         if len(session) < 2:
             return v1._flag("new_session_high", False, "no earlier bar this session")
         earlier = max(b.high for b in session[:-1])
@@ -93,13 +96,25 @@ def rise_from_low(window_minutes: int, min_percent: Decimal) -> SignalBlock:
     within the last `window_minutes` minutes (the last bar included)."""
     window, least = window_minutes, min_percent
 
-    def check(session: Sequence[Bar]) -> Check:
+    def check(session: Sequence[Bar], session_open: datetime) -> Check:
         last = session[-1]
         low = min(b.low for b in session if b.start > last.start - window * M1)
         rise = (last.close / low - ONE) * PERCENT
         return v1._check("rise_from_low_percent", rise, ">=", least,
                          f"close {last.close} over the {window}-minute low {low}")
     return check
+
+
+def session_whole(session: Sequence[Bar], session_open: datetime | None) -> Check:
+    """The platform proved that the bars hold the whole session from its regular open, and
+    they are that session's. A missing 09:30 bar is ordinary (no trade that minute), so the
+    proof comes from the read, never from the first bar."""
+    if session_open is None:
+        return v1._flag("session_whole", False, "bars not proven to reach the regular open")
+    return v1._flag("session_whole", ind.ny_date(session[-1]) == ny_date_of(session_open)
+                    and session[0].start >= session_open,
+                    f"session bars from {session[0].start.isoformat()}, open "
+                    f"{session_open.isoformat()}")
 
 
 SIGNALS: dict[str, tuple[Mapping[str, Callable[[Any], Any]], Callable[..., SignalBlock]]] = {
@@ -263,7 +278,8 @@ class Composed:
             return self._hold_or_exit(context, checks)
         self._held.pop(context.symbol, None)
         session = ind.current_session(context.bars)
-        checks.append(simple.session_from_open(session))
+        opened = context.session_open
+        checks.append(session_whole(session, opened))
         if checks[-1].passed:
             for check in self.session_liquidity(session):
                 checks.append(check)
@@ -272,7 +288,8 @@ class Composed:
         for _, block in self.signals:
             if not checks[-1].passed:
                 break
-            checks.append(block(session))
+            assert opened is not None  # session_whole passed
+            checks.append(block(session, opened))
         if not checks[-1].passed:
             return self._decide(context, Verdict.IGNORE, checks)
         return self._enter(context, checks, session[-1].close)

@@ -110,6 +110,10 @@ class SymbolContext:
     leaves (owner decision 2026-11-14: near the ceiling, size down to fit). None = no
     platform cap (replay, research). A strategy sizes on the smaller of this and its own
     planned loss; the platform still checks the ceiling on admission."""
+    session_open: datetime | None = None
+    """The regular open of the current session when the platform proved that `bars` hold every
+    bar of the session from it (its read reached back that far); None = not proven. Minutes
+    without trades have no bar, so the first session bar may start after the open."""
 
 
 class Liquidity(Protocol):

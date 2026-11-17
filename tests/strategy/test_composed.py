@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from strategy_bars import SYMBOL, TODAY, bar, d, quote
+from strategy_bars import SYMBOL, TODAY, bar, d, minute, quote
 
 from tickr import config
 from tickr.observers.loader import load_strategy, parse_modules
@@ -36,8 +36,11 @@ def ignition(count=20, low=1.00, close=1.20, volume=10_000):
     return bars
 
 
-def ctx(bars, q=None, position=None):
-    return SymbolContext(SYMBOL, bars, (), q, position)
+OPEN = minute(TODAY, 0)
+
+
+def ctx(bars, q=None, position=None, session_open=OPEN):
+    return SymbolContext(SYMBOL, bars, (), q, position, session_open=session_open)
 
 
 def rules(decision):
@@ -91,6 +94,28 @@ def test_the_low_is_taken_only_over_the_window():
     bars[-1] = bar(TODAY, 59, 1.15, 1.20, 1.15, 1.20, 1_000)
     decision = make().evaluate(ctx(bars, quote("1.20", "1.21")))
     assert decision.decisive.rule == "rise_from_low_percent"
+
+
+def test_a_session_without_the_0930_bar_is_decided_when_the_read_reached_the_open():
+    bars = ignition()[3:]  # no trade in the first three minutes: no bars for them
+    decision = make().evaluate(ctx(bars, quote("1.20", "1.21")))
+    assert decision.verdict is Verdict.ENTER, rules(decision)
+
+
+def test_bars_not_proven_to_reach_the_open_are_refused():
+    decision = make().evaluate(ctx(ignition(), quote("1.20", "1.21"), session_open=None))
+    assert decision.verdict is Verdict.IGNORE
+    assert decision.decisive.rule == "session_whole"
+
+
+def test_minutes_after_open_counts_the_clock_not_the_bars():
+    bars = [bar(TODAY, i, 1.00, 1.00, 1.00, 1.00, 10_000) for i in (2, 3)]
+    bars.append(bar(TODAY, 4, 1.00, 1.20, 1.00, 1.20, 10_000))  # 09:34: 4 minutes in, 3 bars
+    decision = make().evaluate(ctx(bars, quote("1.20", "1.21")))
+    assert decision.decisive.rule == "minutes_after_open"
+    later = [bar(TODAY, i, 1.00, 1.00, 1.00, 1.00, 10_000) for i in (2, 3)]
+    later.append(bar(TODAY, 5, 1.00, 1.20, 1.00, 1.20, 10_000))  # 09:35: 5 minutes in
+    assert make().evaluate(ctx(later, quote("1.20", "1.21"))).verdict is Verdict.ENTER
 
 
 def test_the_trailing_exit_fires_twenty_percent_under_the_high_since_the_fill():

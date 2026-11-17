@@ -68,3 +68,12 @@ class TodayBars:
         if kept is None or kept[0] < minute_end:
             return None
         return kept[1]
+
+
+def reaches_open(read: Sequence[Bar], session_open: datetime, requested: int) -> bool:
+    """True when one symbol's bars read (`requested` bars, newest last) proves that it holds
+    every bar of the session from `session_open` on: it reaches back to the open or earlier,
+    or it returned fewer bars than asked, so the provider had no older one. Minutes without
+    trades have no bar, in the regular session too (docs/webull-facts.md), so a missing 09:30
+    bar alone proves nothing either way."""
+    return len(read) < requested or min(b.start for b in read) <= session_open

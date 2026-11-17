@@ -130,7 +130,7 @@ Route: SDK `get_batch_history_bar(["AAPL"], "US_STOCK", "M1", ...)` → `POST /m
   - `trading_sessions` omitted → RTH only, 09:30–15:59 (count 1200 from 2026-11-10 10:00 reached back to 2026-11-05 09:30, skipping the weekend with no bars).
   - `["PRE","RTH","ATH"]` → PRE 04:00–09:29, RTH 09:30–15:59, ATH 16:00–19:59. No overnight bars (20:00–03:59) are returned with these values.
   - Each bar carries `trading_session`; the day boundary in a mixed response is 19:59 (prior day ATH) → 04:00 (PRE).
-- **Missing minutes:** extended-hours minutes with no trades have no bar (e.g. 2026-11-12 04:44 ET absent; several 1-minute holes in 2026-11-09 ATH). RTH had no holes in the sample. Consumers must not assume a dense minute grid outside RTH.
+- **Missing minutes:** extended-hours minutes with no trades have no bar (e.g. 2026-11-12 04:44 ET absent; several 1-minute holes in 2026-11-09 ATH). RTH minutes without trades have no bar either: the liquid early sample had none, but the bot's 2026-11-16 capture (`bars.jsonl`, 718 symbols with regular-session bars, 0 bars of zero volume) has 27% of RTH minutes missing between a symbol's first and last bar, 64% for the 197 symbols under $0.8M session dollar volume (16% at $0.8M and over). 10.2% of those thin symbols (20 of 197) had no 09:30 bar, their first bar at 09:31 to 10:06 ET; 2.7% of the others. Consumers must not assume a dense minute grid, in RTH included, nor a 09:30 bar.
 
 Fixtures:
 - `tests/fixtures/webull/market_data/stocks_bars_list_aapl_m1_window_pre_rth.json` — 09:00–10:00 window (PRE→RTH boundary, extra 08:59 bar); trimmed to 6 of 61 bars (full file is on the owner's Mac evidence folder).

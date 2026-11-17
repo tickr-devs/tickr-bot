@@ -156,6 +156,14 @@ def test_strategy_sees_prior_sessions_and_completed_regular_bars_only(tmp_path):
     assert rig.evaluator.contexts == [context]
 
 
+def test_the_strategy_gets_the_open_its_bars_are_proven_to_reach(tmp_path):
+    rig = Rig(tmp_path)
+    rig.symbol("ABC")  # the read reaches the pre-market bar before the open
+    rig.evaluator.tick(Market(["ABC"]))
+    (context,) = rig.strategy.seen
+    assert context.session_open == OPEN
+
+
 def test_runs_once_per_completed_minute_and_only_in_the_session(tmp_path):
     rig = Rig(tmp_path)
     rig.symbol("ABC")
