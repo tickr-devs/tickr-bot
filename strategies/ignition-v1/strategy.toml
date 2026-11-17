@@ -55,9 +55,11 @@ percent = 20
 block = "trailing_percent"
 # Trail distance under the highest price since the entry, percent (last close or bid). Read by strategy.composed.
 percent = 20
+# Widest spread, (ask - bid) / mid, at which the bid may fire the trail; wider, the last close decides (same ceiling as [liquidity] max_spread_ratio). Read by strategy.composed.
+bid_max_spread_ratio = 0.03
 
 [sizing]
-# Maximum position notional, USD (quantity x top of entry window); owner 2026-11-17: $1,000 per position; must not exceed config/bot.toml [risk]. Read by strategy.composed.
+# Maximum position notional, USD (quantity x top of entry window); owner 2026-11-17: $1,000 per position; admission refuses an entry over config/bot.toml [risk]. Read by strategy.composed.
 max_position_notional_usd = 1000
-# Planned loss per position the quantity is sized for, USD (about notional x stop percent plus the spread); must not exceed config/bot.toml [risk]. Read by strategy.composed.
+# Planned loss per position the quantity is sized for, USD (about notional x stop percent plus the spread); admission refuses an entry over config/bot.toml [risk] planned_loss_usd. Read by strategy.composed.
 planned_loss_usd = 250

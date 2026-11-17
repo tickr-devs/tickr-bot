@@ -52,8 +52,7 @@ from typing import Any
 from tickr.observers.loader import LoadedStrategy, load_strategy, parse_modules
 from tickr.observers.log import DecisionLog
 from tickr.research.records import M1, Admission, DecisionRecord
-from tickr.strategy.base import Decision, Role, SymbolContext, Verdict
-from tickr.types import Quote
+from tickr.strategy.base import Decision, Role, SymbolContext, Verdict, usable_quote
 
 ALL_OBSERVERS = "all observers"
 DROPPED = "queue full"
@@ -83,28 +82,12 @@ def _contract_problem(observer: LoadedStrategy, symbol: str, decision: object) -
     return None
 
 
-def _usable_quote(quote: Quote | None, at: datetime, max_age: timedelta,
-                  max_skew: timedelta) -> Quote | None:
-    """The quote when entry admission would accept its times at `at`: aware provider and
-    receipt times, received no later than `at`, provider time at most `max_skew` ahead and at
-    most `max_age` old. Otherwise None."""
-    if quote is None:
-        return None
-    times = (quote.provider_time, quote.receipt_time)
-    if any(t.tzinfo is None or t.utcoffset() is None for t in times):
-        return None
-    if quote.receipt_time > at:
-        return None
-    age = at - quote.provider_time
-    return quote if -max_skew <= age <= max_age else None
-
-
 def freeze(context: SymbolContext, at: datetime, max_quote_age: timedelta,
            max_clock_skew: timedelta) -> SymbolContext:
     """An immutable copy for the worker: tuples of bars, no position, no daily loss budget
     (that room is the active strategy's; an observer sizes as if it traded alone), and no
     quote whose times entry admission would refuse at `at` (stale, from the future, naive)."""
-    quote = _usable_quote(context.quote, at, max_quote_age, max_clock_skew)
+    quote = usable_quote(context.quote, at, max_quote_age, max_clock_skew)
     return replace(
         context,
         bars=tuple(context.bars),

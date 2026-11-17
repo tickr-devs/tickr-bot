@@ -147,25 +147,41 @@ STOPS: dict[str, tuple[Mapping[str, Callable[[Any], Any]], Callable[..., Any]]] 
 
 @dataclass(frozen=True)
 class TrailingPercent:
-    """EXIT once the last close, or the bid, is `percent` or more below the highest price
-    since the entry (the entry price, then the highs of the bars from the fill's minute on)."""
+    """EXIT once the price is `percent` or more below the highest price since the entry (the
+    entry price, then the highs of the bars from the fill's minute on). The price is the last
+    close, or the bid when that is lower and the book is sane: a valid quote (the platform
+    passes only a fresh one) with a spread ratio at most `bid_max_spread_ratio`. A broken book,
+    such as an emptied bid side in a thin stock, never fires the trail: the last close decides."""
 
     percent: Decimal
+    bid_max_spread_ratio: Decimal
 
-    def check(self, entry: Decimal, since: Sequence[Bar], quote: Quote | None) -> Check:
+    def bid_usable(self, quote: Quote | None) -> Check:
+        if quote is None or not ZERO < quote.bid <= quote.ask:
+            return v1._flag("trail_bid_usable", False, "no valid fresh quote")
+        spread = v1.spread_check(quote, self.bid_max_spread_ratio)
+        return v1._check("trail_bid_spread_ratio", spread.measured, "<=",
+                         self.bid_max_spread_ratio)
+
+    def check(self, entry: Decimal, since: Sequence[Bar],
+              quote: Quote | None) -> tuple[Check, ...]:
         peak = max([entry, *(b.high for b in since)])
         floor = peak * (ONE - self.percent / PERCENT)
+        usable = self.bid_usable(quote)
         prices = [b.close for b in since[-1:]]
-        if quote is not None and ZERO < quote.bid <= quote.ask:
+        if usable.passed:
+            assert quote is not None
             prices.append(quote.bid)
         price = min(prices, default=entry)
-        return v1._check("trailing_stop", price, "<=", floor,
-                         f"lowest of last close and bid against {self.percent}% under the "
-                         f"high since entry {peak}")
+        source = "lowest of last close and bid" if usable.passed else "last close"
+        return usable, v1._check("trailing_stop", price, "<=", floor,
+                                 f"{source} against {self.percent}% under the high since "
+                                 f"entry {peak}")
 
 
 EXITS: dict[str, tuple[Mapping[str, Callable[[Any], Any]], Callable[..., Any]]] = {
-    "trailing_percent": ({"percent": _below_hundred}, TrailingPercent),
+    "trailing_percent": ({"percent": _below_hundred, "bid_max_spread_ratio": v1._positive},
+                         TrailingPercent),
 }
 
 
@@ -310,7 +326,7 @@ class Composed:
         since = [b for b in bars if b.start >= start]
         fired = False
         for _, block in self.exits:
-            checks.append(block.check(position.entry_price, since, context.quote))
+            checks.extend(block.check(position.entry_price, since, context.quote))
             fired = fired or checks[-1].passed
         return self._decide(context, Verdict.EXIT if fired else Verdict.HOLD, checks)
 

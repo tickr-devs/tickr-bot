@@ -17,7 +17,7 @@ with its tests; every later strategy that uses it needs none.
 | `[[signal]]` | `rise_from_low` | `window_minutes`, `min_percent` | The close is this far above the lowest low of the window. |
 | `[entry]` | `marketable_window` | `window_percent` | A marketable buy while the ask is within this percent of the signal close. |
 | `[stop]` | `percent_below_entry` | `percent` | The broker stop this far under the top of the entry window and under the bid. |
-| `[[exit]]` | `trailing_percent` | `percent` | EXIT once the last close or the bid is this far under the highest price since the fill. |
+| `[[exit]]` | `trailing_percent` | `percent`, `bid_max_spread_ratio` | EXIT once the last close, or the bid when the spread ratio is within `bid_max_spread_ratio`, is `percent` under the highest price since the fill. The platform passes a strategy only a quote within `[risk] max_quote_age_seconds`, so an old quote never fires it. |
 | `[sizing]` | (fixed) | `max_position_notional_usd`, `planned_loss_usd` | Quantity is the smaller of notional / entry top and planned loss / (entry top - stop + spread). |
 
 All `[[signal]]` blocks must pass on the last completed M1 bar of the regular session, so a

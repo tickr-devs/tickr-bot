@@ -624,6 +624,38 @@ def test_preload_pauses_after_a_budget_refusal_and_stops_at_the_open(tmp_path):
     assert bars_calls(rig, "bars_before") == [("AAA",)]
 
 
+def _held(rig: Rig, symbol: str) -> None:
+    trade = rig.engine.open_trade(symbol, D(1), D(10), D(9), D(1))
+    rig.broker.fill(rig.engine.orders(trade)[0].client_order_id, D(1), D(10))
+    for _ in range(3):
+        rig.engine.step()
+
+
+@pytest.mark.parametrize("held", [True, False])
+def test_a_held_position_is_decided_only_on_a_fresh_quote(tmp_path, held):
+    """No admission checks an exit, so the strategy never decides a held position on an old
+    quote; an entry keeps it and admission refuses it as stale."""
+    rig = Rig(tmp_path)
+    rig.symbol("ABC")  # its quote is received before the read starts
+    if held:
+        _held(rig, "ABC")
+    _reads_take(rig, timedelta(seconds=float(CFG.risk.max_quote_age_seconds) + 1),
+                quote_on_the_way=False)
+    rig.evaluator.tick(Market([] if held else ["ABC"]))
+    (context,) = rig.strategy.seen
+    assert (context.position is not None) is held
+    assert (context.quote is None) is held
+
+
+def test_a_held_position_keeps_a_fresh_quote(tmp_path):
+    rig = Rig(tmp_path)
+    rig.symbol("ABC")
+    _held(rig, "ABC")
+    rig.evaluator.tick(Market([]))
+    (context,) = rig.strategy.seen
+    assert context.position is not None and context.quote is not None
+
+
 def test_positions_and_watch_are_decided_before_discovery_runs(tmp_path):
     rig = Rig(tmp_path)
     for symbol in ("WAT", "CAN"):

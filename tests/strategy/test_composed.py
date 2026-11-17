@@ -113,6 +113,23 @@ def test_the_bid_alone_can_fire_the_trail():
     assert decision.verdict is Verdict.EXIT
 
 
+def test_a_broken_book_never_fires_the_trail_the_last_close_decides():
+    bars = ignition()  # last close 1.20 at its high
+    position = PositionView(d("1.20"), d(800), d("0.96"), filled_at=bars[-1].start)
+    decision = make().evaluate(ctx(bars, quote("0.50", "1.21"), position))
+    assert decision.verdict is Verdict.HOLD, rules(decision)
+    assert ("trail_bid_spread_ratio", False) in rules(decision)
+    assert decision.checks[-1].note.startswith("last close against")
+
+
+def test_without_a_quote_the_last_close_decides():
+    bars = ignition()
+    position = PositionView(d("1.20"), d(800), d("0.96"), filled_at=bars[-1].start)
+    decision = make().evaluate(ctx(bars, None, position))
+    assert decision.verdict is Verdict.HOLD
+    assert ("trail_bid_usable", False) in rules(decision)
+
+
 def test_without_a_fill_time_the_high_counts_from_the_first_bar_seen():
     bars = ignition()
     strategy = make()

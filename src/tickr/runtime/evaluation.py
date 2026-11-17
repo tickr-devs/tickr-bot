@@ -50,7 +50,7 @@ from tickr.runtime.entries import EntryDesk, daily_loss_room
 from tickr.runtime.market import StreamInbox
 from tickr.runtime.preload import HistoryPreload
 from tickr.runtime.protection import busy
-from tickr.strategy.base import PositionView, Strategy, SymbolContext, Verdict
+from tickr.strategy.base import PositionView, Strategy, SymbolContext, Verdict, usable_quote
 from tickr.types import Bar, Quote
 
 M1 = timedelta(minutes=1)
@@ -381,6 +381,14 @@ class Evaluator:
         prior = () if history is None else tuple(history.bars_of(d) for d in history.sessions)
         bars = ([] if history is None else list(history.bars)) + today_bars
         quote = late_quote if late else self.inbox.latest(symbol)
+        if position is not None and not late:
+            # An exit goes out on the strategy's word alone, with no admission to check the
+            # quote's age, so a held position is decided only on a quote admission would take
+            # now; an entry keeps the raw quote and admission refuses a stale one by its cause.
+            risk = self.config.risk
+            quote = usable_quote(quote, self.now(),
+                                 timedelta(seconds=float(risk.max_quote_age_seconds)),
+                                 timedelta(seconds=float(risk.max_clock_skew_seconds)))
         context = SymbolContext(symbol, tuple(bars), prior, quote, position, self._budget)
         try:
             decision = self.strategy.evaluate(context)
