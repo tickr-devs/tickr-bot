@@ -143,9 +143,24 @@ def test_no_messages_at_all_prove_nothing(tmp_path):
     assert summary["q1"]["verdict"] == tp.SILENT and code == tp.EXIT_NO_ANSWER
 
 
-def test_too_few_symbols_for_the_ladder_prove_nothing(tmp_path):
-    code, summary, _, _ = probe(tmp_path, universe=("A", "B", "C"))
+def test_too_few_symbols_for_the_ladder_are_all_sent_and_prove_nothing_unrefused(tmp_path):
+    code, summary, stream, _ = probe(tmp_path, universe=("A", "B", "C"))
     assert summary["q2"]["verdict"] == tp.UNIVERSE_SHORT and code == tp.EXIT_NO_ANSWER
+    assert summary["q2"]["held"] == 3
+    assert [s for kind, s in stream.requests if kind == tp.TICK][-1] == ["C"]
+
+
+def test_too_few_symbols_still_answer_when_the_last_ones_are_refused(tmp_path):
+    code, summary, _, _ = probe(tmp_path, universe=("A", "B", "C"), tick_cap=2)
+    assert summary["q2"]["verdict"] == tp.CAP_REFUSED and summary["q2"]["held"] == 2
+    assert code == tp.EXIT_ANSWERED
+
+
+def test_a_message_after_the_run_is_dropped(tmp_path):
+    rec = tp.Recorder(tmp_path / tp.EVENTS_FILE, Clock().now)
+    rec.close()
+    rec.on_event({"kind": "tick", "symbol": "A"})  # no error on the SDK's thread
+    assert (tmp_path / tp.EVENTS_FILE).read_text() == ""
 
 
 def test_no_connection_sends_nothing(tmp_path):
@@ -163,6 +178,6 @@ def test_stream_messages_become_records():
         "time": "1763391600123", "price": "14.41", "volume": "100", "side": "BUY"}
     assert tick_probe_event("quote", SimpleNamespace(basic=basic)) == {
         "kind": "quote", "symbol": "SOFI"}
-    assert tick_probe_event("notice", {"type": "1001", "drop": 0}) == {
-        "kind": "notice", "fields": {"type": "1001", "drop": "0"}}
+    assert tick_probe_event("notice", {"type": "1001", "drop": 0, "token": "x"}) == {
+        "kind": "notice", "fields": {"type": "1001", "drop": "0"}, "other_keys": 1}
     assert tick_probe_event("snapshot", object()) == {"kind": "other", "topic": "snapshot"}

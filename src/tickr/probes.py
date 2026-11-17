@@ -65,7 +65,7 @@ from tickr.config import Config, ConfigError
 from tickr.data.base import BarSpan, MarketData, MarketDataError, ScreenerKind, SymbolsRefused
 from tickr.engine import tick_probe
 from tickr.engine.core import Fence
-from tickr.lock import recorded_holder
+from tickr.lock import AlreadyRunning, SingleInstanceLock, recorded_holder
 
 # One bar is enough: the probes count requests and answers, never prices.
 BARS_PER_READ = 1
@@ -449,11 +449,17 @@ def tick(cfg: Config, symbols: Sequence[str], *, now: Clock, sleep: Sleep,
         float(probe.tick_connect_wait_seconds), float(probe.tick_flow_wait_seconds),
         probe.tick_cap_steps, float(probe.tick_step_wait_seconds),
         cfg.market_data.stream_max_symbols)
-    folder = evidence_folder(cfg, "tick", now())
-    out(f"tick {' '.join(symbols)}; evidence in {folder}")
-    code = tick_probe.run(lambda on_event: stream(cfg, on_event), symbols, universe, settings,
-                          folder, now=now, sleep=sleep, out=out,
-                          environment=cfg.environment_name)
+    try:
+        # Held for the whole run, as the trading probes do: a bot job starting meanwhile is
+        # refused instead of sharing the one market-data entitlement with this stream.
+        with SingleInstanceLock(lock_path):
+            folder = evidence_folder(cfg, "tick", now())
+            out(f"tick {' '.join(symbols)}; evidence in {folder}")
+            code = tick_probe.run(lambda on_event: stream(cfg, on_event), symbols, universe,
+                                  settings, folder, now=now, sleep=sleep, out=out,
+                                  environment=cfg.environment_name)
+    except AlreadyRunning as exc:
+        raise ProbeRefused("another tickr process holds the lock") from exc
     return code, folder
 
 

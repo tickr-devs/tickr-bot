@@ -83,9 +83,12 @@ class Recorder:
         self._lock = threading.Lock()
         self.counts: Counter[tuple[str, str]] = Counter()
         self.first_tick: dict[str, dict[str, Any]] = {}
+        self._closed = False
 
     def write(self, record: dict[str, Any]) -> None:
         with self._lock:
+            if self._closed:  # a message after stop(), on the SDK's thread: the run is over
+                return
             line = {"at": self._now().isoformat(), **record}
             self._file.write(json.dumps(line, default=str, sort_keys=True) + "\n")
             self._file.flush()
@@ -114,6 +117,7 @@ class Recorder:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             self._file.close()
 
 
@@ -159,8 +163,9 @@ def cap(stream: TickStream, rec: Recorder, universe: Sequence[str], settings: Ti
     pool = list(dict.fromkeys(universe))
     held: list[str] = []
     verdict, refused_answer = CAP_NOT_REACHED, None
-    for target in settings.cap_steps:
-        if target > len(pool):
+    for step in settings.cap_steps:
+        target = min(step, len(pool))  # too few symbols: the last step takes them all
+        if target <= len(held):
             verdict = UNIVERSE_SHORT
             break
         new = pool[len(held):target]
@@ -174,6 +179,9 @@ def cap(stream: TickStream, rec: Recorder, universe: Sequence[str], settings: Ti
         out(f"q2 TICK {len(held)} symbol(s) held after step {target}: "
             f"{'refused' if refused_answer else 'accepted'}")
         if refused_answer is not None:
+            break
+        if target < step:
+            verdict = UNIVERSE_SHORT
             break
         sleep(settings.step_wait_seconds)
     result: dict[str, Any] = {"verdict": verdict, "held": len(held), "universe": len(pool),

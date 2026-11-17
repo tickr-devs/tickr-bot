@@ -536,8 +536,45 @@ def test_tick_takes_the_cap_symbols_from_the_screeners(tmp_path, monkeypatch, ca
     monkeypatch.setattr(probes, "TICK_STREAM", lambda cfg, on_event: Stream(on_event))
     monkeypatch.setattr(probes, "NOW", clock.now)
     monkeypatch.setattr(probes, "SLEEP", clock.sleep)
-    # Four distinct symbols cannot reach the first cap step: answered for q1 only.
+    # Four distinct symbols cannot reach the first cap step: all four are sent, and with no
+    # refusal q2 stays unanswered.
     assert probes.main(["tick", "SOFI"]) == probes.EXIT_NO_ANSWER
     assert sent[0] == (tick_probe.TICK, ["SOFI"]) and sent[1] == (tick_probe.QUOTE, ["SOFI"])
     out = capsys.readouterr().out
-    assert "q1_tick_streams: streams" in out and "universe-too-small: 0 symbol(s) held of 4" in out
+    assert "q1_tick_streams: streams" in out and "universe-too-small: 4 symbol(s) held of 4" in out
+
+
+def test_tick_holds_the_lock_for_its_run(tmp_path):
+    from tickr.data.base import StreamAnswer
+    from tickr.lock import SingleInstanceLock
+
+    cfg = cfg_in(tmp_path)
+    _, lock_path = data_paths(cfg)
+    seen = []
+
+    class Stream:
+        def start(self):
+            try:  # a bot job starting during the probe is refused
+                SingleInstanceLock(lock_path).acquire()
+                seen.append("bot started")
+            except Exception as exc:  # noqa: BLE001
+                seen.append(type(exc).__name__)
+
+        def wait_connected(self, seconds):
+            return False
+
+        def stop(self):
+            pass
+
+        def subscribe(self, symbols, sub_type):
+            return StreamAnswer(True)
+
+        def unsubscribe_all(self):
+            return StreamAnswer(True)
+
+    probes.tick(cfg, ["SOFI"], now=Clock().now, sleep=Clock().sleep,
+                market=lambda c: FakeMarketData(), stream=lambda c, e: Stream(),
+                out=lambda line: None)
+    assert seen == ["AlreadyRunning"]
+    with SingleInstanceLock(lock_path):  # released after the run
+        pass

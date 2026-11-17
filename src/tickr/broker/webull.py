@@ -1472,6 +1472,7 @@ STREAM_TOPIC_NOTICE = "notice"
 NOTICE_STATUS = "1001"
 NOTICE_ENTITLEMENT_PREEMPTED = "1002"
 STREAM_SUB_TYPE_QUOTE = "QUOTE"
+NOTICE_KEYS = ("type", "drop", "rtt", "sent")  # notice 1001/1002 keys seen (probe M3)
 STREAM_SUB_TYPE_TICK = "TICK"  # trade by trade; only the tick probe subscribes it (KD-1)
 STREAM_TOPIC_TICK = "tick"
 STREAM_SUBSCRIBE_PATH = "/market-data/streaming/subscribe"
@@ -2164,7 +2165,11 @@ def tick_probe_event(topic: str, payload: Any) -> dict[str, Any]:
     if topic == STREAM_TOPIC_QUOTE:
         return {"kind": "quote", "symbol": _as_text(getattr(basic, "symbol", None))}
     if topic == STREAM_TOPIC_NOTICE and isinstance(payload, Mapping):
-        return {"kind": "notice", "fields": {str(k): _as_text(v) for k, v in payload.items()}}
+        # Only the known notice keys go to the evidence (it is pasted into the project chat);
+        # other keys are counted, never kept.
+        kept = {k: _as_text(payload[k]) for k in NOTICE_KEYS if k in payload}
+        return {"kind": "notice", "fields": kept,
+                "other_keys": sum(1 for k in payload if k not in NOTICE_KEYS)}
     return {"kind": "other", "topic": str(topic)}
 
 
