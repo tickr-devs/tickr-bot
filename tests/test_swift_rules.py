@@ -728,6 +728,42 @@ def test_known_twins_are_still_written_twice():
     assert module.KNOWN_TWINS <= declared["apps/macos"] & declared["apps/ios"]
 
 
+def test_loaders_only_through_the_shared_components(tmp_path):
+    source = (
+        "ProgressView()\n"
+        "ProgressView(value: 0.4)\n"
+        "TickrLoader(L10n.Common.loading)\n"
+        "card.redacted(reason: .placeholder)\n"
+        "private struct RowShimmer: View {}\n"
+        "struct BusySpinner: View {}\n"
+        "final class ChartLoaderView: NSView {}\n"
+        "Radar().frame(width: side)\n"
+        "RadarSweep(moving: true)\n"
+        "// ProgressView() in a comment\n"
+        "Skeleton(L10n.Common.loading) { SkeletonBlock(.line) }\n"
+        "Button {} label: {}.inFlight(Text(L10n.Bot.closing))\n"
+        "ProgressLine(fraction: 0.4, label: L10n.Lab.replayProgress)\n"
+        "struct SymbolsSkeleton: View {}\n"
+    )
+    found = load().loader_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+
+def test_the_radar_stays_in_the_empty_positions_state(tmp_path, monkeypatch):
+    module = load()
+    monkeypatch.setattr(module, "REPO", tmp_path)
+    radar = "Radar().frame(width: side)\n"
+    home = app_file(module, tmp_path, "macos", "OverviewView.swift", radar)
+    elsewhere = app_file(module, tmp_path, "macos", "ChartView.swift", radar)
+    module.RADAR_HOMES = {"apps/macos/Tickr/OverviewView.swift"}
+    assert module.loader_violations(home) == []
+    assert [line for line, _ in module.loader_violations(elsewhere)] == [1]
+
+
+def test_the_loader_rule_is_an_app_rule():
+    assert "loaders" in load().APP_RULES
+
+
 def test_cause_rule_flags_a_coded_cause_shown_in_the_bots_words(tmp_path):
     module = load()
     assert {"rulesCause", "sessionCause", "unavailableCause", "agreementCause", "excludedCause",
