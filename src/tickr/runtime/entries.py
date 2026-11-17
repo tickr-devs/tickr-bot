@@ -22,7 +22,15 @@ from tickr.calendar import (
     SessionCalendar,
 )
 from tickr.config import Config, trading_gate
-from tickr.engine.core import Engine, EntryRefused, Fence, Leg, OrderRow, TradeRow
+from tickr.engine.core import (
+    STOPS_PER_FILL,
+    Engine,
+    EntryRefused,
+    Fence,
+    Leg,
+    OrderRow,
+    TradeRow,
+)
 from tickr.observers.log import DecisionLog
 from tickr.research.records import Admission as RecordAdmission
 from tickr.research.records import DecisionRecord
@@ -37,7 +45,6 @@ ZERO = Decimal(0)
 # earlier reduce, a refused close, or not below the held quantity); one row per trade.
 REDUCE_REFUSED = "reduce-refused"
 M1 = timedelta(minutes=1)
-STOP_ORDERS_PER_ENTRY = 1
 FOREIGN = (Fence.FOREIGN_POSITION, Fence.FOREIGN_ORDER)
 # Fences that are reported through their own admission field, not as unresolved exposure.
 NOT_EXPOSURE = (Fence.STARTUP_RECONCILE, Fence.ENTRY_STOP, Fence.BROKER_READ, *FOREIGN)
@@ -209,6 +216,18 @@ def own_exposure(engine: Engine, symbol: str | None = None) -> tuple[int, int]:
     return own_positions, working
 
 
+def stop_requests_owed(engine: Engine) -> int:
+    """Place requests the stops may need if every working entry of ours, and the one about to
+    be placed, filled in the same poll: each fill observation places up to `STOPS_PER_FILL`
+    stops at once (its own and a split at the scale-out boundary). An entry is admitted only
+    while the place budget holds that many after its own request, so entries filling together
+    are never left waiting on our own budget for their stops (with 30 places per 60 s
+    against up to 2 stops per slot). Closes and stop retries are not counted: they come one
+    trade at a time."""
+    working = sum(1 for o in engine.orders() if o.leg is Leg.ENTRY and o.live)
+    return STOPS_PER_FILL * (working + 1)
+
+
 def slots_in_use(engine: Engine) -> int:
     """Open own trades in any symbol (a position, a working entry or an exit in progress):
     each takes one of `[risk] max_open_positions`, as `Engine.open_trade` counts them."""
@@ -277,7 +296,7 @@ class EntryDesk:
             realized_loss_today_usd=realized_loss_today(engine, now),
             open_reservations_usd=self._reservations(),
             entry_budget_available=engine.broker.can_place(1),
-            stop_budget_available=engine.broker.can_place(1 + STOP_ORDERS_PER_ENTRY),
+            stop_budget_available=engine.broker.can_place(1 + stop_requests_owed(engine)),
         )
 
     # --- the one entry point ---------------------------------------------------------------

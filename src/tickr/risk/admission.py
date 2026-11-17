@@ -399,7 +399,8 @@ def _check_budget(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     if not i.entry_budget_available:
         return _refuse(C.ENTRY_BUDGET_UNAVAILABLE, "no request budget for the entry order")
     if not i.stop_budget_available:
-        return _refuse(C.STOP_BUDGET_UNAVAILABLE, "no request budget for the protective stop")
+        return _refuse(C.STOP_BUDGET_UNAVAILABLE, "no request budget for the protective stops "
+                       "of every working entry and this one")
     return None
 
 
