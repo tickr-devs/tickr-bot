@@ -7,6 +7,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 import pytest
+from baseline import load_baseline
 
 from tickr import config
 from tickr.broker.fake import FakeBroker
@@ -26,7 +27,7 @@ from tickr.strategy.base import Check, Decision, Verdict
 from tickr.types import OrderDetail, OrderState, OrderType, Quote, Side
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
 NOW = datetime(2026, 11, 16, 11, 0, 30, tzinfo=NEW_YORK)
 BAR = datetime(2026, 11, 16, 10, 59, tzinfo=NEW_YORK)

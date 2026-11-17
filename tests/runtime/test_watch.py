@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from tickr import config
+from baseline import load_baseline
+
 from tickr.broker.fake import FakeBroker
 from tickr.calendar import NEW_YORK
 from tickr.config import GateResult
@@ -16,7 +17,7 @@ from tickr.runtime.watch import ALERT, BACKUP, BACKUP_FAILED, Watch
 from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 MONDAY_11 = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)
 AFTER = float(CFG.alerts.fence_alert_after_seconds)
 

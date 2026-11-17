@@ -10,6 +10,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 import pytest
+from baseline import load_baseline, write_baseline
 
 from tickr import cli, config
 from tickr.api import contract as api
@@ -23,8 +24,8 @@ from tickr.runtime import service, stopmarker
 from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
-# The `[strategy] observers` line config/bot.toml ships with.
+CFG = load_baseline()
+# The `[strategy] observers` line of the baseline config (tests/baseline.py).
 SHIPPED_OBSERVERS = "observers = " + json.dumps(list(CFG.strategy.observers))
 MONDAY_11 = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
@@ -307,10 +308,8 @@ def test_sigterm_drain_leaves_the_stop_resting_and_cancels_the_entry(tmp_path):
 
 def copy_config(tmp_path: Path) -> Path:
     shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
-    for rel in ("config/bot.toml",):
-        target = tmp_path / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((ROOT / rel).read_bytes())
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    write_baseline(tmp_path / "config" / "bot.toml")
     calendar_dir = tmp_path / Path(CFG.session.calendar_file).parent
     calendar_dir.mkdir(parents=True, exist_ok=True)
     for f in (ROOT / Path(CFG.session.calendar_file).parent).iterdir():

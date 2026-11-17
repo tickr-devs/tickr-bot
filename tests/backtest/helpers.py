@@ -9,7 +9,8 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from tickr import config
+from baseline import load_baseline
+
 from tickr.broker.webull import DailyBar, InstrumentPage, InstrumentRow
 from tickr.calendar import SessionCalendar
 from tickr.data.base import SymbolsRefused
@@ -21,7 +22,8 @@ UTC = ZoneInfo("UTC")
 
 
 def cfg():
-    return config.load(ROOT / "config" / "bot.toml")
+    """The baseline config (tests/baseline.py): price-action-v3's liquidity chooses the pool."""
+    return load_baseline()
 
 
 def calendar() -> SessionCalendar:

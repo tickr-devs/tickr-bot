@@ -6,6 +6,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 import pytest
+from baseline import load_baseline
 
 from tickr import config
 from tickr.broker.base import RateLimited
@@ -38,7 +39,7 @@ from tickr.strategy.base import Check, Decision, SymbolContext, Verdict
 from tickr.types import Bar, Quote
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
 MONDAY = date(2026, 11, 16)
 OPEN = datetime(2026, 11, 16, 9, 30, tzinfo=NEW_YORK)

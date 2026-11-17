@@ -6,7 +6,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from tickr import config
+from baseline import load_baseline
+
 from tickr.api import contract as api
 from tickr.broker.fake import FakeBroker
 from tickr.broker.webull import MalformedResponse
@@ -34,7 +35,7 @@ from tickr.store import Store
 from tickr.types import Bar, Quote
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
 MONDAY_11 = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)
 SATURDAY = datetime(2026, 11, 14, 11, 0, tzinfo=NEW_YORK)

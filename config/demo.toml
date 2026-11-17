@@ -11,6 +11,9 @@ root_dir = "demo"
 # Environment name the demo copy of bot.toml runs as (a copy of the first environment whose trading
 # gate is open without an owner authorization); the apps show it, so it says this is a demo.
 environment = "demo"
+# [strategy] active in the demo copy of bot.toml: the strategy the made-up day's bars are written for
+# (its breakouts), whatever the real bot trades; read by tickr.demo.
+strategy = "price-action-v3"
 # [strategy] observers in the demo copy of bot.toml: shadow strategies whose decisions the apps show.
 observers = ["price-action-v2"]
 # Simulated-exchange provider name written into the demo's capture files.

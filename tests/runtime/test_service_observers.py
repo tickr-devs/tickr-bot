@@ -5,7 +5,8 @@ from datetime import timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
-from tickr import config
+from baseline import load_baseline
+
 from tickr.observers.loader import LoadedStrategy
 from tickr.observers.log import DecisionLog
 from tickr.observers.runner import ObserverSet
@@ -18,7 +19,7 @@ from tickr.types import Bar
 from .test_service import Bot
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 
 
 class Observer:

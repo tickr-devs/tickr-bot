@@ -7,14 +7,15 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from tickr import config
+from baseline import load_baseline
+
 from tickr.calendar import NEW_YORK
 from tickr.data.base import FakeMarketData, InstrumentProfile, ScreenerKind, ScreenerRow
 from tickr.data.capture import EVENTS_FILE, PROFILES_FILE, CaptureError, CaptureWriter
 from tickr.runtime.profiles import ProfileRecorder, move_percent
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 DAY = date(2026, 11, 16)
 T0 = datetime(2026, 11, 16, 10, 0, tzinfo=NEW_YORK)
 REFRESH = timedelta(seconds=float(CFG.market_data.profile_refresh_seconds))

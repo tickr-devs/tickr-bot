@@ -8,8 +8,8 @@ from decimal import Decimal as D
 from pathlib import Path
 
 import pytest
+from baseline import load_baseline
 
-from tickr import config
 from tickr.api import contract as api
 from tickr.broker.fake import FakeBroker
 from tickr.calendar import NEW_YORK, SessionCalendar
@@ -22,7 +22,7 @@ from tickr.runtime.watch import ALERT, Watch
 from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
 MONDAY = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)
 HALF_DAY = datetime(2026, 11, 27, 11, 0, tzinfo=NEW_YORK)  # regular close 13:00 ET

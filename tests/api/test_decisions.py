@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from baseline import pinned_text
 
 from tickr import config
 from tickr.api import contract
@@ -62,7 +63,7 @@ def _write(log: DecisionLog, *records: DecisionRecord, tail: str = "", day=DAY) 
 
 def _cfg(tmp_path, observers: str):
     (tmp_path / "config").mkdir()
-    text = (ROOT / "config" / "bot.toml").read_text("utf-8")
+    text = pinned_text((ROOT / "config" / "bot.toml").read_text("utf-8"))  # tests/baseline.py
     text, count = OBSERVERS_LINE.subn(f"observers = {observers}", text)
     assert count == 1
     path = tmp_path / "config" / "bot.toml"

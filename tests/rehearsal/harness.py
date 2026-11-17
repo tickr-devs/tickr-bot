@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from baseline import write_baseline
 
 from rehearsal.world import World, flat_session, ny
 from tickr import cli, config
@@ -48,7 +49,7 @@ class Rehearsal:
                  start: str = "09:20") -> None:
         for part in ("config", "strategies"):
             shutil.copytree(ROOT / part, tmp_path / part)
-        self.bot_toml = tmp_path / "config" / "bot.toml"
+        self.bot_toml = write_baseline(tmp_path / "config" / "bot.toml")
         self.world = World(ny(DAY, start))
         self.notifier = Notifier(self.world)
         monkeypatch.setattr(cli, "RUN_ADAPTERS", lambda cfg, on_error, on_token: cli.RunAdapters(

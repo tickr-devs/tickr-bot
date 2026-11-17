@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import threading
 import tomllib
@@ -99,8 +100,10 @@ def test_broken_toml_still_shows_lines_and_the_parse_error(served):
 
 def test_a_non_finite_number_is_a_config_error_not_a_crash(served):
     server, path = served
-    path.write_text(path.read_text("utf-8").replace("max_daily_loss_usd = 300",
-                                                    "max_daily_loss_usd = nan"), "utf-8")
+    text, count = re.subn(r"(?m)^max_daily_loss_usd = \S+", "max_daily_loss_usd = nan",
+                          path.read_text("utf-8"))
+    assert count == 1
+    path.write_text(text, "utf-8")
     resp, payload = request(server, "GET", "/config")
     body = doc(payload)
     assert resp.status == 200 and body["valid"] is False

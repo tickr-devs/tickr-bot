@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from baseline import pinned_text
 
 from tickr import config
 from tickr.api.reasons import gate_reason
@@ -13,6 +14,7 @@ from tickr.risk.admission import AdmissionLimits
 
 ROOT = Path(__file__).resolve().parent.parent
 BOT = ROOT / "config" / "bot.toml"
+CEILING = config.load(BOT).risk.max_daily_loss_usd
 
 
 def _copy(tmp_path: Path, text: str | None = None) -> Path:
@@ -105,7 +107,7 @@ def test_cooldown_turned_off_loads(tmp_path):
     assert AdmissionLimits.from_config(cfg).symbol_cooldown_minutes_after_loss is None
 
 
-@pytest.mark.parametrize("value", ["-1", "300", "301"])
+@pytest.mark.parametrize("value", ["-1", str(CEILING), str(CEILING + 1)])
 def test_min_daily_room_must_sit_below_the_ceiling(tmp_path, value):
     text = re.sub(r"(?m)^min_daily_room_usd = \S+", f"min_daily_room_usd = {value}",
                   BOT.read_text("utf-8"))
@@ -283,8 +285,9 @@ def test_cli_check_config(capsys):
 
 def test_cli_check_config_reports_too_little_history(tmp_path, capsys):
     shutil.copytree(ROOT / "strategies", tmp_path / "strategies")
-    path = _copy(tmp_path, BOT.read_text("utf-8").replace("history_sessions = 5",
-                                                          "history_sessions = 4", 1))
+    # price-action-v3 needs 5 prior sessions (the baseline's active strategy, tests/baseline.py)
+    path = _copy(tmp_path, pinned_text(BOT.read_text("utf-8")).replace("history_sessions = 5",
+                                                                        "history_sessions = 4", 1))
     assert main(["--config", str(path), "check-config"]) == 1
     assert "needs 5 prior sessions, [market_data] history_sessions = 4" in capsys.readouterr().out
 

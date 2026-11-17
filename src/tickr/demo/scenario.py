@@ -101,6 +101,7 @@ class Recording:
 class Scenario:
     root_dir: str
     environment: str
+    strategy: str
     observers: tuple[str, ...]
     provider: str
     bot_start: str
@@ -376,7 +377,7 @@ def load(path: Path) -> Scenario:
     top = _keys("demo.toml", raw, {"demo", "market", "scenario", "live", "recording"})
     plan = _keys("[scenario]", top["scenario"], {"today", "commands", "past", "faults"})
     demo = _keys("[demo]", top["demo"], {
-        "root_dir", "environment", "observers", "provider",
+        "root_dir", "environment", "strategy", "observers", "provider",
         "bot_start", "past_stop", "clock", "live_until", "answer_within_seconds"})
     market = _keys("[market]", top["market"], {
         "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume", "texture_drift",
@@ -398,6 +399,7 @@ def load(path: Path) -> Scenario:
     return unroll(Scenario(
         root_dir=_text("[demo] root_dir", demo["root_dir"]),
         environment=environment,
+        strategy=_text("[demo] strategy", demo["strategy"]),
         observers=tuple(observers),
         provider=_text("[demo] provider", demo["provider"]),
         bot_start=_clock("[demo] bot_start", demo["bot_start"]),

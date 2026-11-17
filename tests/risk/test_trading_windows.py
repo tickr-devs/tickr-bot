@@ -8,14 +8,14 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from baseline import load_baseline
 
-from tickr import config
 from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar
 from tickr.risk.timers import WindowKind, trading_windows, window_at
 from tickr.types import TradingSession
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
 MONDAY = CALENDAR.day(date(2026, 11, 16))
 HALF_DAY = CALENDAR.day(date(2026, 11, 27))

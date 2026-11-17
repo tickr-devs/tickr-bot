@@ -1,5 +1,6 @@
-"""The observers config/bot.toml ships with load, and each differs from the active strategy
-only in the values its header names (a variant is a full copy with a new version)."""
+"""The observers config/bot.toml ships with load, and each relative-volume variant
+(`<base>-relvol-<value>`) differs from its base strategy folder only in that value and the
+version (a variant is a full copy with a new version)."""
 
 from __future__ import annotations
 
@@ -28,11 +29,15 @@ def test_shipped_observers_load_with_distinct_identities():
     assert loaded
 
 
+VARIANT = "-relvol-"
+
+
 def test_relative_volume_variants_change_only_that_value_and_the_version():
-    active = _flat(_values(CFG.strategy.active))
-    for folder in CFG.strategy.observers:
+    variants = [f for f in CFG.strategy.observers if VARIANT in f]
+    for folder in variants:
+        base = _flat(_values(folder.split(VARIANT)[0]))
         variant = _flat(_values(folder))
-        changed = {k for k in active.keys() | variant.keys() if active.get(k) != variant.get(k)}
+        changed = {k for k in base.keys() | variant.keys() if base.get(k) != variant.get(k)}
         assert changed == {("strategy", "version"), ("indicators", "minimum_relative_volume")}
-        assert variant[("indicators", "minimum_relative_volume")] < active[
+        assert variant[("indicators", "minimum_relative_volume")] < base[
             ("indicators", "minimum_relative_volume")]

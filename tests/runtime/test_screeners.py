@@ -6,7 +6,8 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
-from tickr import config
+from baseline import load_baseline
+
 from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.data.base import FakeMarketData, ScreenerKind, ScreenerRow
 from tickr.data.capture import (
@@ -19,7 +20,7 @@ from tickr.data.capture import (
 from tickr.runtime.screeners import ScreenerRecorder
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 DAY = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent).day(date(2026, 11, 16))
 
 

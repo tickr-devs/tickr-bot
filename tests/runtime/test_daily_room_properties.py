@@ -22,6 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from baseline import load_baseline
 
 from tickr import config
 from tickr.broker.fake import FakeBroker
@@ -45,7 +46,7 @@ from tickr.types import Bar, Quote
 from .conftest import active_module
 
 ROOT = Path(__file__).resolve().parents[2]
-CFG = config.load(ROOT / "config" / "bot.toml")
+CFG = load_baseline()
 CALENDAR = SessionCalendar.load((ROOT / CFG.session.calendar_file).parent)
 GATE_OPEN = config.trading_gate(CFG).open
 pytestmark = pytest.mark.skipif(not GATE_OPEN, reason="the configured trading gate is closed")

@@ -7,8 +7,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from baseline import load_baseline, write_baseline
 
-from tickr import config
 from tickr.observers.loader import parse_modules
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def active_module() -> ModuleType:
     """The module of the repo config's active strategy: tests build or break the real one."""
-    cfg = config.load(ROOT / "config" / "bot.toml")
+    cfg = load_baseline()
     values = tomllib.loads((ROOT / "strategies" / cfg.strategy.active / "strategy.toml")
                            .read_text("utf-8"))
     modules = parse_modules(cfg.observers.strategy_modules)
@@ -28,6 +28,7 @@ def repo(tmp_path: Path) -> Path:
     """A copy of the parts of the repo that preflight and rendering read."""
     for part in ("config", "strategies", "ops"):
         shutil.copytree(ROOT / part, tmp_path / part)
+    write_baseline(tmp_path / "config" / "bot.toml")
     return tmp_path
 
 
