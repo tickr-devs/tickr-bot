@@ -160,8 +160,7 @@ ACCOUNT_FREE_ROUTES = frozenset(
 )
 # The only routes a market-data-only transport (the API's chart reads) may send.
 MARKET_DATA_ROUTES = frozenset(
-    {Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS, Route.PROFILES,
-     Route.DEPTHS, Route.TICKS}
+    {Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS, Route.PROFILES}
 )
 
 

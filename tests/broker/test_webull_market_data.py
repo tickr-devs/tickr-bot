@@ -20,6 +20,7 @@ from tickr.broker.base import RateLimited
 from tickr.broker.budget import RequestBudget, RouteLimit
 from tickr.broker.webull import (
     ACCOUNT_FREE_ROUTES,
+    MARKET_DATA_ROUTES,
     AdapterConfigError,
     BrokerReadFailed,
     MalformedResponse,
@@ -500,6 +501,8 @@ def test_quote_sources_sends_each_read_once_and_keeps_refusals():
     assert (reads[2].status, reads[2].error_code) == (403, "NO_PERMISSION")
     assert reads[0].received == NOW
     assert Route.DEPTHS in ACCOUNT_FREE_ROUTES and Route.TICKS in ACCOUNT_FREE_ROUTES
+    # Only probe Q1 reads them, over the full transport: the API's chart transport may not.
+    assert not {Route.DEPTHS, Route.TICKS} & MARKET_DATA_ROUTES
 
 
 def test_quote_sources_out_of_budget_is_recorded_not_sent():
