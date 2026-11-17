@@ -22,5 +22,7 @@
   "poll_seconds": "3",
   "broker_read_max_age_seconds": "30",
   "broker_read_warn_seconds": "15",
-  "api_version": 1
+  "api_version": 1,
+  "live_quote_max_age_seconds": "60",
+  "quotes_poll_seconds": "1"
 }

@@ -209,6 +209,10 @@ class ApiConfig:
     commands_dir: str
     status_stale_seconds: Decimal
     broker_read_warn_seconds: Decimal
+    live_quote_max_age_seconds: Decimal
+    quotes_file: str
+    quotes_write_seconds: Decimal
+    quotes_poll_seconds: Decimal
     poll_seconds: Decimal
     max_request_body_bytes: int
     request_timeout_seconds: Decimal
@@ -696,6 +700,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[api] broker_read_warn_seconds must be above [orders] "
                           "reconcile_interval_seconds and below [orders] "
                           "broker_read_max_age_seconds")
+    for key in ("quotes_write_seconds", "quotes_poll_seconds", "live_quote_max_age_seconds"):
+        if not getattr(api, key) > 0:
+            raise ConfigError(f"[api] {key} must be above 0")
+    if not api.quotes_file.strip():
+        raise ConfigError("[api] quotes_file must name a file")
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:
         raise ConfigError("[strategy] the active strategy cannot also be an observer")

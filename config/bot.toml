@@ -351,6 +351,20 @@ status_stale_seconds = 15
 # broker_read_max_age_seconds); keep it above [orders] reconcile_interval_seconds and below broker_read_max_age_seconds;
 # read by the api server and returned to clients at GET /settings.
 broker_read_warn_seconds = 15
+# Oldest live quote (GET /quotes, by its quoted_at on the bot's clock) the apps show as a live price, in seconds,
+# above 0; an older quote is not shown as live and the apps use the captured one-minute bars or the screener's price
+# instead (one bar long: past it a bar is as current as the quote). Read by the api server and returned to clients
+# at GET /settings.
+live_quote_max_age_seconds = 60
+# Live quotes file the bot writes (the newest valid quote of every symbol on its quote stream) and the API serves at
+# GET /quotes, relative to data_dir; read by the bot's quotes file thread and the api server.
+quotes_file = "quotes.json"
+# Seconds between two looks of the bot's quotes file thread at the stream; it rewrites the file only when a quote
+# changed; above 0. Display only, its own thread, never the trading loop; read by runtime.quotes.
+quotes_write_seconds = 0.5
+# Seconds between two reads of GET /quotes by the apps (returned to them at GET /settings); with quotes_write_seconds
+# this bounds how far a shown live price trails the stream; above 0; read by the api server.
+quotes_poll_seconds = 1
 # Seconds between refreshes of the status page, also returned to clients as a polling hint; read by the api server and the status page.
 poll_seconds = 3
 # Largest accepted command request body in bytes; larger = refused; read by the api server.

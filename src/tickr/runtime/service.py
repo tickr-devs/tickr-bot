@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     from tickr.observers.runner import ObserverSet
     from tickr.runtime.evaluation import Evaluator
     from tickr.runtime.market import MarketRuntime
+    from tickr.runtime.quotes import QuoteFile
     from tickr.runtime.watch import Watch
     from tickr.types import Quote
 
@@ -155,7 +156,8 @@ class Service:
                  evaluator: Evaluator | None = None, entries_off: str | None = None,
                  observers: ObserverSet | None = None,
                  watch: Watch | None = None,
-                 account_reads: AccountReads | None = None) -> None:
+                 account_reads: AccountReads | None = None,
+                 quote_file: QuoteFile | None = None) -> None:
         self.engine = engine
         self.market = market
         self.evaluator = evaluator
@@ -179,6 +181,9 @@ class Service:
         self._account_failing = False  # the last account file write failed (journaled once)
         # Balances, account kind and today's fills, read on their own thread (display only).
         self.account_reads = account_reads
+        # The live quotes file, written on its own thread (display only); the loop journals its
+        # write failures.
+        self.quote_file = quote_file
         # The records disagreed with the broker on the last successful reconciliation
         # (record_reconcile: a disagreement is recorded once two passes in a row show it).
         self._disagreed = False
@@ -811,6 +816,8 @@ class Service:
 
     def write_status(self) -> None:
         api.write_status(self.paths.status, self.status())
+        if self.quote_file is not None:
+            self.quote_file.journal_failures(self.engine)
 
     def write_account(self) -> None:
         """After a successful reconciliation: what it read from the broker (docs/api.md)."""

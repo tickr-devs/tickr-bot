@@ -52,6 +52,7 @@ API_VERSION = 1
 STATUS_SCHEMA_VERSION = 1
 COMMAND_SCHEMA_VERSION = 1
 ACCOUNT_SCHEMA_VERSION = 1
+QUOTES_SCHEMA_VERSION = 1
 
 INBOX = "inbox"
 PROCESSED = "processed"
@@ -465,6 +466,39 @@ class AccountResponseV1:
 
 
 @dataclass(frozen=True)
+class LiveQuote:
+    """The newest L1 quote of one symbol on the bot's quote stream. Display only."""
+
+    symbol: str
+    bid: Decimal
+    ask: Decimal
+    quoted_at: datetime  # the provider's time of the quote
+    received_at: datetime  # when the bot received it
+
+
+@dataclass(frozen=True)
+class QuotesV1:
+    """The bot's live quotes file (runtime/quotes.py): the newest valid quote of every symbol on
+    its stream, rewritten within `[api] quotes_write_seconds` of a change. Written by the bot,
+    never by the API."""
+
+    written_at: datetime
+    quotes: tuple[LiveQuote, ...]  # by symbol
+    schema_version: int = _const(QUOTES_SCHEMA_VERSION)
+
+
+@dataclass(frozen=True)
+class QuotesResponseV1:
+    """GET /quotes: the bot's quotes file as it was last written. A missing or invalid file is
+    503 unavailable instead. Each quote's age (`quoted_at`) says how live it is; the file is
+    rewritten only when a quote changes, so its own age says nothing."""
+
+    served_at: datetime
+    quotes: QuotesV1
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
 class PairedV1:
     """POST /pair on the remote port: the bearer token the phone keeps from now on. Answered
     once per pairing code; the server keeps only the token's SHA-256."""
@@ -850,6 +884,13 @@ class SettingsV1:
     broker_read_max_age_seconds: Decimal
     broker_read_warn_seconds: Decimal
     api_version: int = _const(API_VERSION)
+    # Oldest live quote (GET /quotes, by `quoted_at`) clients show as a live price ([api]
+    # live_quote_max_age_seconds); older ones are not shown as live.
+    # Added after v1 shipped (2026-11-17); null from an older API, and then no quote is live.
+    live_quote_max_age_seconds: Decimal | None = _added_later(None)
+    # Seconds between two client reads of GET /quotes ([api] quotes_poll_seconds). Added after
+    # v1 shipped (2026-11-17); null from an older API, which has no /quotes.
+    quotes_poll_seconds: Decimal | None = _added_later(None)
 
 
 # ---------------------------------------------------------------- jobs (read-only)
@@ -2246,6 +2287,8 @@ SCHEMA_TYPES: dict[str, type] = {
     "performance-v1": PerformanceV1,
     "account-v1": AccountV1,
     "account-response-v1": AccountResponseV1,
+    "quotes-v1": QuotesV1,
+    "quotes-response-v1": QuotesResponseV1,
 }
 
 
@@ -2539,6 +2582,16 @@ def read_status(path: Path | str) -> StatusV1:
 def write_account(path: Path | str, account: AccountV1) -> None:
     """Called by the bot after each successful broker read of positions and open orders."""
     write_atomic(Path(path), dumps(account))
+
+
+def write_quotes(path: Path | str, quotes: QuotesV1) -> None:
+    """Called by the bot's quotes file thread when a quote changed."""
+    write_atomic(Path(path), dumps(quotes))
+
+
+def read_quotes(path: Path | str) -> QuotesV1:
+    """Raises FileNotFoundError when the bot has not written one yet, else ContractError."""
+    return loads(QuotesV1, Path(path).read_bytes())
 
 
 def read_account(path: Path | str) -> AccountV1:

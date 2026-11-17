@@ -399,6 +399,7 @@ _PROSE = _shapes(
     ("pairing_code_wrong", r"the pairing code is not the waiting one"),
     # reads the bot has not written yet, and the Start button (api/server.py, api/botstart.py)
     ("no_account_file", r"the bot has not written an account file"),
+    ("no_quotes_file", r"the bot has not written a quotes file"),
     ("no_start_command", r"no start command is configured on this machine \(\[api\] "
                          r"start_bot_command is empty\): start the bot where it runs"),
     ("bot_not_stopped", r"the bot is (?P<state>\w+): nothing to start"),
@@ -455,6 +456,7 @@ _PROSE = _shapes(
     ("status_file_invalid", r"status file is invalid \((?P<detail>.+)\)"),
     ("status_from_future", r"status file is dated in the future"),
     ("account_file_invalid", r"account file is invalid \((?P<detail>.+)\)"),
+    ("quotes_file_invalid", r"quotes file is invalid \((?P<detail>.+)\)"),
     ("past_day_reconciliation",
      r"only the latest reconciliation is kept; it is not recorded per day"),
     ("past_day_status", r"only the latest status is kept; it is not recorded per day"),

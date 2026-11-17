@@ -147,6 +147,22 @@ def test_broker_read_warning_sits_between_reconcile_and_block(tmp_path, value):
         config.load(_copy(tmp_path, text))
 
 
+@pytest.mark.parametrize("key", ["quotes_write_seconds", "quotes_poll_seconds",
+                                 "live_quote_max_age_seconds"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_live_quote_timings_must_be_above_zero(tmp_path, key, value):
+    """A zero write interval would spin the bot's quotes thread; zero poll or age is meaningless."""
+    text = re.sub(rf"(?m)^{key} = \S+", f"{key} = {value}", BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match=key):
+        config.load(_copy(tmp_path, text))
+
+
+def test_quotes_file_must_be_named(tmp_path):
+    text = re.sub(r'(?m)^quotes_file = \S+', 'quotes_file = ""', BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="quotes_file"):
+        config.load(_copy(tmp_path, text))
+
+
 def test_unknown_environment_refused(tmp_path):
     text = re.sub(r'(?m)^environment = ".*"', 'environment = "staging"', BOT.read_text("utf-8"))
     with pytest.raises(config.ConfigError, match="not one of"):

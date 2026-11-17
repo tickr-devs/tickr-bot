@@ -57,6 +57,7 @@ from tickr.api.contract import (
     ErrorV1,
     PairedV1,
     PendingCommandsV1,
+    QuotesResponseV1,
     RiskSettings,
     SessionSettings,
     SettingsV1,
@@ -136,6 +137,7 @@ class ApiSettings:
     strategies_root: Path  # holds strategies/<folder>/strategy.toml, read by GET /observers
     account_path: Path  # the bot's account-v1 file, served at GET /account
     account_stale_seconds: Decimal
+    quotes_path: Path  # the bot's quotes-v1 file, served at GET /quotes
     simulation: SimulationPaths  # inputs of the observers' simulated day results
     observer_trades_max_rows: int  # most simulated trades per observer at GET /observers
     universe: DiscoverySettings  # the universe filter GET /flow applies to captured passes
@@ -265,6 +267,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         strategies_root=cfg.root,
         account_path=data / api.account_file,
         account_stale_seconds=api.account_stale_seconds,
+        quotes_path=data / api.quotes_file,
         simulation=SimulationPaths.from_config(cfg),
         observer_trades_max_rows=api.observer_trades_max_rows,
         universe=DiscoverySettings.from_config(cfg),
@@ -312,6 +315,8 @@ def shown_settings(cfg: Config) -> SettingsV1:
         poll_seconds=cfg.api.poll_seconds,
         broker_read_max_age_seconds=cfg.orders.broker_read_max_age_seconds,
         broker_read_warn_seconds=cfg.api.broker_read_warn_seconds,
+        live_quote_max_age_seconds=cfg.api.live_quote_max_age_seconds,
+        quotes_poll_seconds=cfg.api.quotes_poll_seconds,
     )
 
 
@@ -406,6 +411,16 @@ class ApiServer(ThreadingHTTPServer):
         return AccountResponseV1(served_at=now, account=account, age_seconds=age,
                                  stale=age > self.settings.account_stale_seconds)
 
+    def quotes_response(self) -> QuotesResponseV1 | ErrorV1:
+        """The bot's quotes-v1 file; an `unavailable` error when it is missing or invalid."""
+        try:
+            quotes = contract.read_quotes(self.settings.quotes_path)
+        except FileNotFoundError:
+            return ErrorV1("unavailable", "the bot has not written a quotes file")
+        except (ContractError, OSError) as exc:
+            return ErrorV1("unavailable", f"quotes file is invalid ({exc})")
+        return QuotesResponseV1(served_at=self.clock(), quotes=quotes)
+
     def start_bot(self) -> BotStartV1 | ErrorV1:
         """POST /commands/start-bot (api/botstart.py), one at a time across both listeners."""
         with self.start_lock:
@@ -494,7 +509,7 @@ _ERROR_CODES = {
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/journal", "/config",
-              "/trades/whatif", "/advisor", "/symbols", "/movers")
+              "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
 HTML_TYPE = "text/html; charset=utf-8"
@@ -677,6 +692,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._recorded_decisions(path)
             elif path == "/account":
                 self._account()
+            elif path == "/quotes":
+                self._quotes()
             elif path == "/chart":
                 self._chart()
             elif path in COMMAND_ROUTES or path == START_BOT:
@@ -916,6 +933,19 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request", str(exc))
             return
         result = self.server.account_response()
+        if isinstance(result, ErrorV1):
+            self._error(result.error, result.cause)
+        else:
+            self._json(200, result)
+
+    def _quotes(self) -> None:
+        """GET /quotes: the newest quote of every symbol on the bot's stream (display only)."""
+        try:
+            _query(urlsplit(self.path).query, frozenset())
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        result = self.server.quotes_response()
         if isinstance(result, ErrorV1):
             self._error(result.error, result.cause)
         else:

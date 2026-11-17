@@ -608,6 +608,7 @@ def _run(path: Path) -> int:
         StreamInbox,
         journal_capture_failed,
     )
+    from tickr.runtime.quotes import QuoteFile
     from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
     from tickr.runtime.watch import ALERT, Watch
 
@@ -636,6 +637,7 @@ def _run(path: Path) -> int:
         watch: Watch | None = None
         account_reads: AccountReads | None = None
         market: MarketRuntime | None = None
+        quote_file: QuoteFile | None = None
         try:
             alerter = Alerter(cfg.alerts, f"Tickr {cfg.environment_name}",
                               NOTIFIER(cfg.alerts), clock=NOW)
@@ -696,13 +698,17 @@ def _run(path: Path) -> int:
             if adapters.display_reads is not None:
                 account_reads = AccountReads(adapters.display_reads,
                                              float(cfg.orders.balance_read_seconds), NOW)
+            # The stream's quotes for the apps, on their own thread (display only).
+            quote_file = QuoteFile(inbox, cfg.root / cfg.run.data_dir / cfg.api.quotes_file,
+                                   float(cfg.api.quotes_write_seconds), NOW)
             bot = service.Service(engine, now=NOW, calendar=calendar, strategy=strategy,
                                   paths=service.ServicePaths.from_config(cfg), market=market,
                                   evaluator=evaluator, entries_off=entries_off,
                                   observers=observers, watch=watch,
-                                  account_reads=account_reads)
+                                  account_reads=account_reads, quote_file=quote_file)
             market.bind()
             adapters.start_stream()
+            quote_file.start()
             if account_reads is not None:
                 account_reads.start()
             clean = bot.run(should_stop=lambda: stop.requested, sleep=SLEEP,
@@ -717,6 +723,7 @@ def _run(path: Path) -> int:
             for step in ((adapters.stop_stream if adapters is not None else None),
                          ((lambda: account_reads.stop(0)) if account_reads is not None
                           else None),
+                         ((lambda: quote_file.stop(0)) if quote_file is not None else None),
                          ((lambda: market.close(discovery_stop)) if market is not None
                           else None),
                          ((lambda: capture.event(BOT_STOP, NOW(), run_id=str(run_id),

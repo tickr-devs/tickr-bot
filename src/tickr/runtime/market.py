@@ -114,6 +114,11 @@ class StreamInbox:
         with self._lock:
             return self._latest.get(symbol)
 
+    def snapshot(self) -> dict[str, Quote]:
+        """A copy of the newest quote of every symbol (for the quotes file thread)."""
+        with self._lock:
+            return dict(self._latest)
+
     def forget(self, symbol: str) -> None:
         with self._lock:
             self._latest.pop(symbol, None)

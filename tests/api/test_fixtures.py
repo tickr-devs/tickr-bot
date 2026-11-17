@@ -75,6 +75,7 @@ from tickr.api.contract import (
     LabVersionV1,
     LatestSizeV1,
     LaunchdJobV1,
+    LiveQuote,
     MoversV1,
     NextSessionV1,
     NightlyFetchJobV1,
@@ -85,6 +86,8 @@ from tickr.api.contract import (
     PairedV1,
     PendingCommandsV1,
     PriceAfterV1,
+    QuotesResponseV1,
+    QuotesV1,
     ReconcileJobV1,
     RiskSettings,
     SessionKind,
@@ -270,7 +273,8 @@ def documents() -> dict[str, object]:
             RiskSettings(Decimal("50"), Decimal("2500"), Decimal("300"), 1, Decimal("5"),
                          Decimal("10")),
             SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL,
-            Decimal("30"), Decimal("15")),
+            Decimal("30"), Decimal("15"), live_quote_max_age_seconds=Decimal("60"),
+            quotes_poll_seconds=Decimal("1")),
         # 10:00 New York on a Monday: the bot runs, its last broker read was 4 s ago.
         "jobs-v1": JobsV1(
             T0, BotState.RUNNING, False, T0.replace(hour=13, minute=12, second=4),
@@ -414,6 +418,14 @@ def documents() -> dict[str, object]:
                                   datetime(2026, 11, 16, 14, 41, 2, 250000, tzinfo=UTC),
                                   "no 1d bars from webull for ABCD in range 1y", ()),
         "account-v1": account(),
+        # ABCD quoted 1 s after T0; EFGH's quote is from a quiet minute.
+        "quotes-response-v1": QuotesResponseV1(T0 + timedelta(seconds=2), QuotesV1(
+            T0 + timedelta(milliseconds=1700), (
+                LiveQuote("ABCD", Decimal("12.50"), Decimal("12.52"), T0 + timedelta(seconds=1),
+                          T0 + timedelta(milliseconds=1200)),
+                LiveQuote("EFGH", Decimal("3.4100"), Decimal("3.4300"),
+                          T0 - timedelta(minutes=2), T0 - timedelta(minutes=2) +
+                          timedelta(milliseconds=300))))),
         "account-v1.mismatch": mismatch,
         "account-response-v1": AccountResponseV1(T0 + timedelta(seconds=4), account(),
                                                  Decimal("4.000"), False),
