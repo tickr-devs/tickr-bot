@@ -128,6 +128,14 @@ def test_stop_held_proof_interval_must_be_positive(tmp_path, value):
         config.load(_copy(tmp_path, text))
 
 
+@pytest.mark.parametrize("value", ["0", "-0.1", "1.5"])
+def test_the_stop_split_tick_share_is_a_share(tmp_path, value):
+    text = re.sub(r"(?m)^stop_split_tick_share = \S+", f"stop_split_tick_share = {value}",
+                  BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="stop_split_tick_share"):
+        config.load(_copy(tmp_path, text))
+
+
 @pytest.mark.parametrize(("key", "value"), [("history_fill_poll_seconds", "2"),
                                           ("history_fill_max_pages", "0"),
                                           ("history_fill_poll_seconds", "5")])

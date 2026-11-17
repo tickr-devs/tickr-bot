@@ -136,6 +136,7 @@ class OrdersConfig:
     max_unprotected_seconds: Decimal
     max_stops_per_trade: int
     stop_listing_polls: int
+    stop_split_tick_share: Decimal
     history_fill_poll_seconds: Decimal
     history_fill_max_pages: int
     detail_unreadable_seconds: Decimal
@@ -711,6 +712,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                               f"and below the bot's bars route limit of [environments.{name}] "
                               f"({bot_count}), or discovery could never read bars")
     orders, api = built["orders"], built["api"]
+    if not 0 < orders.stop_split_tick_share <= 1:
+        raise ConfigError("[orders] stop_split_tick_share must be above 0 and at most 1")
     if orders.history_fill_poll_seconds < orders.detail_poll_seconds \
             or orders.history_fill_max_pages < 1:
         raise ConfigError("[orders] history_fill_poll_seconds must be at least "

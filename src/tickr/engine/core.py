@@ -1627,7 +1627,13 @@ class Engine:
         if (trade.last_stop_failure_at is not None and self.clock() - trade.last_stop_failure_at
                 < float(orders.stop_retry_spacing_seconds)):
             return
-        for quantity in _stop_pieces(trade, covered, target - covered):
+        pieces = _stop_pieces(trade, covered, target - covered)
+        while pieces:
+            quantity = pieces.pop(0)
+            apart = self._apart_by_quantity(trade, quantity, len(pieces))
+            if apart:
+                pieces[:0] = apart
+                quantity = pieces.pop(0)
             with self.store.transaction():
                 cid = self._write_intent(trade.trade_id, Leg.STOP, trade.symbol, Side.SELL,
                                          OrderType.STOP_LOSS, quantity,
@@ -1636,6 +1642,51 @@ class Engine:
             self._send(cid)
             if self.order(cid).send_state is not SendState.ACKNOWLEDGED:
                 return  # the next pass decides again (refusal spacing, unknown outcome)
+
+    def _apart_by_quantity(self, trade: TradeRow, quantity: Decimal,
+                           pending: int) -> list[Decimal]:
+        """A piece that clashes with a live stop of ours (same quantity at the trade's stop
+        price) on a stock where one tick is at least `[orders] stop_split_tick_share` of the
+        stop distance (entry average fill less stop): placed as `quantity` - 1 and 1 at the
+        trade's own stop price instead of a tick higher (Fable, #603 review: a tick is a large
+        part of a 2 % stop under about 5 USD; Webull accepts the same price with another
+        quantity, probe T D1). Only when neither part clashes too and the trade's live stops
+        plus the `pending` pieces and both parts stay within `[orders] max_stops_per_trade`
+        (the flatten bound counts that cap), less what one more observation adds while the
+        entry still works with several slots (`_cap_stops` keeps that room for it); otherwise
+        [] and the price moves a tick
+        (`_distinct_stop_price`). The parts are placed in this order, so the stops placed first
+        still cover exactly the scale-out shares. Journaled when it splits."""
+        price = trade.stop_price
+        if quantity < 2 or not self._stop_clashes(trade.symbol, quantity, price):
+            return []
+        orders = self.orders(trade.trade_id)
+        entry = next(o for o in orders if o.leg is Leg.ENTRY)
+        fill = entry.average_fill_price
+        if fill is None or fill <= price:
+            return []
+        if tick(price) < self.config.orders.stop_split_tick_share * (fill - price):
+            return []
+        parts = [quantity - 1, Decimal(1)]
+        live = sum(1 for o in orders if o.leg is Leg.STOP and o.live)
+        # An entry still working may fill once more after `_cap_stops` cancels it: that
+        # observation's stops (up to STOPS_PER_FILL) must still fit under the cap.
+        room = self.config.orders.max_stops_per_trade - (
+            STOPS_PER_FILL if entry.live and self.config.risk.max_open_positions > 1 else 0)
+        if (live + pending + len(parts) > room
+                or any(self._stop_clashes(trade.symbol, part, price) for part in parts)):
+            return []
+        with self.store.transaction():
+            self.store.append("stop-quantity-split", {
+                "stop": price, "quantity": quantity, "parts": parts, "tick": tick(price),
+                "distance": fill - price}, key=trade.trade_id, run_id=self.run_id)
+        return parts
+
+    def _stop_clashes(self, symbol: str, quantity: Decimal, price: Decimal) -> bool:
+        """A live SELL stop of ours in `symbol` with this quantity and stop price exists."""
+        return any(o.symbol == symbol and o.leg is Leg.STOP and o.side is Side.SELL
+                   and o.live and o.quantity == quantity and o.stop_price == price
+                   for o in self.orders())
 
     def _distinct_stop_price(self, symbol: str, quantity: Decimal, price: Decimal) -> Decimal:
         """`price`, or one valid tick higher per clash, so that the new SELL stop is not

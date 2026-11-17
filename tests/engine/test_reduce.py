@@ -82,6 +82,65 @@ def test_equal_partial_fills_get_distinct_stops_and_no_refusal(store):
     assert e.trade(t).stop_failures == 0
 
 
+def cheap_fills(store, *fills: int, size: int | None = None):
+    """Entry 1.50, stop 1.47 (2 %): one cent is a third of the stop distance. The entry is
+    for `size` shares (default: the fills' sum)."""
+    b = FakeBroker()
+    e = make(store, b)
+    t = e.open_trade("CHP", D(size or sum(fills)), D("1.50"), D("1.47"), D("9"))
+    cid = legs(e, t, Leg.ENTRY)[0].client_order_id
+    for quantity in fills:
+        b.fill(cid, D(quantity), D("1.50"))
+        run(e, 3)
+    return b, e, t
+
+
+def test_on_a_cheap_stock_an_equal_piece_is_told_apart_by_quantity(store):
+    """Fable's #603 case: a second fill of 100 is placed as 99 and 1 at the planned 1.47,
+    not 100 at 1.48 (0.67 % under the entry instead of 2 %)."""
+    b, e, t = cheap_fills(store, 100, 100)
+    stops = legs(e, t, Leg.STOP)
+    assert [(s.quantity, s.stop_price) for s in stops] == [
+        (D(100), D("1.47")), (D(99), D("1.47")), (D(1), D("1.47"))]
+    assert all(e.order(s.client_order_id).verified for s in stops)
+    assert working_stops(b) == D(200) and e.trade(t).stop_failures == 0
+    assert [r.body["parts"] for r in store.journal("stop-quantity-split", t)] == [["99", "1"]]
+    assert not store.journal("stop-price-distinct", "CHP")
+    assert_single_sends(b)
+
+
+def test_while_the_entry_still_works_the_cap_keeps_room_and_the_price_moves(store):
+    """Two equal fills of a larger entry: the entry may fill once more after the cap
+    cancels it, so its stops keep room for that observation: no split, a tick higher, and
+    the last fill still fits under max_stops_per_trade."""
+    assert CFG.risk.max_open_positions > 1
+    b, e, t = cheap_fills(store, 100, 100, size=300)
+    stops = legs(e, t, Leg.STOP)
+    assert [(s.quantity, s.stop_price) for s in stops] == [
+        (D(100), D("1.47")), (D(100), D("1.48"))]
+    assert not store.journal("stop-quantity-split", t)
+
+
+def test_when_the_parts_clash_too_the_price_moves_a_tick(store):
+    b, e, t = cheap_fills(store, 100, 100)
+    assert e._apart_by_quantity(e.trade(t), D(100), 0) == []  # 99 and 1 are taken now
+
+
+def test_where_a_tick_is_small_against_the_stop_the_price_still_moves(store):
+    """10.00 with a 9.80 stop: a cent is 5 % of the distance, below the configured share."""
+    assert D("0.01") < CFG.orders.stop_split_tick_share * D("0.20")
+    b = FakeBroker()
+    e = make(store, b)
+    t = e.open_trade("ABC", D(6), D("10.00"), D("9.80"), D("2"))
+    cid = legs(e, t, Leg.ENTRY)[0].client_order_id
+    for _ in range(2):
+        b.fill(cid, D(3), D(10))
+        run(e, 3)
+    assert [(s.quantity, s.stop_price) for s in legs(e, t, Leg.STOP)] == [
+        (D(3), D("9.80")), (D(3), D("9.81"))]
+    assert not store.journal("stop-quantity-split", t)
+
+
 def test_partial_entry_fills_still_leave_a_boundary_at_the_scale_out(store):
     b = FakeBroker()
     e = make(store, b)

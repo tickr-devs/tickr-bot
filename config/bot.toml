@@ -170,6 +170,12 @@ max_stops_per_trade = 4
 # poll, so a read right after the place and the next one may both miss it: 2; the list is read every poll while a new
 # stop is unverified, and the start-time checks add this to the fills-together bound; read by runtime.launchd.check_timings.
 stop_listing_polls = 2
+# Share of a trade's stop distance (entry average fill less stop) from which one price tick counts as large: a new
+# stop piece identical to a live one (same quantity and price, which Webull refuses as a duplicate) is then placed as
+# quantity - 1 and 1 at the planned price instead of a tick higher (a cent is 0.67 % of a 1.50 USD stock), when both
+# parts are new and fit [orders] max_stops_per_trade; below it, or when they do not, the price moves a tick. 0.1:
+# a 2 % stop under 5 USD; read by the engine.
+stop_split_tick_share = 0.1
 # Seconds between the engine's order-history reads for fills (each up to history_fill_max_pages pages), made only
 # while an entry of ours is working and more orders wait for Detail than [orders] detail_reads_per_step: entries
 # filling together are then all seen by one read instead of one Detail read each (a row counts only when it shows
