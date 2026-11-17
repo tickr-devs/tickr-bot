@@ -20,7 +20,7 @@ On an open market day (half days too: a position after the flatten time is wrong
   old. A pid alone is not proof: after a crash or a reboot it may belong to another process
   (or user), and a hung bot keeps its pid. A missing, unreadable or future-dated status file
   means not running.
-- from `watchdog_restart_before_flatten_seconds` before the flatten time (15:50 ET on a normal
+- from `watchdog_restart_before_flatten_seconds` before the flatten time (15:45 ET on a normal
   day; config refuses a time inside the entry window), a bot that is not running while the
   database shows an open trade is started ONCE a day: the watchdog runs
   `watchdog_restart_command` (launchd's kickstart of the bot job: the same preflight and

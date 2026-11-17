@@ -4,6 +4,7 @@ Newest first. Only decisions that are in force. Each line: date, decision, where
 
 | Date | Decision | Applies to |
 |---|---|---|
+| 2026-11-17 | The session flatten starts 10 minutes before the close (15:50 ET) and the last entry is 20 minutes before it (15:40 ET), so the flatten of every slot (one stop at a time) fits before the close-order cutoff. | config `session`, runtime.launchd.check_timings |
 | 2026-11-17 | Extended-hours protection, three choices (design v2.1, section 9; the rule 2 wording and the numbers are still open). A: when the market has really fallen far under the bot-watched stop, the exit keeps selling lower with the market (it can sell at the bottom of a spike) rather than stop and wait. B1: accepted that while the bot is down or cannot see a live quote outside the regular session nothing at Webull limits the loss, so a trade there can lose its whole (half-size) position, not only its planned loss. B2: an extended-hours trade reserves its whole position value against the daily loss ceiling, not only its planned loss. None of this runs yet: `config.load` refuses both extended sessions. | risk.admission (B2), engine extended exits (A), operations (B1) |
 | 2026-11-17 | A broker stop counts as verified when the open-orders list shows it working as sent, not only when its own Detail read does; one list read verifies every new stop. Absence from the list proves nothing; fills are still sized by Detail. | engine/core.py (`_verify_listed`), spec-v1 section 9 |
 | 2026-11-17 | Production charts need a separate decision before `[chart] webull_enabled` is used there: the API process then holds the app key and secret, which can sign any request, not only market data. Options: charts off in Production, a separate non-listening chart process, or a market-data-only key. In Sandbox the API holds the active environment's app key and secret only (never the account id), and no process it starts gets any credential (owner/Fable, review of #576). | config `chart`, runtime/launchd.py, api |
@@ -42,7 +43,7 @@ Newest first. Only decisions that are in force. Each line: date, decision, where
 | 2026-11-14 | Standing requirements: all numbers in commented config; Sandbox/Production only an environment switch; strategies swappable and versioned; record every signal (taken or not) and all inputs from day one for "what if we had entered" and "what if another strategy" analysis; live observer strategy versions; AI advisor that proposes strategy versions (never applies them). | everything |
 | 2026-11-07 | Planned loss per trade 50 USD. | config `risk` |
 | 2026-10-31 | Per-position notional cap 2,500 USD. | config `risk` |
-| 2026-10-31 | Regular session only for now: last entry about 15:45 ET, everything closed by 15:55 ET. | config `session` |
+| 2026-10-31 | Regular session only for now. | config `session` |
 | 2026-10-28 | Ceiling reached with a position open: keep the position and its stop, block new entries only. | risk |
 | 2026-10-28 | No price floor; protection against thin stocks comes from liquidity rules. Minimum stop distance = max(3 spreads, 0.5 percent of price); closer = refuse. | strategy |
 | 2026-10-23 | No short selling in the first Sandbox cycle. | spec-v1 |

@@ -271,7 +271,7 @@ def test_a_working_entry_is_cancelled_when_its_quote_leaves_the_window(tmp_path,
 def test_working_entries_are_cancelled_at_the_last_entry_time(tmp_path):
     desk = Desk(tmp_path)
     opened(desk)
-    last_entry = datetime(2026, 11, 16, 15, 45, tzinfo=NEW_YORK)
+    last_entry = datetime(2026, 11, 16, 15, 40, tzinfo=NEW_YORK)
     fresh = Quote("ABC", D("10.04"), D("10.05"), D(100), D(100), last_entry, last_entry)
     assert guard(desk, fresh, last_entry - timedelta(seconds=1)) == []
     (cause,) = guard(desk, fresh, last_entry)

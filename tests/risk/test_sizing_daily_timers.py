@@ -74,8 +74,8 @@ def test_daily_invalid_money(bad):
 
 def test_deadlines_normal_day():
     times = deadlines_for(CALENDAR, date(2026, 11, 16), CONFIG.session)
-    assert times.last_entry == datetime(2026, 11, 16, 15, 45, tzinfo=NEW_YORK)
-    assert times.flatten == datetime(2026, 11, 16, 15, 55, tzinfo=NEW_YORK)
+    assert times.last_entry == datetime(2026, 11, 16, 15, 40, tzinfo=NEW_YORK)
+    assert times.flatten == datetime(2026, 11, 16, 15, 50, tzinfo=NEW_YORK)
 
 
 def test_deadlines_half_day():

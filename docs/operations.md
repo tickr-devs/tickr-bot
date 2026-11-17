@@ -628,7 +628,7 @@ measured (`fill_to_observed_seconds` is null). Only the first fill of a trade is
 
 ## End of the day
 
-`[session] flatten_grace_seconds` after the flatten time (15:55 ET on a normal day), the bot
+`[session] flatten_grace_seconds` after the flatten time (15:50 ET on a normal day), the bot
 checks the latest broker reads (positions and open orders read after the flatten time, never
 our records alone) and journals one `day-end` row per trading day: `broker_flat`,
 `own_positions`, `own_open_orders`, `trades_today`, `trades_closed`, `open_trades`, `agree`
@@ -692,7 +692,7 @@ stop with exit 4 and print the fence.
 ## Watchdog
 
 The bot's own day-end check dies with the bot. The protective stop is a DAY order and launchd
-never relaunches a crashed bot, so after a crash nothing would flatten at 15:55 ET and the
+never relaunches a crashed bot, so after a crash nothing would flatten at 15:50 ET and the
 position would go overnight without a broker-side stop. The watchdog job (`python -m tickr.runtime watchdog`)
 is a separate process that covers this:
 
@@ -707,7 +707,7 @@ is a separate process that covers this:
   day-end check and before the close. Started late (the Mac woke after these times), it checks
   once at once.
 - One restart a day (below): from `[runtime] watchdog_restart_before_flatten_seconds` before
-  the flatten time (15:50 ET on a normal day), if the bot is down while its database shows an
+  the flatten time (15:45 ET on a normal day), if the bot is down while its database shows an
   open trade, the watchdog starts the bot job once. It still sends nothing itself.
 - Every check and alert is one JSON line in `data/watchdog.jsonl` (`[runtime]
   watchdog_journal_file`) and in `~/Library/Logs/Tickr/watchdog.log`.
@@ -745,7 +745,7 @@ open trade. Running means both: its lock file names a live process, and `data/st
 (written every loop pass) is at most `[runtime] watchdog_status_stale_seconds` old. The text
 says which failed: "no live pid in its lock file" (crashed or stopped), "status file older
 than ..." (hung, or the pid now belongs to another process after a crash or reboot), "no status
-file" or "status file unreadable". Nothing will flatten that trade at 15:55 ET.
+file" or "status file unreadable". Nothing will flatten that trade at 15:50 ET.
 A mid-session restart of the bot can raise this alert once while the new bot starts and
 recovers (no live pid, or a status file not yet rewritten); if the next check is quiet and
 `data/status.json` is fresh again, the bot is back.
@@ -754,7 +754,7 @@ recovers (no live pid, or a status file not yet rewritten); if the next check is
 2. Close the position by hand, or keep it with its stop and close it before 16:00 ET yourself.
 3. Do not restart the bot over an open position without reading the bot log; startup
    reconciles first, but you decide. If you do nothing, the watchdog starts the bot job once
-   at 15:50 ET (below).
+   at 15:45 ET (below).
 
 ### One restart a day: `watchdog-restarted-bot`
 

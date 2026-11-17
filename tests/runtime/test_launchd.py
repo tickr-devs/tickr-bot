@@ -173,7 +173,7 @@ def test_flatten_grace_must_cover_a_reconcile_pass(config_path):
         launchd.check_timings(cfg)
 
 
-@pytest.mark.parametrize("value", ["300", "-1"])
+@pytest.mark.parametrize("value", ["600", "-1"])
 def test_close_order_cutoff_must_leave_the_flatten_its_close(config_path, value):
     text = re.sub(r"(?m)^close_order_cutoff_seconds = .*$",
                   f"close_order_cutoff_seconds = {value}", config_path.read_text("utf-8"))
@@ -208,7 +208,7 @@ def test_watchdog_job_scheduled_and_both_long_jobs_keep_the_mac_awake(config_pat
 
 @pytest.mark.parametrize("key,value", [
     ("watchdog_after_flatten_seconds", "120"),   # not above flatten_grace_seconds
-    ("watchdog_after_flatten_seconds", "260"),   # + before_close reaches the close
+    ("watchdog_after_flatten_seconds", "550"),   # + before_close reaches the close
     ("watchdog_before_close_seconds", "0"),
     ("watchdog_status_stale_seconds", "10"),     # not above reconcile_interval_seconds
     ("watchdog_status_stale_seconds", "3"),      # not above detail_poll_seconds

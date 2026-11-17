@@ -121,13 +121,13 @@ In the apps (they read the bot's local API):
 - When a trade opens: within `[orders] max_unprotected_seconds` (30 s) the position shows a
   verified stop, and the Webull app shows the position and one working SELL stop. An
   `unprotected-position` alert means: check the app now.
-- 15:45 last entry, 15:55 the bot closes what is open. After 16:00 the account is flat and the
+- 15:40 last entry, 15:50 the bot closes what is open. After 16:00 the account is flat and the
   watchdog has sent no alert.
 
 In the Webull app, a few times in the day: positions and working orders match what the apps show.
 
 **Never buy or sell by hand a symbol the bot holds.** If foreign shares turn up in the bot's
-symbol, the bot raises `quantity-mismatch`, and at its exit or the 15:55 flatten it sells
+symbol, the bot raises `quantity-mismatch`, and at its exit or the 15:50 flatten it sells
 exactly its own quantity and never touches the extra shares. The trade then stays open in the
 apps until the account is flat in that symbol: close the extra shares by hand in the Webull
 app and confirm no position and no working order is left.
@@ -182,7 +182,7 @@ limit of 30 requests per 60 s per route that the bot uses.
   order (run it while the bot is flat: if the second client breaks the bot's broker access,
   nothing is then open). That check is made once, at the start, so the best time is outside
   the entry window. On Monday the bot starts after the manual probes, so: after the last
-  entry at 15:45.
+  entry at 15:40.
 - Both write their evidence to `data/probes/<date>/`: paste `summary.json` into the project
   chat. Until both are recorded for an environment, `[chart] webull_enabled` goes back to
   `false` there after the probe.
@@ -194,7 +194,7 @@ that nothing in them identifies the account.
 
 ## Stopping safely
 
-- Normal end: do nothing until the close. The bot flattens at 15:55 and records its day-end
+- Normal end: do nothing until the close. The bot flattens at 15:50 and records its day-end
   check; once the apps and the Webull app show no position and no working order, stop the bot
   from Terminal as below.
 - Stop entries only, keep protecting: the entry-stop command in the apps.

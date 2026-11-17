@@ -221,7 +221,7 @@ chat at the end; an agent then writes webull-facts.md and the fixtures from them
    flat after the flatten time). While a manual trade is open it alerts
    `bot-down-with-open-trade` ("no live pid in its lock file" or a stale status file):
    expected on a probe day, because the manual command is not the bot. If a manual trade is
-   still open at 15:50 ET it also tries its one restart of the bot job; with the job booted out
+   still open at 15:45 ET it also tries its one restart of the bot job; with the job booted out
    that fails and alerts `watchdog-restart-failed`: close the manual trade before then.
 2. Terminal A, as in one-time setup: `cd`, `source`, load the env file, `tickr check-config`.
    Then `tickr status`: it must show `bot: not running`. (`status` does not list fences;
