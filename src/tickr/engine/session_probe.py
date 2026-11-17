@@ -64,6 +64,7 @@ from tickr.types import (
     Side,
     TimeInForce,
     TradingSession,
+    TrailingType,
 )
 
 # A US ticker as the probe accepts it (letters, digits, one class dot); protocol shape.
@@ -334,13 +335,14 @@ class Probe:
     def request(self, cid: str, side: Side, order_type: OrderType, quantity: Decimal,
                 *, session: TradingSession | None = None, limit: Decimal | None = None,
                 stop: Decimal | None = None,
-                trailing_step: Decimal | None = None) -> OrderRequest:
+                trailing_step: Decimal | None = None,
+                trailing_type: TrailingType = TrailingType.PERCENTAGE) -> OrderRequest:
         return OrderRequest(client_order_id=cid, symbol=self.symbol, side=side,
                             order_type=order_type, quantity=quantity,
                             time_in_force=TimeInForce.DAY,
                             session=self.order_session if session is None else session,
                             limit_price=limit, stop_price=stop,
-                            trailing_stop_step=trailing_step)
+                            trailing_stop_step=trailing_step, trailing_type=trailing_type)
 
     # -- steps ------------------------------------------------------------------------------
 

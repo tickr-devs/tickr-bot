@@ -278,9 +278,14 @@ attached_stop_wait_seconds = 30
 # trailing_stop_step = this / 100, the SDK sample's ratio form, and the stop price Detail shows says which unit Webull
 # reads; read by the probe-trailing command.
 trailing_wide_percent = 20
-# probe-trailing: the tight trailing stop's distance, percent, so it triggers within trailing_trigger_seconds on an active
-# stock; sent only once the wide stop proved the unit; read by the probe-trailing command.
-trailing_tight_percent = 0.5
+# probe-trailing (T6, T7): tight trailing stop distances, percent, tried smallest first until Webull accepts one (0.5
+# sent as the ratio 0.005 was refused with OPENAPI_PARAM_ERR on 2026-11-17); the accepted one should trigger within
+# trailing_trigger_seconds on an active stock; sent only once the wide stop proved the unit; read by the probe-trailing
+# command.
+trailing_tight_percents = [0.5, 1, 2, 3]
+# probe-trailing (A3): AMOUNT trailing stop steps, USD, tried smallest first until Webull accepts one, which is cancelled
+# at once; the smallest accepted is the answer; read by the probe-trailing command.
+trailing_amount_steps_usd = [0.01, 0.02, 0.05, 0.1]
 # probe-trailing: seconds the wide trailing stop is watched (Detail and a quote each [orders] detail_poll_seconds) for
 # its stop price and whether it rises with the price, before it is cancelled; read by the probe-trailing command.
 trailing_observe_seconds = 120

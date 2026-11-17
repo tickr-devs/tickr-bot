@@ -177,7 +177,9 @@ the bot about several fills at once) how long a new stop takes to be listed in o
 for this answer). H1 and L1 only read. Questions (docs/webull-facts.md, "T"): T1 is a SELL TRAILING_STOP_LOSS
 (PERCENTAGE, DAY, CORE) accepted; T2 which unit `trailing_stop_step` is read in (0.2 = 20 % or
 0.2 %), from the stop price Detail shows; T3 does that stop price rise with the price; T4 is it
-listed in open orders; T5 does a cancel end it; T6 does a tight one trigger. Details:
+listed in open orders; T5 does a cancel end it; T6 does a tight one trigger; T7 the smallest
+percent accepted; A1-A3 the same with `trailing_type` AMOUNT (a USD step) and the smallest amount
+accepted; D1 whether a second stop at the same price with another quantity is accepted. Details:
 `src/tickr/engine/trailing_probe.py`.
 
 When: in the regular session, between `[probe] window_start` and `window_end`, account flat and

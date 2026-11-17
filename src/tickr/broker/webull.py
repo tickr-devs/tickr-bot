@@ -108,8 +108,7 @@ ORDER_COMBO_TYPE = "NORMAL"
 ORDER_ENTRUST_TYPE = "QTY"
 ORDER_INSTRUMENT_TYPE = "EQUITY"
 ORDER_MARKET = "US"
-# Trailing stop parts, from the SDK v3 sample only (NOT probed: engine/trailing_probe.py).
-ORDER_TRAILING_TYPE = "PERCENTAGE"
+# Trailing stop trigger, from the SDK v3 sample (probe T, 2026-11-17: accepted with PERCENTAGE).
 ORDER_TRIGGER_PRICE_TYPE = "PRICE"
 
 SDK_API_VERSION = "v3"
@@ -695,8 +694,9 @@ def build_order_body(request: OrderRequest, client_order_id_max_length: int,
     if request.stop_price is not None:
         body["stop_price"] = _wire_decimal(request.stop_price)
     if request.trailing_stop_step is not None:
-        # SDK v3 sample (trade_client_v3.py, trailing stop loss): PERCENTAGE step, PRICE trigger.
-        body["trailing_type"] = ORDER_TRAILING_TYPE
+        # SDK v3 sample (trade_client_v3.py, trailing stop loss), PRICE trigger; the type is
+        # the SDK's TrailingType (PERCENTAGE or AMOUNT).
+        body["trailing_type"] = request.trailing_type.value
         body["trailing_stop_step"] = _wire_decimal(request.trailing_stop_step)
         body["trigger_price_type"] = ORDER_TRIGGER_PRICE_TYPE
     return body

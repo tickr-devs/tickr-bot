@@ -92,6 +92,14 @@ TERMINAL_STATES = frozenset(
 )
 
 
+class TrailingType(StrEnum):
+    """How Webull reads a trailing stop's `trailing_stop_step` (SDK `TrailingType`):
+    PERCENTAGE as a ratio of the price (0.2 = 20 %, probe T2, 2026-11-17), AMOUNT in USD."""
+
+    PERCENTAGE = "PERCENTAGE"
+    AMOUNT = "AMOUNT"
+
+
 @dataclass(frozen=True)
 class OrderRequest:
     client_order_id: str
@@ -103,9 +111,10 @@ class OrderRequest:
     session: TradingSession
     limit_price: Decimal | None = None
     stop_price: Decimal | None = None
-    # TRAILING_STOP_LOSS only: Webull's `trailing_stop_step` with `trailing_type` PERCENTAGE,
-    # sent as given; whether 0.2 means 20 % or 0.2 % is what the trailing probe answers.
+    # TRAILING_STOP_LOSS only: Webull's `trailing_stop_step`, sent as given, read in the unit
+    # `trailing_type` names.
     trailing_stop_step: Decimal | None = None
+    trailing_type: TrailingType = TrailingType.PERCENTAGE
 
 
 @dataclass(frozen=True)

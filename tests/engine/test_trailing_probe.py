@@ -24,12 +24,42 @@ from tickr.types import (
     Side,
     TimeInForce,
     TradingSession,
+    TrailingType,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 CFG = config.load(ROOT / "config" / "bot.toml")
 NOON = datetime(2026, 11, 16, 17, 0, tzinfo=UTC)  # 12:00 ET, Monday
 SYMBOL = "ABCD"
+
+
+DUPLICATE = "OPENAPI_ORDER_RISK_RULE_DUPLICATE_ORDER_CHECK"
+
+
+class Duplicates(FakeBroker):
+    """Refuses an order like a working one, as Webull did on 2026-11-17: "identical" = same
+    symbol, side, type, quantity and stop price; "price" = same stop price whatever the
+    quantity (the unknown D1 asks about)."""
+
+    def __init__(self, rule: str, smallest: tuple[Decimal, Decimal]) -> None:
+        super().__init__()
+        self.rule = rule
+        self.smallest = dict(zip((TrailingType.PERCENTAGE, TrailingType.AMOUNT), smallest,
+                                 strict=True))
+
+    def place(self, request):
+        step = request.trailing_stop_step
+        if step is not None and step < self.smallest[request.trailing_type]:
+            raise Refused("OPENAPI_PARAM_ERR")
+        for order in self.orders.values():
+            if order.state.terminal or order.order_type is not request.order_type:
+                continue
+            if (order.symbol, order.side, order.stop_price) != (
+                    request.symbol, request.side, request.stop_price) or order.stop_price is None:
+                continue
+            if self.rule == "price" or order.quantity == request.quantity:
+                raise Refused(DUPLICATE)
+        return super().place(request)
 
 
 class World:
@@ -43,9 +73,10 @@ class World:
     def __init__(self, tmp_path: Path, *, unit: str | None = tp.UNIT_RATIO,
                  drift: Decimal = Decimal("0.01"), fill_entry: bool = True,
                  position_lag_polls: int = 0, history_lag_polls: int | None = 0,
-                 listing_lag_polls: int = 0) -> None:
+                 listing_lag_polls: int = 0, duplicates: str = "identical",
+                 smallest: tuple[Decimal, Decimal] = (Decimal(0), Decimal(0))) -> None:
         self.at = NOON
-        self.broker = FakeBroker()
+        self.broker = Duplicates(duplicates, smallest)
         self.market = FakeMarketData()
         self.bid, self.ask = Decimal("10.00"), Decimal("10.02")
         self.unit, self.drift, self.fill_entry = unit, drift, fill_entry
@@ -104,9 +135,12 @@ class World:
             elif order.order_type is OrderType.TRAILING_STOP_LOSS:
                 step = request.trailing_stop_step
                 assert step is not None
-                distance = step if self.unit == tp.UNIT_RATIO else step / 100
                 high = self.high[cid] = max(self.high.get(cid, self.bid), self.bid)
-                stop = (high * (1 - distance)).quantize(Decimal("0.01"))
+                if request.trailing_type is TrailingType.AMOUNT:
+                    stop = high - step
+                else:
+                    distance = step if self.unit == tp.UNIT_RATIO else step / 100
+                    stop = (high * (1 - distance)).quantize(Decimal("0.01"))
                 if self.bid <= stop:
                     b.fill(cid, order.quantity, self.bid)
                 elif self.unit is not None:
@@ -165,6 +199,7 @@ def test_rising_price_answers_every_question_and_ends_flat(tmp_path: Path) -> No
     assert summary["t1_accepted"].startswith("accepted")
     assert summary["t2_unit"] == tp.UNIT_RATIO
     assert summary["t3_follows"] == tp.FOLLOWED
+    assert summary["t3_tight_follows"] == tp.FOLLOWED
     assert summary["t4_open_orders"] == tp.LISTED
     assert summary["t5_cancel"] == tp.CANCELLED
     assert summary["p1_positions_lag_seconds"] == 0 and "poll-granular" in summary["p1_note"]
@@ -175,9 +210,12 @@ def test_rising_price_answers_every_question_and_ends_flat(tmp_path: Path) -> No
     (logged,) = [row for row in fields if row["step"] == "trailing-row-fields"]
     assert "stop_price" in logged["fields"]
     assert summary["close"] == "closed" and Decimal(summary["broker_after"]["position"]) == 0
-    wide, tight = [r for r in world.broker.sent if r.order_type is OrderType.TRAILING_STOP_LOSS]
+    wide, tight = [r for r in world.broker.sent if r.order_type is OrderType.TRAILING_STOP_LOSS
+                   and r.trailing_type is TrailingType.PERCENTAGE]
     assert (wide.trailing_stop_step, tight.trailing_stop_step) == (Decimal("0.2"),
                                                                     Decimal("0.005"))
+    assert summary["a1_accepted"].endswith(" USD)")
+    assert summary["a2_distance"].startswith("usd")
     assert all(r.session is TradingSession.CORE for r in world.broker.sent)
 
 
@@ -201,8 +239,9 @@ def test_percent_unit_is_found_and_the_tight_step_sent_in_it(tmp_path: Path) -> 
     world = World(tmp_path, unit=tp.UNIT_PERCENT)
     _, summary = world.run()
     assert summary["t2_unit"] == tp.UNIT_PERCENT
-    tight = [r for r in world.broker.sent if r.order_type is OrderType.TRAILING_STOP_LOSS][-1]
-    assert tight.trailing_stop_step == CFG.probe.trailing_tight_percent
+    tight = [r for r in world.broker.sent if r.order_type is OrderType.TRAILING_STOP_LOSS
+             and r.trailing_type is TrailingType.PERCENTAGE][-1]
+    assert tight.trailing_stop_step == CFG.probe.trailing_tight_percents[0]
 
 
 def test_no_stop_price_in_detail_skips_the_trigger_test(tmp_path: Path) -> None:
@@ -272,15 +311,44 @@ def test_stops_placed_together_are_listed_measured_and_cancelled(tmp_path: Path,
     world = World(tmp_path, listing_lag_polls=polls)
     code, summary = world.run()
     n = CFG.probe.listing_stops
-    stops = [r for r in world.broker.sent if r.order_type is OrderType.STOP_LOSS]
+    stops = [r for r in world.broker.sent if r.order_type is OrderType.STOP_LOSS][:n]
     assert len(stops) == n and all(r.side is Side.BUY for r in stops)
+    assert len({r.stop_price for r in stops}) == n  # one tick apart: none is a duplicate
     assert all(r.stop_price > Decimal("10.02") * (1 + CFG.probe.listing_far_percent / 100)
                for r in stops)
-    assert world.broker.sent.index(stops[-1]) == n - 1  # before the entry
+    entry = next(r for r in world.broker.sent if r.order_type is OrderType.LIMIT)
+    assert world.broker.sent.index(stops[-1]) < world.broker.sent.index(entry)
     assert summary["l2_listed_after_seconds"] == [
         (polls + 1) * float(CFG.orders.detail_poll_seconds)] * n
     assert all(world.broker.orders[r.client_order_id].state is OrderState.CANCELLED
                for r in stops)
+    assert code == tp.EXIT_ANSWERED and summary["close"] == "closed"
+
+
+@pytest.mark.parametrize("rule, answer", [("identical", "accepted"), ("price", "refused")])
+def test_d1_says_whether_a_stop_differing_only_in_quantity_is_accepted(tmp_path: Path, rule,
+                                                                       answer) -> None:
+    world = World(tmp_path, duplicates=rule)
+    code, summary = world.run()
+    assert summary["d1_same_price"].startswith(answer)
+    same = [r for r in world.broker.sent if r.order_type is OrderType.STOP_LOSS][
+        CFG.probe.listing_stops:]
+    sent = [Decimal(CFG.probe.quantity), 2 * Decimal(CFG.probe.quantity)]
+    assert [r.quantity for r in same] == (sent if answer == "accepted" else sent[:1])
+    assert len({r.stop_price for r in same}) == 1
+    assert all(o.state.terminal for o in world.broker.orders.values())
+    assert code == tp.EXIT_ANSWERED and summary["close"] == "closed"
+
+
+def test_the_smallest_accepted_steps_are_found_smallest_first(tmp_path: Path) -> None:
+    """T7 and A3: steps Webull refuses (as it refused 0.005 on 2026-11-17) are recorded and
+    the next is tried; the first accepted is the answer; nothing is left working."""
+    world = World(tmp_path, smallest=(Decimal("0.01"), Decimal("0.05")))
+    code, summary = world.run()
+    assert summary["t7_smallest_percent"].startswith("1 %; refused: ['0.005: refused']")
+    assert summary["a3_smallest_amount"].startswith(
+        "0.05 USD; refused: ['0.01: refused', '0.02: refused']")
+    assert all(o.state.terminal for o in world.broker.orders.values())
     assert code == tp.EXIT_ANSWERED and summary["close"] == "closed"
 
 
@@ -322,6 +390,14 @@ def test_order_body_matches_the_sdk_sample_and_refuses_misfits() -> None:
                 replace(request, trailing_stop_step=Decimal(0))):
         with pytest.raises(Refused):
             build_order_body(bad, CFG.orders.client_order_id_max_length)
+
+
+def test_an_amount_trailing_stop_is_sent_as_amount() -> None:
+    request = OrderRequest("probe-x1", SYMBOL, Side.SELL, OrderType.TRAILING_STOP_LOSS,
+                           Decimal(1), TimeInForce.DAY, TradingSession.CORE,
+                           trailing_stop_step=Decimal("0.05"), trailing_type=TrailingType.AMOUNT)
+    body = build_order_body(request, CFG.orders.client_order_id_max_length)
+    assert (body["trailing_type"], body["trailing_stop_step"]) == ("AMOUNT", "0.05")
 
 
 def test_a_trailing_row_is_read_with_its_step() -> None:

@@ -11,10 +11,16 @@ DAY, session CORE.
 0. Listing of stops placed together (L2, before the entry, account flat):
    `[probe] listing_stops` BUY STOP_LOSS DAY CORE orders of `[probe] quantity` share(s), each
    `[probe] listing_far_percent` above the ask so none triggers (a buy stop needs no shares, so
-   the probe's one share is not over-reserved), sent back to back in one poll. The open orders
+   the probe's one share is not over-reserved), each one tick above the one before (Webull
+   refuses an order identical to a working one, 417 OPENAPI_ORDER_RISK_RULE_DUPLICATE_ORDER_CHECK,
+   2026-11-17), sent back to back in one poll. The open orders
    are read each poll for `[probe] listing_wait_seconds`: per stop, seconds from its place
    answer to the first read listing it. Then each is cancelled and must show CANCELLED; the
    bot's bulk stop check and its fills-together bound rely on this delay.
+   D1 (same step): two more far BUY stops at one price, of `[probe] quantity` and twice that:
+   does Webull accept a stop that differs from a working one only in quantity (the bot's stops
+   for one trade share a price; equal quantities at one price are refused, see above). Both
+   are then cancelled and proven over.
 1. Entry: a BUY LIMIT DAY CORE for `[probe] quantity` shares at the ask. Unfilled within
    `[probe] entry_wait_seconds`, it is cancelled and the probe ends. While it waits, Detail
    and the positions are read each poll (P1: how long after Detail shows a fill the positions
@@ -33,9 +39,15 @@ DAY, session CORE.
    seconds from the place answer to the first listing; the bot verifies new stops from that
    list). Then it is cancelled and must show CANCELLED (T5); a trigger meanwhile is recorded
    as such.
-3. Tight trailing stop (T6 triggers): only when T2 found the unit, a SELL TRAILING_STOP_LOSS
-   with `[probe] trailing_tight_percent` in that unit, watched for
-   `[probe] trailing_trigger_seconds`; still working afterwards, it is cancelled.
+2b. Amount trailing stop (A1 accepted, A2 the stop lies `trailing_stop_step` USD under the
+   price): a SELL TRAILING_STOP_LOSS with `trailing_type` AMOUNT and a step of the bid times
+   `[probe] trailing_wide_percent` in USD, watched like the wide one, then cancelled.
+3. Tight trailing stop (T6 triggers; T7 the smallest percent Webull accepts): only when T2
+   found the unit, `[probe] trailing_tight_percents` in that unit, smallest first, until one
+   is accepted (0.5 % sent as 0.005 was refused with OPENAPI_PARAM_ERR on 2026-11-17); that
+   one is watched for `[probe] trailing_trigger_seconds`, and cancelled if still working.
+3b. Smallest amount (A3): if a share is still held, `[probe] trailing_amount_steps_usd`, smallest
+   first, until one is accepted; it is cancelled at once (a trigger meanwhile is recorded).
 4. Close: whatever is still held is sold with a LIMIT DAY CORE `[probe] trailing_close_percent`
    below the bid, watched for `[orders] max_exit_seconds`; once Detail shows it filled, the
    history is read each poll for H1 on a sell. Not filled: the probe says so loudly and exits
@@ -56,7 +68,7 @@ Evidence: `<data_dir>/<[probe] evidence_dir>/<NY date>/trailing-<UTC time>/steps
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -93,7 +105,15 @@ from tickr.engine.session_probe import (
     require_flat,
     tick,
 )
-from tickr.types import OrderDetail, OrderState, OrderType, Quote, Side, TradingSession
+from tickr.types import (
+    OrderDetail,
+    OrderState,
+    OrderType,
+    Quote,
+    Side,
+    TradingSession,
+    TrailingType,
+)
 
 CORE = TradingSession.CORE
 
@@ -115,6 +135,7 @@ TRIGGERED = "triggered"
 NOT_TRIGGERED = "not-triggered"
 
 TRIGGER_STATES = (OrderState.FILLED, OrderState.PARTIALLY_FILLED)
+CENT = Decimal("0.01")  # USD cents: the AMOUNT step's precision
 
 
 def unit_of(step: Decimal, bid: Decimal, stop: Decimal | None, factor: Decimal) -> str:
@@ -134,6 +155,15 @@ def unit_of(step: Decimal, bid: Decimal, stop: Decimal | None, factor: Decimal) 
         if ratio <= factor:
             fits.append((ratio, unit))
     return min(fits)[1] if fits else UNIT_UNCLEAR
+
+
+def follows(seen: list[tuple[Decimal, Decimal]]) -> str:
+    """T3 from (bid, stop price) per poll: did the stop rise when the bid rose above where it
+    was at the first read."""
+    bid, stop = seen[0]
+    if max(s for _, s in seen) > stop:
+        return FOLLOWED
+    return NOT_FOLLOWED if max(b for b, _ in seen) > bid else PRICE_DID_NOT_RISE
 
 
 @dataclass
@@ -160,6 +190,8 @@ class TrailingProbe(Probe):
     listed_together: list[float | None] | None = None
     # L2: the listing stops that filled (should be none: they lie far above the ask).
     listing_filled: list[str] | None = None
+    # D1: the same-price stops placed, until each is finished.
+    _same_open: list[tuple[str, str, OrderDetail | None, bool]] = field(default_factory=list)
     # H1 for the entry, until measured: (client order id, filled quantity, when Detail showed it).
     _entry_pending: tuple[str, Decimal, datetime] | None = None
 
@@ -193,7 +225,7 @@ class TrailingProbe(Probe):
             cid = self._cid("listing")
             sent = self.place(f"listing-{n}", self.request(
                 cid, Side.BUY, OrderType.STOP_LOSS, Decimal(probe.quantity), session=CORE,
-                stop=stop))
+                stop=stop + n * tick(stop)))
             if sent in (REFUSED, NOT_SENT):
                 break
             placed.append((cid, self.now()))
@@ -226,6 +258,39 @@ class TrailingProbe(Probe):
         if self.listing_filled:
             verdict += f"; {', '.join(self.listing_filled)}"
         self.out(f"l2_listing: {verdict}")
+        return verdict
+
+    def same_price(self, quote: Quote) -> str:
+        """D1: a far BUY stop, then a second at the same price for twice the quantity; the
+        second's fate (accepted, or refused as a duplicate) is the answer. Both are then
+        cancelled and proven over."""
+        probe = self.config.probe
+        stop = floor_tick(quote.ask * (1 + probe.listing_far_percent / PERCENT))
+        stop += tick(stop)
+        rows: list[OrderDetail | None] = []
+        poll = float(self.config.orders.detail_poll_seconds)
+        for n, quantity in enumerate((Decimal(probe.quantity), Decimal(probe.quantity) * 2)):
+            name = f"same-price-{n}"
+            cid = self._cid("same")
+            sent = self.place(name, self.request(cid, Side.BUY, OrderType.STOP_LOSS, quantity,
+                                                 session=CORE, stop=stop))
+            if sent in (REFUSED, NOT_SENT):
+                rows.append(None)
+                if n == 0:
+                    break
+                continue
+            row, absent = self.settle(name, cid, poll)
+            rows.append(row)
+            self._same_open.append((name, cid, row, absent))
+        for name, cid, row, absent in self._same_open:
+            self.finish(name, cid, row, absent)
+        if len(rows) < 2 or rows[0] is None:
+            verdict = f"{NOT_TESTED} (the first stop was not accepted)"
+        elif rows[1] is None:
+            verdict = "refused: a stop at the same price with another quantity is a duplicate"
+        else:
+            verdict = f"accepted ({rows[1].raw_status}): the quantity tells stops apart"
+        self.out(f"d1_same_price: {verdict}")
         return verdict
 
     def _history_shows(self, name: str, cid: str, filled: Decimal) -> bool:
@@ -346,14 +411,38 @@ class TrailingProbe(Probe):
                 self._entry_pending = (cid, row.filled_quantity, detail_at)
         return row, row is None and absent >= self.config.orders.unknown_absent_reads
 
-    def _send_trailing(self, name: str, step: Decimal) -> tuple[str, str | None]:
+    def _send_trailing(self, name: str, step: Decimal,
+                       kind: TrailingType = TrailingType.PERCENTAGE) -> tuple[str, str | None]:
         held = self.held()
         if held <= 0:
             return NOT_TESTED, None
         cid = self._cid(name)
         sent = self.place(name, self.request(cid, Side.SELL, OrderType.TRAILING_STOP_LOSS, held,
-                                             session=CORE, trailing_step=step))
+                                             session=CORE, trailing_step=step,
+                                             trailing_type=kind))
         return sent, (None if sent in (REFUSED, NOT_SENT) else cid)
+
+    def _first_accepted(self, name: str, steps: list[Decimal], kind: TrailingType,
+                        ) -> tuple[Decimal | None, str | None, list[str]]:
+        """Each step in turn, until Webull accepts one: a refusal, or an unknown answer that
+        Detail proves created nothing (`[orders] unknown_absent_reads` "not present" answers),
+        moves on. Returns the accepted step and its client order id (None, None when none was
+        accepted or no share is held) and one line per step refused."""
+        refused: list[str] = []
+        poll = float(self.config.orders.detail_poll_seconds)
+        for step in steps:
+            sent, cid = self._send_trailing(name, step, kind)
+            if sent == NOT_TESTED:
+                return None, None, refused
+            if cid is None:
+                refused.append(f"{step}: {sent}")
+                continue
+            row, absent = self.settle(name, cid, poll * self.config.orders.unknown_absent_reads)
+            if row is None and absent:
+                refused.append(f"{step}: not created")
+                continue
+            return step, cid, refused
+        return None, None, refused
 
     def _watch(self, name: str, cid: str, seconds: float, *, listing: bool = False,
                ) -> tuple[OrderDetail | None, int, list[tuple[Decimal, Decimal]]]:
@@ -420,9 +509,7 @@ class TrailingProbe(Probe):
         if seen:
             bid, stop = seen[0]
             answers["t2_unit"] = unit_of(step, bid, stop, self.config.probe.trailing_unit_factor)
-            rose = max(b for b, _ in seen) > bid
-            answers["t3_follows"] = (FOLLOWED if max(s for _, s in seen) > stop
-                                     else NOT_FOLLOWED if rose else PRICE_DID_NOT_RISE)
+            answers["t3_follows"] = follows(seen)
         elif row is not None:
             answers["t2_unit"] = UNIT_NOT_SHOWN
         triggered = row is not None and row.state in TRIGGER_STATES
@@ -440,18 +527,29 @@ class TrailingProbe(Probe):
             self.out(f"{key}: {value}")
         return answers
 
-    def tight(self, unit: str) -> str:
-        """T6: with the unit known, a tight trailing stop is watched for a trigger."""
+    def tight(self, unit: str) -> dict[str, str]:
+        """T6 and T7: with the unit known, the tight percents smallest first until one is
+        accepted (T7), and that one watched for a trigger (T6)."""
         if unit not in (UNIT_RATIO, UNIT_PERCENT):
-            return NOT_TESTED
-        percent = self.config.probe.trailing_tight_percent
-        step = percent / PERCENT if unit == UNIT_RATIO else percent
+            return {"t6_triggers": NOT_TESTED, "t7_smallest_percent": NOT_TESTED}
+        percents = list(self.config.probe.trailing_tight_percents)
+        steps = [p / PERCENT if unit == UNIT_RATIO else p for p in percents]
         name = "trailing-tight"
-        sent, cid = self._send_trailing(name, step)
+        step, cid, refused = self._first_accepted(name, steps, TrailingType.PERCENTAGE)
+        smallest = (NOT_TESTED if step is None and not refused
+                    else f"none of {percents} %" if step is None
+                    else f"{percents[steps.index(step)]} %")
+        answers = {"t7_smallest_percent": f"{smallest}; refused: {refused}"}
+        self.out(f"t7_smallest_percent: {answers['t7_smallest_percent']}")
         if cid is None:
-            return sent
-        row, absent, _ = self._watch(name, cid,
-                                     float(self.config.probe.trailing_trigger_seconds))
+            answers["t6_triggers"] = NOT_TESTED
+            return answers
+        row, absent, seen = self._watch(name, cid,
+                                        float(self.config.probe.trailing_trigger_seconds))
+        # T3 again: a tight stop moves a cent for about a cent of rise, so a stop price that
+        # stays put while the bid rises says Detail does not show the trailing stop's level.
+        answers["t3_tight_follows"] = follows(seen) if seen else UNIT_NOT_SHOWN
+        self.out(f"t3_tight_follows: {answers['t3_tight_follows']}")
         row = self.finish(name, cid, row,
                           row is None and absent >= self.config.orders.unknown_absent_reads)
         if row is not None and row.filled_quantity > 0:
@@ -461,6 +559,56 @@ class TrailingProbe(Probe):
         else:
             verdict = NOT_TRIGGERED
         self.out(f"t6_triggers: {verdict}")
+        answers["t6_triggers"] = verdict
+        return answers
+
+    def amount(self) -> dict[str, str]:
+        """A1 and A2: a wide AMOUNT trailing stop, step = the bid times
+        `[probe] trailing_wide_percent`, in USD; watched like the wide one, then cancelled."""
+        name = "trailing-amount"
+        bid = self._bid(name)
+        if bid is None:
+            return {"a1_accepted": NOT_TESTED, "a2_distance": NOT_TESTED}
+        step = (bid * self.config.probe.trailing_wide_percent / PERCENT).quantize(CENT)
+        sent, cid = self._send_trailing(name, step, TrailingType.AMOUNT)
+        answers = {"a1_accepted": sent, "a2_distance": NOT_TESTED}
+        if cid is not None:
+            row, absent, seen = self._watch(
+                name, cid, float(self.config.probe.trailing_observe_seconds))
+            if row is None:
+                answers["a1_accepted"] = UNKNOWN if sent == UNKNOWN else "not-in-detail"
+            else:
+                answers["a1_accepted"] = f"{row.raw_status} (step {step} USD)"
+            if seen:
+                first_bid, first_stop = seen[0]
+                distance = first_bid - first_stop
+                fits = (distance > 0 and max(distance, step) / min(distance, step)
+                        <= self.config.probe.trailing_unit_factor)
+                answers["a2_distance"] = (
+                    f"{'usd' if fits else UNIT_UNCLEAR}: bid {first_bid}, stop {first_stop}")
+            elif row is not None:
+                answers["a2_distance"] = UNIT_NOT_SHOWN
+            self.finish(name, cid, row,
+                        row is None and absent >= self.config.orders.unknown_absent_reads)
+        for key, value in answers.items():
+            self.out(f"{key}: {value}")
+        return answers
+
+    def smallest_amount(self) -> str:
+        """A3: the `[probe] trailing_amount_steps_usd` smallest first until Webull accepts
+        one; it is cancelled at once (a trigger meanwhile is recorded)."""
+        name = "trailing-amount-min"
+        steps = list(self.config.probe.trailing_amount_steps_usd)
+        step, cid, refused = self._first_accepted(name, steps, TrailingType.AMOUNT)
+        if cid is None:
+            verdict = (NOT_TESTED if not refused else f"none of {steps} USD") + \
+                f"; refused: {refused}"
+        else:
+            row = self.finish(name, cid, None, False)
+            filled = row is not None and row.filled_quantity > 0
+            verdict = (f"{step} USD{' (triggered before its cancel)' if filled else ''}; "
+                       f"refused: {refused}")
+        self.out(f"a3_smallest_amount: {verdict}")
         return verdict
 
     def close(self) -> str:
@@ -503,6 +651,7 @@ def run(config: Config, broker: Broker, market: MarketData, symbol: str, folder:
                 raise ManualRefused(f"ask {quote.ask} is above [probe] max_price_usd")
             summary["l2_listing"] = probe.listing(quote)
             summary["l2_listed_after_seconds"] = probe.listed_together
+            summary["d1_same_price"] = probe.same_price(probe.quote())
             summary["l2_note"] = (
                 "BUY stops (the bot's stops are SELLs; L1 is one SELL sample); the first "
                 "open-orders read is one poll after the last place, so the smallest answer is "
@@ -519,8 +668,10 @@ def run(config: Config, broker: Broker, market: MarketData, symbol: str, folder:
                 answers = probe.wide()
                 summary.update(answers)
                 summary["l1_listed_after_seconds"] = probe.listed_after
+                summary.update(probe.amount())
                 if "t6_triggers" not in answers:
-                    summary["t6_triggers"] = probe.tight(answers["t2_unit"])
+                    summary.update(probe.tight(answers["t2_unit"]))
+                summary["a3_smallest_amount"] = probe.smallest_amount()
         except ManualRefused as exc:
             summary["stopped"] = str(exc)
             out(f"stopped: {exc}")
@@ -534,7 +685,10 @@ def run(config: Config, broker: Broker, market: MarketData, symbol: str, folder:
         summary["error"] = f"{type(exc).__name__}: {exc}"
         summary.setdefault("close", NOT_CLOSED)
     finally:
-        probe._entry_history(final=True)
+        try:
+            probe._entry_history(final=True)
+        except Exception as exc:  # noqa: BLE001 - the summary below must still be written
+            summary["h1_error"] = f"{type(exc).__name__}: {exc}"
         summary["h1_history_lag_seconds"] = probe.history_lag
         summary["h1_note"] = (
             "per filled order, seconds from Detail first showing the fill to the order history "
