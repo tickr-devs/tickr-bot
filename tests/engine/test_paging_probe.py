@@ -131,3 +131,35 @@ def test_a_failed_history_read_is_recorded_and_the_account_left_clean(tmp_path: 
     code, summary = world.run()
     assert code == sp.EXIT_ANSWERED and "history route paused" in summary["error"]
     assert summary["broker_after"]["working_probe_orders"] == []
+
+
+def test_a_fill_stops_the_run_and_names_the_order_and_the_share(tmp_path: Path) -> None:
+    class FillsThird(PagingBroker):
+        def place(self, request: Any) -> Any:
+            ack = super().place(request)
+            if len(self.sent) == 3:
+                self.fill(request.client_order_id, Decimal(1), request.limit_price)
+            return ack
+
+    world = World(tmp_path, FillsThird())
+    code, summary = world.run()
+    third = world.broker.sent[2].client_order_id
+    assert code == sp.EXIT_OPERATOR and len(world.broker.sent) == 3  # nothing more sent
+    assert third in summary["unresolved"] and "filled 1" in summary["unresolved"]
+    assert summary["broker_after"]["position"] == "1"
+    assert world.lines[-1].startswith("OPERATOR:") and third in world.lines[-1]
+
+
+def test_a_cancel_that_never_takes_stops_the_run_with_the_order_left(tmp_path: Path) -> None:
+    class Sticky(PagingBroker):
+        def cancel(self, client_order_id: str) -> None:
+            if len(self.sent) < 2 or client_order_id != self.sent[1].client_order_id:
+                super().cancel(client_order_id)
+
+    world = World(tmp_path, Sticky())
+    code, summary = world.run()
+    second = world.broker.sent[1].client_order_id
+    assert code == sp.EXIT_OPERATOR and len(world.broker.sent) == 2  # nothing more sent
+    assert second in summary["unresolved"]
+    assert summary["broker_after"]["working_probe_orders"] == [second]
+    assert "pages" not in summary  # the history is not read with an order left working
