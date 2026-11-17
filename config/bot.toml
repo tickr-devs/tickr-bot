@@ -269,6 +269,20 @@ trailing_close_percent = 1
 # shows; the two candidates differ a hundredfold and the stop follows the high, not the bid read with it, so cents do
 # not decide; a ratio; read by the probe-trailing command.
 trailing_unit_factor = 3
+# probe-trailing: seconds the order history is read (once per [orders] detail_poll_seconds) after Detail shows the entry
+# or the close filled, until it shows the same filled quantity (H1, how fresh one history read for all fills is);
+# read-only, decides nothing; read by the probe-trailing command.
+history_wait_seconds = 30
+# probe-trailing (L2): BUY STOP_LOSS orders sent back to back before the entry, to measure how long open orders take to
+# list stops placed together (the bot's bulk stop check and fills-together bound rely on it); a count; read by the
+# probe-trailing command.
+listing_stops = 5
+# probe-trailing (L2): those stops lie this many percent above the ask, so none triggers while it is watched; read by the
+# probe-trailing command.
+listing_far_percent = 20
+# probe-trailing (L2): seconds the open orders are read (once per [orders] detail_poll_seconds) until every stop placed
+# together is listed, before all are cancelled; read by the probe-trailing command.
+listing_wait_seconds = 30
 
 [api]
 # Local API bind address; loopback only; read by the api server.
