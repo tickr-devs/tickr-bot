@@ -1,0 +1,63 @@
+# Strategy "ignition-v1": buy a thin stock the moment it ignites (a new day high at least 10% over
+# its 30-minute low while the session's dollar volume is still small), ride it on a 20% trailing
+# exit, and enter again on the next ignition (owner 2026-11-17, research thread). Built only from
+# the blocks of tickr.strategy.composed: this file is the whole rule. Changing any value means a
+# new `version`.
+
+[strategy]
+# Strategy name; recorded with every decision; config/bot.toml [observers] strategy_modules maps it to tickr.strategy.composed.
+name = "ignition-v1"
+# Strategy version; bump on any value change; recorded with every decision and trade.
+version = "1"
+
+[liquidity]
+# The strategy owns every liquidity threshold (owner 2026-11-15): discovery applies these to the
+# active strategy's candidates, and evaluate applies them again.
+# Maximum (ask - bid) / mid of the quote, ratio; thin stocks have wide books. Read by strategy.composed.
+max_spread_ratio = 0.03
+# Least current regular-session dollar volume (sum of close x volume of completed minutes), USD; 0 = no floor. Read by strategy.composed.
+min_session_dollar_volume_usd = 0
+# Most current regular-session dollar volume, USD: only stocks that are still thin when they ignite. Read by strategy.composed.
+max_session_dollar_volume_usd = 800000
+
+[[signal]]
+# Signal block: no signal in the first minutes of the session. Read by strategy.composed.
+block = "minutes_after_open"
+# Least minutes from the regular open to the start of the signal bar, minutes. Read by strategy.composed.
+minutes = 5
+
+[[signal]]
+# Signal block: the signal bar closes above every earlier high of the session (a new day high). Read by strategy.composed.
+block = "new_session_high"
+
+[[signal]]
+# Signal block: the signal bar closes well above the recent low. Read by strategy.composed.
+block = "rise_from_low"
+# Minutes back (the signal bar included) over which the low is taken, minutes. Read by strategy.composed.
+window_minutes = 30
+# Least rise of the signal bar's close over that low, percent. Read by strategy.composed.
+min_percent = 10
+
+[entry]
+# Entry block: a marketable buy while the ask is near the signal close. Read by strategy.composed.
+block = "marketable_window"
+# Entry window below and above the signal close, percent each way; the ask must be inside it. Read by strategy.composed.
+window_percent = 2
+
+[stop]
+# Stop block: the broker stop a fixed percent under the top of the entry window (and under the bid). Read by strategy.composed.
+block = "percent_below_entry"
+# Stop distance, percent; the same as the trailing exit, so the stop is where the trail starts. Read by strategy.composed.
+percent = 20
+
+[[exit]]
+# Exit block: sell once the price falls a fixed percent from the highest price since the entry. Read by strategy.composed.
+block = "trailing_percent"
+# Trail distance under the highest price since the entry, percent (last close or bid). Read by strategy.composed.
+percent = 20
+
+[sizing]
+# Maximum position notional, USD (quantity x top of entry window); owner 2026-11-17: $1,000 per position; must not exceed config/bot.toml [risk]. Read by strategy.composed.
+max_position_notional_usd = 1000
+# Planned loss per position the quantity is sized for, USD (about notional x stop percent plus the spread); must not exceed config/bot.toml [risk]. Read by strategy.composed.
+planned_loss_usd = 250

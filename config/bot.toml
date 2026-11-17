@@ -465,7 +465,7 @@ capture_dir = "capture"
 [observers]
 # Strategy module per strategy NAME, as "name=importable.module" (the module exposes create(values)); an observer folder
 # strategies/<folder>/strategy.toml names its strategy in [strategy] name; read by observers.loader.
-strategy_modules = ["price-action-v1=tickr.strategy.price_action_v1", "price-action-v2=tickr.strategy.price_action_v2", "price-action-v3=tickr.strategy.price_action_v3", "volume-shock-v1=tickr.strategy.volume_shock_v1", "noise-band-v1=tickr.strategy.noise_band_v1"]
+strategy_modules = ["price-action-v1=tickr.strategy.price_action_v1", "price-action-v2=tickr.strategy.price_action_v2", "price-action-v3=tickr.strategy.price_action_v3", "volume-shock-v1=tickr.strategy.volume_shock_v1", "noise-band-v1=tickr.strategy.noise_band_v1", "ignition-v1=tickr.strategy.composed"]
 # Most observer strategies [strategy] observers may list (each costs observer-process time per bar, not the trading
 # thread's); read by observers.loader.
 max_observers = 4
