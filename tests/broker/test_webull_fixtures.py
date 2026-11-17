@@ -427,6 +427,20 @@ def test_order_history_for_fills_skips_foreign_rows_and_refuses_a_bad_own_row():
         b.order_history({"ap-6e324fb0-t1-e1"}, 1)
 
 
+def test_history_page_shapes_name_no_order_and_follow_the_pages():
+    page = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    first = {**copy.deepcopy(page), "pagination_key": "k1"}
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    shapes = b.history_page_shapes(5)
+    assert [p for _, p in t.sent] == [{}, {"pagination_key": "k1"}]
+    assert [(s["combos"], s["rows"], s["own_rows"], s["next_page"]) for s in shapes] == [
+        (2, 2, 2, True), (2, 2, 2, False)]
+    assert shapes[0]["place_times"][0] == "2026-11-16T15:17:06.664Z"
+    assert not any("ap-" in json.dumps(s) or "TSCO" in json.dumps(s) for s in shapes)
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    assert len(b.history_page_shapes(1)) == 1 and len(t.sent) == 1
+
+
 # --- cash activities: the exact trade amounts (recorded 2026-11-16) ---------------------------
 
 

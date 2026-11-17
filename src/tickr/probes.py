@@ -27,6 +27,12 @@ Section K, on the L1 stream:
   REFUSES while a bot process is recorded in the lock (the bot's own stream would be taken).
   The cap ramp takes its symbols from the three screeners after the given ones.
 
+Section H, account read only (the adapter reads the account id itself; it is never printed):
+
+- `history` (H2): how many rows one order-history page holds and in which order they come, read
+  page by page up to `[probe] history_max_pages`. Next to a running bot only while its status
+  and last broker read show it flat (the bot's own history reads share the route).
+
 Every request is sent once and never repeated. Evidence goes to
 `<data_dir>/<[probe] evidence_dir>/<NY date>/<probe>-<UTC time>/`: one JSON line per request and
 a `summary.json`. Nothing in it names the account or a credential; the token folder is described
@@ -54,6 +60,7 @@ from tickr.broker.budget import BudgetExhausted
 from tickr.broker.webull import (
     BrokerReadFailed,
     Route,
+    broker_from_config,
     budget_from_config,
     chart_market_data_from_config,
     chart_probe_market_data_from_config,
@@ -464,6 +471,63 @@ def tick(cfg: Config, symbols: Sequence[str], *, now: Clock, sleep: Sleep,
 
 
 # --------------------------------------------------------------------------------------------
+# history (H2)
+# --------------------------------------------------------------------------------------------
+
+NEWEST_FIRST = "newest-first"
+OLDEST_FIRST = "oldest-first"
+MIXED = "mixed"
+ONE_PAGE = "one-page"
+PAGED = "paged"
+
+
+def history_order(times: Sequence[str]) -> str:
+    """Row order of the history across pages, from `place_time_at` (ISO, UTC)."""
+    stamps = [datetime.fromisoformat(t) for t in times if t]
+    if all(a >= b for a, b in zip(stamps, stamps[1:], strict=False)):
+        return NEWEST_FIRST
+    if all(a <= b for a, b in zip(stamps, stamps[1:], strict=False)):
+        return OLDEST_FIRST
+    return MIXED
+
+
+def history(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
+            out: Callable[[str], None] = print) -> tuple[str, Path]:
+    """H2: how many rows one order-history page holds and in which order, read page by page
+    (`[probe] history_max_pages`). Read only. Next to a running bot only while it is flat (its
+    own history reads share the route)."""
+    _, lock_path = data_paths(cfg)
+    if recorded_holder(lock_path) is not None:
+        _refuse_while_exposed(cfg, now())
+    started = now()
+    pages = broker(cfg).history_page_shapes(cfg.probe.history_max_pages)
+    folder = evidence_folder(cfg, "history", started)
+    for seq, page in enumerate(pages):
+        _append(folder / "pages.jsonl", {"seq": seq, **page})
+    full = [page["rows"] for page in pages if page["next_page"]]
+    times = [t for page in pages for t in page["place_times"]]
+    summary = {
+        "probe": "history", "environment": cfg.environment_name,
+        "started_at": started.isoformat(), "pages": len(pages),
+        "rows_per_page": [page["rows"] for page in pages],
+        "combos_per_page": [page["combos"] for page in pages],
+        "paging": PAGED if full else ONE_PAGE,
+        "page_size": max(full) if full else None,
+        "order": history_order(times),
+        "oldest": min(times, default=None), "newest": max(times, default=None),
+        "last_page_has_next": bool(pages and pages[-1]["next_page"]),
+    }
+    (folder / SUMMARY_FILE).write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n",
+                                       "utf-8")
+    out(f"h2_history: {summary['pages']} page(s), rows per page {summary['rows_per_page']}, "
+        f"combos per page {summary['combos_per_page']}; paging {summary['paging']}, "
+        f"page size {summary['page_size']}; order {summary['order']}; "
+        f"oldest {summary['oldest']}, newest {summary['newest']}")
+    verdict = PASSED if summary["paging"] == PAGED and summary["order"] != MIXED else UNFINISHED
+    return verdict, folder
+
+
+# --------------------------------------------------------------------------------------------
 # Command line
 # --------------------------------------------------------------------------------------------
 
@@ -474,6 +538,7 @@ LIMIT_MARKET: Callable[[Config], MarketData] = chart_probe_market_data_from_conf
 CLIENT_MARKET: Callable[[Config], MarketData] = chart_market_data_from_config
 TICK_STREAM: Callable[[Config, Callable[[dict[str, Any]], None]],
                       tick_probe.TickStream] = tick_probe_stream_from_config
+HISTORY_BROKER: Callable[[Config], Any] = broker_from_config
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -485,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
                                        "Only with the bot stopped"),
                        ("chart-client", "C1: a second client next to the running bot")):
         sub.add_parser(name, help=text).add_argument("symbol")
+    sub.add_parser("history", help="H2: order-history page size and row order (read only; "
+                   "next to a running bot only while it is flat)")
     sub.add_parser("tick", help="K: trade-by-trade stream and its symbol cap. Only with the "
                    "bot stopped").add_argument("symbols", nargs="+")
     worker = sub.add_parser("chart-limit-worker", help="one process of chart-limit (internal)")
@@ -500,6 +567,10 @@ def main(argv: list[str] | None = None) -> int:
                              limit.window_seconds, args.start_at, args.out,
                              now=NOW, sleep=SLEEP)
             return EXIT_ANSWERED
+        if args.command == "history":
+            verdict, folder = history(cfg, now=NOW, broker=HISTORY_BROKER)
+            print(f"history: {verdict}; evidence in {folder}")
+            return EXIT_ANSWERED if verdict == PASSED else EXIT_NO_ANSWER
         if args.command == "tick":
             code, folder = tick(cfg, args.symbols, now=NOW, sleep=SLEEP, market=LIMIT_MARKET,
                                 stream=TICK_STREAM)

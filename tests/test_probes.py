@@ -578,3 +578,59 @@ def test_tick_holds_the_lock_for_its_run(tmp_path):
     assert seen == ["AlreadyRunning"]
     with SingleInstanceLock(lock_path):  # released after the run
         pass
+
+
+# --- history (H2) -------------------------------------------------------------------------
+
+
+class Pages:
+    """A broker whose history pages are scripted shapes."""
+
+    def __init__(self, *pages: dict) -> None:
+        self.pages, self.asked = list(pages), []
+
+    def history_page_shapes(self, max_pages: int) -> list[dict]:
+        self.asked.append(max_pages)
+        return self.pages[:max_pages]
+
+
+def page(times: list[str], more: bool) -> dict:
+    return {"combos": len(times), "rows": len(times), "own_rows": len(times),
+            "place_times": times, "next_page": more}
+
+
+def test_history_probe_records_page_size_and_order(tmp_path):
+    cfg, lines = cfg_in(tmp_path), []
+    broker = Pages(page(["2026-11-17T15:03:00+00:00", "2026-11-17T15:02:00+00:00"], True),
+                   page(["2026-11-17T15:01:00+00:00"], False))
+    verdict, folder = probes.history(cfg, now=Clock().now, broker=lambda _: broker,
+                                     out=lines.append)
+    summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
+    assert verdict == probes.PASSED and broker.asked == [cfg.probe.history_max_pages]
+    assert (summary["paging"], summary["page_size"], summary["order"]) == (
+        probes.PAGED, 2, probes.NEWEST_FIRST)
+    assert summary["rows_per_page"] == [2, 1] and not summary["last_page_has_next"]
+    assert lines[0].startswith("h2_history: 2 page(s)")
+    assert len((folder / "pages.jsonl").read_text().splitlines()) == 2
+
+
+def test_one_history_page_or_mixed_order_leaves_h2_open(tmp_path):
+    cfg = cfg_in(tmp_path)
+    one = Pages(page(["2026-11-17T15:01:00+00:00", "2026-11-17T15:02:00+00:00"], False))
+    verdict, folder = probes.history(cfg, now=Clock().now, broker=lambda _: one,
+                                     out=lambda _: None)
+    summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
+    assert verdict == probes.UNFINISHED
+    assert (summary["paging"], summary["order"]) == (probes.ONE_PAGE, probes.OLDEST_FIRST)
+    assert probes.history_order(["2026-11-17T15:01:00+00:00", "2026-11-17T15:03:00+00:00",
+                                 "2026-11-17T15:02:00+00:00"]) == probes.MIXED
+
+
+def test_history_probe_refuses_next_to_a_bot_with_a_trade_open(tmp_path):
+    cfg = cfg_in(tmp_path)
+    live_bot(cfg)
+    Bot(cfg, Clock(), exposed="position").write()
+    broker = Pages()
+    with pytest.raises(probes.ProbeRefused, match="flat"):
+        probes.history(cfg, now=Clock().now, broker=lambda _: broker)
+    assert broker.asked == []

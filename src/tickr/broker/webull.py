@@ -928,6 +928,31 @@ class WebullBroker:
             params = {"pagination_key": str(next_key)}
         return orders
 
+    def history_page_shapes(self, max_pages: int) -> list[dict[str, Any]]:
+        """Probe H2 (python -m tickr.probes history), read only: the shape of each order
+        history page, page by page by `pagination_key` up to `max_pages`. Per page: how many
+        combos and order rows it holds, how many rows are ours, each row's `place_time_at` in
+        page order, and whether a next page is offered. No id, symbol, price or account field
+        is returned."""
+        pages: list[dict[str, Any]] = []
+        params: dict[str, Any] = {}
+        for _page in range(max_pages):
+            body = self._read(Route.HISTORY, params)
+            combos = _unwrap_list(body, "history")
+            rows = [row for combo in combos if isinstance(combo, Mapping)
+                    for row in (combo.get("orders") or []) if isinstance(row, Mapping)]
+            next_key = _optional(body, "pagination_key") if isinstance(body, Mapping) else None
+            pages.append({
+                "combos": len(combos), "rows": len(rows),
+                "own_rows": sum(1 for row in rows
+                                if self._is_own_order(str(row.get("client_order_id") or ""))),
+                "place_times": [str(row.get("place_time_at") or "") for row in rows],
+                "next_page": next_key is not None})
+            if next_key is None:
+                break
+            params = {"pagination_key": str(next_key)}
+        return pages
+
     def open_orders(self) -> list[OrderDetail]:
         orders: list[OrderDetail] = []
         unreadable: list[UnreadableOrder] = []

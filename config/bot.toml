@@ -344,6 +344,9 @@ tick_flow_wait_seconds = 60
 tick_cap_steps = [20, 50, 100, 101, 150, 200]
 # probe tick: seconds between two cap steps, so ticks of the new symbols can arrive; read by tickr.engine.tick_probe.
 tick_step_wait_seconds = 10
+# Probe H2 (python -m tickr.probes history): most order-history pages read to see a page's size and the rows' order
+# (each a request of the order-history route, sent once, within its budget); read by the history probe.
+history_max_pages = 5
 
 [api]
 # Local API bind address; loopback only; read by the api server.

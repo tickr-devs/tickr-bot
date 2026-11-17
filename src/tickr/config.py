@@ -196,6 +196,7 @@ class ProbeConfig:
     tick_flow_wait_seconds: int
     tick_cap_steps: tuple[int, ...]
     tick_step_wait_seconds: int
+    history_max_pages: int
 
 
 @dataclass(frozen=True)
@@ -653,6 +654,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
             or min(probe.tick_cap_steps) < 1):
         raise ConfigError("[probe] tick_* waits must be above 0 (tick_step_wait_seconds at "
                           "least 0) and tick_cap_steps at least 1")
+    if probe.history_max_pages < 1:
+        raise ConfigError("[probe] history_max_pages must be at least 1")
     for name, values in (("trailing_tight_percents", probe.trailing_tight_percents),
                          ("trailing_amount_steps_usd", probe.trailing_amount_steps_usd),
                          ("tick_cap_steps", probe.tick_cap_steps)):
