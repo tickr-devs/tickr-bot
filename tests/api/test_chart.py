@@ -24,10 +24,10 @@ from tickr.api.chart import (
     parse_query,
     place,
 )
-from tickr.api.contract import ChartInterval, ChartRange
+from tickr.api.contract import ChartInterval, ChartPendingV1, ChartRange
 from tickr.api.server import make_server, settings_from_config
 from tickr.broker.base import BrokerError
-from tickr.broker.budget import RequestBudget, RouteLimit
+from tickr.broker.budget import BudgetExhausted, RequestBudget, RouteLimit
 from tickr.broker.webull import Route, WebullMarketData, WireResponse
 from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.data.base import BarSpan, FakeMarketData, SessionBar
@@ -113,6 +113,7 @@ def test_hour_candles_never_cross_a_session_edge_and_keep_partial_buckets():
     # last regular hour 15:30-15:59 is half an hour; the post-market starts its own at 16:00.
     assert starts == [("09:00", True), ("09:30", False), ("10:30", False), ("15:30", False),
                       ("16:00", True)]
+    assert [c.session for c in candles] == ["pre", "regular", "regular", "regular", "after"]
 
 
 def test_merge_is_exact_decimal_ohlcv_with_missing_minutes():
@@ -214,11 +215,41 @@ def test_live_day_is_read_again_only_after_the_ttl(tmp_path):
     fake, chart = a_day(tmp_path)
     now = ny(MONDAY, "19:00")  # the session day is still running (post-market)
     chart.answer("ABCD", IV.M1, R.D1, now)
-    chart.answer("ABCD", IV.M30, R.D1, now + TTL - timedelta(seconds=1))
-    assert len(fake.calls) == 1
-    chart.answer("ABCD", IV.M1, R.D1, now + TTL)
+    # Monday, then Friday for its after-hours count (no bars there: kept in memory too).
     assert len(fake.calls) == 2
+    chart.answer("ABCD", IV.M30, R.D1, now + TTL - timedelta(seconds=1))
+    assert len(fake.calls) == 2
+    chart.answer("ABCD", IV.M1, R.D1, now + TTL)
+    assert len(fake.calls) == 4
     assert not (tmp_path / "chart").exists()  # an unfinished day is never written to disk
+
+
+def test_a_running_day_says_how_many_after_hours_candles_the_session_before_had(tmp_path):
+    """Mockup v113: today's after-hours is reserved as wide as yesterday's was, in candles of
+    the asked interval; nothing after the session, and nothing when the budget is spent."""
+    fake = FakeMarketData("fake")
+    fake.add_history_bars(BarSpan.M1, [
+        m1(FRIDAY, "15:59", "RTH"), m1(FRIDAY, "16:00", "ATH"), m1(FRIDAY, "16:04", "ATH"),
+        m1(FRIDAY, "16:05", "ATH"), m1(FRIDAY, "19:30", "ATH"),
+        m1(MONDAY, "09:30", "RTH")])
+    chart = Chart(settings(tmp_path), fake)
+    running = ny(MONDAY, "10:00")
+    assert chart.answer("ABCD", IV.M5, R.D1, running).previous_after_candles == 3
+    assert chart.answer("ABCD", IV.M1, R.D1, running).previous_after_candles == 4
+    assert chart.answer("ABCD", IV.H1, R.D1, running).previous_after_candles == 2
+    assert chart.answer("ABCD", IV.M5, R.D5, running).previous_after_candles is None
+    over = ny(MONDAY, "20:30")
+    assert chart.answer("ABCD", IV.M5, R.D1, over).previous_after_candles is None
+
+
+def test_the_after_hours_count_never_spends_the_answer(tmp_path):
+    fake = FakeMarketData("fake")
+    fake.add_history_bars(BarSpan.M1, [m1(MONDAY, "09:30", "RTH")])
+    chart = Chart(settings(tmp_path), fake)
+    fake.limit("history_bars", 1)  # the second read (Friday) is refused by the budget
+    answer = chart.answer("ABCD", IV.M5, R.D1, ny(MONDAY, "10:00"))
+    assert len(answer.bars) == 1 and answer.pending is None
+    assert answer.previous_after_candles is None
 
 
 def test_a_day_is_written_only_after_it_settles(tmp_path):
@@ -374,6 +405,115 @@ def test_budget_refusal_is_rate_limited_and_nothing_is_cached(tmp_path):
     assert not (tmp_path / "chart").exists()
 
 
+class Budgeted(FakeMarketData):
+    """A source behind a chart-like budget: `allowed` more history reads, then BudgetExhausted
+    with `retry_after` seconds until the test refills it. Keeps each read's end time."""
+
+    def __init__(self, allowed: int, retry_after: float = 37.25) -> None:
+        super().__init__("fake")
+        self.allowed = allowed
+        self.retry_after = retry_after
+        self.ends: list[datetime] = []
+
+    def history_bars(self, symbol, span, end, count):
+        if self.allowed == 0:
+            raise BudgetExhausted("history_bars", "window full", self.retry_after)
+        self.allowed -= 1
+        self.ends.append(end)
+        return super().history_bars(symbol, span, end, count)
+
+
+WEEK = [date(2026, 11, d) for d in (10, 11, 12, 13, 16)]  # the five sessions up to MONDAY
+
+
+def five_days(source: FakeMarketData) -> FakeMarketData:
+    source.add_history_bars(BarSpan.M1, [m1(d, "10:00", "RTH") for d in WEEK])
+    return source
+
+
+def test_a_cold_five_days_fills_newest_first_within_the_budget(tmp_path):
+    """Four reads left of five sessions: the four newest are drawn, pending says 4 of 5 and the
+    budget's wait; after the wait the next ask reads only what is not cached yet."""
+    source = five_days(Budgeted(4))
+    chart = Chart(settings(tmp_path), source)
+    now = ny(MONDAY, "12:00")  # Monday's session is running: it stays in memory only
+    first = chart.answer("ABCD", IV.H1, R.D5, now)
+    assert source.ends == [now, *(ny(d, "20:00") for d in reversed(WEEK[1:-1]))]  # newest first
+    assert [c.start for c in first.bars] == [ny(d, "09:30") for d in WEEK[1:]]  # oldest first
+    assert first.pending == ChartPendingV1(4, 5, D("37.250"))
+    assert first.cause is None and first.cached_at == now
+    source.allowed = 4  # the budget refilled
+    later = now + timedelta(seconds=60)
+    second = chart.answer("ABCD", IV.H1, R.D5, later)
+    assert second.pending is None and second.cause is None
+    assert [c.start for c in second.bars] == [ny(d, "09:30") for d in WEEK]
+    # Monday again (its live TTL ran out) and the missing oldest day; the rest from disk.
+    assert source.ends[4:] == [later, ny(WEEK[0], "20:00")]
+    assert second.cached_at == now
+
+
+def test_a_cold_five_days_after_the_close_completes_with_one_more_read(tmp_path):
+    source = five_days(Budgeted(4))
+    chart = Chart(settings(tmp_path), source)
+    now = ny(MONDAY, "21:00")  # every session settled: each read goes to disk
+    assert chart.answer("ABCD", IV.M5, R.D5, now).pending == ChartPendingV1(4, 5, D("37.250"))
+    source.allowed = 4
+    again = chart.answer("ABCD", IV.M5, R.D5, now + timedelta(seconds=60))
+    assert again.pending is None and len(again.bars) == len(WEEK)
+    assert source.ends[4:] == [ny(WEEK[0], "20:00")]
+
+
+def test_reading_stops_at_the_refused_session_even_with_an_older_one_cached(tmp_path):
+    """The answer stays one contiguous run up to the latest session: a cached session older
+    than the refused one is not added (it would leave a gap), and costs nothing next time."""
+    source = five_days(Budgeted(1))
+    chart = Chart(settings(tmp_path), source)
+    chart.answer("ABCD", IV.H1, R.D1, ny(WEEK[0], "21:00"))  # 2026-11-10 now on disk
+    source.allowed = 2
+    now = ny(MONDAY, "21:00")
+    answer = chart.answer("ABCD", IV.H1, R.D5, now)
+    assert [c.start for c in answer.bars] == [ny(d, "09:30") for d in WEEK[-2:]]
+    assert answer.pending == ChartPendingV1(2, 5, D("37.250"))
+    assert source.ends[1:] == [ny(d, "20:00") for d in (MONDAY, FRIDAY)]
+
+
+def test_one_day_with_the_budget_spent_is_empty_and_pending(tmp_path):
+    source = five_days(Budgeted(0, retry_after=12.0001))
+    now = ny(MONDAY, "12:00")
+    answer = Chart(settings(tmp_path), source).answer("ABCD", IV.M1, R.D1, now)
+    assert answer.bars == () and answer.cause is None and answer.cached_at == now
+    # Rounded up to the millisecond: the apps never ask again too early.
+    assert answer.pending == ChartPendingV1(0, 1, D("12.001"))
+    assert not (tmp_path / "chart").exists()
+
+
+def test_a_daily_range_with_the_budget_spent_is_empty_and_pending(tmp_path):
+    source = Budgeted(0)
+    now = ny(MONDAY, "12:00")
+    chart = Chart(settings(tmp_path), source)
+    answer = chart.answer("ABCD", IV.W1, R.Y1, now)
+    assert answer.bars == () and answer.cause is None and answer.cached_at == now
+    assert answer.pending == ChartPendingV1(0, 1, D("37.250"))
+    source.add_history_bars(BarSpan.D, [daily(date(2026, 11, 13), "1", "2", "1", "2")])
+    source.allowed = 1
+    done = chart.answer("ABCD", IV.D1, R.M1, now + timedelta(seconds=60))
+    assert done.pending is None and len(done.bars) == 1
+
+
+def test_a_partial_five_days_without_a_retry_after_is_rate_limited(tmp_path):
+    """A refusal that cannot say when the budget refills stays 429 (the apps could not know
+    when to ask again); the sessions read before it are still cached."""
+    fake = five_days(FakeMarketData("fake"))
+    fake.limit("history_bars", 4)
+    chart = Chart(settings(tmp_path), fake)
+    now = ny(MONDAY, "21:00")
+    with pytest.raises(ChartRefused) as refused:
+        chart.answer("ABCD", IV.H1, R.D5, now)
+    assert refused.value.error == "rate_limited" and refused.value.retry_after is None
+    assert sorted(p.stem for p in (tmp_path / "chart" / "ABCD").iterdir()) == [
+        d.isoformat() for d in WEEK[1:]]
+
+
 def test_no_source_is_unavailable_with_the_cause(tmp_path):
     with pytest.raises(ChartRefused, match=r"webull_enabled = false") as refused:
         Chart(settings(tmp_path)).answer("ABCD", IV.M1, R.D1, ny(MONDAY, "12:00"))
@@ -453,12 +593,15 @@ def test_http_chart_matches_the_schema(served, tmp_path):
     assert errors(schema("chart-v1"), body) == []
     assert body["interval"] == "5m" and body["range"] == "1d" and body["source"] == "fake"
     assert [b["extended"] for b in body["bars"]] == [True, True, False, False, True, True]
+    assert [b["session"] for b in body["bars"]] == ["pre", "pre", "regular", "regular", "after",
+                                                    "after"]
     resp, _ = request(served, "POST", "/chart", {})
     assert resp.status == 405
 
 
-def test_http_budget_exhaustion_is_429_with_retry_after(served):
-    """The real Webull adapter over a recorded transport with a one-request chart budget."""
+def test_http_spent_budget_is_200_with_pending(served):
+    """The real Webull adapter over a recorded transport with a one-request chart budget: the
+    second chart is answered with nothing yet and the budget's own wait, never a 429."""
     budget = RequestBudget(RouteLimit(1, 60, 60), clock=lambda: 0.0)
     transport = Scripted(WireResponse(200, {"result": [{"symbol": "ABCD", "delay_minutes": "0",
                                                          "result": []}]}))
@@ -467,10 +610,22 @@ def test_http_budget_exhaustion_is_429_with_retry_after(served):
                                       utc_now=lambda: ny(MONDAY, "21:00")))
     resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=1d&range=1m")
     assert resp.status == 200 and doc(payload)["bars"] == []
+    assert doc(payload)["pending"] is None
+    resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=1m&range=1d")
+    body = doc(payload)
+    assert resp.status == 200 and errors(schema("chart-v1"), body) == []
+    assert body["bars"] == [] and body["cause"] is None
+    assert body["pending"] == {"read": 0, "total": 1, "retry_after_seconds": "60.000"}
+    assert len(transport.sent) == 1  # nothing queued, nothing retried
+
+
+def test_http_budget_refusal_without_a_wait_is_429(served, tmp_path):
+    fake, _ = a_day(tmp_path)
+    fake.limit("history_bars", 0)
+    served.chart.use(fake)
     resp, payload = request(served, "GET", "/chart?symbol=ABCD&interval=1m&range=1d")
     assert resp.status == 429 and doc(payload)["error"] == "rate_limited"
-    assert resp.getheader("Retry-After") == "60"
-    assert len(transport.sent) == 1  # nothing queued, nothing retried
+    assert resp.getheader("Retry-After") is None
 
 
 def chart_on(tmp_path: Path) -> config.Config:

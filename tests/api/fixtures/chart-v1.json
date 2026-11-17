@@ -13,7 +13,8 @@
       "low": "12.05",
       "close": "12.16",
       "volume": "3120",
-      "extended": true
+      "extended": true,
+      "session": "pre"
     },
     {
       "start": "2026-11-16T14:25:00.000Z",
@@ -22,7 +23,8 @@
       "low": "12.15",
       "close": "12.30",
       "volume": "5410",
-      "extended": true
+      "extended": true,
+      "session": "pre"
     },
     {
       "start": "2026-11-16T14:30:00.000Z",
@@ -31,9 +33,12 @@
       "low": "12.28",
       "close": "12.47",
       "volume": "182300",
-      "extended": false
+      "extended": false,
+      "session": "regular"
     }
   ],
+  "pending": null,
+  "previous_after_candles": null,
   "api_version": 1,
   "cause_codes": []
 }

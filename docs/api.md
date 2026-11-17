@@ -96,7 +96,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first, each with its clean-day verdict (`clean`). |
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date (with prices after the exit and overshoot) and the symbols with captured M1 bars that start on that date. A date without records answers with empty lists. |
 | GET | `/bars?symbol=<ticker>&date=<YYYY-MM-DD>` | `200` `bars-v1`: captured M1 bars of one symbol that start on that New York date, oldest first. A day's capture file also holds bars of the sessions before it (the session's first reads reach back `[market_data] bars_per_symbol` minutes); those are left out here (the simulations still read them as history). |
-| GET | `/chart?symbol=<ticker>&interval=<1m\|5m\|30m\|1h\|1d\|1w\|1mo>&range=<1d\|5d\|1m\|3m\|1y>` | `200` `chart-v1`: candles of any US stock from market data; `400`, `429` `rate_limited`, `503` `unavailable`. |
+| GET | `/chart?symbol=<ticker>&interval=<1m\|5m\|30m\|1h\|1d\|1w\|1mo>&range=<1d\|5d\|1m\|3m\|1y>` | `200` `chart-v1`: candles of any US stock from market data (`pending` while its budget lets it read only part); `400`, `429` `rate_limited` (only when the budget cannot say when it refills), `503` `unavailable`. |
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, whether they matched its records, and the latest balances. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. |
@@ -128,7 +128,7 @@ Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1, "cause_c
 `forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
 `unauthorized` 401 (remote request without the paired token),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
-`too_many_pending` 429, `rate_limited` 429 (GET /chart: its request budget is spent; `Retry-After`),
+`too_many_pending` 429, `rate_limited` 429 (GET /chart: its request budget is spent and cannot say when it refills),
 `conflict` 409 (an `Idempotency-Key` already used for another command; a Lab replay that cannot
 start now),
 `internal` 500, `unavailable` 503 (history cannot be read now: database of another schema
@@ -803,12 +803,30 @@ from the bot's capture). Code: `src/tickr/api/chart.py`; settings: `[chart]` in 
   class suffix, e.g. `BRK.B`), `interval` and `range`. Served pairs: `1m`, `5m`, `30m`, `1h` with
   `1d` (the latest session) or `5d` (the latest five); `1d`, `1w`, `1mo` with `1m`, `3m`, `1y`
   (calendar months back from today). Anything else is `400 bad_request`.
-- `chart-v1`: `{symbol, interval, range, source, cached_at, cause, bars[], api_version}`; each bar
-  `{start, open, high, low, close, volume, extended}`, oldest first. `source` names the provider
-  (`webull`, or the demo's own). `cached_at` is when the oldest data in the answer was read from it.
-  `cause` is null, or says why `bars` is empty (no data for that symbol and range).
+- `chart-v1`: `{symbol, interval, range, source, cached_at, cause, bars[], pending, previous_after_candles,
+  api_version}`;
+  each bar `{start, open, high, low, close, volume, extended, session}`, oldest first; `session`
+  (added after version 1 shipped) is the part of the day by the calendar, `pre`, `regular` or
+  `after`, for 1m/5m/30m/1h candles and null for daily ones. `source` names the
+  provider (`webull`, or the demo's own). `cached_at` is when the oldest data in the answer was read
+  from it (the answer's time when nothing was read). `cause` is null, or says why `bars` is empty
+  (no data for that symbol and range); it is null while `pending`.
+- `previous_after_candles` (added after version 1 shipped; absent = null): on a `1d` range while
+  its session runs, how many after-hours candles of the asked interval the session before it had,
+  so the apps reserve as many slots for today's after-hours (mockup v113: those prints are sparse,
+  the whole 16:00-20:00 would leave a wide empty band). Read after the answer's own session, from
+  the disk cache once that day has settled; null after the session, on other ranges, or when the
+  budget refused that one read (the answer itself is never held back for it).
+- `pending` (added after version 1 shipped; absent in older documents = null): null when the
+  answer is complete, else `{read, total, retry_after_seconds}`: the chart's budget let it read
+  only `read` of `total` parts, and asking again after `retry_after_seconds` (a decimal string,
+  the budget's own wait, rounded up to the millisecond) reads more. For `1d`/`5d` the parts are
+  the range's sessions (1 or 5) and `bars` holds the newest `read` of them; for `1m`/`3m`/`1y` the
+  one daily-series request, so `read` 0 of `total` 1 and `bars` empty. The apps draw what is there
+  with a progress line ("Loading 3 of 5 days") and ask again after the wait.
 - Sessions: a session is the calendar's day from the pre-market open (04:00) to the extended close
-  (20:00; 17:00 on half days); a 1d/5d range counts sessions whose pre-market has begun. Pre- and
+  (20:00; 17:00 on half days); a 1d/5d range counts sessions whose pre-market has begun and reads them newest first, one
+  request per uncached session. Pre- and
   post-market bars are included and `extended: true`, decided by the session calendar; a bar the
   provider labels differently from the calendar, or one outside the day's sessions, refuses the
   answer (`503`). 5m/30m/1h candles are merged from M1, anchored at the start of each part of the
@@ -830,8 +848,13 @@ from the bot's capture). Code: `src/tickr/api/chart.py`; settings: `[chart]` in 
   at most); `tickr maintain --apply` deletes day files older than `[chart] cache_max_age_days`
   (docs/operations.md). A pruned day is read from Webull again when charted.
 - Budget: the chart has its own request budget, `[chart] requests_per_minute` per 60 s, never the
-  bot's. When it is spent the answer is `429 rate_limited` with `Retry-After` (seconds); nothing is
-  queued or retried. A 1d range costs at most one request per uncached session, a daily range one.
+  bot's. A 1d/5d range costs at most one request per uncached session, a daily range one, so a
+  cold 5d can need more than one window. When the budget refuses a read, reading stops: the answer
+  is `200` with what was read so far and `pending` (above); for 1d/5d that is the newest sessions
+  up to the refused one, one contiguous run (an older session behind it is not added even when it
+  is cached). Every session read is cached as usual, so the next ask after the wait reads only
+  what is missing. Only a refusal that cannot say when the budget refills is `429 rate_limited`;
+  nothing is queued or retried.
   With the chart on, the bot's own budget for the bars route is lowered by the same number, so the
   two processes together never pass one route limit (docs/webull-facts.md, section C).
 - Off by default: `[chart] webull_enabled = false` answers every chart `503 unavailable` with that

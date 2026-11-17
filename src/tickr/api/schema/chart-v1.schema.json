@@ -77,6 +77,21 @@
           },
           "extended": {
             "type": "boolean"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pre",
+                  "regular",
+                  "after"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -90,6 +105,44 @@
         ],
         "additionalProperties": false
       }
+    },
+    "pending": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "read": {
+              "type": "integer"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "retry_after_seconds": {
+              "type": "string",
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+            }
+          },
+          "required": [
+            "read",
+            "total",
+            "retry_after_seconds"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "previous_after_candles": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "api_version": {
       "type": "integer",

@@ -7,10 +7,11 @@ a refused or failed read is one typed answer.
 
 How an answer is built:
 - Ranges 1d and 5d (intervals 1m, 5m, 30m, 1h): the latest 1 or 5 sessions of the calendar whose
-  pre-market has begun. Each session's M1 bars come from one request (end_time = the session's
-  extended close, or now while it runs; `[chart] bars_per_request` covers the 960 minutes of a
-  full day). Every bar must lie inside its day's sessions and carry the provider's label for that
-  part of the day (PRE, RTH, ATH), else the answer is refused; `extended` comes from the calendar.
+  pre-market has begun, read newest first. Each session's M1 bars come from one request
+  (end_time = the session's extended close, or now while it runs; `[chart] bars_per_request`
+  covers the 960 minutes of a full day). Every bar must lie inside its day's sessions and carry
+  the provider's label for that part of the day (PRE, RTH, ATH), else the answer is refused;
+  `extended` comes from the calendar.
   5m/30m/1h candles are cut from M1, anchored at the start of each part of the day (pre-market
   open, regular open, regular close), so no candle spans a session edge: the last candle of a part
   may be shorter, and a bucket without bars has no candle.
@@ -25,6 +26,16 @@ How an answer is built:
   `[chart] live_ttl_seconds`. The daily series stays in memory for the live TTL while today's
   session is not over, then until the next session's pre-market opens. `tickr maintain`
   deletes day files older than `[chart] cache_max_age_days`.
+- Spent budget: the chart's request budget (`[chart] requests_per_minute`) can be smaller than
+  the sessions of a cold 5d range. When it refuses a read and says when it refills, the answer is
+  what was read so far plus `pending` {read, total, retry_after_seconds}: for 1d/5d the newest
+  sessions that were read (reading stops at the first refused session, so the bars are one
+  contiguous run up to the latest session; an older session behind it is not added even when it
+  is cached, because the refused one would leave a gap), for a daily range nothing (0 of 1). Every
+  session read is cached as usual, so asking again after the wait reads only what is missing. A
+  refusal that cannot say when the budget refills stays `rate_limited`.
+- 1d while its session runs also says how many after-hours candles the session before had
+  (`previous_after_candles`), read after the answer's own session and only if the budget allows.
 - Concurrency: the provider is read outside the shared state lock. Answers for one symbol run one
   at a time (a per-symbol lock), so a second request for the same symbol waits and then finds the
   first one's cache instead of spending budget twice; other symbols are not held up. A symbol's
@@ -35,18 +46,26 @@ from __future__ import annotations
 
 import calendar as gregorian
 import json
+import math
 import re
 import threading
 import weakref
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Any
 
 from tickr.api import contract
-from tickr.api.contract import ChartBarV1, ChartInterval, ChartRange, ChartV1
+from tickr.api.contract import (
+    ChartBarV1,
+    ChartInterval,
+    ChartPendingV1,
+    ChartRange,
+    ChartSession,
+    ChartV1,
+)
 from tickr.broker.base import BrokerError, RateLimited
 from tickr.calendar import (
     NEW_YORK,
@@ -71,9 +90,21 @@ RANGE_MONTHS = {ChartRange.M1: 1, ChartRange.M3: 3, ChartRange.Y1: MONTHS_PER_YE
 DAILY_INTERVALS = (ChartInterval.D1, ChartInterval.W1, ChartInterval.MO1)
 # Provider session labels of M1 bars (probe M4).
 PRE, REGULAR, POST = "PRE", "RTH", "ATH"
+CHART_SESSIONS = {PRE: ChartSession.PRE, REGULAR: ChartSession.REGULAR, POST: ChartSession.AFTER}
 ONE_DAY = timedelta(days=1)
 SKIPPED_DAYS = (CalendarCause.WEEKEND, CalendarCause.HOLIDAY)
+MILLISECOND = Decimal("0.001")  # unit factor: retry_after_seconds is given to the millisecond
 OFF_CAUSE = "chart market data is off ([chart] webull_enabled = false)"
+
+
+def pending_after(refused: RateLimited, read: int, total: int) -> ChartPendingV1 | None:
+    """`pending` for a budget refusal after `read` of `total` parts, or None when the refusal
+    does not say when the budget refills (then the apps could not know when to ask again, so the
+    answer stays rate_limited). The wait is rounded up, never asking again too early."""
+    seconds = getattr(refused, "retry_after_seconds", None)
+    if seconds is None or not math.isfinite(seconds) or seconds < 0:
+        return None
+    return ChartPendingV1(read, total, Decimal(seconds).quantize(MILLISECOND, ROUND_CEILING))
 
 
 class ChartRefused(Exception):
@@ -151,6 +182,7 @@ class PlacedBar:
     bar: Bar
     part_start: datetime
     extended: bool
+    session: ChartSession
 
 
 def place(day: MarketDay, item: SessionBar) -> PlacedBar:
@@ -171,7 +203,7 @@ def place(day: MarketDay, item: SessionBar) -> PlacedBar:
         raise ChartRefused("unavailable", f"{item.bar.symbol} bar at "
                            f"{contract.format_time(start)}: the provider says {item.session}, "
                            f"the calendar says {part}")
-    return PlacedBar(item.bar, part_start, part != REGULAR)
+    return PlacedBar(item.bar, part_start, part != REGULAR, CHART_SESSIONS[part])
 
 
 def aggregate_intraday(placed: Sequence[PlacedBar], minutes: int) -> list[ChartBarV1]:
@@ -186,7 +218,8 @@ def aggregate_intraday(placed: Sequence[PlacedBar], minutes: int) -> list[ChartB
         previous = item.bar.start
         offset = (item.bar.start - item.part_start) // width
         buckets.setdefault(item.part_start + offset * width, []).append(item)
-    return [ChartBarV1(start, *merge([i.bar for i in items]), extended=items[0].extended)
+    return [ChartBarV1(start, *merge([i.bar for i in items]), extended=items[0].extended,
+                       session=items[0].session)
             for start, items in buckets.items()]
 
 
@@ -261,12 +294,16 @@ class Chart:
         if source is None:
             raise ChartRefused("unavailable", off_cause)
         with symbol_lock:
+            previous_after: int | None = None
             try:
                 if interval in INTRADAY_MINUTES:
-                    read_at, bars = self._intraday(source, symbol, interval,
-                                                   RANGE_SESSIONS[span], now)
+                    read_at, bars, pending = self._intraday(source, symbol, interval,
+                                                            RANGE_SESSIONS[span], now)
+                    if span is ChartRange.D1 and pending is None:
+                        previous_after = self._previous_after(source, symbol, interval, now)
                 else:
-                    read_at, bars = self._daily(source, symbol, interval, RANGE_MONTHS[span], now)
+                    read_at, bars, pending = self._daily_or_pending(source, symbol, interval,
+                                                                    RANGE_MONTHS[span], now)
             except RateLimited as exc:
                 raise ChartRefused("rate_limited", f"chart read budget: {exc}",
                                    getattr(exc, "retry_after_seconds", None)) from None
@@ -277,9 +314,10 @@ class Chart:
                                    f"{type(exc).__name__}: {exc}") from None
             except CalendarRefused as exc:
                 raise ChartRefused("unavailable", f"calendar: {exc}") from None
-        cause = None if bars else (f"no {interval.value} bars from {source.provider} for "
-                                   f"{symbol} in range {span.value}")
-        return ChartV1(symbol, interval, span, source.provider, read_at, cause, tuple(bars))
+        cause = None if bars or pending else (f"no {interval.value} bars from {source.provider} "
+                                              f"for {symbol} in range {span.value}")
+        return ChartV1(symbol, interval, span, source.provider, read_at, cause, tuple(bars),
+                       pending, previous_after)
 
     # ------------------------------------------------------------ intraday
 
@@ -314,15 +352,45 @@ class Chart:
                            f"{self.settings.session_lookback_days} days before "
                            f"{ny_date_of(now).isoformat()} ([chart] session_lookback_days)")
 
-    def _intraday(self, source: MarketData, symbol: str, interval: ChartInterval,
-                  sessions: int, now: datetime) -> tuple[datetime, list[ChartBarV1]]:
-        placed: list[PlacedBar] = []
-        read_times: list[datetime] = []
-        for day in self._sessions(now, sessions):
-            read_at, rows = self._minutes(source, symbol, day, now)
-            read_times.append(read_at)
-            placed.extend(place(day, row) for row in rows)
-        return min(read_times), aggregate_intraday(placed, INTRADAY_MINUTES[interval])
+    def _intraday(self, source: MarketData, symbol: str, interval: ChartInterval, sessions: int,
+                  now: datetime) -> tuple[datetime, list[ChartBarV1], ChartPendingV1 | None]:
+        """Sessions newest first, so a spent budget still leaves the latest ones on the chart;
+        reading stops at the first refused session (an older one, even cached, would leave a
+        gap). RateLimited propagates when the budget cannot say when it refills."""
+        days = self._sessions(now, sessions)
+        read: list[tuple[MarketDay, datetime, list[SessionBar]]] = []
+        pending: ChartPendingV1 | None = None
+        for day in reversed(days):
+            try:
+                read_at, rows = self._minutes(source, symbol, day, now)
+            except RateLimited as exc:
+                pending = pending_after(exc, len(read), len(days))
+                if pending is None:
+                    raise
+                break
+            read.append((day, read_at, rows))
+        read.reverse()
+        placed = [place(day, row) for day, _, rows in read for row in rows]
+        oldest = min((read_at for _, read_at, _ in read), default=now)
+        return oldest, aggregate_intraday(placed, INTRADAY_MINUTES[interval]), pending
+
+    def _previous_after(self, source: MarketData, symbol: str, interval: ChartInterval,
+                        now: datetime) -> int | None:
+        """While the latest session runs: how many after-hours candles of `interval` the session
+        before it had, for the apps to reserve as many slots for today's after-hours (they are
+        sparse, so the whole 16:00-20:00 would leave a wide empty band). Read after today's
+        session, from the disk cache once settled; None after the session, or when the budget
+        refuses the read (the answer itself never waits for it)."""
+        before, latest = self._sessions(now, 2)
+        if now >= latest.extended_close:
+            return None
+        try:
+            _, rows = self._minutes(source, symbol, before, now)
+        except RateLimited:
+            return None
+        candles = aggregate_intraday([place(before, row) for row in rows],
+                                     INTRADAY_MINUTES[interval])
+        return sum(1 for candle in candles if candle.session is ChartSession.AFTER)
 
     def _minutes(self, source: MarketData, symbol: str, day: MarketDay,
                  now: datetime) -> tuple[datetime, list[SessionBar]]:
@@ -362,6 +430,19 @@ class Chart:
             self._live[key] = _Live(expires, read_at, rows)
 
     # ------------------------------------------------------------ daily
+
+    def _daily_or_pending(self, source: MarketData, symbol: str, interval: ChartInterval,
+                          months: int, now: datetime
+                          ) -> tuple[datetime, list[ChartBarV1], ChartPendingV1 | None]:
+        """A daily range is one request: refused, nothing is drawn yet (0 of 1)."""
+        try:
+            read_at, bars = self._daily(source, symbol, interval, months, now)
+        except RateLimited as exc:
+            pending = pending_after(exc, 0, 1)
+            if pending is None:
+                raise
+            return now, [], pending
+        return read_at, bars, None
 
     def _daily(self, source: MarketData, symbol: str, interval: ChartInterval, months: int,
                now: datetime) -> tuple[datetime, list[ChartBarV1]]:

@@ -713,11 +713,21 @@ class ChartRange(StrEnum):
     Y1 = "1y"
 
 
+class ChartSession(StrEnum):
+    """The part of the day an intraday candle lies in, by the session calendar."""
+
+    PRE = "pre"
+    REGULAR = "regular"
+    AFTER = "after"
+
+
 @dataclass(frozen=True)
 class ChartBarV1:
     """One candle. `start` is the candle's first instant: for 1d/1w/1mo, 00:00 New York time
     of its first calendar day (the date, the Monday, the 1st). `extended` is true for a pre- or
-    post-market candle, decided by the session calendar; always false for 1d/1w/1mo."""
+    post-market candle, decided by the session calendar; always false for 1d/1w/1mo.
+    `session` names that part of the day (pre, regular, after) for 1m/5m/30m/1h candles, so a
+    chart can tell the pre-market from the after-hours without a clock; null for 1d/1w/1mo."""
 
     start: datetime
     open: Decimal
@@ -726,13 +736,32 @@ class ChartBarV1:
     close: Decimal
     volume: Decimal
     extended: bool
+    session: ChartSession | None = _added_later(None)
+
+
+@dataclass(frozen=True)
+class ChartPendingV1:
+    """A chart answered before the chart's request budget let it read everything: `read` of
+    `total` parts are in `bars` (sessions for 1d/5d, newest first; the one daily series for
+    1m/3m/1y, so 0 of 1), and asking again after `retry_after_seconds` (the budget's own wait)
+    reads more. The apps draw what is there and say how far it has got."""
+
+    read: int
+    total: int
+    retry_after_seconds: Decimal
 
 
 @dataclass(frozen=True)
 class ChartV1:
     """GET /chart?symbol=&interval=&range=: candles of any US stock from market data, oldest
     first. `source` names the provider; `cached_at` is when the oldest data in the answer was
-    read from it; `cause` says why `bars` is empty (null when it is not)."""
+    read from it (the answer's time when nothing was read); `cause` says why `bars` is empty
+    (null when it is not, and while `pending`); `pending` is null for a complete answer, else
+    how much the spent budget let it read (added after version 1 shipped).
+    `previous_after_candles`: on a 1d range while its session runs, how many after-hours candles
+    the session before it had in this interval, so the apps reserve as many slots for today's
+    after-hours (mockup v113); null otherwise, or when the budget did not let it be read (added
+    after version 1 shipped)."""
 
     symbol: str
     interval: ChartInterval
@@ -741,6 +770,8 @@ class ChartV1:
     cached_at: datetime
     cause: str | None
     bars: tuple[ChartBarV1, ...]
+    pending: ChartPendingV1 | None = _added_later(None)
+    previous_after_candles: int | None = _added_later(None)
     api_version: int = _const(API_VERSION)
 
     cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
