@@ -32,9 +32,10 @@ Section H, account read only (the adapter reads the account id itself; it is nev
 - `history` (H2): how many rows one order-history page holds and in which order they come, read
   page by page up to `[probe] history_max_pages`. Next to a running bot only while its status
   and last broker read show it flat (the bot's own history reads share the route).
-- `history-since` (H2b): whether the order history takes `start_time` (today's New York
-  midnight, written three ways) and then lists only today's orders, so one page could cover a
-  day of 20 slots. Read only, flat as above.
+- `history-since` (H2b): whether the order history takes a `start_time`/`end_time` window
+  (today's New York midnight to now, in the documented format and two others) and then lists
+  only today's orders, so one page could cover a day of 20 slots. It records each refusal's
+  message. Read only, flat as above.
 
 Every request is sent once and never repeated. Evidence goes to
 `<data_dir>/<[probe] evidence_dir>/<NY date>/<probe>-<UTC time>/`: one JSON line per request and
@@ -538,22 +539,31 @@ def history(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
     return verdict, folder
 
 
-def start_time_encodings(start: datetime) -> list[tuple[str, str]]:
-    """`start` (aware) written the ways the history's `start_time` might take it: the SDK's
-    documented pattern yyyy-MM-dd'T'HH:mm:ss.SSSZ (Java `Z`: +0000), the same with a literal
-    Z, and epoch milliseconds (as the bars route takes its times)."""
-    utc = start.astimezone(UTC)
-    stamp = utc.strftime("%Y-%m-%dT%H:%M:%S.000")
-    return [("iso-offset", stamp + "+0000"), ("iso-z", stamp + "Z"),
-            ("epoch-ms", str(int(utc.timestamp() * MS_PER_SECOND)))]
+def history_windows(start: datetime, end: datetime) -> list[tuple[str, dict[str, str]]]:
+    """The history windows H2b asks for, `start` and `end` aware. The first run (2026-11-17)
+    sent `start_time` alone as +0000, Z and epoch ms: all three HTTP 417 OPENAPI_PARAM_ERR.
+    The API reference gives yyyy-MM-dd'T'HH:mm:ss.SSS'Z' (example 2025-01-05T22:59:59.012Z)
+    for both `start_time` and `end_time`, both optional. So: the documented format alone (to
+    record the refusal's message), then with `end_time`, then the other two formats paired."""
+    def iso(at: datetime, suffix: str) -> str:
+        return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000") + suffix
+
+    def epoch(at: datetime) -> str:
+        return str(int(at.timestamp() * MS_PER_SECOND))
+
+    return [("z-start", {"start_time": iso(start, "Z")}),
+            ("z-pair", {"start_time": iso(start, "Z"), "end_time": iso(end, "Z")}),
+            ("offset-pair", {"start_time": iso(start, "+0000"), "end_time": iso(end, "+0000")}),
+            ("epoch-pair", {"start_time": epoch(start), "end_time": epoch(end)})]
 
 
 def history_since(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
                   out: Callable[[str], None] = print) -> tuple[str, Path]:
-    """H2b: does the history take `start_time`, in which format, and does it then list only
-    orders placed since then? One read per encoding of today's New York midnight. Read only.
-    Next to a running bot only while it is flat (its own history reads share the route).
-    Passed when an encoding is accepted and every row it lists is from today."""
+    """H2b: does the history take a window, in which format, and does it then list only
+    orders placed since today's New York midnight? One read per window of
+    `history_windows`. Read only. Next to a running bot only while it is flat (its own history
+    reads share the route). Passed when a window is accepted and every row it lists is from
+    today."""
     _, lock_path = data_paths(cfg)
     if recorded_holder(lock_path) is not None:
         _refuse_while_exposed(cfg, now())
@@ -562,19 +572,19 @@ def history_since(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
     client = broker(cfg)
     folder = evidence_folder(cfg, "history-since", started)
     shapes = []
-    for name, value in start_time_encodings(midnight):
-        shape = {"encoding": name, **client.history_window_shape(value)}
+    for name, window in history_windows(midnight, started):
+        shape = {"name": name, **client.history_window_shape(window)}
         _append(folder / "reads.jsonl", shape)
         shapes.append(shape)
-    honored = [s["encoding"] for s in shapes if s.get("rows") is not None and (
+    honored = [s["name"] for s in shapes if s.get("rows") is not None and (
         s["oldest"] is None or datetime.fromisoformat(s["oldest"]) >= midnight)]
     (folder / SUMMARY_FILE).write_text(json.dumps({
         "probe": "history-since", "environment": cfg.environment_name,
         "started_at": started.isoformat(), "start": midnight.isoformat(),
         "reads": shapes, "honored": honored}, indent=1, sort_keys=True) + "\n", "utf-8")
     for s in shapes:
-        out(f"h2_since {s['encoding']}: HTTP {s['status']}"
-            + (f" {s.get('error_code')}" if s.get("rows") is None else
+        out(f"h2_since {s['name']}: HTTP {s['status']}"
+            + (f" {s.get('error_code')} {s.get('message')!r}" if s.get("rows") is None else
                f", rows {s['rows']} (own {s['own_rows']}), oldest {s['oldest']}, "
                f"next page {s['next_page']}"))
     return (PASSED if honored else UNFINISHED), folder

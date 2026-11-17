@@ -114,8 +114,6 @@ ORDER_TRIGGER_PRICE_TYPE = "PRICE"
 
 SDK_API_VERSION = "v3"
 SDK_LOGGER_PREFIX = "webull"
-# Query parameter of the order history's window start (SDK `list_order_history`, v3).
-HISTORY_START_PARAM = "start_time"
 LOGGING_OFF = logging.CRITICAL + 1
 SECONDS_PER_MINUTE = 60
 
@@ -955,16 +953,17 @@ class WebullBroker:
             params = {"pagination_key": str(next_key)}
         return pages
 
-    def history_window_shape(self, start_time: str) -> dict[str, Any]:
+    def history_window_shape(self, window: Mapping[str, str]) -> dict[str, Any]:
         """Probe H2b (python -m tickr.probes history-since), read only: one history request
-        with `start_time` (SDK `list_order_history`; its format is unproven) and what it
-        answered: HTTP status and error code, or how many rows (ours among them), the oldest
-        and newest `place_time_at` and whether a next page is offered. No id, symbol, price or
-        account field is returned."""
-        response = self._send(Route.HISTORY, {HISTORY_START_PARAM: start_time})
-        shape: dict[str, Any] = {"start_time": start_time, "status": response.status}
+        with the window's query parameters (`start_time`, `end_time`; SDK `list_order_history`,
+        formats unproven) and what it answered: HTTP status, error code and message (account
+        id scrubbed by the transport), or how many rows (ours among them), the oldest and newest
+        `place_time_at` and whether a next page is offered. No id, symbol, price or account
+        field is returned."""
+        response = self._send(Route.HISTORY, dict(window))
+        shape: dict[str, Any] = {"window": dict(window), "status": response.status}
         if not response.ok:
-            return {**shape, "error_code": response.error_code}
+            return {**shape, "error_code": response.error_code, "message": response.message}
         combos = _unwrap_list(response.body, "history")
         rows = [row for combo in combos if isinstance(combo, Mapping)
                 for row in (combo.get("orders") or []) if isinstance(row, Mapping)]

@@ -627,44 +627,57 @@ def test_one_history_page_or_mixed_order_leaves_h2_open(tmp_path):
 
 
 class Windows:
-    """A broker whose history answers each `start_time` encoding as scripted."""
+    """A broker whose history answers each window as scripted (by `key`), else 417."""
 
     def __init__(self, answers: dict[str, dict]) -> None:
         self.answers, self.asked = answers, []
 
-    def history_window_shape(self, start_time: str) -> dict:
-        self.asked.append(start_time)
-        return {"start_time": start_time, **self.answers.get(start_time, {
-            "status": 417, "error_code": "OPENAPI_PARAM_ERR"})}
+    def history_window_shape(self, window: dict[str, str]) -> dict:
+        self.asked.append(window)
+        return {"window": window, **self.answers.get(key(window), {
+            "status": 417, "error_code": "OPENAPI_PARAM_ERR", "message": "bad time"})}
 
 
-def test_history_since_finds_the_accepted_start_time_format(tmp_path):
-    cfg, lines = cfg_in(tmp_path), []
+def key(window: dict[str, str]) -> str:
+    return "|".join(f"{k}={v}" for k, v in sorted(window.items()))
+
+
+def test_history_windows_use_the_documented_format_first():
     start = datetime(2026, 11, 17, 5, tzinfo=UTC)  # midnight New York
-    encodings = dict(probes.start_time_encodings(start))
-    assert encodings == {"iso-offset": "2026-11-17T05:00:00.000+0000",
-                         "iso-z": "2026-11-17T05:00:00.000Z", "epoch-ms": "1794891600000"}
+    windows = dict(probes.history_windows(start, start + timedelta(hours=16)))
+    assert list(windows) == ["z-start", "z-pair", "offset-pair", "epoch-pair"]
+    assert windows["z-start"] == {"start_time": "2026-11-17T05:00:00.000Z"}
+    assert windows["z-pair"]["end_time"] == "2026-11-17T21:00:00.000Z"
+    assert windows["offset-pair"]["start_time"] == "2026-11-17T05:00:00.000+0000"
+    assert windows["epoch-pair"] == {"start_time": "1794891600000",
+                                     "end_time": "1794949200000"}
+
+
+def test_history_since_finds_the_accepted_window_and_records_refusals(tmp_path):
+    cfg, lines = cfg_in(tmp_path), []
     midnight = datetime.combine(T0.astimezone(probes.NEW_YORK).date(), datetime.min.time(),
                                 probes.NEW_YORK)
-    broker = Windows({dict(probes.start_time_encodings(midnight))["iso-z"]: {
+    pair = dict(probes.history_windows(midnight, T0))["z-pair"]
+    broker = Windows({key(pair): {
         "status": 200, "rows": 3, "own_rows": 2,
-        "oldest": (midnight + timedelta(hours=10)).isoformat(),
-        "newest": (midnight + timedelta(hours=15)).isoformat(), "next_page": False}})
+        "oldest": (midnight + timedelta(hours=4)).isoformat(),
+        "newest": (midnight + timedelta(hours=7)).isoformat(), "next_page": False}})
     verdict, folder = probes.history_since(cfg, now=Clock().now, broker=lambda _: broker,
                                            out=lines.append)
     summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
-    assert verdict == probes.PASSED and summary["honored"] == ["iso-z"]
-    assert len(broker.asked) == 3 and len(lines) == 3
-    assert "HTTP 417 OPENAPI_PARAM_ERR" in lines[0] and "rows 3 (own 2)" in lines[1]
+    assert verdict == probes.PASSED and summary["honored"] == ["z-pair"]
+    assert len(broker.asked) == 4 and len(lines) == 4
+    assert "HTTP 417 OPENAPI_PARAM_ERR 'bad time'" in lines[0] and "rows 3 (own 2)" in lines[1]
+    assert summary["reads"][0]["message"] == "bad time"
 
 
-def test_history_since_is_open_when_no_format_limits_the_window(tmp_path):
+def test_history_since_is_open_when_no_window_limits_the_rows(tmp_path):
     cfg = cfg_in(tmp_path)
     yesterday = (T0 - timedelta(days=1)).isoformat()
     old = {"status": 200, "rows": 1, "own_rows": 1, "oldest": yesterday,
            "newest": yesterday, "next_page": False}
     broker = Windows({})
-    broker.history_window_shape = lambda start_time: {"start_time": start_time, **old}
+    broker.history_window_shape = lambda window: {"window": window, **old}
     verdict, _ = probes.history_since(cfg, now=Clock().now, broker=lambda _: broker,
                                       out=lambda _: None)
     assert verdict == probes.UNFINISHED  # accepted but not honored: yesterday's row is listed
