@@ -292,19 +292,19 @@ def test_no_working_stop_exits_alerts_and_blocks_entries_until_the_operator_clea
 
 
 def test_a_partial_entry_at_the_last_entry_time_is_protected_then_flattened(tmp_path, monkeypatch):
-    """BBB is bought at about 15:35 but only 10 of the shares fill. At the 15:40 last-entry
+    """BBB is bought at about 15:34 but only 10 of the shares fill. At the 15:35 last-entry
     time the rest of the entry is cancelled (never re-priced), the 10 stay protected, and the
-    15:50 flatten closes exactly those 10. The day ends flat and clean."""
+    15:45 flatten closes exactly those 10. The day ends flat and clean."""
     r = Rehearsal(tmp_path, monkeypatch, start="15:32")  # first signal at the ramp top
     ex = scripted(r)
     # Late in the day only a much hotter run makes the cumulative relative volume pass.
     add(r, "BBB", "20", ("15:18", "15:33", D("24.50"), HOT * 10))
     ex.pieces["BBB"] = [Piece(D(10)), Piece(None, at("16:30"))]  # the rest would never fill
-    assert r.run_until("15:54") == 0  # the day-end check reads the broker 180 s after 15:50
+    assert r.run_until("15:54") == 0  # the day-end check reads the broker 500 s after 15:45
 
     (trade,) = r.trades()
     assert trade["close_cause"] == "session-flatten"
-    assert at("15:30").isoformat() < trade["opened_at"] < at("15:40").isoformat()
+    assert at("15:30").isoformat() < trade["opened_at"] < at("15:35").isoformat()
     (entry,) = ex.of("BBB", OrderType.LIMIT)
     assert ex.orders[entry.client_order_id].state is OrderState.CANCELLED
     (cancel,) = r.journal("entry-cancel")
@@ -312,7 +312,7 @@ def test_a_partial_entry_at_the_last_entry_time_is_protected_then_flattened(tmp_
     assert [s.quantity for s in ex.of("BBB", OrderType.STOP_LOSS)] == [D(10)]
     (close,) = ex.of("BBB", OrderType.MARKET)
     assert close.quantity == D(10)
-    assert at("15:50").isoformat() <= trade["closed_at"] < at("15:51").isoformat()
+    assert at("15:45").isoformat() <= trade["closed_at"] < at("15:46").isoformat()
     records_agree(r, ex)
     (day_end,) = r.journal("day-end")
     assert day_end.body["day_clean"] and alert_kinds(r) == []

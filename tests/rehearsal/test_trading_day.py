@@ -3,7 +3,7 @@
 Monday 2026-11-16. Two symbols appear on the gainers screener:
 - AAA breaks out at the open, is bought, and later collapses through its stop (stopped out);
 - BBB breaks out late morning, is bought, survives a bot restart while held (stop resting at
-  the broker), and is closed by the session flatten at 15:50.
+  the broker), and is closed by the session flatten at 15:45.
 The operator stops and re-allows entries through the command inbox in between.
 """
 
@@ -46,7 +46,7 @@ def test_full_day(tmp_path, monkeypatch):
     aaa, bbb = r.trades()
     assert (aaa["symbol"], aaa["close_cause"]) == ("AAA", "stopped-out")
     assert (bbb["symbol"], bbb["close_cause"]) == ("BBB", "session-flatten")
-    assert bbb["closed_at"] >= "2026-11-16T20:50:00"  # 15:50 New York
+    assert bbb["closed_at"] >= "2026-11-16T20:45:00"  # 15:45 New York
 
     # The broker saw exactly: entry, stop (filled) for AAA; entry, stop, close for BBB.
     assert [(side, kind) for _, side, kind, _, _ in r.fills("AAA")] == [

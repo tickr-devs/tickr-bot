@@ -75,17 +75,17 @@ max_entry_rest_bars = 10
 timezone = "America/New_York"
 # Calendar file with standard hours and exceptions, relative to the repo root; read by the calendar.
 calendar_file = "config/calendar/us-equity-2026.json"
-# Last entry this many minutes before the regular close (15:40 ET on a normal day; owner 2026-11-17, ten minutes before
+# Last entry this many minutes before the regular close (15:35 ET on a normal day; owner 2026-11-17, ten minutes before
 # the flatten); read by safety.
-last_entry_minutes_before_close = 20
-# All positions closed this many minutes before the regular close (15:50 ET on a normal day; owner 2026-11-17: room for
-# the flatten of every slot, one stop at a time, before close_order_cutoff_seconds); read by runtime.
-flatten_minutes_before_close = 10
+last_entry_minutes_before_close = 25
+# All positions closed this many minutes before the regular close (15:45 ET on a normal day; owner 2026-11-17: room for
+# the flatten of up to 20 slots, one stop at a time, before close_order_cutoff_seconds); read by runtime.
+flatten_minutes_before_close = 15
 # Seconds after the flatten time before broker reads must show nothing of ours left (alert not-flat-after-flatten,
 # day-end record); must cover the flatten of every slot ([risk] max_open_positions x [orders] max_stops_per_trade x 2 x
-# detail_poll_seconds, 144 s at 6 slots) plus [orders] reconcile_interval_seconds (start-time check,
-# runtime.launchd.check_timings); read by runtime.dayend.
-flatten_grace_seconds = 180
+# detail_poll_seconds, 144 s at 6 slots, 480 s at 20) plus [orders] reconcile_interval_seconds (start-time check,
+# runtime.launchd.check_timings); 500 s = 15:53:20 ET on a normal day, sized for 20 slots; read by runtime.dayend.
+flatten_grace_seconds = 500
 # Seconds before the regular close (the calendar's early close on a half day) from which no closing MARKET order is sent
 # until the next regular open: the trade keeps its broker stop, the engine sets the market-closed fence and the owner gets
 # the flatten-after-close alert; keep it below the flatten-to-close time; read by engine.manual.close_refusal.
@@ -702,7 +702,7 @@ nightly_fetch_out = "data/nightly"
 nightly_fetch_seed = "data/backtest"
 # First watchdog broker check this many seconds after the flatten time (15:54 ET on a normal day); must be above
 # [session] flatten_grace_seconds so the bot's own day-end check comes first; read by runtime.watchdog.
-watchdog_after_flatten_seconds = 240
+watchdog_after_flatten_seconds = 540
 # Last watchdog broker check this many seconds before the regular close (15:59 ET on a normal day); read by runtime.watchdog.
 watchdog_before_close_seconds = 60
 # Seconds between watchdog checks, during the regular session, that the bot runs whenever the database shows an open trade;
@@ -714,7 +714,7 @@ watchdog_bot_check_seconds = 60
 watchdog_status_stale_seconds = 60
 # Watchdog journal (JSON lines: checks and alerts), relative to data_dir; never the bot's database; read by runtime.watchdog.
 watchdog_journal_file = "watchdog.jsonl"
-# From this many seconds before the flatten time (15:45 ET on a normal day) the watchdog starts the bot job once a day
+# From this many seconds before the flatten time (15:40 ET on a normal day) the watchdog starts the bot job once a day
 # when the bot is not running and its database shows an open trade, so the bot's own flatten closes it; must be positive
 # and below the last-entry-to-flatten time so the restarted bot can never open a trade (the earlier restart for a resting entry starts a run fenced
 # by watchdog-started, so it cannot either); read by runtime.watchdog.

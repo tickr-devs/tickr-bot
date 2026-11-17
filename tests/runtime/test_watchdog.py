@@ -25,7 +25,7 @@ from tickr.types import OrderDetail, OrderState, OrderType, Position, Side
 MONDAY_OPEN = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)  # 09:30 ET
 STATUS_EXAMPLE = Path(__file__).resolve().parents[1] / "api" / "fixtures" / "status-v1.example.json"
 MORNING = datetime(2026, 11, 16, 14, 5, tzinfo=UTC)       # 09:05 ET, the job's start
-FIRST = datetime(2026, 11, 16, 20, 54, tzinfo=UTC)    # 15:50 ET flatten + 240 s
+FIRST = datetime(2026, 11, 16, 20, 54, tzinfo=UTC)    # 15:45 ET flatten + 540 s
 LAST = datetime(2026, 11, 16, 20, 59, tzinfo=UTC)         # 16:00 ET close - 60 s
 
 
@@ -328,7 +328,7 @@ def test_cli_watchdog_without_a_channel_never_exits_0(config_path, monkeypatch, 
 
 # --- the one restart a day ----------------------------------------------------------------
 
-FLATTEN = datetime(2026, 11, 16, 20, 50, tzinfo=UTC)  # 15:50 ET
+FLATTEN = datetime(2026, 11, 16, 20, 45, tzinfo=UTC)  # 15:45 ET
 
 
 @pytest.fixture(autouse=True)

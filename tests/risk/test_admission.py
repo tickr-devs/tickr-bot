@@ -97,7 +97,7 @@ REFUSALS = [
                                 session=CALENDAR.day(date(2026, 11, 27)))),
     (C.OUTSIDE_REGULAR_SESSION, lambda: _moved(_at(9, 29))),
     (C.OUTSIDE_REGULAR_SESSION, lambda: _moved(_at(16, 0))),
-    (C.AFTER_LAST_ENTRY, lambda: _moved(_at(15, 40))),
+    (C.AFTER_LAST_ENTRY, lambda: _moved(_at(15, 35))),
     # 4
     (C.COUNT_INVALID, lambda: inputs(own_working_orders=-1)),
     (C.COUNT_INVALID, lambda: inputs(open_positions=True)),
@@ -215,7 +215,7 @@ def test_cooldown_times_are_read_exactly(lim):
 
 def test_after_last_entry_time_is_read(lim):
     refusal = refusal_of(_recorded(admit(_moved(_at(15, 50)), lim)))
-    assert refusal.since == _at(15, 40)
+    assert refusal.since == _at(15, 35)
     assert refusal.message == "the session's last entry time had passed"
 
 
@@ -231,7 +231,7 @@ def test_boundaries_admit(lim):
     assert admit(edge, lim).ok
     # Ask at the window bottom; last minute before last entry; first minute of the session.
     assert admit(inputs(quote=quote(bid=D("9.99"), ask=D("10.00"))), lim).ok
-    assert admit(_moved(_at(15, 39)), lim).ok
+    assert admit(_moved(_at(15, 34)), lim).ok
     assert admit(_moved(_at(9, 30)), lim).ok
 
 
@@ -255,8 +255,8 @@ def test_half_day_admitted_when_enabled(lim):
     result = admit(_moved(_at(10, 0, day), session=CALENDAR.day(day)),
                    replace(lim, session=replace(lim.session, half_days_enabled=True)))
     assert result.ok
-    # Half-day close is 13:00 New York, so last entry is 12:45.
-    refused = admit(_moved(_at(12, 45, day), session=CALENDAR.day(day)),
+    # Half-day close is 13:00 New York, so last entry is 12:35.
+    refused = admit(_moved(_at(12, 35, day), session=CALENDAR.day(day)),
                     replace(lim, session=replace(lim.session, half_days_enabled=True)))
     assert refused.cause is C.AFTER_LAST_ENTRY
 
@@ -296,8 +296,8 @@ def test_first_failure_wins(lim):
 def test_dst_change_day(lim):
     # 2026-11-02 is the first Monday after the DST change (2026-11-01).
     day = date(2026, 11, 2)
-    assert admit(_moved(_at(15, 39, day), session=CALENDAR.day(day)), lim).ok
-    assert admit(_moved(_at(15, 40, day), session=CALENDAR.day(day)), lim).cause \
+    assert admit(_moved(_at(15, 34, day), session=CALENDAR.day(day)), lim).ok
+    assert admit(_moved(_at(15, 35, day), session=CALENDAR.day(day)), lim).cause \
         is C.AFTER_LAST_ENTRY
 
 

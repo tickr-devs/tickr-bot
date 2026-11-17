@@ -124,16 +124,17 @@ def test_a_crash_at_each_step_of_a_trade_then_a_restart(tmp_path, monkeypatch, w
 
 @pytest.mark.parametrize("back", ["15:57", "15:59:30", "16:10"])
 def test_a_bot_down_through_the_flatten_time(tmp_path, monkeypatch, back):
-    """AAA is held when the bot stops at 09:47 and stays down. Back at 15:57 (after the 15:55
+    """AAA is held when the bot stops at 09:47 and stays down. Back at 15:57 (after the 15:45
     flatten time, before the close-order cutoff) it flattens with a MARKET order; back after
     the cutoff (15:59) or after the close it sends nothing, keeps the stop, sets
-    `market-closed:<trade>` and alerts flatten-after-close, and the day end is not clean."""
+    `market-closed:<trade>` and alerts flatten-after-close, and the day end is not clean. A bot
+    started after the flatten time checks the day's end flatten_grace_seconds after its start."""
     r = Rehearsal(tmp_path, monkeypatch, start="09:43")
     ex = scripted(r)
     add(r, "AAA", "20", breakout("09:30", "09:45", "24.50"))
     assert r.run_until("09:47") == 0
     r.bot_down_until(back)
-    assert r.run_until("16:05" if back < "16:00" else "16:15") == 0
+    assert r.run_until("16:10" if back < "16:00" else "16:20") == 0
 
     (trade,) = r.trades()
     (day_end,) = r.journal("day-end")

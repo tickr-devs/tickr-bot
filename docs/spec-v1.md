@@ -153,7 +153,7 @@ Each stage is one or more PRs; the next starts after the previous merges.
 | 1 | Skeleton | config loader + comment rule, SQLite journal, single-instance lock, fake broker, CLI `status`, CI. |
 | 2 | Webull adapter | read account/positions/orders/Detail, place/cancel, host allowlist, request budget; recorded-shape tests green. |
 | 3 | Protected trade on command | `enter 1 SYMBOL` does intent -> order -> fill -> stop -> exit -> reconcile in Sandbox; kill -9 mid-trade and restart resumes correctly. |
-| 4 | Risk and session | admission checklist, daily risk, entry-stop, cancel-own-orders, flatten, 15:40/15:50 timers. |
+| 4 | Risk and session | admission checklist, daily risk, entry-stop, cancel-own-orders, flatten, 15:35/15:45 timers. |
 | 5 | Data and strategy | discovery, bars, L1 stream, capture files, strategy interface + price-action-v1, decision recording; historical M1 replay of the strategy as an evaluation tool. |
 | 6 | Automatic trading | strategy ENTER wired to orders, launchd jobs, alerts, local API + status screen; 5 clean trading days. |
 | 7 | Later | Versions v1.1 to v6 in `docs/backlog.md`. Development does not wait for the 5 clean days: v1 is released and keeps collecting them while the next version is built (owner, 2026-11-16). |
