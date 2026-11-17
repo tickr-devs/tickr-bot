@@ -322,9 +322,13 @@ def _detail_priority(row: OrderRow, poll_seconds: float) -> float:
     return (row.last_detail_at or 0.0) - boost * poll_seconds
 
 
-# The most stops one fill observation adds: its own, and a split at the trade's scale-out
+# The stop pieces one fill observation sizes: its own, and a split at the trade's scale-out
 # boundary (`_stop_pieces`). `[orders] max_stops_per_trade` keeps room for one more.
 STOPS_PER_FILL = 2
+# The most stop places one fill observation sends: its pieces, and one of them told apart from
+# an equal live stop by quantity (`_apart_by_quantity`: an even scale-out on a cheap stock
+# places q - 1 and 1 for the second half). The place budget reserves this many per entry.
+STOP_PLACES_PER_FILL = STOPS_PER_FILL + 1
 
 
 def _stop_pieces(trade: TradeRow, covered: Decimal, quantity: Decimal) -> list[Decimal]:

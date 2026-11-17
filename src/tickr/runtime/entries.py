@@ -23,7 +23,7 @@ from tickr.calendar import (
 )
 from tickr.config import Config, trading_gate
 from tickr.engine.core import (
-    STOPS_PER_FILL,
+    STOP_PLACES_PER_FILL,
     Engine,
     EntryRefused,
     Fence,
@@ -218,14 +218,15 @@ def own_exposure(engine: Engine, symbol: str | None = None) -> tuple[int, int]:
 
 def stop_requests_owed(engine: Engine) -> int:
     """Place requests the stops may need if every working entry of ours, and the one about to
-    be placed, filled in the same poll: each fill observation places up to `STOPS_PER_FILL`
-    stops at once (its own and a split at the scale-out boundary). An entry is admitted only
-    while the place budget holds that many after its own request, so entries filling together
-    are never left waiting on our own budget for their stops (with 30 places per 60 s
-    against up to 2 stops per slot). Closes and stop retries are not counted: they come one
-    trade at a time."""
+    be placed, filled in the same poll: each fill observation places up to
+    `STOP_PLACES_PER_FILL` stops at once (its own, a split at the scale-out boundary, and one
+    piece told apart by quantity on a cheap stock). An entry is admitted only while the place
+    budget holds that many after its own request, so entries filling together are never left
+    waiting on our own budget for their stops (with 30 places per 60 s: at most 7 entries
+    working at once). Not counted: a later piecemeal fill of an entry already observed, closes,
+    stop retries and forced exits; they draw on the rest of the window."""
     working = sum(1 for o in engine.orders() if o.leg is Leg.ENTRY and o.live)
-    return STOPS_PER_FILL * (working + 1)
+    return STOP_PLACES_PER_FILL * (working + 1)
 
 
 def slots_in_use(engine: Engine) -> int:
