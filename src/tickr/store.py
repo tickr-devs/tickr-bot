@@ -163,10 +163,19 @@ def _schema_v9(db: sqlite3.Connection) -> None:
         db.execute(f"ALTER TABLE trades ADD COLUMN {column} TEXT")
 
 
+def _schema_v10(db: sqlite3.Connection) -> None:
+    # Extended hours (design v2.1, 2026-11-17): the trading window a trade was opened in
+    # (risk.timers.WindowKind; every earlier trade was a regular one), and what it reserves
+    # against the daily loss ceiling (NULL: its planned loss; an extended trade reserves its
+    # whole position value, owner decision B2 2026-11-17).
+    db.execute("ALTER TABLE trades ADD COLUMN trading_window TEXT NOT NULL DEFAULT 'regular'")
+    db.execute("ALTER TABLE trades ADD COLUMN reserved_usd TEXT")
+
+
 # Forward-only migrations. Never edit a released entry; append a new one.
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5, _schema_v6, _schema_v7,
-    _schema_v8, _schema_v9)
+    _schema_v8, _schema_v9, _schema_v10)
 
 
 def _json_default(value: Any) -> Any:

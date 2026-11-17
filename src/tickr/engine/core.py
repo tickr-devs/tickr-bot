@@ -24,6 +24,7 @@ from typing import Any
 
 from tickr.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, Refused
 from tickr.config import Config, GateResult
+from tickr.risk.timers import WindowKind
 from tickr.store import Store
 from tickr.types import (
     OrderDetail,
@@ -37,6 +38,10 @@ from tickr.types import (
 )
 
 ZERO = Decimal(0)
+# Trading windows the engine can protect a trade in: only the regular session has a broker
+# stop (F7). The pre-market and post-market join when the bot-watched stop and the LIMIT exits
+# exist (design v2.1, PRs 3 and 4).
+PROTECTED_WINDOWS = frozenset({WindowKind.REGULAR})
 
 
 class Leg(StrEnum):
@@ -237,6 +242,14 @@ class TradeRow:
     reduce_quantity: Decimal | None = None
     reduce_cause: str | None = None
     reduce_state: ReduceState | None = None
+    trading_window: WindowKind = WindowKind.REGULAR
+    reserved_usd: Decimal | None = None
+
+    @property
+    def reservation(self) -> Decimal:
+        """What the trade holds against the daily loss ceiling: its planned loss, or for an
+        extended-hours trade its whole position value (owner decision B2, 2026-11-17)."""
+        return self.planned_loss_usd if self.reserved_usd is None else self.reserved_usd
 
     @property
     def reducing(self) -> bool:
@@ -280,6 +293,8 @@ def _trade(row: Any) -> TradeRow:
         scale_out_quantity=_dec(row["scale_out_quantity"]),
         reduce_quantity=_dec(row["reduce_quantity"]), reduce_cause=row["reduce_cause"],
         reduce_state=None if row["reduce_state"] is None else ReduceState(row["reduce_state"]),
+        trading_window=WindowKind(row["trading_window"]),
+        reserved_usd=_dec(row["reserved_usd"]),
     )
 
 
@@ -551,7 +566,9 @@ class Engine:
                    entry_low_price: Decimal | None = None,
                    strategy: tuple[str, str] | None = None,
                    rest_until: datetime | None = None,
-                   scale_out_quantity: Decimal | None = None) -> str:
+                   scale_out_quantity: Decimal | None = None,
+                   window: WindowKind = WindowKind.REGULAR,
+                   reserved_usd: Decimal | None = None) -> str:
         """Record and send a LIMIT BUY entry. Refuses (EntryRefused) instead of guessing.
 
         With `stop_percent_below_fill`, the stop is re-derived from the first observed average
@@ -564,7 +581,14 @@ class Engine:
         (`runtime.entries.entry_cancel_cause`); it needs `entry_low_price`.
         `scale_out_quantity` (whole, below `quantity`) is the part the strategy plans to sell
         first: stops are placed so that some of them cover exactly that part, and a later
-        `request_reduce` of it leaves the rest protected throughout."""
+        `request_reduce` of it leaves the rest protected throughout. `window` is the trading
+        window admission found; a trade is opened only in a window the engine can protect
+        (`PROTECTED_WINDOWS`). `reserved_usd`: what it reserves against the daily ceiling when
+        that is not its planned loss."""
+        if window not in PROTECTED_WINDOWS:
+            # Second barrier behind config.load (Fable on #574): admission may admit an
+            # extended entry, but nothing here protects one yet (no broker stop exists there).
+            raise EntryRefused(f"no protection path for a {window} trade yet")
         gate = self.gate()
         if not gate.open:
             raise EntryRefused(f"trading gate closed: {gate.cause}")
@@ -596,15 +620,17 @@ class Engine:
             self.store.execute(
                 "INSERT INTO trades(trade_id, run_id, symbol, state, entry_quantity, "
                 "entry_limit_price, stop_price, stop_percent_below_fill, planned_loss_usd, "
-                "opened_at, entry_low_price, entry_rest_until, scale_out_quantity) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "opened_at, entry_low_price, entry_rest_until, scale_out_quantity, "
+                "trading_window, reserved_usd) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (trade_id, self.run_id, symbol, TradeState.OPENING, str(quantity),
                  str(limit_price), str(stop_price),
                  None if stop_percent_below_fill is None else str(stop_percent_below_fill),
                  str(planned_loss_usd), self.store.stamp(),
                  None if entry_low_price is None else str(entry_low_price),
                  None if rest_until is None else rest_until.astimezone(UTC).isoformat(),
-                 None if scale_out_quantity is None else str(scale_out_quantity)))
+                 None if scale_out_quantity is None else str(scale_out_quantity),
+                 window, None if reserved_usd is None else str(reserved_usd)))
             self.store.append(TRADE_OPENED, {
                 "symbol": symbol, "quantity": quantity, "limit_price": limit_price,
                 "stop_price": stop_price, "planned_loss_usd": planned_loss_usd,

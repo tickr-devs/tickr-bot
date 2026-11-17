@@ -130,7 +130,12 @@ class Admission:
     cause: AdmissionCause | None
     detail: str
     planned_loss_usd: Decimal | None = None
-    """On success: the reservation to record for this entry (quantity x (limit - stop price))."""
+    """On success: the entry's planned loss (quantity x (limit - stop price))."""
+    window: WindowKind | None = None
+    """On success: the trading window the entry is in."""
+    reserved_usd: Decimal | None = None
+    """On success, when it is not the planned loss: what the entry reserves against the daily
+    loss ceiling (an extended-hours entry: its whole position value, owner decision B2)."""
 
 
 def _refuse(cause: AdmissionCause, detail: str) -> Admission:
@@ -371,12 +376,23 @@ def _check_money(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
         assert size.cause is not None
         return _refuse(size.cause, size.detail)
     assert size.planned_loss_usd is not None
+    reserve = _reservation(i, lim) or size.planned_loss_usd
     daily = check_daily(i.realized_loss_today_usd, i.open_reservations_usd,
-                        size.planned_loss_usd, lim.max_daily_loss_usd, lim.min_daily_room_usd)
+                        reserve, lim.max_daily_loss_usd, lim.min_daily_room_usd)
     if not daily.ok:
         assert daily.cause is not None
         return _refuse(daily.cause, daily.detail)
     return None
+
+
+def _reservation(i: AdmissionInputs, lim: AdmissionLimits) -> Decimal | None:
+    """An extended-hours entry reserves its whole position value against the daily ceiling:
+    nothing at Webull limits its loss there while the bot cannot act (owner decisions B1, B2,
+    2026-11-17). None for a regular entry (it reserves its planned loss)."""
+    if _window(i, lim).kind is WindowKind.REGULAR:
+        return None
+    assert i.decision.quantity is not None and i.limit_price is not None
+    return i.decision.quantity * i.limit_price
 
 
 def _check_budget(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
@@ -409,5 +425,6 @@ def admit(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admission:
     assert d.quantity is not None
     assert inputs.limit_price is not None and inputs.stop_price is not None
     planned_loss = d.quantity * (inputs.limit_price - inputs.stop_price)
-    return Admission(True, None, f"admitted {d.quantity} {d.symbol}", planned_loss)
+    return Admission(True, None, f"admitted {d.quantity} {d.symbol}", planned_loss,
+                     _window(inputs, limits).kind, _reservation(inputs, limits))
 

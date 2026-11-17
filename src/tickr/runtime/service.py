@@ -691,7 +691,7 @@ class Service:
         from tickr.runtime import entries  # entries imports this module
 
         now = self.now()
-        reserved = sum((t.planned_loss_usd for t in self.engine.trades()), ZERO)
+        reserved = sum((t.reservation for t in self.engine.trades()), ZERO)
         return (entries.realized_loss_today(self.engine, now), reserved,
                 entries.daily_loss_room(self.engine, self.config, now))
 

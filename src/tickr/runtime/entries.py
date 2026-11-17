@@ -174,7 +174,7 @@ def daily_loss_room(engine: Engine, config: Config, now: datetime) -> Decimal | 
     loss = realized_loss_today(engine, now)
     if loss is None:
         return None
-    reserved = sum((t.planned_loss_usd for t in engine.trades()), ZERO)
+    reserved = sum((t.reservation for t in engine.trades()), ZERO)
     return config.risk.max_daily_loss_usd - loss - reserved
 
 
@@ -239,7 +239,7 @@ class EntryDesk:
     # --- money -----------------------------------------------------------------------------
 
     def _reservations(self) -> Decimal:
-        return sum((t.planned_loss_usd for t in self.engine.trades()), ZERO)
+        return sum((t.reservation for t in self.engine.trades()), ZERO)
 
     # --- admission -------------------------------------------------------------------------
 
@@ -294,6 +294,7 @@ class EntryDesk:
                 admission, cause = RecordAdmission.REFUSED, f"{result.cause}: {result.detail}"
             else:
                 assert decision.quantity is not None and result.planned_loss_usd is not None
+                assert result.window is not None
                 assert inputs.limit_price is not None and inputs.stop_price is not None
                 try:
                     self.engine.open_trade(decision.symbol, decision.quantity,
@@ -302,7 +303,9 @@ class EntryDesk:
                                            entry_low_price=decision.entry_low,
                                            strategy=(decision.strategy, decision.version),
                                            rest_until=rest_until(decision, bar_start),
-                                           scale_out_quantity=decision.scale_out)
+                                           scale_out_quantity=decision.scale_out,
+                                           window=result.window,
+                                           reserved_usd=result.reserved_usd)
                     admission = RecordAdmission.TAKEN
                 except EntryRefused as exc:
                     admission, cause = RecordAdmission.REFUSED, f"{ENGINE_REFUSED}: {exc.cause}"

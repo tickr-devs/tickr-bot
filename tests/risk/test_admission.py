@@ -342,7 +342,9 @@ def _extended(lim, *strategies: str):
     """Both extended windows on (config.load refuses that until the path exists; admission
     itself must already be right) and `strategies` allowed to enter in them."""
     session = replace(lim.session, premarket_enabled=True, postmarket_enabled=True)
-    return replace(lim, session=session, extended_hours_strategies=frozenset(strategies))
+    # The whole position is reserved outside RTH (B2): use the planned 5,000 USD ceiling.
+    return replace(lim, session=session, extended_hours_strategies=frozenset(strategies),
+                   max_daily_loss_usd=D(5000))
 
 
 def test_extended_window_refuses_a_strategy_not_allowed_there(lim):
@@ -387,3 +389,16 @@ def test_extended_window_sizes_down(lim):
     assert admit(_moved(_at(17, 0)), on).cause is C.PLANNED_LOSS_OVER_LIMIT
     half = admit(_moved(_at(17, 0), decision=HALF), on)
     assert half.ok and half.planned_loss_usd == D("24.80")
+
+
+def test_extended_entry_reserves_its_whole_position(lim):
+    # Owner decision B2 (2026-11-17): 62 x 10.20 = 632.40 USD held against the daily ceiling.
+    on = _extended(lim, "price-action-v3")
+    result = admit(_moved(_at(17, 0), decision=HALF), on)
+    assert result.ok and result.reserved_usd == D("632.40")
+    assert result.planned_loss_usd == D("24.80")
+    assert result.window == "post-market"
+    tight = admit(_moved(_at(17, 0), decision=HALF), replace(on, max_daily_loss_usd=D(600)))
+    assert tight.cause is C.DAILY_CEILING
+    regular = admit(_moved(_at(10, 0)), on)
+    assert regular.reserved_usd is None and regular.window == "regular"

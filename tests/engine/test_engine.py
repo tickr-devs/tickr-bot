@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -897,3 +898,25 @@ def test_a_sell_given_up_on_is_asked_about_again_when_the_shares_go(store):
     assert has(e, Fence.RESURRECTED)
     assert legs(e, t, Leg.EXIT)[0].filled_quantity == D(2)
     assert working_stops(b) == D(0)  # the stop for shares no longer held is cancelled
+
+
+def test_no_trade_is_opened_in_a_window_it_cannot_protect(store):
+    # Second barrier behind config.load (Fable on #574): no broker stop exists outside RTH and
+    # the bot-watched path is not built yet, so nothing is recorded or sent.
+    from tickr.risk.timers import WindowKind
+
+    b = FakeBroker()
+    e = make(store, b)
+    for window in (WindowKind.PRE, WindowKind.POST):
+        with pytest.raises(EntryRefused, match=f"no protection path for a {window} trade"):
+            e.open_trade("ABC", D(1), D("10.00"), D("9.80"), D("0.2"), window=window,
+                         reserved_usd=D(10))
+    assert e.trades() == [] and b.open_orders() == []
+
+
+def test_a_trade_keeps_its_window_and_reservation(store):
+    e = make(store, FakeBroker())
+    t = e.open_trade("ABC", D(1), D("10.00"), D("9.80"), D("0.2"), reserved_usd=D("10.00"))
+    assert (e.trade(t).trading_window, e.trade(t).planned_loss_usd) == ("regular", D("0.2"))
+    assert e.trade(t).reservation == D("10.00")
+    assert replace(e.trade(t), reserved_usd=None).reservation == D("0.2")
