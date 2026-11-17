@@ -103,6 +103,32 @@ def test_memory_holds_the_most_recently_asked_and_the_rest_come_from_disk(tmp_pa
     assert len(md.calls) == asked + 2  # only CCC's two pages went to the provider
 
 
+def test_a_history_read_back_from_its_file_is_counted_as_a_reload(tmp_path):
+    md = FakeMarketData()
+    for symbol in ("AAA", "BBB"):
+        for day in [date(2026, 11, 6), *WEEK, MONDAY]:
+            md.add_bars(session_bars(symbol, day))
+    rd = reader(md, tmp_path, memory_symbols=1)
+    assert rd.prior_sessions(["AAA", "BBB"], MONDAY, 5).reloads == 0  # BBB pushed AAA out
+    assert rd.prior_sessions(["BBB"], MONDAY, 5).reloads == 0  # in memory
+    assert rd.prior_sessions(["AAA"], MONDAY, 5).reloads == 1  # from its file
+    assert rd.prior_sessions(["AAA"], MONDAY, 5).reloads == 0  # in memory again
+
+
+def test_a_reader_without_a_directory_never_pushes_a_history_out():
+    """With no file to read it back from, a pushed-out history would be fetched again."""
+    md = FakeMarketData()
+    for symbol in ("AAA", "BBB"):
+        for day in [date(2026, 11, 6), *WEEK, MONDAY]:
+            md.add_bars(session_bars(symbol, day))
+    rd = reader(md, None, memory_symbols=1)
+    first = one(rd, "AAA", MONDAY, 5)
+    one(rd, "BBB", MONDAY, 5)
+    asked = len(md.calls)
+    assert one(rd, "AAA", MONDAY, 5) is first
+    assert len(md.calls) == asked
+
+
 def test_a_history_whose_write_failed_is_never_pushed_out(tmp_path, monkeypatch):
     md = FakeMarketData()
     for symbol in ("AAA", "BBB", "CCC"):

@@ -27,6 +27,7 @@ from tickr.runtime.entries import EntryDesk
 from tickr.runtime.evaluation import (
     EVALUATION_STOPPED,
     HISTORY_REFUSED,
+    HISTORY_RELOADED,
     REMAINDER,
     STRATEGY_ERROR,
     Evaluator,
@@ -405,6 +406,25 @@ def test_history_refusal_is_recorded_once_a_day_and_the_strategy_still_decides(t
     rig.evaluator.tick(Market(["ABC"]))
     assert len(rig.store.journal(HISTORY_REFUSED)) == 1
     assert [len(c.prior_sessions) for c in rig.strategy.seen] == [0, 0]
+
+
+def test_histories_read_back_from_disk_are_journaled_once_per_minute(tmp_path):
+    """A memory cache smaller than what a minute asks reads files every minute: the minute's
+    count is journaled once the next minute is evaluated."""
+    settings = replace(HistorySettings.from_config(CFG), memory_symbols=1)
+    rig = Rig(tmp_path)
+    rig.evaluator.history = HistoryReader(rig.source, CALENDAR, settings, tmp_path / "history")
+    for symbol in ("ABC", "XYZ"):
+        rig.symbol(symbol)
+    rig.evaluator.tick(Market(["ABC", "XYZ"]))  # both fetched; XYZ pushes ABC out
+    rig.now += timedelta(minutes=1)
+    rig.evaluator.tick(Market(["ABC", "XYZ"]))  # each read back, pushing the other out
+    assert rig.store.journal(HISTORY_RELOADED) == []  # its minute is not over yet
+    rig.now += timedelta(minutes=1)
+    rig.evaluator.tick(Market(["ABC", "XYZ"]))
+    (row,) = rig.store.journal(HISTORY_RELOADED)
+    minute = NOW.replace(second=0, microsecond=0)  # the bar of the second tick
+    assert row.body == {"bar_start": minute.isoformat(), "reloads": 2}
 
 
 def test_budget_or_delayed_data_stops_the_minute(tmp_path):

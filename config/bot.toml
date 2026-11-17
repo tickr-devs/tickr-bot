@@ -472,8 +472,9 @@ history_max_lookback_days = 14
 history_sessions = 5
 # Most symbols' prior-session histories the bot keeps in memory, the most recently asked; the others are read again
 # from their cache file under history_dir, with no request (one 5-session history is about 2 MB; 2026-11-16 the bot
-# evaluated at most 251 symbols in any 10 minutes, while the pre-open preload reads several hundred); count; read by
-# data.history.
+# evaluated at most 251 symbols in any 10 minutes, while the pre-open preload reads several hundred); a minute that
+# reads histories back from disk is journaled as history-reloaded (raise this when those rows appear every minute);
+# count; read by data.history.
 history_memory_symbols = 300
 # Prior-session bar cache folder relative to [run] data_dir; files go to <history_dir>/<environment>/<NY date asked
 # on>/<symbol>-<sessions>.jsonl (replay bar format); read by data.history.

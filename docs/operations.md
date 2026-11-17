@@ -581,6 +581,12 @@ loads the prior-session history of the screener recorder's symbols (below), one 
 silently). History refusals of the strategy's symbols are `history-refused` rows, once a
 symbol a day.
 
+The evaluation keeps at most `[market_data] history_memory_symbols` prior-session histories in
+memory; one pushed out is read again from its cache file. A minute that read any back writes one
+`history-reloaded` row (`bar_start`, `reloads`) once the next minute is evaluated. Such rows every
+minute mean the limit is below what a minute asks: raise it. A cache file deleted during the day
+is fetched again (request budget) the next time its history is not in memory.
+
 ### Screener lists outside the regular session
 
 From the pre-market open to the regular open, and from the regular close to the extended close

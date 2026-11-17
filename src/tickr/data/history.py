@@ -50,8 +50,12 @@ Cache: on disk at `<directory>/<before>/<symbol>-<sessions>.jsonl`, in the repla
 written whole through a temporary file, and in memory for at most `memory_symbols` histories, the
 most recently asked (one history of 5 sessions is about 2 MB; the pre-open preload alone reads
 several hundred symbols, so an unbounded memory cache grew the bot by a history per new symbol
-all day). A history pushed out of memory is read again from its file, with no request. A cache
-file that does not parse, or a failed write, is refused as CACHE; a bad file is never silently
+all day). A history pushed out of memory is read again from its file, with no request, and
+counted in `HistoryRead.reloads` (the evaluation journals them per minute: a cap below what one
+minute asks reads files all day instead of growing). A reader without a directory never pushes
+a history out (it would be fetched again). A cache file deleted mid-day is fetched again on the
+next ask of a history no longer in memory (the budget is spent once more). A cache file that
+does not parse, or a failed write, is refused as CACHE; a bad file is never silently
 re-fetched over. A fetched history whose write failed stays in memory all day (it has no file),
 so the budget is not spent twice. Refusals are kept all day (they hold no bars).
 """
@@ -163,6 +167,7 @@ class HistoryRead:
     refused: dict[str, HistoryUnavailable]
     error: MarketDataError | BrokerError | None  # RateLimited, DelayedData, a failed read
     requests: int  # requests the provider answered in this call (budget refusals not counted)
+    reloads: int = 0  # histories read again from their file after being pushed out of memory
 
 
 @dataclass
@@ -197,6 +202,7 @@ class HistoryReader:
         self._memory: OrderedDict[tuple[str, date, int], SessionHistory] = OrderedDict()
         self._refusals: dict[tuple[str, date, int], HistoryUnavailable] = {}
         self._unstored: set[tuple[str, date, int]] = set()
+        self._pushed: set[tuple[str, date, int]] = set()  # pushed out, not read back yet
 
     @classmethod
     def from_config(cls, config: Config, source: MarketData,
@@ -212,6 +218,7 @@ class HistoryReader:
         found: dict[str, SessionHistory] = {}
         refused: dict[str, HistoryUnavailable] = {}
         counter = [0]
+        reloads = 0
         error: MarketDataError | BrokerError | None = None
         with self._lock:
             # A new New York day drops older entries: the cache is per day asked on.
@@ -219,6 +226,7 @@ class HistoryReader:
                 del self._memory[old]
             self._refusals = {k: v for k, v in self._refusals.items() if k[1] == before}
             self._unstored = {k for k in self._unstored if k[1] == before}
+            self._pushed = {k for k in self._pushed if k[1] == before}
             missing: list[str] = []
             days: list[MarketDay] | None = None
             for symbol in dict.fromkeys(symbols):
@@ -250,6 +258,8 @@ class HistoryReader:
                 if history is None:
                     missing.append(symbol)
                 else:
+                    if key in self._pushed:
+                        reloads += 1
                     self._remember(key, history)
                     found[symbol] = history
             if missing:
@@ -262,18 +272,23 @@ class HistoryReader:
                     except (MarketDataError, BrokerError) as exc:  # RateLimited, DelayedData
                         error = exc
                         break
-        return HistoryRead(found, refused, error, counter[0])
+        return HistoryRead(found, refused, error, counter[0], reloads)
 
     def _remember(self, key: tuple[str, date, int], history: SessionHistory) -> None:
         """Keep `history` as the most recently asked; push out the least recently asked
-        histories that have a file while more than `memory_symbols` are held."""
+        histories that have a file while more than `memory_symbols` are held. Without a
+        directory there are no files: nothing is pushed out."""
+        self._pushed.discard(key)
         self._memory[key] = history
         self._memory.move_to_end(key)
+        if self._directory is None:
+            return
         excess = len(self._memory) - self._settings.memory_symbols
         for old in [k for k in self._memory if k not in self._unstored]:
             if excess <= 0:
                 break
             del self._memory[old]
+            self._pushed.add(old)
             excess -= 1
 
     def _refuse(self, refused: dict[str, HistoryUnavailable], before: date, sessions: int,

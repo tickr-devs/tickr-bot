@@ -58,6 +58,7 @@ ZERO = Decimal(0)
 EVALUATION_STOPPED = "evaluation-stopped"
 STRATEGY_ERROR = "strategy-error"
 HISTORY_REFUSED = "history-refused"
+HISTORY_RELOADED = "history-reloaded"
 PROTECT_FIRST = "protect-first"
 CANDIDATES_LATE = "candidates-late"
 REMAINDER = "evaluation-remainder"
@@ -140,6 +141,8 @@ class Evaluator:
         # already decided (never twice in a minute).
         self._waiting: tuple[datetime, list[str]] | None = None
         self._history_refused: set[tuple[str, date]] = set()
+        # The minute being evaluated and how many histories it read back from their files.
+        self._reloads: tuple[datetime, int] | None = None
         self._budget: Decimal | None = None  # daily loss room of the current minute
         self._remainder = self._pending_remainder()
 
@@ -270,6 +273,7 @@ class Evaluator:
         failed read, or a decision that needs the loop)."""
         today = bar_start.astimezone(NEW_YORK).date()
         md = self.config.market_data
+        self._reloaded(bar_start, 0)
         stage = "remainder-" if late is not None else ""
         size = md.bars_symbols_per_request
         for n, chunk in enumerate(_chunks(ordered, size)):
@@ -296,6 +300,7 @@ class Evaluator:
             if not owns:
                 continue
             histories = self.history.prior_sessions(list(owns), today, md.history_sessions)
+            self._reloaded(bar_start, histories.reloads)
             for symbol in owns:
                 error, history = self._history(histories, symbol, today)
                 if error is not None:
@@ -317,6 +322,19 @@ class Evaluator:
                     self._put_aside(bar_start, symbol, cause, after + rest())
                     return True
         return False
+
+    def _reloaded(self, bar_start: datetime, count: int) -> None:
+        """Add `count` histories read back from disk to the minute of `bar_start`; a minute
+        before it that read any is journaled once (`history-reloaded`): a memory cache smaller
+        than what a minute asks shows there instead of as growth."""
+        held = self._reloads
+        if held is not None and held[0] != bar_start:
+            self._journal(HISTORY_RELOADED, {"bar_start": held[0].isoformat(),
+                                              "reloads": held[1]})
+            held = None
+        if count:
+            held = (bar_start, count + (0 if held is None else held[1]))
+        self._reloads = held
 
     def _today_bars(self, chunk: list[str], bar_start: datetime,
                     regular_open: datetime) -> dict[str, tuple[Bar, ...]] | Exception:
