@@ -80,6 +80,37 @@ flatten_grace_seconds = 120
 close_order_cutoff_seconds = 60
 # Trade on half days: false = no trading on half days; read by safety.
 half_days_enabled = false
+# Extended sessions (owner 2026-11-16). Each enabled session is its own trading window that flattens itself before it
+# ends: no position is carried into the next session or overnight. Orders in them are LIMIT only with Webull session ALL.
+# The offsets and sizes below are proposals awaiting the owner's confirmation before either session is enabled.
+# Off until the bot-watched protection outside the regular session is built (Webull takes no stop there: F7 in
+# docs/webull-facts.md; owner decision 2026-11-16 in docs/decisions.md).
+# Trade in the pre-market (calendar premarket_open to regular_open, 04:00-09:30 ET); read by risk.timers.
+premarket_enabled = false
+# Pre-market: first entry this many minutes after the pre-market opens (05:00 ET: the first hour is the thinnest); read by risk.timers.
+premarket_first_entry_minutes_after_open = 60
+# Pre-market: last entry this many minutes before the regular open (09:15 ET); read by risk.timers.
+premarket_last_entry_minutes_before_close = 15
+# Pre-market: everything closed this many minutes before the regular open (09:25 ET), so nothing meets the opening
+# auction; read by risk.timers.
+premarket_flatten_minutes_before_close = 5
+# Pre-market: share of the planned loss per trade and of the notional cap an entry may use (0.5 = half size); read by
+# risk.timers.
+premarket_size_fraction = 0.5
+# Trade in the post-market (calendar regular_close to extended_close, 16:00-20:00 ET, 13:00-17:00 on half days); read
+# by risk.timers.
+postmarket_enabled = false
+# Post-market: first entry this many minutes after the regular close (16:05 ET: after the closing prints); read by
+# risk.timers.
+postmarket_first_entry_minutes_after_open = 5
+# Post-market: last entry this many minutes before the post-market closes (19:00 ET); read by risk.timers.
+postmarket_last_entry_minutes_before_close = 60
+# Post-market: everything closed this many minutes before the post-market closes (19:30 ET; assumed, not probed (F10
+# in docs/webull-facts.md): DAY orders with session ALL expire at 20:00 ET); read by risk.timers.
+postmarket_flatten_minutes_before_close = 30
+# Post-market: share of the planned loss per trade and of the notional cap an entry may use (0.5 = half size); read by
+# risk.timers.
+postmarket_size_fraction = 0.5
 
 [orders]
 # Prefix of bot client order ids; read by orders and reconciliation to recognise own orders.

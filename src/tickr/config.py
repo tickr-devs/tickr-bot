@@ -102,6 +102,16 @@ class SessionConfig:
     flatten_grace_seconds: Decimal
     close_order_cutoff_seconds: Decimal
     half_days_enabled: bool
+    premarket_enabled: bool
+    premarket_first_entry_minutes_after_open: int
+    premarket_last_entry_minutes_before_close: int
+    premarket_flatten_minutes_before_close: int
+    premarket_size_fraction: Decimal
+    postmarket_enabled: bool
+    postmarket_first_entry_minutes_after_open: int
+    postmarket_last_entry_minutes_before_close: int
+    postmarket_flatten_minutes_before_close: int
+    postmarket_size_fraction: Decimal
 
 
 @dataclass(frozen=True)
