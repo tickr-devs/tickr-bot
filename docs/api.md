@@ -333,8 +333,9 @@ broker's day P&L shows and the negative of the realized loss when it is a loss. 
 until every filled order of today's closed trades has its fees recorded.
 `result_today_broker_usd` is the broker's own realized result for today: its day P&L less the
 unrealized part, from the latest balance read, `null` until a balance read made after the last
-of today's trades closed; it covers the whole account (manual trades too). The apps show it as
-today's result when present, else the net, else the gross. Display only.
+of today's trades closed; it covers the whole account (manual and probe trades too). The apps show the net as
+today's result, else the gross: the net is the sum of the trade rows and what the daily loss rule
+reads (each trade's settled cash once proven, exact for sub-dollar fills). Display only.
 
 Each `trades_today` entry also has `planned_loss_usd` (1 R as recorded when the trade was opened)
 and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE are only in
