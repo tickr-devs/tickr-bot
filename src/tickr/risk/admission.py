@@ -15,11 +15,11 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from tickr.calendar import CalendarRefused, MarketDay, ny_date_of
-from tickr.config import Config, GateResult
+from tickr.config import Config, GateResult, SessionConfig
 from tickr.risk.causes import AdmissionCause
 from tickr.risk.daily import check_daily
 from tickr.risk.sizing import check_size
-from tickr.risk.timers import deadlines
+from tickr.risk.timers import TradingWindow, WindowKind, trading_windows, window_at
 from tickr.strategy.base import Decision, Verdict
 from tickr.types import Quote
 
@@ -39,15 +39,16 @@ class AdmissionLimits:
     max_quote_age_seconds: Decimal
     max_clock_skew_seconds: Decimal
     broker_read_max_age_seconds: Decimal
-    last_entry_minutes_before_close: int
-    flatten_minutes_before_close: int
-    half_days_enabled: bool
+    session: SessionConfig
+    """The day's trading windows and the extended windows' own entry limits (`[session]`)."""
     active_strategy: str
     """Only decisions tagged with this strategy name may be admitted."""
     symbol_cooldown_minutes_after_loss: int | None
     """None = cooldown turned off (`symbol_cooldown_after_loss_enabled = false`)."""
     max_entry_rest_bars: int
     """Longest a resting limit entry (`Decision.rest_bars`) may work, in bars."""
+    extended_hours_strategies: frozenset[str]
+    """Strategies whose ENTER may be admitted outside the regular session."""
 
     @classmethod
     def from_config(cls, config: Config) -> AdmissionLimits:
@@ -61,14 +62,13 @@ class AdmissionLimits:
             max_quote_age_seconds=risk.max_quote_age_seconds,
             max_clock_skew_seconds=risk.max_clock_skew_seconds,
             broker_read_max_age_seconds=config.orders.broker_read_max_age_seconds,
-            last_entry_minutes_before_close=session.last_entry_minutes_before_close,
-            flatten_minutes_before_close=session.flatten_minutes_before_close,
-            half_days_enabled=session.half_days_enabled,
+            session=session,
             active_strategy=config.strategy.active,
             symbol_cooldown_minutes_after_loss=(
                 risk.symbol_cooldown_minutes_after_loss
                 if risk.symbol_cooldown_after_loss_enabled else None),
             max_entry_rest_bars=risk.max_entry_rest_bars,
+            extended_hours_strategies=frozenset(config.strategy.extended_hours_strategies),
         )
 
 
@@ -178,9 +178,12 @@ def _check_session(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None
     return session_refusal(i.session, i.now, lim)
 
 
-def session_refusal(day: object, now: datetime, lim: AdmissionLimits) -> Admission | None:
-    """Check 3 on its own: whether the session admits an entry at `now`. The status document
-    asks the same question to say why entries are refused, so it cannot drift from admission."""
+def entry_window(day: object, now: datetime,
+                 lim: AdmissionLimits) -> TradingWindow | Admission:
+    """Check 3: the enabled trading window that admits an entry at `now`, or the refusal.
+    The status document asks the same question to say why entries are refused, so it cannot
+    drift from admission. With both extended sessions off (as shipped) only the regular
+    window exists, so this is the regular session's check unchanged."""
     if isinstance(day, CalendarRefused):
         return _refuse(C.CALENDAR_UNKNOWN, f"{day.cause}: {day.detail}")
     if not isinstance(day, MarketDay):
@@ -189,20 +192,53 @@ def session_refusal(day: object, now: datetime, lim: AdmissionLimits) -> Admissi
     if day.ny_date != today:
         return _refuse(C.CALENDAR_DAY_MISMATCH,
                        f"calendar day {day.ny_date} is not today {today} in New York")
-    if day.half_day and not lim.half_days_enabled:
+    if day.half_day and not lim.session.half_days_enabled:
         return _refuse(C.HALF_DAY, f"{day.ny_date} is a half day; half days disabled")
-    if not day.in_regular_session(now):
-        return _refuse(C.OUTSIDE_REGULAR_SESSION,
-                       f"{now.isoformat()} is outside {day.regular_open.time()}-"
-                       f"{day.regular_close.time()} New York")
     try:
-        times = deadlines(day, lim.last_entry_minutes_before_close,
-                          lim.flatten_minutes_before_close)
+        windows = trading_windows(day, lim.session)
     except CalendarRefused as exc:
         return _refuse(C.SESSION_TIMES_INVALID, f"{exc.cause}: {exc.detail}")
-    if now >= times.last_entry:
-        return _refuse(C.AFTER_LAST_ENTRY, f"last entry was {times.last_entry.isoformat()}")
-    return None
+    window = window_at(windows, now)
+    if window is None:
+        # The enabled windows touch end to end, so their span is one interval (the API reads
+        # this exact shape).
+        return _refuse(C.OUTSIDE_REGULAR_SESSION,
+                       f"{now.isoformat()} is outside {windows[0].opens.time()}-"
+                       f"{windows[-1].closes.time()} New York")
+    if now < window.first_entry:
+        return _refuse(C.BEFORE_FIRST_ENTRY,
+                       f"{window.kind}: first entry is {window.first_entry.isoformat()}")
+    if now >= window.last_entry:
+        return _refuse(C.AFTER_LAST_ENTRY, f"last entry was {window.last_entry.isoformat()}")
+    return window
+
+
+def session_refusal(day: object, now: datetime, lim: AdmissionLimits) -> Admission | None:
+    """Check 3 on its own: the refusal of `entry_window`, or None."""
+    found = entry_window(day, now, lim)
+    return found if isinstance(found, Admission) else None
+
+
+def _window(i: AdmissionInputs, lim: AdmissionLimits) -> TradingWindow:
+    """The window check 3 admitted (later checks run only after it passed)."""
+    found = entry_window(i.session, i.now, lim)
+    assert isinstance(found, TradingWindow)
+    return found
+
+
+def window_limits(window: TradingWindow, lim: AdmissionLimits,
+                  ) -> tuple[Decimal, Decimal | None, Decimal]:
+    """(maximum quote age in seconds, platform spread ceiling or None, size fraction) of a
+    window. The regular window keeps `[risk] max_quote_age_seconds`, no platform spread
+    ceiling (the strategy's own rule applies) and full size."""
+    s = lim.session
+    if window.kind is WindowKind.PRE:
+        return (s.premarket_max_quote_age_seconds, s.premarket_max_spread_ratio,
+                window.size_fraction)
+    if window.kind is WindowKind.POST:
+        return (s.postmarket_max_quote_age_seconds, s.postmarket_max_spread_ratio,
+                window.size_fraction)
+    return lim.max_quote_age_seconds, None, window.size_fraction
 
 
 def _check_own_state(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
@@ -245,6 +281,11 @@ def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admissio
     if d.strategy != lim.active_strategy:
         return _refuse(C.DECISION_NOT_ACTIVE,
                        f"decision from {d.strategy} {d.version}, active is {lim.active_strategy}")
+    window = _window(i, lim)
+    max_age, max_spread, _ = window_limits(window, lim)
+    if window.kind is not WindowKind.REGULAR and d.strategy not in lim.extended_hours_strategies:
+        return _refuse(C.STRATEGY_NOT_EXTENDED,
+                       f"{d.strategy} is not allowed to enter in the {window.kind}")
     missing = [name for name in ("entry_low", "entry_high", "stop", "quantity")
                if getattr(d, name) is None]
     if missing:
@@ -299,8 +340,13 @@ def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admissio
                        f"provider time {-age} s ahead of our clock "
                        f"> {lim.max_clock_skew_seconds} s")
     age = max(age, Decimal(0))
-    if age > lim.max_quote_age_seconds:
-        return _refuse(C.QUOTE_STALE, f"quote {age} s old > {lim.max_quote_age_seconds} s")
+    if age > max_age:
+        return _refuse(C.QUOTE_STALE, f"quote {age} s old > {max_age} s ({window.kind})")
+    if max_spread is not None:
+        spread = (q.ask - q.bid) / ((q.ask + q.bid) / 2)
+        if spread > max_spread:
+            return _refuse(C.SPREAD_TOO_WIDE,
+                           f"spread {spread:.4f} > {max_spread} ({window.kind})")
     if rest is not None:
         # A resting buy waits below the ask for a pullback; it fills at its limit or better,
         # so only an ask already under the window refuses it.
@@ -317,8 +363,10 @@ def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admissio
 def _check_money(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     d = i.decision
     assert d.quantity is not None and i.limit_price is not None and i.stop_price is not None
-    size = check_size(d.quantity, i.limit_price, i.stop_price, lim.planned_loss_usd,
-                      lim.position_notional_cap_usd)
+    # Outside the regular session the platform, not the strategy, sizes down (design 2026-11-17).
+    _, _, fraction = window_limits(_window(i, lim), lim)
+    size = check_size(d.quantity, i.limit_price, i.stop_price, lim.planned_loss_usd * fraction,
+                      lim.position_notional_cap_usd * fraction)
     if not size.ok:
         assert size.cause is not None
         return _refuse(size.cause, size.detail)

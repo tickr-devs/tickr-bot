@@ -28,6 +28,10 @@ active = "price-action-v3"
 # Observer strategy folders under strategies/: they decide on the same live data on their own worker thread, never trade
 # and never delay the trading loop (docs/observers.md); at most [observers] max_observers; read by runtime and the api server.
 observers = ["price-action-v3-relvol-1.5", "price-action-v3-relvol-1.75"]
+# Strategy names (folders under strategies/) whose ENTER may be admitted in the pre-market or post-market window; empty =
+# none. No strategy defines what its session, day high or dollar volume mean outside the regular session yet (design:
+# docs/decisions.md 2026-11-16), so none is listed; read by safety (admission check 5).
+extended_hours_strategies = []
 
 [risk]
 # Planned loss per trade in USD (owner 2026-11-07); read by the strategy for sizing and by safety for the check.
@@ -114,6 +118,18 @@ postmarket_flatten_minutes_before_close = 30
 # Post-market: share of the planned loss per trade and of the notional cap an entry may use (0.5 = half size); read by
 # risk.timers.
 postmarket_size_fraction = 0.5
+# Pre-market: maximum quote age for an entry, seconds, from provider time; the regular session uses [risk]
+# max_quote_age_seconds. Placeholder equal to it until probe Q1 (docs/webull-facts.md) shows which read is fresh there;
+# read by safety.
+premarket_max_quote_age_seconds = 5
+# Post-market: maximum quote age for an entry, seconds, from provider time; placeholder as above until probe Q1; read by
+# safety.
+postmarket_max_quote_age_seconds = 5
+# Pre-market: widest book an entry may meet, (ask - bid) / mid, on top of the strategy's own spread rule (the stricter
+# wins): extended-hours books are thin. Proposal awaiting the owner; read by safety.
+premarket_max_spread_ratio = 0.02
+# Post-market: widest book an entry may meet, as above. Proposal awaiting the owner; read by safety.
+postmarket_max_spread_ratio = 0.02
 
 [orders]
 # Prefix of bot client order ids; read by orders and reconciliation to recognise own orders.

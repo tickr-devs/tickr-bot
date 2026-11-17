@@ -165,9 +165,14 @@ def test_each_refusal_has_its_cause(lim, cause, make):
     assert result.planned_loss_usd is None
 
 
+# Causes that need other limits: SESSION_TIMES_INVALID (test_invalid_session_offsets_refuse) and
+# the extended windows' own (test_extended_window_*).
+OTHER_LIMITS = {C.SESSION_TIMES_INVALID, C.BEFORE_FIRST_ENTRY, C.STRATEGY_NOT_EXTENDED,
+                C.SPREAD_TOO_WIDE}
+
+
 def test_every_cause_is_exercised():
-    # SESSION_TIMES_INVALID needs other limits; see test_invalid_session_offsets_refuse.
-    assert {c for c, _ in REFUSALS} | {C.SESSION_TIMES_INVALID} == set(C)
+    assert {c for c, _ in REFUSALS} | OTHER_LIMITS == set(C)
 
 
 def _recorded(result) -> str:
@@ -196,7 +201,8 @@ def test_the_api_reads_every_recorded_refusal(lim, cause, make):
 
 
 def test_the_api_reads_session_times_invalid(lim):
-    bad = replace(lim, last_entry_minutes_before_close=5, flatten_minutes_before_close=15)
+    bad = replace(lim, session=replace(lim.session, last_entry_minutes_before_close=5,
+                                       flatten_minutes_before_close=15))
     refusal = refusal_of(_recorded(admit(inputs(), bad)))
     assert refusal.code is RefusalCode.SESSION_TIMES_INVALID and refusal.message
 
@@ -247,16 +253,17 @@ def test_size_limits_exactly_at_cap_are_admitted(lim):
 def test_half_day_admitted_when_enabled(lim):
     day = date(2026, 11, 27)
     result = admit(_moved(_at(10, 0, day), session=CALENDAR.day(day)),
-                   replace(lim, half_days_enabled=True))
+                   replace(lim, session=replace(lim.session, half_days_enabled=True)))
     assert result.ok
     # Half-day close is 13:00 New York, so last entry is 12:45.
     refused = admit(_moved(_at(12, 45, day), session=CALENDAR.day(day)),
-                    replace(lim, half_days_enabled=True))
+                    replace(lim, session=replace(lim.session, half_days_enabled=True)))
     assert refused.cause is C.AFTER_LAST_ENTRY
 
 
 def test_invalid_session_offsets_refuse(lim):
-    bad = replace(lim, last_entry_minutes_before_close=5, flatten_minutes_before_close=15)
+    bad = replace(lim, session=replace(lim.session, last_entry_minutes_before_close=5,
+                                       flatten_minutes_before_close=15))
     assert admit(inputs(), bad).cause is C.SESSION_TIMES_INVALID
 
 
@@ -326,3 +333,57 @@ def test_clock_skew_tolerance(lim):
     # Zero tolerance: any lead refuses.
     strict = replace(lim, max_clock_skew_seconds=Decimal(0))
     assert admit(inputs(quote=small), strict).cause is C.QUOTE_TIME_INVALID
+
+
+HALF = decision(quantity=D("62"))  # 62 x 0.40 = 24.80 USD, under the half-size 25 USD
+
+
+def _extended(lim, *strategies: str):
+    """Both extended windows on (config.load refuses that until the path exists; admission
+    itself must already be right) and `strategies` allowed to enter in them."""
+    session = replace(lim.session, premarket_enabled=True, postmarket_enabled=True)
+    return replace(lim, session=session, extended_hours_strategies=frozenset(strategies))
+
+
+def test_extended_window_refuses_a_strategy_not_allowed_there(lim):
+    on = _extended(lim)
+    assert admit(_moved(_at(17, 0)), on).cause is C.STRATEGY_NOT_EXTENDED
+    assert admit(_moved(_at(17, 0)), lim).cause is C.OUTSIDE_REGULAR_SESSION
+    assert admit(_moved(_at(10, 0)), on).ok  # the regular window is unchanged
+
+
+def test_extended_window_times(lim):
+    on = _extended(lim, "price-action-v3")
+    assert admit(_moved(_at(4, 30)), on).cause is C.BEFORE_FIRST_ENTRY  # first entry 05:00
+    assert admit(_moved(_at(5, 0), decision=HALF), on).ok
+    assert admit(_moved(_at(9, 15)), on).cause is C.AFTER_LAST_ENTRY
+    assert admit(_moved(_at(16, 4)), on).cause is C.BEFORE_FIRST_ENTRY  # first entry 16:05
+    assert admit(_moved(_at(18, 59), decision=HALF), on).ok
+    assert admit(_moved(_at(19, 0)), on).cause is C.AFTER_LAST_ENTRY
+    outside = admit(_moved(_at(3, 59)), on)
+    assert outside.cause is C.OUTSIDE_REGULAR_SESSION
+    assert refusal_of(_recorded(outside)).message == (
+        "outside the regular session 04:00:00-20:00:00 New York")
+
+
+def test_extended_window_quote_age_and_spread(lim):
+    on = _extended(lim, "price-action-v3")
+    on = replace(on, session=replace(on.session, postmarket_max_quote_age_seconds=D(60),
+                                     postmarket_max_spread_ratio=D("0.002")))
+    at = _at(17, 0)
+    old = quote(provider_time=at - timedelta(seconds=30), receipt_time=at)
+    assert admit(_moved(at, quote=old, decision=HALF), on).ok  # 30 s is fine here
+    assert admit(_moved(_at(10, 0), quote=quote(provider_time=_at(10, 0) - timedelta(
+        seconds=30), receipt_time=_at(10, 0))), on).cause is C.QUOTE_STALE  # not in RTH
+    wide = quote(bid=D("10.00"), ask=D("10.05"), provider_time=at, receipt_time=at)
+    assert admit(_moved(at, quote=wide), on).cause is C.SPREAD_TOO_WIDE
+    assert admit(_moved(_at(10, 0), quote=quote(bid=D("10.00"), ask=D("10.05"))), on).ok
+
+
+def test_extended_window_sizes_down(lim):
+    on = _extended(lim, "price-action-v3")
+    # 100 x 0.40 = 40 USD planned loss: under 50, over 50 x 0.5 = 25 in the post-market.
+    assert admit(_moved(_at(10, 0)), on).ok
+    assert admit(_moved(_at(17, 0)), on).cause is C.PLANNED_LOSS_OVER_LIMIT
+    half = admit(_moved(_at(17, 0), decision=HALF), on)
+    assert half.ok and half.planned_loss_usd == D("24.80")

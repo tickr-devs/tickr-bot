@@ -77,6 +77,7 @@ class RunConfig:
 class StrategySelection:
     active: str
     observers: tuple[str, ...]
+    extended_hours_strategies: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,10 @@ class SessionConfig:
     postmarket_last_entry_minutes_before_close: int
     postmarket_flatten_minutes_before_close: int
     postmarket_size_fraction: Decimal
+    premarket_max_quote_age_seconds: Decimal
+    postmarket_max_quote_age_seconds: Decimal
+    premarket_max_spread_ratio: Decimal
+    postmarket_max_spread_ratio: Decimal
 
 
 @dataclass(frozen=True)
@@ -527,6 +532,10 @@ def check_extended_sessions(session: SessionConfig) -> None:
         fraction = getattr(session, f"{name}_size_fraction")
         if not 0 < fraction <= 1:
             raise ConfigError(f"[session] {name}_size_fraction must be above 0 and at most 1")
+        if getattr(session, f"{name}_max_quote_age_seconds") <= 0:
+            raise ConfigError(f"[session] {name}_max_quote_age_seconds must be above 0")
+        if not 0 < getattr(session, f"{name}_max_spread_ratio") < 1:
+            raise ConfigError(f"[session] {name}_max_spread_ratio must be above 0 and below 1")
 
 
 def load(path: Path | str, root: Path | str | None = None) -> Config:
