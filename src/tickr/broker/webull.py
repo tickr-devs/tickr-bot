@@ -68,6 +68,7 @@ from tickr.data.base import (
     ScreenerRow,
     ScreenerSession,
     SessionBar,
+    SourceRead,
     StreamNotice,
     SubscriptionLimit,
     SymbolsRefused,
@@ -135,6 +136,9 @@ class Route(Enum):
     SNAPSHOT = ("GET", "/market-data/stocks/snapshots/list", False)
     BARS = ("POST", BARS_ROUTE, False)
     PROFILES = ("GET", "/trading/instruments/stocks/profiles/list", False)
+    # Read only by `quote_sources` (probe Q1): which read is fresh outside the regular session.
+    DEPTHS = ("GET", "/market-data/stocks/depths/list", False)
+    TICKS = ("GET", "/market-data/stocks/ticks/list", False)
 
     @property
     def method(self) -> str:
@@ -152,11 +156,12 @@ class Route(Enum):
 # Routes that are not account-scoped: the transport never adds the account id to them.
 ACCOUNT_FREE_ROUTES = frozenset(
     {Route.ACCOUNTS, Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS,
-     Route.PROFILES}
+     Route.PROFILES, Route.DEPTHS, Route.TICKS}
 )
 # The only routes a market-data-only transport (the API's chart reads) may send.
 MARKET_DATA_ROUTES = frozenset(
-    {Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS, Route.PROFILES}
+    {Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS, Route.PROFILES,
+     Route.DEPTHS, Route.TICKS}
 )
 
 
@@ -1194,6 +1199,18 @@ def _require_present(obj: Any, key: str, where: str) -> Any:
     return obj[key]
 
 
+# Probe Q1 (`tickr probe-quote-sources`): names of the reads and their fixed parameters.
+SOURCE_SNAPSHOT = "snapshot"
+SOURCE_SNAPSHOT_EXTENDED = "snapshot-extended"
+SOURCE_DEPTH = "depth"
+SOURCE_TICKS = "ticks"
+SNAPSHOT_EXTENDED_PARAM = "extend_hour_required"  # SDK get_snapshot: include PRE and ATH
+SNAPSHOT_EXTENDED_VALUE = "true"
+DEPTH_TOP_LEVEL = "1"  # SDK get_quotes: level 1 = the best bid and ask only
+TICKS_COUNT = "5"  # the newest trades
+TICKS_SESSIONS = "PRE,RTH,ATH"  # the bars' trading_session labels (probe M4)
+
+
 class WebullMarketData:
     """`MarketData` over the HTTP routes. Takes request budget per route like the broker.
 
@@ -1311,6 +1328,33 @@ class WebullMarketData:
         if stray:
             raise MalformedResponse(f"snapshot: symbols not requested: {', '.join(stray)}")
         return quotes
+
+    def quote_sources(self, symbol: str) -> list[SourceRead]:
+        """Probe Q1, read only: the four reads that could price an order outside the regular
+        session, each sent once and kept as answered (a refusal is evidence too): the snapshot
+        as the bot reads it, the snapshot with `extend_hour_required`, the top of the book
+        (depths, depth 1) and the last trades of every session (ticks). Never used to trade."""
+        reads = (
+            (SOURCE_SNAPSHOT, Route.SNAPSHOT, {"symbols": symbol, "category": self._category}),
+            (SOURCE_SNAPSHOT_EXTENDED, Route.SNAPSHOT,
+             {"symbols": symbol, "category": self._category,
+              SNAPSHOT_EXTENDED_PARAM: SNAPSHOT_EXTENDED_VALUE}),
+            (SOURCE_DEPTH, Route.DEPTHS,
+             {"symbol": symbol, "category": self._category, "depth": DEPTH_TOP_LEVEL}),
+            (SOURCE_TICKS, Route.TICKS,
+             {"symbol": symbol, "category": self._category, "count": TICKS_COUNT,
+              "trading_sessions": TICKS_SESSIONS}),
+        )
+        found: list[SourceRead] = []
+        for name, route, params in reads:
+            try:
+                response = send_once(self._transport, self._budget, route, params, self._clock)
+            except (RateLimited, BrokerReadFailed) as exc:
+                found.append(SourceRead(name, None, type(exc).__name__, None, self._utc_now()))
+                continue
+            found.append(SourceRead(name, response.status, response.error_code, response.body,
+                                    self._utc_now()))
+        return found
 
     def bars(self, symbols: Sequence[str], count: int, *, budget_reserve: int = 0) -> list[Bar]:
         body = self._read(Route.BARS, {

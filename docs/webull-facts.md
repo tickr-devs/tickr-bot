@@ -231,8 +231,20 @@ How Tickr uses it now: only the manual `probe-replace-stop` command. Trading cod
   - BUY STOP_LOSS, DAY, session CORE placed in the post-market: `OPENAPI_DAY_ORDER_NOT_ALLOWED_AFT_CORE_TIME_STOP_LIMIT` (no DAY stop can be placed after the regular close for later).
 - The owner confirmed the Webull app does not offer a stop outside the regular session either.
 - BUY LIMIT, DAY, session ALL at the ask filled (1 share at 14.87); the closing SELL LIMIT, session ALL, below the bid filled; the final read showed position 0 and no working order.
-- Snapshot quotes after the close are minutes old even for active stocks (9-3400 s at 17:55-19:06 ET; SOFI 17 s, NIO 13 s at 19:06): the 5 s entry rule (`[risk] max_quote_age_seconds`) cannot be met there.
+- Snapshot quotes after the close are minutes old even for active stocks (9-3400 s at 17:55-19:06 ET; SOFI 17 s, NIO 13 s at 19:06): the 5 s entry rule (`[risk] max_quote_age_seconds`) cannot be met there by that read. That read never sends `extend_hour_required` (SDK `get_snapshot`), so these ages may describe the read, not the market: probe Q1 below answers which read is fresh outside the regular session.
 - So outside the regular session there is no broker-side stop: protection is the bot's own (decisions.md 2026-11-16). Evidence: the owner's Mac, `data/probes/2026-11-16/extended-000643/`.
+
+## Q1 — which read is fresh outside the regular session (NOT probed yet)
+
+`tickr probe-quote-sources SYM...` (read only, sends no orders; docs/manual-trade.md) reads each
+symbol four ways and prints the age of every time field in each answer: the snapshot as the bot
+reads it; the snapshot with `extend_hour_required=true` (adds `extend_hour_*` fields, names in
+`tests/fixtures/webull/market_data/snapshot_bars_keys.md`); the top of the book
+(`/market-data/stocks/depths/list`, depth 1, SDK `get_quotes`); the newest trades
+(`/market-data/stocks/ticks/list`, count 5, `trading_sessions` PRE,RTH,ATH, SDK `get_tick`).
+Answers to record: which reads Sandbox serves (depths and ticks may need a data permission);
+whether `quote_time`, bid and ask move with `extend_hour_required`; how old the freshest of them
+is in the pre-market and the post-market. The extended-hours entry rule is set from this.
 
 ## F8 — an entry with an attached stop (Webull docs reading 2026-11-16; NOT probed yet)
 

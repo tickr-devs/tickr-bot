@@ -425,6 +425,27 @@ def _probe_trailing(args: argparse.Namespace) -> int:
         return code
 
 
+def _probe_quote_sources(args: argparse.Namespace) -> int:
+    """Read-only probe Q1 (docs/manual-trade.md): which read is fresh outside the regular
+    session. Sends no orders. Exit 0 when every read was answered, 3 otherwise."""
+    from tickr.engine import quote_sources_probe, session_probe
+
+    bad = [s for s in args.symbols if not session_probe.SYMBOL.match(s)]
+    if bad:
+        print(f"refused: not a symbol: {', '.join(bad)}", file=sys.stderr)
+        return 2
+    cfg = config_module.load(args.config)
+    _, market = PROBE_ADAPTERS(cfg)
+    if not isinstance(market, quote_sources_probe.QuoteSources):
+        print("refused: this market data cannot run probe Q1", file=sys.stderr)
+        return 2
+    folder = session_probe.evidence_folder(cfg, NOW(), "quote-sources")
+    print(f"probe-quote-sources {' '.join(args.symbols)}; evidence in {folder}")
+    code = quote_sources_probe.run(market, args.symbols, folder, print)
+    print(f"answers: {folder / quote_sources_probe.SOURCES_FILE}")
+    return code
+
+
 def _check_quote(args: argparse.Namespace) -> int:
     """Read-only: one snapshot quote through the probes' market-data path, and whether its age
     passes the check `probe-replace-stop` applies. Sends no orders. Exit 0 fresh, 3 not."""
@@ -781,6 +802,10 @@ def main(argv: list[str] | None = None) -> int:
     quote = sub.add_parser("check-quote", help="read-only: is the snapshot quote fresh enough "
                            "for the probes? Sends no orders")
     quote.add_argument("symbol")
+    sources = sub.add_parser("probe-quote-sources", help="read-only probe Q1: snapshot, "
+                             "extended snapshot, top of book and newest trades, with the age "
+                             "of each; sends no orders")
+    sources.add_argument("symbols", nargs="+")
     explain_parser = sub.add_parser("explain", help="read-only: the latest decision recorded "
                                     "today for a symbol, with every check")
     explain_parser.add_argument("symbol")
@@ -820,6 +845,8 @@ def main(argv: list[str] | None = None) -> int:
             return _probe_trailing(args)
         if args.command == "check-quote":
             return _check_quote(args)
+        if args.command == "probe-quote-sources":
+            return _probe_quote_sources(args)
         if args.command == "explain":
             return _explain(args)
         if args.command == "maintain":

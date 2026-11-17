@@ -43,6 +43,7 @@ visible.
 tickr check-config
 tickr status                                 # environment, gate, bot pid, last run
 tickr check-quote SYMBOL                     # read-only: is the snapshot quote fresh?
+tickr probe-quote-sources SYM [SYM...]       # read-only probe Q1: which read is fresh outside RTH
 tickr trade SYMBOL --limit 12.34            # quantity and stop default from [probe]
 tickr trade SYMBOL --limit 12.34 --stop 12.10
 tickr probe-replace-stop --to 12.20          # probe F5, see below

@@ -478,3 +478,32 @@ def test_profile_reads_chunk_leave_the_reserve_and_drop_symbols_not_asked():
         {"symbols": "A,B", "category": "US_STOCK"}, {"symbols": "C", "category": "US_STOCK"}]
     with pytest.raises(RateLimited):
         md.profiles(["D"], budget_reserve=1)  # the last request of the window is kept free
+
+
+def test_quote_sources_sends_each_read_once_and_keeps_refusals():
+    from tickr.broker.webull import (
+        SOURCE_DEPTH,
+        SOURCE_SNAPSHOT,
+        SOURCE_SNAPSHOT_EXTENDED,
+        SOURCE_TICKS,
+    )
+    md, transport = adapter(ok([snapshot_row("AAA")]), ok([snapshot_row("AAA")]),
+                            WireResponse(403, {"error_code": "NO_PERMISSION"}), ok({"x": 1}))
+    reads = md.quote_sources("AAA")
+    assert [r.name for r in reads] == [SOURCE_SNAPSHOT, SOURCE_SNAPSHOT_EXTENDED, SOURCE_DEPTH,
+                                       SOURCE_TICKS]
+    assert [r for r, _ in transport.sent] == [Route.SNAPSHOT, Route.SNAPSHOT, Route.DEPTHS,
+                                              Route.TICKS]
+    assert "extend_hour_required" not in transport.sent[0][1]
+    assert transport.sent[1][1]["extend_hour_required"] == "true"
+    assert transport.sent[2][1] == {"symbol": "AAA", "category": "US_STOCK", "depth": "1"}
+    assert (reads[2].status, reads[2].error_code) == (403, "NO_PERMISSION")
+    assert reads[0].received == NOW
+    assert Route.DEPTHS in ACCOUNT_FREE_ROUTES and Route.TICKS in ACCOUNT_FREE_ROUTES
+
+
+def test_quote_sources_out_of_budget_is_recorded_not_sent():
+    md, transport = adapter(ok([]), ok([]), ok([]), limit=1)  # one request a route
+    reads = md.quote_sources("AAA")
+    assert [r for r, _ in transport.sent] == [Route.SNAPSHOT, Route.DEPTHS, Route.TICKS]
+    assert (reads[1].status, reads[1].error_code) == (None, "BudgetExhausted")

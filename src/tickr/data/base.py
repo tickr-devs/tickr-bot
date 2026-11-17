@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from tickr.broker.base import RateLimited
 from tickr.types import Bar, Quote
@@ -52,6 +52,18 @@ class InstrumentProfile:
     symbol: str
     security_type: str | None
     fields: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SourceRead:
+    """One probe Q1 read as answered: HTTP status (None when nothing came back), error code,
+    body, and when the answer arrived (UTC)."""
+
+    name: str
+    status: int | None
+    error_code: str | None
+    body: Any
+    received: datetime
 
 
 @dataclass(frozen=True)
