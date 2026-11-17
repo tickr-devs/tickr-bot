@@ -156,27 +156,30 @@ class TrailingPercent:
     percent: Decimal
     bid_max_spread_ratio: Decimal
 
-    def bid_usable(self, quote: Quote | None) -> Check:
+    def bid_refused(self, quote: Quote | None) -> str | None:
+        """Why the bid may not fire the trail, or None when it may."""
         if quote is None or not ZERO < quote.bid <= quote.ask:
-            return v1._flag("trail_bid_usable", False, "no valid fresh quote")
+            return "no valid fresh quote"
         spread = v1.spread_check(quote, self.bid_max_spread_ratio)
-        return v1._check("trail_bid_spread_ratio", spread.measured, "<=",
-                         self.bid_max_spread_ratio)
+        if not spread.passed:
+            return f"spread ratio {spread.measured} over {self.bid_max_spread_ratio}"
+        return None
 
-    def check(self, entry: Decimal, since: Sequence[Bar],
-              quote: Quote | None) -> tuple[Check, ...]:
+    def check(self, entry: Decimal, since: Sequence[Bar], quote: Quote | None) -> Check:
+        """One check, so a decision's decisive rule is always the trail itself; why the bid
+        did not count is in its note."""
         peak = max([entry, *(b.high for b in since)])
         floor = peak * (ONE - self.percent / PERCENT)
-        usable = self.bid_usable(quote)
+        refused = self.bid_refused(quote)
         prices = [b.close for b in since[-1:]]
-        if usable.passed:
+        if refused is None:
             assert quote is not None
             prices.append(quote.bid)
         price = min(prices, default=entry)
-        source = "lowest of last close and bid" if usable.passed else "last close"
-        return usable, v1._check("trailing_stop", price, "<=", floor,
-                                 f"{source} against {self.percent}% under the high since "
-                                 f"entry {peak}")
+        source = ("lowest of last close and bid" if refused is None
+                  else f"last close (bid not used: {refused})")
+        return v1._check("trailing_stop", price, "<=", floor,
+                         f"{source} against {self.percent}% under the high since entry {peak}")
 
 
 EXITS: dict[str, tuple[Mapping[str, Callable[[Any], Any]], Callable[..., Any]]] = {
@@ -326,7 +329,7 @@ class Composed:
         since = [b for b in bars if b.start >= start]
         fired = False
         for _, block in self.exits:
-            checks.extend(block.check(position.entry_price, since, context.quote))
+            checks.append(block.check(position.entry_price, since, context.quote))
             fired = fired or checks[-1].passed
         return self._decide(context, Verdict.EXIT if fired else Verdict.HOLD, checks)
 

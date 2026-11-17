@@ -118,8 +118,17 @@ def test_a_broken_book_never_fires_the_trail_the_last_close_decides():
     position = PositionView(d("1.20"), d(800), d("0.96"), filled_at=bars[-1].start)
     decision = make().evaluate(ctx(bars, quote("0.50", "1.21"), position))
     assert decision.verdict is Verdict.HOLD, rules(decision)
-    assert ("trail_bid_spread_ratio", False) in rules(decision)
-    assert decision.checks[-1].note.startswith("last close against")
+    assert decision.checks[-1].note.startswith("last close (bid not used: spread ratio")
+
+
+def test_an_exit_on_the_close_with_a_wide_book_names_the_trail_as_decisive():
+    bars = ignition()
+    bars.append(bar(TODAY, 20, 1.20, 1.20, 0.90, 0.90, 10_000))  # 25% under 1.20
+    position = PositionView(d("1.20"), d(800), d("0.96"), filled_at=bars[-2].start)
+    decision = make().evaluate(ctx(bars, quote("0.50", "1.21"), position))
+    assert decision.verdict is Verdict.EXIT
+    assert all(c.passed for c in decision.checks if c.rule != "trailing_stop")
+    assert decision.checks[-1].rule == "trailing_stop" and decision.checks[-1].passed
 
 
 def test_without_a_quote_the_last_close_decides():
@@ -127,7 +136,7 @@ def test_without_a_quote_the_last_close_decides():
     position = PositionView(d("1.20"), d(800), d("0.96"), filled_at=bars[-1].start)
     decision = make().evaluate(ctx(bars, None, position))
     assert decision.verdict is Verdict.HOLD
-    assert ("trail_bid_usable", False) in rules(decision)
+    assert decision.checks[-1].note.startswith("last close (bid not used: no valid fresh quote)")
 
 
 def test_without_a_fill_time_the_high_counts_from_the_first_bar_seen():
