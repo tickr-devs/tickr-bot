@@ -30,7 +30,14 @@ from tickr.broker.webull import (
     to_decimal,
 )
 from tickr.config import GateResult
-from tickr.types import OrderRequest, OrderType, Side, TimeInForce, TradingSession
+from tickr.types import (
+    ComboRole,
+    OrderRequest,
+    OrderType,
+    Side,
+    TimeInForce,
+    TradingSession,
+)
 
 MAX_CID = 32
 OWN = "ACCOUNT-UNDER-TEST"
@@ -115,6 +122,39 @@ def test_place_doubt_is_outcome_unknown_and_never_resent(outcome):
     b, t, _ = broker(outcome)
     with pytest.raises(OutcomeUnknown):
         b.place(limit_buy())
+    assert len(t.sent) == 1
+
+
+def stop_only_combo() -> list[tuple[ComboRole, OrderRequest]]:
+    stop = OrderRequest("ap-2", "AAPL", Side.SELL, OrderType.STOP_LOSS, D(1), TimeInForce.DAY,
+                        TradingSession.CORE, stop_price=D("9.81"))
+    return [(ComboRole.MASTER, limit_buy()), (ComboRole.STOP_LOSS, stop)]
+
+
+def test_combo_ack_is_the_combo_ids_shape_of_probe_f8():
+    """Probe F8 (2026-11-17): a combo place answers `{client_combo_order_id, combo_order_id}`;
+    it names no leg, so the MASTER's broker id is left to Detail."""
+    b, t, _ = broker(WireResponse(200, {"client_combo_order_id": "ap-c", "combo_order_id": "C7"}))
+    ack = b.place_combo("ap-c", stop_only_combo())
+    assert (ack.client_order_id, ack.broker_order_id) == ("ap-1", None)
+    route, params = t.sent[0]
+    assert route is Route.PLACE and len(t.sent) == 1
+    assert params["client_combo_order_id"] == "ap-c"
+    assert [o["combo_type"] for o in params["new_orders"]] == ["MASTER", "STOP_LOSS"]
+
+
+@pytest.mark.parametrize("body", [
+    {"client_combo_order_id": "other", "combo_order_id": "C7"},
+    {"client_combo_order_id": "ap-c", "combo_order_id": " "},
+    {"client_combo_order_id": "ap-c"},
+    {"client_combo_order_id": "ap-c", "combo_order_id": "C7", "error_code": "X"},
+    {"client_order_id": "ap-1", "order_id": "X9"},
+    [],
+])
+def test_any_other_combo_ack_is_outcome_unknown_and_never_resent(body):
+    b, t, _ = broker(WireResponse(200, body))
+    with pytest.raises(OutcomeUnknown):
+        b.place_combo("ap-c", stop_only_combo())
     assert len(t.sent) == 1
 
 
