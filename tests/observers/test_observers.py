@@ -58,11 +58,12 @@ class Fake:
         return Decision(name, version, ctx.symbol, self.verdict, (), **extra)
 
 
-def observer_set(tmp_path, *fakes, max_seconds="0.5", clock=None, queue_size=8):
+def observer_set(tmp_path, *fakes, max_seconds="0.5", clock=None, queue_size=8,
+                 slow_in_row=1):
     loaded = [LoadedStrategy(f"folder-{i}", f) for i, f in enumerate(fakes)]
     log = DecisionLog(tmp_path / "decisions")
     observers = ObserverSet(loaded, log, Decimal(max_seconds), queue_size, Decimal(5), Decimal(1),
-                            clock or (lambda: 0.0))
+                            clock or (lambda: 0.0), slow_in_row=slow_in_row)
     return observers, log
 
 
@@ -124,6 +125,23 @@ def test_a_slow_observer_is_recorded_then_switched_off(tmp_path):
     assert failure.cause.startswith("evaluation took 2.000 s")
     assert observers.close(5)
     assert len(load_records([log.path(date(2026, 11, 10))])) == 1
+
+
+
+def test_a_slow_evaluation_alone_is_tolerated_only_slow_ones_in_a_row_switch_off(tmp_path):
+    """2026-11-17: one 0.509 s evaluation (limit 0.5) switched an observer off for the day."""
+    # Per evaluation: start, end. Slow, fast, slow, slow -> off at the second slow in a row.
+    ticks = iter([0.0, 2.0, 2.0, 2.1, 2.1, 4.1, 4.1, 6.1])
+    observers, log = observer_set(tmp_path, Fake("slow"), clock=lambda: next(ticks),
+                                  slow_in_row=2)
+    for minute in range(3, 6):
+        observers.on_evaluation(context(minute), START + minute * M1)
+        assert settle(observers) == ()
+    observers.on_evaluation(context(6), START + 6 * M1)
+    (failure,) = settle(observers)
+    assert failure.cause == "evaluation took 2.000 s, limit 0.5 s (2 in a row)"
+    assert observers.close(5)
+    assert len(load_records([log.path(date(2026, 11, 10))])) == 4
 
 
 class Blocking(Fake):

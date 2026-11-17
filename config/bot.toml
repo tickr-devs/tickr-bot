@@ -574,8 +574,12 @@ strategy_modules = ["price-action-v1=tickr.strategy.price_action_v1", "price-act
 # Most observer strategies [strategy] observers may list (each costs observer-process time per bar, not the trading
 # thread's); read by observers.loader.
 max_observers = 4
-# Seconds one observer evaluation may take; slower = that observer is switched off for the run with a cause; read by observers.runner.
+# Seconds one observer evaluation may take; slower counts as slow (see the next key); read by observers.runner.
 max_evaluation_seconds = 0.5
+# Slow evaluations in a row that switch an observer off for the run, with a cause (one slow evaluation is not proof: a
+# garbage collection or a busy Mac stretches any; 2026-11-17 one 0.509 s evaluation switched one off); count; read by
+# observers.runner.
+max_slow_evaluations_in_row = 3
 # Evaluations waiting for the observer process; when full, the rest of that pass is dropped for the observers and
 # journaled as observers-dropped (never blocks trading, observers go on with the next pass); read by observers.runner.
 queue_size = 256

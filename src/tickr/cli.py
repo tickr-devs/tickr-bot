@@ -579,7 +579,8 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
                                                 config_module.credential_variables(cfg)),
                             limits=Limits(timedelta(seconds=float(
                                 cfg.observers.forget_symbol_seconds)),
-                                cfg.observers.history_sends_per_pass))
+                                cfg.observers.history_sends_per_pass),
+                            slow_in_row=cfg.observers.max_slow_evaluations_in_row)
     return evaluator, observers
 
 

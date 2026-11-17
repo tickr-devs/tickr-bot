@@ -24,9 +24,12 @@ An observer is never allowed to hurt trading:
   observers go on with the next one (the caller counts drops); nothing waits;
 - on the worker, any exception from evaluate(), or a decision that breaks the contract (not a
   Decision, wrong name/version tag, wrong symbol), switches that observer off for the run;
-- an evaluation slower than `[observers] max_evaluation_seconds` is still recorded, then the
-  observer is switched off (a hung one keeps the worker busy; the queue then overflows and
-  further evaluations are dropped, still without blocking);
+- an evaluation slower than `[observers] max_evaluation_seconds` is still recorded; an
+  observer is switched off when `[observers] max_slow_evaluations_in_row` of its evaluations
+  in a row were slower (one slow evaluation is not proof: a garbage collection or a busy Mac
+  can stretch any of them, 2026-11-17: 0.509 s once, then fast again). A hung one keeps the
+  worker busy; the queue then overflows and further evaluations are dropped, still without
+  blocking;
 - a failed decision log write switches every observer off;
 - a worker process that ends on its own (`alive` false) is reported once as a failure of all
   observers; the caller then stops them.
@@ -181,11 +184,14 @@ class _Worker:
     ("watch", folder, symbol, bar_start), ("unwatch", folder, symbol)."""
 
     def __init__(self, observers: Sequence[LoadedStrategy], log: DecisionLog,
-                 max_seconds: float, monotonic: Callable[[], float]) -> None:
+                 max_seconds: float, monotonic: Callable[[], float],
+                 slow_in_row: int = 1) -> None:
         self.enabled = list(observers)
         self.log = log
         self.max_seconds = max_seconds
         self.monotonic = monotonic
+        self.slow_in_row = slow_in_row
+        self._slow: dict[str, int] = {}  # observer folder -> its slow evaluations in a row
         self._bars: dict[str, list[Any]] = {}
         self._prior: dict[str, tuple[tuple[Any, ...], ...]] = {}
         # (observer folder, symbol) -> the cause of its last IGNORE written, None after any
@@ -261,9 +267,7 @@ class _Worker:
             if decision.verdict is Verdict.IGNORE:
                 cause = _cause(decision)
                 if self._ignored.get(key) == cause:
-                    if elapsed > self.max_seconds:
-                        self._off(observer, at, f"evaluation took {elapsed:.3f} s, limit "
-                                  f"{self.max_seconds} s", events)
+                    self._timed(observer, elapsed, at, events)
                     continue
                 self._ignored[key] = cause
             else:
@@ -281,9 +285,19 @@ class _Worker:
                 for other in tuple(self.enabled):
                     self._off(other, at, f"decision log write failed: {exc}", events)
                 return
-            if elapsed > self.max_seconds:
-                self._off(observer, at,
-                          f"evaluation took {elapsed:.3f} s, limit {self.max_seconds} s", events)
+            self._timed(observer, elapsed, at, events)
+
+    def _timed(self, observer: LoadedStrategy, elapsed: float, at: datetime,
+               events: list[tuple[Any, ...]]) -> None:
+        """Count a slow evaluation; `slow_in_row` of them in a row switch the observer off."""
+        if elapsed <= self.max_seconds:
+            self._slow[observer.folder] = 0
+            return
+        count = self._slow.get(observer.folder, 0) + 1
+        self._slow[observer.folder] = count
+        if count >= self.slow_in_row:
+            self._off(observer, at, f"evaluation took {elapsed:.3f} s, limit {self.max_seconds} s"
+                      f" ({count} in a row)", events)
 
 
 def _cause(decision: Decision) -> str:
@@ -293,7 +307,7 @@ def _cause(decision: Decision) -> str:
 
 
 def _child_main(spec: ProcessSpec, folders: tuple[str, ...], max_seconds: float,
-                inbox: Any, results: Any, parent_alive: Any) -> None:
+                slow_in_row: int, inbox: Any, results: Any, parent_alive: Any) -> None:
     """The observer process: drop the credential variables, build the observers from their
     folders and serve the inbox until told to stop or the parent is gone (its end of
     `parent_alive` closes: EOF). Ctrl-C in a terminal is the parent's to handle. It leaves
@@ -310,7 +324,8 @@ def _child_main(spec: ProcessSpec, folders: tuple[str, ...], max_seconds: float,
             results.send(("events", [("off", folder, folder, datetime.now(UTC),
                                       f"not loaded in the observer process: "
                                       f"{type(exc).__name__}: {exc}")]))
-    worker = _Worker(loaded, DecisionLog(spec.decisions), max_seconds, time.monotonic)
+    worker = _Worker(loaded, DecisionLog(spec.decisions), max_seconds, time.monotonic,
+                     slow_in_row)
 
     def get() -> Any:
         while True:
@@ -341,12 +356,16 @@ class ObserverSet:
         *,
         process: ProcessSpec | None = None,
         limits: Limits | None = None,
+        slow_in_row: int = 1,
     ) -> None:
         """`process`: run the worker in a child process built from the observers' folders;
         without it the worker is a thread of this process using `observers` as given.
-        `limits`: forgetting and history sends (default: keep everything, no per-pass cap)."""
+        `limits`: forgetting and history sends (default: keep everything, no per-pass cap).
+        `slow_in_row`: slow evaluations in a row that switch an observer off."""
         if queue_size < 1:
             raise ValueError("queue_size must be at least 1")
+        if slow_in_row < 1:
+            raise ValueError("slow_in_row must be at least 1")
         self.log = log
         self.max_seconds = float(max_evaluation_seconds)
         self.max_quote_age = timedelta(seconds=float(max_quote_age_seconds))
@@ -373,7 +392,7 @@ class ObserverSet:
         if process is None:
             self._inbox = queue.Queue(maxsize=queue_size)
             answers: queue.Queue[tuple[Any, ...]] = queue.Queue()
-            worker = _Worker(self._enabled, log, self.max_seconds, monotonic)
+            worker = _Worker(self._enabled, log, self.max_seconds, monotonic, slow_in_row)
             self._thread = threading.Thread(target=worker.run, name="observers", daemon=True,
                                             args=(self._inbox.get, answers.put))
             self._thread.start()
@@ -390,7 +409,7 @@ class ObserverSet:
             self._process = context.Process(
                 target=_child_main, name="tickr-observers", daemon=True,
                 args=(process, tuple(o.folder for o in self._enabled), self.max_seconds,
-                      self._inbox, writer, alive_reader))
+                      slow_in_row, self._inbox, writer, alive_reader))
             self._process.start()
             # Only the child writes answers: once it is gone, reading gives EOFError, never a
             # wait for a message it will not finish.

@@ -304,6 +304,7 @@ class ObserversConfig:
     strategy_modules: tuple[str, ...]
     max_observers: int
     max_evaluation_seconds: Decimal
+    max_slow_evaluations_in_row: int
     queue_size: int
     watching_seconds: Decimal
     decisions_dir: str
@@ -619,6 +620,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[observers] watching_seconds must be above 0")
     if built["observers"].forget_symbol_seconds <= 0:
         raise ConfigError("[observers] forget_symbol_seconds must be above 0")
+    if built["observers"].max_slow_evaluations_in_row < 1:
+        raise ConfigError("[observers] max_slow_evaluations_in_row must be at least 1")
     if built["observers"].history_sends_per_pass < 1:
         raise ConfigError("[observers] history_sends_per_pass must be at least 1")
     risk: RiskConfig = built["risk"]

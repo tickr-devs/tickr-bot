@@ -192,8 +192,10 @@ trading thread ran about 2x slower while observers worked and handing over a pas
   it switched off and which symbols each one is watching.
 - A full queue (`[observers] queue_size`) drops the rest of that pass for the observers and
   writes one `observers-dropped` journal row with the count; they go on with the next pass.
-- An exception, a contract break or a slow evaluation switches that one observer off
-  (`observer-failure` row), as before. A child that ends on its own switches the observers off
+- An exception or a contract break switches that one observer off (`observer-failure` row), as
+  before. So do `[observers] max_slow_evaluations_in_row` evaluations in a row slower than
+  `max_evaluation_seconds`: a single slow one (a garbage collection, a busy Mac) is recorded
+  and the observer goes on. A child that ends on its own switches the observers off
   for the run with one `observers-stopped` row and alert; trading goes on.
 - The child forgets a symbol it has not been sent for `[observers] forget_symbol_seconds`
   (the bot forgets it too and sends the whole history again if it comes back), so memory follows
