@@ -78,8 +78,8 @@ def _bars_file(paths: HistoryPaths, day: date, lines: list[str]) -> None:
     path.write_text("".join(lines), "utf-8")
 
 
-def _bar(symbol: str, minute: int, close: str = "12.40", end: str = "\n") -> str:
-    start = OPEN + timedelta(minutes=minute)
+def _bar(symbol: str, minute: int, close: str = "12.40", end: str = "\n", day: date = DAY) -> str:
+    start = OPEN + timedelta(days=(day - DAY).days, minutes=minute)
     return json.dumps({"symbol": symbol, "start": start.isoformat(), "open": "12.30",
                        "high": "12.50", "low": "12.20", "close": close, "volume": "1000",
                        "provider": "webull", "receipt_time": start.isoformat()}) + end
@@ -543,7 +543,7 @@ def test_days_join_trades_runs_and_capture_newest_first(paths):
     _trade(store, run, "win", OPEN + timedelta(minutes=30))
     _trade(store, run, "loss", OPEN + timedelta(minutes=50), exit_="12.00")
     store.close()
-    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0)])
+    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0, day=PREVIOUS)])
     days = History(paths).days(DAY)
     assert [d.day for d in days.days] == [DAY, PREVIOUS]
     today, previous = days.days
@@ -587,14 +587,27 @@ def test_history_never_writes_the_database(paths):
 
 
 def test_bars_one_per_start_last_revision_wins(paths):
-    _bars_file(paths, PREVIOUS, [_bar("ABCD", 1), _bar("ABCD", 0), _bar("KLMN", 0),
-                                 _bar("ABCD", 1, close="12.45"), _bar("ABCD", 1, close="12.45")])
+    lines = [_bar("ABCD", 1), _bar("ABCD", 0), _bar("KLMN", 0), _bar("ABCD", 1, close="12.45"),
+             _bar("ABCD", 1, close="12.45")]
+    _bars_file(paths, DAY, lines)
     history = History(paths)
-    bars = history.bars("ABCD", PREVIOUS, DAY)
+    bars = history.bars("ABCD", DAY, DAY)
     assert [b.start for b in bars.bars] == [OPEN, OPEN + timedelta(minutes=1)]
     assert bars.bars[1].close == Decimal("12.45")
-    assert history.day(PREVIOUS, DAY).bar_symbols == ("ABCD", "KLMN")
-    assert history.bars("NONE", PREVIOUS, DAY).bars == ()
+    assert history.day(DAY, DAY).bar_symbols == ("ABCD", "KLMN")
+    assert history.bars("NONE", DAY, DAY).bars == ()
+
+
+def test_a_day_shows_only_its_own_bars_never_the_sessions_before(paths):
+    # The session's first reads reach back into Friday: those bars are in Monday's file.
+    friday = [_bar("ABCD", 0, day=PREVIOUS), _bar("ABCD", 1, day=PREVIOUS),
+              _bar("OLD", 0, day=PREVIOUS)]
+    _bars_file(paths, DAY, [*friday, _bar("ABCD", 0), _bar("ABCD", 2)])
+    history = History(paths)
+    bars = history.bars("ABCD", DAY, DAY)
+    assert [b.start for b in bars.bars] == [OPEN, OPEN + timedelta(minutes=2)]
+    assert history.day(DAY, DAY).bar_symbols == ("ABCD",)
+    assert history.bars("OLD", DAY, DAY).bars == ()
 
 
 def test_todays_half_written_last_line_waits_other_days_refuse_it(paths):
@@ -625,7 +638,7 @@ def served(api, settings):  # noqa: F811 - pytest fixture
 
 def test_days_endpoint(served):
     server, paths = served
-    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0)])
+    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0, day=PREVIOUS)])
     resp, payload = request(server, "GET", "/days")
     assert resp.status == 200
     body = doc(payload)
@@ -635,7 +648,7 @@ def test_days_endpoint(served):
 
 def test_day_endpoint(served):
     server, paths = served
-    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0)])
+    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0, day=PREVIOUS)])
     resp, payload = request(server, "GET", "/days/2026-11-13")
     assert resp.status == 200
     body = doc(payload)
@@ -645,7 +658,7 @@ def test_day_endpoint(served):
 
 def test_bars_endpoint(served):
     server, paths = served
-    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0), _bar("ABCD", 1)])
+    _bars_file(paths, PREVIOUS, [_bar("ABCD", 0, day=PREVIOUS), _bar("ABCD", 1, day=PREVIOUS)])
     resp, payload = request(server, "GET", "/bars?symbol=ABCD&date=2026-11-13")
     assert resp.status == 200
     body = doc(payload)

@@ -11,6 +11,7 @@ import json
 import re
 import sqlite3
 import threading
+from bisect import bisect_left
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
@@ -42,6 +43,10 @@ from tickr.version import recorded
 ZERO = Decimal(0)
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9./-]*$")
 _DAY_DIR = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def _bar_start(bar: Bar) -> datetime:
+    return bar.start
 
 
 class HistoryUnavailable(Exception):
@@ -515,9 +520,26 @@ class History:
         except (CaptureError, OSError) as exc:
             raise HistoryUnavailable(f"capture file unreadable: {exc}") from exc
 
+    def _bars_on(self, day: date, today: date) -> dict[str, tuple[Bar, ...]]:
+        """Each symbol's captured bars that start on New York date `day`. A day's capture file
+        holds the bars received that day, and the first reads of a session reach back into the
+        sessions before it (a read returns the last `[market_data] bars_per_symbol` minutes):
+        those belong to their own date, never to this day's chart, trades or symbols. The
+        simulations read the whole file (their history); this view does not."""
+        first = datetime.combine(day, time(), NEW_YORK)
+        after = datetime.combine(day + timedelta(days=1), time(), NEW_YORK)
+        on_day: dict[str, tuple[Bar, ...]] = {}
+        for symbol, bars in self._bars_by_symbol(day, today).items():
+            # Each symbol's bars are in start order (CapturedBarsDays): cut, never scan.
+            low = bisect_left(bars, first, key=_bar_start)
+            high = bisect_left(bars, after, lo=low, key=_bar_start)
+            if high > low:
+                on_day[symbol] = bars[low:high]
+        return on_day
+
     def _bars_of(self, symbol: str, day: date, today: date) -> list[api.BarV1]:
         return [api.BarV1(bar.start, bar.open, bar.high, bar.low, bar.close, bar.volume)
-                for bar in self._bars_by_symbol(day, today).get(symbol, ())]
+                for bar in self._bars_on(day, today).get(symbol, ())]
 
     # ------------------------------------------------------------ answers
 
@@ -567,7 +589,7 @@ class History:
     def day(self, day: date, today: date) -> api.DayV1:
         trades, _ = self._read_db((day, today))
         of_day = self._of_day(trades, day)
-        symbols = tuple(sorted(self._bars_by_symbol(day, today)))
+        symbols = tuple(sorted(self._bars_on(day, today)))
         return api.DayV1(environment=self.paths.environment, day=day, trades=tuple(of_day),
                          result_gross_usd=sum((t.result_gross_usd for t in of_day), ZERO),
                          bar_symbols=symbols, result_net_usd=total_net(of_day))
