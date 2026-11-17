@@ -38,6 +38,11 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run --no-sync tickr demo --record
+      # The new recording must pass its own tests before it is offered: a recording the tests
+      # refuse (2026-11-17: the recorded cycle began and ended with a position held, so the apps'
+      # loop would jump) fails this run, which opens the "CI failed on main" issue (ci-alert.yml),
+      # instead of opening a pull request that can never go green.
+      - run: uv run --no-sync pytest -q tests/demo/test_recording.py
       # Opens the pull request only when the recording changed; leaves no other file behind.
       - uses: peter-evans/create-pull-request@v8
         with:

@@ -200,7 +200,9 @@ trades), on the phone away from the Mac, with no `tickr demo` running and no net
   recording does not follow fails there too.
 - **Nightly re-record**: `.github/workflows/record-demo.yml` runs `tickr demo --record` on GitHub
   every night at 06:30 UTC (outside US market hours; also by hand from the Actions tab) on the
-  latest `main`. Only when the file changed does it open a pull request, from the fixed
+  latest `main` and then the recording's own tests (`tests/demo/test_recording.py`) on the new
+  file: a recording they refuse fails the run instead of being offered. Only when the file
+  changed does it open a pull request, from the fixed
   `demo-recording` branch: while that pull request is open, each later night updates it instead
   of opening another. So the demo day keeps showing what today's bot does without any pull request
   having to carry it.
