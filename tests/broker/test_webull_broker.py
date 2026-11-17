@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from datetime import UTC, datetime
 from decimal import Decimal as D
 from typing import Any
 
@@ -66,11 +67,16 @@ OPEN_GATE = GateResult(True, "test: open")
 PREFIXES = ("ap-", "probe-")
 
 
-def broker(*responses, limit=DEFAULT_LIMIT, max_pages=3, gate=OPEN_GATE):
+# Wall clock of the scripted broker: after the close of the recorded trade day (2026-11-16).
+WALL = datetime(2026, 11, 16, 21, 30, tzinfo=UTC)
+
+
+def broker(*responses, limit=DEFAULT_LIMIT, max_pages=3, gate=OPEN_GATE, wall=WALL):
     transport = ScriptedTransport(*responses)
     budget = RequestBudget(limit, clock=lambda: 0.0)
     b = WebullBroker(transport, budget, max_pages, MAX_CID, PREFIXES, lambda: gate,
-                     history_max_pages=max_pages, cash_activities_max_pages=max_pages)
+                     history_max_pages=max_pages, cash_activities_max_pages=max_pages,
+                     wall=lambda: wall)
     return b, transport, budget
 
 

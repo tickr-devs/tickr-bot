@@ -35,7 +35,7 @@ import time
 import uuid
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
@@ -56,7 +56,7 @@ from tickr.broker.base import (
 )
 from tickr.broker.budget import RequestBudget, RouteLimit
 from tickr.broker.status import map_status
-from tickr.calendar import ny_date_of
+from tickr.calendar import NEW_YORK, ny_date_of
 from tickr.config import BARS_ROUTE, Config, GateResult, check_chart_slice, trading_gate
 from tickr.data.base import (
     BarSpan,
@@ -113,6 +113,12 @@ ORDER_MARKET = "US"
 ORDER_TRIGGER_PRICE_TYPE = "PRICE"
 
 SDK_API_VERSION = "v3"
+# The order history's window (probe H2b, 2026-11-17): `start_time` is refused unless
+# `end_time` comes with it, and both must be UTC yyyy-MM-dd'T'HH:mm:ss.SSS'Z' (+0000 and epoch
+# ms are refused); with both it lists only orders placed inside the window.
+HISTORY_START_PARAM = "start_time"
+HISTORY_END_PARAM = "end_time"
+MICROSECONDS_PER_MILLISECOND = 1000
 SDK_LOGGER_PREFIX = "webull"
 LOGGING_OFF = logging.CRITICAL + 1
 SECONDS_PER_MINUTE = 60
@@ -275,6 +281,13 @@ def _require(obj: Any, key: str, where: str) -> Any:
     if value is None or value == "":
         raise MalformedResponse(f"{where}: missing field {key!r}")
     return value
+
+
+def _history_time(at: datetime) -> str:
+    """An aware instant as the history's window takes it: UTC, milliseconds, a literal Z."""
+    utc = at.astimezone(UTC)
+    return (utc.strftime("%Y-%m-%dT%H:%M:%S.")
+            + f"{utc.microsecond // MICROSECONDS_PER_MILLISECOND:03d}Z")
 
 
 def _optional(obj: Mapping[str, Any], key: str) -> Any:
@@ -803,6 +816,7 @@ class WebullBroker:
         *,
         history_max_pages: int,
         cash_activities_max_pages: int,
+        wall: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if open_orders_max_pages < 1:
             raise AdapterConfigError("open_orders_max_pages must be at least 1")
@@ -821,6 +835,7 @@ class WebullBroker:
         self._open_orders_max_pages = open_orders_max_pages
         self._client_order_id_max_length = client_order_id_max_length
         self._clock = clock
+        self._wall = wall
 
     # -- plumbing -------------------------------------------------------------------------
 
@@ -843,6 +858,16 @@ class WebullBroker:
         result = self._gate()
         if not result.open:
             raise Refused(GATE_CLOSED, result.cause)
+
+    def _history_window(self, day: date) -> dict[str, str]:
+        """The history query for New York date `day`: its midnight to the earlier of the next
+        midnight and now (probe H2b). A day that has not begun is refused, never read."""
+        start = datetime.combine(day, datetime.min.time(), NEW_YORK)
+        end = min(self._wall(), datetime.combine(day + timedelta(days=1),
+                                                 datetime.min.time(), NEW_YORK))
+        if end <= start:
+            raise BrokerReadFailed(Route.HISTORY.name, None, "HISTORY_DAY_NOT_BEGUN")
+        return {HISTORY_START_PARAM: _history_time(start), HISTORY_END_PARAM: _history_time(end)}
 
     def _read(self, route: Route, params: Mapping[str, Any]) -> Any:
         response = self._send(route, params)
@@ -884,11 +909,12 @@ class WebullBroker:
         raise BrokerReadFailed(Route.CASH_ACTIVITIES.name, None, "PAGE_LIMIT_REACHED")
 
     def fills_today(self, day: date) -> list[BrokerFill]:
-        """The history's default window (no `start_time`; its format is unproven), every page
-        by `pagination_key` (SDK `list_order_history`) up to `history_max_pages`, kept to the
+        """The history of `day` (`_history_window`, sent with every page), every page by
+        `pagination_key` (SDK `list_order_history`) up to `history_max_pages`, kept to the
         fills of `day`; a partial list refuses. Display only, called off the loop thread."""
         fills: list[BrokerFill] = []
-        params: dict[str, Any] = {}
+        window = self._history_window(day)
+        params: dict[str, Any] = dict(window)
         seen_keys: set[str] = set()
         for _page in range(self._history_max_pages):
             body = self._read(Route.HISTORY, params)
@@ -899,17 +925,19 @@ class WebullBroker:
             if str(next_key) in seen_keys:
                 raise BrokerReadFailed(Route.HISTORY.name, None, "PAGINATION_REPEATED")
             seen_keys.add(str(next_key))
-            params = {"pagination_key": str(next_key)}
+            params = {**window, "pagination_key": str(next_key)}
         raise BrokerReadFailed(Route.HISTORY.name, None, "PAGE_LIMIT_REACHED")
 
     def order_history(self, wanted: Collection[str], max_pages: int) -> list[OrderDetail]:
-        """The history's default window (as `fills_today`), page by page by `pagination_key`
-        until every id in `wanted` was seen, the last page or `max_pages`; our own rows only
-        (a foreign row we cannot parse is no concern here). Called by the engine for fills
-        arriving together (`Engine._read_history`)."""
+        """Today's history (New York date of now, `_history_window`, sent with every page;
+        the bot trades intraday, so its working orders were all placed today), page by page
+        by `pagination_key` until every id in `wanted` was seen, the last page or
+        `max_pages`; our own rows only (a foreign row we cannot parse is no concern here).
+        Called by the engine for fills arriving together (`Engine._read_history`)."""
         orders: list[OrderDetail] = []
         missing = set(wanted)
-        params: dict[str, Any] = {}
+        window = self._history_window(ny_date_of(self._wall()))
+        params: dict[str, Any] = dict(window)
         seen_keys: set[str] = set()
         for _page in range(max_pages):
             body = self._read(Route.HISTORY, params)
@@ -925,7 +953,7 @@ class WebullBroker:
             if str(next_key) in seen_keys:
                 raise BrokerReadFailed(Route.HISTORY.name, None, "PAGINATION_REPEATED")
             seen_keys.add(str(next_key))
-            params = {"pagination_key": str(next_key)}
+            params = {**window, "pagination_key": str(next_key)}
         return orders
 
     def history_page_shapes(self, max_pages: int) -> list[dict[str, Any]]:

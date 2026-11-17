@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -329,10 +329,13 @@ def test_recorded_working_stop_is_our_live_stop():
     assert stop.fees == D("0.07")  # the broker's estimate already listed: SEC 0.06 + FINRA 0.01
 
 
+WINDOW = {"start_time": "2026-11-16T05:00:00.000Z", "end_time": "2026-11-16T21:30:00.000Z"}
+
+
 def test_recorded_fill_in_history():
     b, t, _ = broker(load("historical_orders_fill_and_stop.json"))
     (fill,) = b.fills_today(TRADE_DAY)  # the working stop has no fill
-    assert [r for r, _ in t.sent] == [Route.HISTORY]
+    assert t.sent == [(Route.HISTORY, WINDOW)]  # the day's window (probe H2b)
     assert (fill.client_order_id, fill.symbol, fill.side, fill.order_type) == (
         "ap-6e324fb0-t1-e1", "TSCO", "BUY", "LIMIT")
     assert (fill.filled_quantity, fill.filled_price, fill.fees) == (D(64), D("38.44"), D(0))
@@ -373,8 +376,24 @@ def test_history_refuses_a_row_without_its_fill():
 
 
 def test_fills_of_another_new_york_day_are_left_out():
-    b, _, _ = broker(load("historical_orders_fill_and_stop.json"))
-    assert b.fills_today(date(2026, 11, 17)) == []
+    b, t, _ = broker(load("historical_orders_fill_and_stop.json"),
+                     wall=datetime(2026, 11, 18, 1, tzinfo=UTC))
+    assert b.fills_today(date(2026, 11, 17)) == []  # rows the window should not have listed
+    assert t.sent == [(Route.HISTORY, {"start_time": "2026-11-17T05:00:00.000Z",
+                                       "end_time": "2026-11-18T01:00:00.000Z"})]
+
+
+def test_history_window_ends_at_the_next_midnight_and_refuses_a_day_not_begun():
+    b, t, _ = broker(load("historical_orders_fill_and_stop.json"),
+                     wall=datetime(2026, 11, 20, 12, tzinfo=UTC))
+    b.fills_today(TRADE_DAY)
+    assert t.sent == [(Route.HISTORY, {"start_time": "2026-11-16T05:00:00.000Z",
+                                       "end_time": "2026-11-17T05:00:00.000Z"})]
+    b, t, _ = broker(load("historical_orders_fill_and_stop.json"),
+                     wall=datetime(2026, 11, 16, 4, 59, 59, 999000, tzinfo=UTC))
+    with pytest.raises(BrokerReadFailed, match="HISTORY_DAY_NOT_BEGUN"):
+        b.fills_today(TRADE_DAY)  # 23:59:59.999 on 2026-11-15 in New York
+    assert t.sent == []
 
 
 def test_a_filled_row_without_its_time_refuses():
@@ -390,7 +409,7 @@ def test_history_pages_until_no_key_and_refuses_a_repeated_key():
     first = {**copy.deepcopy(page), "pagination_key": "k1"}
     b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
     assert len(b.fills_today(TRADE_DAY)) == 2
-    assert [p for _, p in t.sent] == [{}, {"pagination_key": "k1"}]
+    assert [p for _, p in t.sent] == [WINDOW, {**WINDOW, "pagination_key": "k1"}]
     b, _, _ = broker(WireResponse(200, first), WireResponse(200, first))
     with pytest.raises(BrokerReadFailed):
         b.fills_today(TRADE_DAY)
@@ -409,7 +428,8 @@ def test_order_history_for_fills_stops_once_every_wanted_order_is_seen():
     assert len(t.sent) == 1
     b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
     b.order_history({"ap-elsewhere"}, 3)
-    assert [p for _, p in t.sent] == [{}, {"pagination_key": "k1"}]  # the last page
+    # today's window on every page, to the last page
+    assert [p for _, p in t.sent] == [WINDOW, {**WINDOW, "pagination_key": "k1"}]
 
 
 def test_order_history_for_fills_skips_foreign_rows_and_refuses_a_bad_own_row():

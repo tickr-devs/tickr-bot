@@ -394,7 +394,7 @@ the cause.
   does not show it). `last_price`, `market_value_usd`, `unrealized_pl_usd` and `day_pl_usd` are
   the broker's own figures for the position, display only (null when absent or unreadable).
 - `fills`: today's orders with a fill, oldest first, from the broker's order history
-  (`GET /trading/orders/historical-orders/list`, no `start_time`, at most
+  (`GET /trading/orders/historical-orders/list` with the day's `start_time`/`end_time` window, at most
   `[environments.*] history_max_pages` pages, kept to the New York date), read on the same
   thread with the balance and under the same rules (`fills_read_at`, `fills-read-failed` journaled once per stretch, never
   blocks anything). Each has the broker's `side` and `type`, the filled `quantity`, the
