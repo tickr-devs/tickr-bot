@@ -44,12 +44,19 @@ class Duplicates(FakeBroker):
     def __init__(self, rule: str, smallest: tuple[Decimal, Decimal]) -> None:
         super().__init__()
         self.rule = rule
+        self.reject_later = False
         self.smallest = dict(zip((TrailingType.PERCENTAGE, TrailingType.AMOUNT), smallest,
                                  strict=True))
 
     def place(self, request):
         step = request.trailing_stop_step
         if step is not None and step < self.smallest[request.trailing_type]:
+            if self.reject_later:
+                ack = super().place(request)
+                self.orders[request.client_order_id] = replace(
+                    self.orders[request.client_order_id], state=OrderState.REJECTED,
+                    raw_status="FAILED")
+                return ack
             raise Refused("OPENAPI_PARAM_ERR")
         for order in self.orders.values():
             if order.state.terminal or order.order_type is not request.order_type:
@@ -349,6 +356,15 @@ def test_the_smallest_accepted_steps_are_found_smallest_first(tmp_path: Path) ->
     assert summary["a3_smallest_amount"].startswith(
         "0.05 USD; refused: ['0.01: refused', '0.02: refused']")
     assert all(o.state.terminal for o in world.broker.orders.values())
+    assert code == tp.EXIT_ANSWERED and summary["close"] == "closed"
+
+
+def test_a_step_acknowledged_then_rejected_is_not_taken_as_accepted(tmp_path: Path) -> None:
+    world = World(tmp_path, smallest=(Decimal("0.01"), Decimal("0.05")))
+    world.broker.reject_later = True
+    code, summary = world.run()
+    assert summary["t7_smallest_percent"].startswith("1 %; refused: ['0.005: FAILED']")
+    assert summary["a3_smallest_amount"].startswith("0.05 USD; refused: ['0.01: FAILED'")
     assert code == tp.EXIT_ANSWERED and summary["close"] == "closed"
 
 

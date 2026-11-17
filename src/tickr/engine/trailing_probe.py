@@ -424,9 +424,11 @@ class TrailingProbe(Probe):
 
     def _first_accepted(self, name: str, steps: list[Decimal], kind: TrailingType,
                         ) -> tuple[Decimal | None, str | None, list[str]]:
-        """Each step in turn, until Webull accepts one: a refusal, or an unknown answer that
+        """Each step in turn, until Webull accepts one: a refusal, an unknown answer that
         Detail proves created nothing (`[orders] unknown_absent_reads` "not present" answers),
-        moves on. Returns the accepted step and its client order id (None, None when none was
+        or a row that ended unfilled (rejected after its acknowledgement) moves on; a step
+        neither shown nor proven absent is made sure over and ends the scan as unknown.
+        Returns the accepted step and its client order id (None, None when none was
         accepted or no share is held) and one line per step refused."""
         refused: list[str] = []
         poll = float(self.config.orders.detail_poll_seconds)
@@ -440,6 +442,15 @@ class TrailingProbe(Probe):
             row, absent = self.settle(name, cid, poll * self.config.orders.unknown_absent_reads)
             if row is None and absent:
                 refused.append(f"{step}: not created")
+                continue
+            if row is None:
+                # Neither shown nor proven absent: make sure it is over, and stop the scan.
+                self.finish(name, cid, None, False)
+                refused.append(f"{step}: {UNKNOWN}")
+                return None, None, refused
+            if row.state.terminal and row.filled_quantity == 0:
+                self.finish(name, cid, row, False)
+                refused.append(f"{step}: {row.raw_status}")
                 continue
             return step, cid, refused
         return None, None, refused
