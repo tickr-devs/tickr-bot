@@ -2529,6 +2529,11 @@ class SdkTransport:
             parsed = parse_json(raw.content) if raw.content else None
         except ValueError:
             return WireResponse(raw.status_code, {"error_code": "UNPARSEABLE_BODY"})
+        if isinstance(parsed, Mapping) and "message" in parsed:
+            # Hard rule 4: a body's message reaches refusals, journals and probe evidence;
+            # the SDK raises on every non-2xx (scrubbed above), but a 2xx body can carry an
+            # error envelope (tests/broker/test_bug_cancel_success_with_error_envelope.py).
+            parsed = {**parsed, "message": self._scrub(str(parsed["message"] or ""))}
         return WireResponse(raw.status_code, parsed)
 
 

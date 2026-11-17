@@ -139,6 +139,16 @@ def test_error_message_never_carries_the_account_id(env, monkeypatch):
     assert resp.status == 417 and ACCOUNT not in resp.message
 
 
+def test_a_2xx_error_envelope_message_never_carries_the_account_id(env, monkeypatch):
+    install(monkeypatch, {
+        "/trading/orders/historical-orders/list": [
+            (200, {"error_code": "OPENAPI_PARAM_ERR", "message": f"account {ACCOUNT} bad time"})],
+    })
+    resp = SdkTransport(settings(env)).send(Route.HISTORY, {"start_time": "x"})
+    assert resp.error_code == "OPENAPI_PARAM_ERR" and ACCOUNT not in resp.message
+    assert "<account>" in resp.message and ACCOUNT not in json.dumps(resp.body, default=str)
+
+
 def test_sdk_writes_no_logs_stdout_or_files(env, monkeypatch, capsys, caplog):
     monkeypatch.setenv("WEBULL_API_DEBUG", "sdk")  # SDK's own header dump switch
     install(monkeypatch, {
