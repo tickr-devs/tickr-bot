@@ -462,6 +462,20 @@ def test_history_page_shapes_name_no_order_and_follow_the_pages():
     assert len(b.history_page_shapes(1)) == 1 and len(t.sent) == 1
 
 
+def test_history_page_shapes_with_a_day_send_its_window_and_list_only_the_prefix():
+    page = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    first = {**copy.deepcopy(page), "pagination_key": "k1"}
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    shapes = b.history_page_shapes(5, TRADE_DAY, "ap-6e324fb0-t1-e")
+    window = t.sent[0][1]
+    assert set(window) == {"start_time", "end_time"}
+    assert [p for _, p in t.sent] == [window, {**window, "pagination_key": "k1"}]
+    assert [s["listed"] for s in shapes] == [["ap-6e324fb0-t1-e1"], ["ap-6e324fb0-t1-e1"]]
+    b, _, _ = broker(WireResponse(200, first), WireResponse(200, first))
+    with pytest.raises(BrokerReadFailed):
+        b.history_page_shapes(5, TRADE_DAY)
+
+
 def test_history_window_shape_sends_the_window_and_names_no_order():
     page = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
     b, t, _ = broker(WireResponse(200, page))

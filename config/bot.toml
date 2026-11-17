@@ -354,6 +354,14 @@ tick_step_wait_seconds = 10
 # Probe H2 (python -m tickr.probes history): most order-history pages read to see a page's size and the rows' order
 # (each a request of the order-history route, sent once, within its budget); read by the history probe.
 history_max_pages = 5
+# Probe H2c (tickr probe-history-paging): far BUY LIMIT orders placed and cancelled one after another, so one day's
+# history holds more rows than one page (44 seen on 2026-11-17); a count; read by tickr.engine.paging_probe.
+paging_orders = 50
+# Probe H2c: those limits lie this many percent below the bid, so none can fill; read by tickr.engine.paging_probe.
+paging_far_percent = 20
+# Probe H2c: seconds between two orders (each a place and a cancel: 30 sends a minute in Sandbox); read by
+# tickr.engine.paging_probe.
+paging_send_interval_seconds = 4
 
 [api]
 # Local API bind address; loopback only; read by the api server.

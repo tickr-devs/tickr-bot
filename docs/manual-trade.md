@@ -143,6 +143,26 @@ by the probe's result (a few cents).
    refused, nothing sent; the line says why.
 5. Paste `run.txt` and the `summary.json` it names into the project chat.
 
+## History paging probe (H2c)
+
+`tickr probe-history-paging SYMBOL` answers how the order history pages when one day holds more
+orders than one page (docs/webull-facts.md H2): the page size, whether paging works with the
+day's window, whether every order is listed exactly once, and the rows' order. The fills-together
+bound waits for it before slots are raised. Details: `src/tickr/engine/paging_probe.py`.
+
+When, and the bot: as for the extended-hours probe above (pre-market or post-market, bot stopped
+and kept from restarting, account flat; the same step 1). It places `[probe] paging_orders` BUY
+LIMIT orders of `[probe] quantity` share(s), `[probe] paging_far_percent` below the bid so none
+fills, one at a time, each cancelled and proven over before the next, then reads the history.
+It takes about 9 minutes and buys nothing.
+
+1. Step 1 of the extended-hours probe.
+2. A liquid stock under `[probe] max_price_usd` whose quote is fresh enough (step 2 above).
+3. `mkdir -p data/probe-paging && tickr probe-history-paging SYM 2>&1 | tee -i data/probe-paging/run.txt`.
+4. Exit 0: answered (the `h2c_paging` line). Exit 4: a probe order is left; cancel it in the
+   Webull app. Exit 3: refused, nothing sent.
+5. Re-enable and restart the bot (step 1), and paste `run.txt` and `summary.json`.
+
 ## Attached-stop probe (F8)
 
 `tickr probe-attached-stop SYMBOL` answers whether an entry can carry its own stop at the

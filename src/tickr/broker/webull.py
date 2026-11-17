@@ -959,29 +959,39 @@ class WebullBroker:
             params = {**window, "pagination_key": str(next_key)}
         return orders
 
-    def history_page_shapes(self, max_pages: int) -> list[dict[str, Any]]:
-        """Probe H2 (python -m tickr.probes history), read only: the shape of each order
-        history page, page by page by `pagination_key` up to `max_pages`. Per page: how many
-        combos and order rows it holds, how many rows are ours, each row's `place_time_at` in
-        page order, and whether a next page is offered. No id, symbol, price or account field
-        is returned."""
+    def history_page_shapes(self, max_pages: int, day: date | None = None,
+                            listed_prefix: str | None = None) -> list[dict[str, Any]]:
+        """Probes H2 and H2c, read only: the shape of each order history page, page by page by
+        `pagination_key` up to `max_pages`; with `day`, that day's window (`_history_window`)
+        goes with every page. Per page: how many combos and order rows it holds, how many rows
+        are ours, each row's `place_time_at` in page order, whether a next page is offered and,
+        with `listed_prefix`, the client order ids starting with it (the probe's own). No
+        other id, no symbol, price or account field is returned. A repeated key refuses."""
         pages: list[dict[str, Any]] = []
-        params: dict[str, Any] = {}
+        window = {} if day is None else self._history_window(day)
+        params: dict[str, Any] = dict(window)
+        seen_keys: set[str] = set()
         for _page in range(max_pages):
             body = self._read(Route.HISTORY, params)
             combos = _unwrap_list(body, "history")
             rows = [row for combo in combos if isinstance(combo, Mapping)
                     for row in (combo.get("orders") or []) if isinstance(row, Mapping)]
             next_key = _optional(body, "pagination_key") if isinstance(body, Mapping) else None
-            pages.append({
+            ids = [str(row.get("client_order_id") or "") for row in rows]
+            page: dict[str, Any] = {
                 "combos": len(combos), "rows": len(rows),
-                "own_rows": sum(1 for row in rows
-                                if self._is_own_order(str(row.get("client_order_id") or ""))),
+                "own_rows": sum(1 for cid in ids if self._is_own_order(cid)),
                 "place_times": [str(row.get("place_time_at") or "") for row in rows],
-                "next_page": next_key is not None})
+                "next_page": next_key is not None}
+            if listed_prefix is not None:
+                page["listed"] = [cid for cid in ids if cid.startswith(listed_prefix)]
+            pages.append(page)
             if next_key is None:
                 break
-            params = {"pagination_key": str(next_key)}
+            if str(next_key) in seen_keys:
+                raise BrokerReadFailed(Route.HISTORY.name, None, "PAGINATION_REPEATED")
+            seen_keys.add(str(next_key))
+            params = {**window, "pagination_key": str(next_key)}
         return pages
 
     def history_window_shape(self, window: Mapping[str, str]) -> dict[str, Any]:
