@@ -316,6 +316,18 @@ listing_far_percent = 20
 # probe-trailing (L2): seconds the open orders are read (once per [orders] detail_poll_seconds) until every stop placed
 # together is listed, before all are cancelled; read by the probe-trailing command.
 listing_wait_seconds = 30
+# probe tick (python -m tickr.probes tick): seconds to wait for the stream connection before the probe gives up; read by
+# tickr.engine.tick_probe.
+tick_connect_wait_seconds = 30
+# probe tick: seconds TICK and QUOTE messages are counted after both are subscribed for the given symbols (question 1:
+# does TICK stream on our entitlement?); read by tickr.engine.tick_probe.
+tick_flow_wait_seconds = 60
+# probe tick: cumulative TICK symbol counts the cap ramp subscribes, ascending, one step after another, until a request
+# is refused (question 2: how many symbols one connection may hold for TICK; QUOTE allows 100, probe M3); count; read by
+# tickr.engine.tick_probe.
+tick_cap_steps = [20, 50, 100, 101, 150, 200]
+# probe tick: seconds between two cap steps, so ticks of the new symbols can arrive; read by tickr.engine.tick_probe.
+tick_step_wait_seconds = 10
 
 [api]
 # Local API bind address; loopback only; read by the api server.

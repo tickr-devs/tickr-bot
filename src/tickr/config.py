@@ -188,6 +188,10 @@ class ProbeConfig:
     listing_stops: int
     listing_far_percent: Decimal
     listing_wait_seconds: int
+    tick_connect_wait_seconds: int
+    tick_flow_wait_seconds: int
+    tick_cap_steps: tuple[int, ...]
+    tick_step_wait_seconds: int
 
 
 @dataclass(frozen=True)
@@ -640,8 +644,14 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                           "above 0 and trailing_unit_factor above 1")
     if max(probe.trailing_tight_percents) >= probe.trailing_wide_percent:
         raise ConfigError("[probe] trailing_tight_percents must be below trailing_wide_percent")
+    if (probe.tick_connect_wait_seconds <= 0 or probe.tick_flow_wait_seconds <= 0
+            or probe.tick_step_wait_seconds < 0 or not probe.tick_cap_steps
+            or min(probe.tick_cap_steps) < 1):
+        raise ConfigError("[probe] tick_* waits must be above 0 (tick_step_wait_seconds at "
+                          "least 0) and tick_cap_steps at least 1")
     for name, values in (("trailing_tight_percents", probe.trailing_tight_percents),
-                         ("trailing_amount_steps_usd", probe.trailing_amount_steps_usd)):
+                         ("trailing_amount_steps_usd", probe.trailing_amount_steps_usd),
+                         ("tick_cap_steps", probe.tick_cap_steps)):
         if list(values) != sorted(set(values)):
             raise ConfigError(f"[probe] {name} must be ascending, without repeats")
     if not 1 <= risk.max_open_positions <= md.stream_reserved_symbols:

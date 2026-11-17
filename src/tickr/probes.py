@@ -1,7 +1,7 @@
 """Read-only Webull probes for the owner's Mac: `python -m tickr.probes <command> SYMBOL`.
 
-They answer two open facts of docs/webull-facts.md, section C, with chart bars reads only (no
-account route, no order, the account id is never read):
+They answer open facts of docs/webull-facts.md with market-data reads only (no account route,
+no order, the account id is never read). Section C, with chart bars reads:
 
 - `chart-limit` (C2): is the bars route limit counted per App Key across processes? It starts
   `[probe] chart_limit_processes` processes that each send `chart_limit_requests` bars requests
@@ -18,6 +18,14 @@ account route, no order, the account id is never read):
   If the experiment fails the bot may lose its broker reads, so it REFUSES to start while the
   bot's status or its last broker read shows a position or a working order of its own, or
   either cannot be read or is stale.
+
+Section K, on the L1 stream:
+
+- `tick SYMBOL...` (K): does the stream deliver trade-by-trade TICK messages on our
+  entitlement, and how many symbols may one connection hold for TICK? See
+  tickr/engine/tick_probe.py. Only one device may hold the market-data entitlement, so it
+  REFUSES while a bot process is recorded in the lock (the bot's own stream would be taken).
+  The cap ramp takes its symbols from the three screeners after the given ones.
 
 Every request is sent once and never repeated. Evidence goes to
 `<data_dir>/<[probe] evidence_dir>/<NY date>/<probe>-<UTC time>/`: one JSON line per request and
@@ -49,11 +57,13 @@ from tickr.broker.webull import (
     budget_from_config,
     chart_market_data_from_config,
     chart_probe_market_data_from_config,
+    tick_probe_stream_from_config,
 )
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.cli import data_paths
 from tickr.config import Config, ConfigError
-from tickr.data.base import BarSpan, MarketData, MarketDataError, SymbolsRefused
+from tickr.data.base import BarSpan, MarketData, MarketDataError, ScreenerKind, SymbolsRefused
+from tickr.engine import tick_probe
 from tickr.engine.core import Fence
 from tickr.lock import recorded_holder
 
@@ -412,6 +422,42 @@ def chart_client_gate(cfg: Config) -> str | None:
 
 
 # --------------------------------------------------------------------------------------------
+# tick (K)
+# --------------------------------------------------------------------------------------------
+
+
+def tick(cfg: Config, symbols: Sequence[str], *, now: Clock, sleep: Sleep,
+         market: Callable[[Config], MarketData],
+         stream: Callable[[Config, Callable[[dict[str, Any]], None]], tick_probe.TickStream],
+         out: Callable[[str], None] = print) -> tuple[int, Path]:
+    for symbol in symbols:
+        _require_symbol(symbol)
+    _, lock_path = data_paths(cfg)
+    pid = recorded_holder(lock_path)
+    if pid is not None:
+        raise ProbeRefused(f"a bot process (pid {pid}) is recorded in the lock; this probe "
+                           "takes the market-data entitlement its stream holds")
+    universe, reads = list(symbols), market(cfg)
+    for kind in (ScreenerKind.TOP_ACTIVES, ScreenerKind.GAINERS, ScreenerKind.LOSERS):
+        try:
+            universe += [row.symbol for row in reads.screener(kind)]
+        except (BrokerError, MarketDataError) as exc:
+            out(f"screener {kind} not read ({type(exc).__name__}); the cap ramp has fewer "
+                "symbols")
+    probe = cfg.probe
+    settings = tick_probe.TickSettings(
+        float(probe.tick_connect_wait_seconds), float(probe.tick_flow_wait_seconds),
+        probe.tick_cap_steps, float(probe.tick_step_wait_seconds),
+        cfg.market_data.stream_max_symbols)
+    folder = evidence_folder(cfg, "tick", now())
+    out(f"tick {' '.join(symbols)}; evidence in {folder}")
+    code = tick_probe.run(lambda on_event: stream(cfg, on_event), symbols, universe, settings,
+                          folder, now=now, sleep=sleep, out=out,
+                          environment=cfg.environment_name)
+    return code, folder
+
+
+# --------------------------------------------------------------------------------------------
 # Command line
 # --------------------------------------------------------------------------------------------
 
@@ -420,6 +466,8 @@ NOW: Clock = lambda: datetime.now(UTC)  # noqa: E731
 SLEEP: Sleep = time.sleep
 LIMIT_MARKET: Callable[[Config], MarketData] = chart_probe_market_data_from_config
 CLIENT_MARKET: Callable[[Config], MarketData] = chart_market_data_from_config
+TICK_STREAM: Callable[[Config, Callable[[dict[str, Any]], None]],
+                      tick_probe.TickStream] = tick_probe_stream_from_config
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -431,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
                                        "Only with the bot stopped"),
                        ("chart-client", "C1: a second client next to the running bot")):
         sub.add_parser(name, help=text).add_argument("symbol")
+    sub.add_parser("tick", help="K: trade-by-trade stream and its symbol cap. Only with the "
+                   "bot stopped").add_argument("symbols", nargs="+")
     worker = sub.add_parser("chart-limit-worker", help="one process of chart-limit (internal)")
     worker.add_argument("symbol")
     worker.add_argument("--out", type=Path, required=True)
@@ -444,6 +494,11 @@ def main(argv: list[str] | None = None) -> int:
                              limit.window_seconds, args.start_at, args.out,
                              now=NOW, sleep=SLEEP)
             return EXIT_ANSWERED
+        if args.command == "tick":
+            code, folder = tick(cfg, args.symbols, now=NOW, sleep=SLEEP, market=LIMIT_MARKET,
+                                stream=TICK_STREAM)
+            print(f"tick: evidence in {folder}")
+            return code
         if args.command == "chart-limit":
             verdict, folder = chart_limit(cfg, args.config, args.symbol, now=NOW)
         else:

@@ -69,6 +69,7 @@ from tickr.data.base import (
     ScreenerSession,
     SessionBar,
     SourceRead,
+    StreamAnswer,
     StreamNotice,
     SubscriptionLimit,
     SymbolsRefused,
@@ -1471,6 +1472,8 @@ STREAM_TOPIC_NOTICE = "notice"
 NOTICE_STATUS = "1001"
 NOTICE_ENTITLEMENT_PREEMPTED = "1002"
 STREAM_SUB_TYPE_QUOTE = "QUOTE"
+STREAM_SUB_TYPE_TICK = "TICK"  # trade by trade; only the tick probe subscribes it (KD-1)
+STREAM_TOPIC_TICK = "tick"
 STREAM_SUBSCRIBE_PATH = "/market-data/streaming/subscribe"
 STREAM_UNSUBSCRIBE_PATH = "/market-data/streaming/unsubscribe"
 # Subscribe refusal past the per-connection symbol limit (probe M3: HTTP 417, REST ServerException,
@@ -2040,6 +2043,27 @@ class StreamSettings:
     max_symbols: int
 
 
+def _new_stream_client(settings: StreamSettings) -> Any:
+    """The SDK's DataStreamingClient on the allowlisted hosts, with the configured token
+    folder; credentials are read by variable name only."""
+    for host in (settings.mqtt_host, settings.http_host):
+        if host not in settings.allowed_hosts:
+            raise AdapterConfigError("stream host is not on the host allowlist")
+    app_key = _read_credential(settings.app_key_env)
+    app_secret = _read_credential(settings.app_secret_env)
+    silence_sdk_loggers()
+    from webull.data.data_streaming_client import DataStreamingClient
+
+    silence_sdk_loggers()
+    client = DataStreamingClient(
+        app_key, app_secret, settings.region_id, uuid.uuid4().hex,
+        http_host=settings.http_host, mqtt_host=settings.mqtt_host,
+        mqtt_port=settings.mqtt_port,
+    )
+    client.set_token_dir(settings.token_dir)
+    return client
+
+
 class SdkQuoteStream:
     """`QuoteStream` over the SDK's DataStreamingClient (MQTT + subscribe POST), own thread.
 
@@ -2049,21 +2073,7 @@ class SdkQuoteStream:
     the session reports the transport down. Snapshot/tick topics are not subscribed (KD-1)."""
 
     def __init__(self, settings: StreamSettings, session: StreamSession) -> None:
-        for host in (settings.mqtt_host, settings.http_host):
-            if host not in settings.allowed_hosts:
-                raise AdapterConfigError("stream host is not on the host allowlist")
-        app_key = _read_credential(settings.app_key_env)
-        app_secret = _read_credential(settings.app_secret_env)
-        silence_sdk_loggers()
-        from webull.data.data_streaming_client import DataStreamingClient
-
-        silence_sdk_loggers()
-        client = DataStreamingClient(
-            app_key, app_secret, settings.region_id, uuid.uuid4().hex,
-            http_host=settings.http_host, mqtt_host=settings.mqtt_host,
-            mqtt_port=settings.mqtt_port,
-        )
-        client.set_token_dir(settings.token_dir)
+        client = _new_stream_client(settings)
         category = settings.category
         limit = settings.max_symbols
 
@@ -2132,6 +2142,97 @@ class SdkQuoteStream:
         # reconnect attempts; there is no public way to end its loop.
         self._client._thread_terminate = True
         self._client.disconnect()
+
+
+def _as_text(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def tick_probe_event(topic: str, payload: Any) -> dict[str, Any]:
+    """One stream message as a record for the tick probe: a tick's fields as received (SDK
+    3.0.3 `TickResult`: basic{symbol, timestamp ms, trading_session}, time, price, volume, side),
+    the symbol of a quote, a notice's fields, else the topic. Nothing is decided on them."""
+    basic = getattr(payload, "basic", None)
+    if topic == STREAM_TOPIC_TICK:
+        return {"kind": "tick", "symbol": _as_text(getattr(basic, "symbol", None)),
+                "timestamp": _as_text(getattr(basic, "timestamp", None)),
+                "session": _as_text(getattr(basic, "trading_session", None)),
+                "time": _as_text(getattr(payload, "time", None)),
+                "price": _as_text(getattr(payload, "price", None)),
+                "volume": _as_text(getattr(payload, "volume", None)),
+                "side": _as_text(getattr(payload, "side", None))}
+    if topic == STREAM_TOPIC_QUOTE:
+        return {"kind": "quote", "symbol": _as_text(getattr(basic, "symbol", None))}
+    if topic == STREAM_TOPIC_NOTICE and isinstance(payload, Mapping):
+        return {"kind": "notice", "fields": {str(k): _as_text(v) for k, v in payload.items()}}
+    return {"kind": "other", "topic": str(topic)}
+
+
+def _stream_answer(call: Callable[[], Any]) -> StreamAnswer:
+    try:
+        call()
+    except Exception as exc:  # noqa: BLE001 - the SDK raises ServerException and bare ones
+        status = getattr(exc, "http_status", None)
+        code = getattr(exc, "error_code", None)
+        return StreamAnswer(False, status if isinstance(status, int) else None,
+                            _as_text(code), type(exc).__name__)
+    return StreamAnswer(True)
+
+
+class SdkTickProbeStream:
+    """Probe-only stream for `python -m tickr.probes tick`: one MQTT connection on which the
+    probe itself sends TICK and QUOTE subscribe requests, each once; every message is handed to
+    `on_event` (on the SDK's thread) as a `tick_probe_event` record. No reconnect, no
+    resubscribe. Never used by the bot."""
+
+    def __init__(self, settings: StreamSettings,
+                 on_event: Callable[[dict[str, Any]], None]) -> None:
+        client = _new_stream_client(settings)
+        self._connected = threading.Event()
+        self._on_event = on_event
+        client.on_connect_success = lambda _c, _api, _sid: self._connected.set()
+        client.on_quotes_message = (
+            lambda _c, topic, payload: on_event(tick_probe_event(topic, payload)))
+        client.on_disconnect = (
+            lambda _c, _u, rc: on_event({"kind": "disconnected", "rc": _as_text(rc)}))
+        silence_sdk_loggers()
+        self._client = client
+        self._category = settings.category
+        self._thread: threading.Thread | None = None
+
+    def _run(self) -> None:
+        try:
+            self._client.connect_and_loop_forever(logger_enable=False)
+            detail = "ended"
+        except Exception as exc:  # noqa: BLE001 - the SDK raises bare Exceptions
+            detail = type(exc).__name__
+        self._on_event({"kind": "loop-ended", "detail": detail})
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise MarketDataError("tick probe stream already started")
+        self._thread = threading.Thread(target=self._run, name="tickr-tick-probe", daemon=True)
+        self._thread.start()
+
+    def wait_connected(self, seconds: float) -> bool:
+        return self._connected.wait(seconds)
+
+    def subscribe(self, symbols: Sequence[str], sub_type: str) -> StreamAnswer:
+        return _stream_answer(
+            lambda: self._client.subscribe(list(symbols), self._category, [sub_type]))
+
+    def unsubscribe_all(self) -> StreamAnswer:
+        return _stream_answer(lambda: self._client.unsubscribe(unsubscribe_all=True))
+
+    def stop(self) -> None:
+        # SDK 3.0.3 (paho 1.6.1): see SdkQuoteStream.stop.
+        self._client._thread_terminate = True
+        self._client.disconnect()
+
+
+def tick_probe_stream_from_config(
+        config: Config, on_event: Callable[[dict[str, Any]], None]) -> SdkTickProbeStream:
+    return SdkTickProbeStream(stream_settings_from_config(config), on_event)
 
 
 # --------------------------------------------------------------------------------------------

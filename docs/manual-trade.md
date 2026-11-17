@@ -197,6 +197,24 @@ a few seconds between orders without one.
 5. Paste `run.txt` and the `summary.json` it names into the project chat; restart the bot as in
    the extended-hours probe.
 
+## Tick-stream probe (K)
+
+`python -m tickr.probes tick SYM [SYM...]` answers whether the L1 stream delivers trade-by-trade
+TICK messages (price, volume, time, side) on our OpenAPI entitlement, and how many symbols one
+connection may hold for TICK (QUOTE allows 100). It only subscribes and counts; it sends no
+order and reads no account. Details: `src/tickr/engine/tick_probe.py`, docs/webull-facts.md "K".
+
+When: while the market trades (the regular session is best; trades must happen for ticks to
+arrive), with the bot stopped: only one device may hold the market-data entitlement, so the
+probe refuses while a bot process is in the lock. About 3 minutes.
+
+1. Stop the bot and keep its job from starting, as in step 1 of the extended-hours probe.
+2. `mkdir -p data/probe-tick && python -m tickr.probes tick SOFI NIO AAPL SPY QQQ 2>&1 | tee -i data/probe-tick/run.txt`.
+3. Exit 0: both answered. Exit 4: one is not (for example no messages at all: market quiet).
+   Exit 3: refused, nothing sent.
+4. Paste `run.txt` and the `summary.json` it names into the project chat; restart the bot as in
+   the extended-hours probe.
+
 ## Probe day (Monday 2026-11-16)
 
 Goal: answer the open broker facts in docs/webull-facts.md with read-only calls and two

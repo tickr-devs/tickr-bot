@@ -169,6 +169,18 @@ class StreamNotice:
     sent: int
 
 
+@dataclass(frozen=True)
+class StreamAnswer:
+    """The provider's answer to one stream subscribe or unsubscribe request, for the tick probe:
+    accepted, or refused with its HTTP status and error code as received (None when absent) and
+    the exception type. The provider's message is never kept."""
+
+    accepted: bool
+    http_status: int | None = None
+    error_code: str | None = None
+    error_type: str | None = None
+
+
 class QuoteListener(Protocol):
     """Receives stream events. Called on the provider's thread; keep the work tiny."""
 

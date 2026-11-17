@@ -482,3 +482,62 @@ def test_main_runs_one_worker_process(tmp_path, monkeypatch):
                         "--start-at", T0.isoformat()]) == probes.EXIT_ANSWERED
     assert len(out.read_text().splitlines()) == CFG.probe.chart_limit_requests
     assert len(market.calls) == CFG.probe.chart_limit_requests
+
+
+# --- tick (K) ----------------------------------------------------------------------------------
+
+
+def test_tick_refuses_next_to_a_bot_and_builds_nothing(tmp_path):
+    cfg = cfg_in(tmp_path)
+    live_bot(cfg)
+    with pytest.raises(probes.ProbeRefused, match="entitlement"):
+        probes.tick(cfg, ["SOFI"], now=Clock().now, sleep=Clock().sleep,
+                    market=lambda c: pytest.fail("built a client"),
+                    stream=lambda c, e: pytest.fail("built a stream"))
+    assert not (tmp_path / CFG.run.data_dir / CFG.probe.evidence_dir).exists()
+
+
+def test_tick_takes_the_cap_symbols_from_the_screeners(tmp_path, monkeypatch, capsys):
+    from tickr.data.base import ScreenerKind, ScreenerRow, StreamAnswer
+    from tickr.engine import tick_probe
+
+    market = FakeMarketData()
+    for kind, names in ((ScreenerKind.TOP_ACTIVES, ["SOFI", "NIO"]),
+                        (ScreenerKind.GAINERS, ["ABC"]), (ScreenerKind.LOSERS, ["XYZ"])):
+        market.set_screener(kind, [ScreenerRow(kind, n, f"id-{s}", s, "NAS", "USD", "CS")
+                                   for n, s in enumerate(names, start=1)])
+    sent: list[tuple[str, list[str]]] = []
+
+    class Stream:
+        def __init__(self, on_event):
+            self.on_event = on_event
+
+        def start(self):
+            pass
+
+        def wait_connected(self, seconds):
+            return True
+
+        def subscribe(self, symbols, sub_type):
+            sent.append((sub_type, list(symbols)))
+            if sub_type == tick_probe.TICK:
+                self.on_event({"kind": "tick", "symbol": symbols[0]})
+            return StreamAnswer(True)
+
+        def unsubscribe_all(self):
+            return StreamAnswer(True)
+
+        def stop(self):
+            pass
+
+    clock = Clock()
+    monkeypatch.setattr(probes.config_module, "load", lambda path: cfg_in(tmp_path))
+    monkeypatch.setattr(probes, "LIMIT_MARKET", lambda cfg: market)
+    monkeypatch.setattr(probes, "TICK_STREAM", lambda cfg, on_event: Stream(on_event))
+    monkeypatch.setattr(probes, "NOW", clock.now)
+    monkeypatch.setattr(probes, "SLEEP", clock.sleep)
+    # Four distinct symbols cannot reach the first cap step: answered for q1 only.
+    assert probes.main(["tick", "SOFI"]) == probes.EXIT_NO_ANSWER
+    assert sent[0] == (tick_probe.TICK, ["SOFI"]) and sent[1] == (tick_probe.QUOTE, ["SOFI"])
+    out = capsys.readouterr().out
+    assert "q1_tick_streams: streams" in out and "universe-too-small: 0 symbol(s) held of 4" in out
