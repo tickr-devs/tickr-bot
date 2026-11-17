@@ -33,7 +33,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -901,6 +901,32 @@ class WebullBroker:
             seen_keys.add(str(next_key))
             params = {"pagination_key": str(next_key)}
         raise BrokerReadFailed(Route.HISTORY.name, None, "PAGE_LIMIT_REACHED")
+
+    def order_history(self, wanted: Collection[str], max_pages: int) -> list[OrderDetail]:
+        """The history's default window (as `fills_today`), page by page by `pagination_key`
+        until every id in `wanted` was seen, the last page or `max_pages`; our own rows only
+        (a foreign row we cannot parse is no concern here). Called by the engine for fills
+        arriving together (`Engine._read_history`)."""
+        orders: list[OrderDetail] = []
+        missing = set(wanted)
+        params: dict[str, Any] = {}
+        seen_keys: set[str] = set()
+        for _page in range(max_pages):
+            body = self._read(Route.HISTORY, params)
+            rows, _foreign = read_order_rows(
+                body, self._transport.is_own_account, self._is_own_order, "history"
+            )
+            own = [row for row in rows if self._is_own_order(row.client_order_id)]
+            orders.extend(own)
+            missing.difference_update(row.client_order_id for row in own)
+            next_key = _optional(body, "pagination_key") if isinstance(body, Mapping) else None
+            if not missing or next_key is None:
+                break
+            if str(next_key) in seen_keys:
+                raise BrokerReadFailed(Route.HISTORY.name, None, "PAGINATION_REPEATED")
+            seen_keys.add(str(next_key))
+            params = {"pagination_key": str(next_key)}
+        return orders
 
     def open_orders(self) -> list[OrderDetail]:
         orders: list[OrderDetail] = []

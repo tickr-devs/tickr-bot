@@ -184,10 +184,11 @@ POLL = float(CFG.orders.detail_poll_seconds)
 SYMBOLS = [f"S{n:02d}" for n in range(MAX)]
 
 
-def full(tmp_path, *, filled: int, **overrides: object) -> Desk:
+def full(tmp_path, *, filled: int, broker: FakeBroker | None = None,
+         **overrides: object) -> Desk:
     """Every slot taken: the first `filled` trades hold a protected position, the others have
     their entry working; then long enough that every order has been read in turn."""
-    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)))
+    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)), broker)
     for n, symbol in enumerate(SYMBOLS):
         assert desk.enter(symbol, **overrides).admission == "taken"
         if n < filled:
@@ -244,10 +245,12 @@ BURST = int((float(CFG.orders.max_unprotected_seconds) - POLL) / POLL) - 1 - LIS
 
 
 def test_entries_filling_in_the_same_poll_get_their_stops_in_turn(tmp_path):
-    """Every working entry fills at once: the fills are read one per poll, each fill's stop
-    goes out at once, and the next open-orders read verifies it, so the k-th position has a
-    verified stop after k + 1 polls, not after all the fills were read."""
-    desk = full(tmp_path, filled=0)
+    """Every working entry fills at once and the order history cannot be read (with it, one
+    read shows them all: tests/runtime/test_history_fills.py): the fills are read one per
+    poll, each fill's stop goes out at once, and the next open-orders read verifies it, so
+    the k-th position has a verified stop after k + 1 polls, not after all the fills were
+    read."""
+    desk = full(tmp_path, filled=0, broker=FakeBroker(history_down=True))
     assert fill_together(desk, SYMBOLS) == [k + 1 for k in range(1, MAX + 1)]
 
 
@@ -265,7 +268,7 @@ class NoList(FakeBroker):
 def test_without_the_open_orders_list_new_stops_are_read_by_detail_in_turn(tmp_path):
     """While the list cannot be read, each new stop's Detail is read right after its fill,
     before the next fill: the k-th position is stopped after 2 k polls."""
-    broker = NoList()
+    broker = NoList(history_down=True)  # Detail alone
     desk = Desk(tmp_path, wide(3, max_daily_loss_usd=D(MAX * 10)), broker)
     symbols = SYMBOLS[:3]
     for symbol in symbols:
@@ -279,7 +282,7 @@ class LateList(FakeBroker):
     """The open-orders list shows a new stop only from its `late`+1-th read on."""
 
     def __init__(self, late: int) -> None:
-        super().__init__()
+        super().__init__(history_down=True)  # Detail alone: the start-time check's bound
         self.late = late
         self.unseen: dict[str, int] = {}
 

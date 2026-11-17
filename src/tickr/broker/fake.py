@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
@@ -65,6 +65,9 @@ class FakeBroker:
     fill_fees: Decimal | None = Decimal(0)  # the fees a fill shows (None: unreadable)
     account_label: str | None = None
     balance_reads: int = 0
+    history_reads: int = 0
+    history_down: bool = False  # order_history() raises
+    history_hidden: set[str] = field(default_factory=set)  # ids order_history() leaves out
 
     def script(self, *outcomes: str) -> None:
         self.outcomes.extend(outcomes)
@@ -91,6 +94,14 @@ class FakeBroker:
 
     def open_orders(self) -> list[OrderDetail]:
         return [o for o in self.orders.values() if not o.state.terminal]
+
+    def order_history(self, wanted: Collection[str], max_pages: int) -> list[OrderDetail]:  # noqa: ARG002 - one page
+        """Every order, as Detail shows it, but those in `history_hidden` (not listed yet);
+        raises BrokerError while `history_down`."""
+        self.history_reads += 1
+        if self.history_down:
+            raise BrokerError("history down")
+        return [o for cid, o in self.orders.items() if cid not in self.history_hidden]
 
     def order_detail(self, client_order_id: str) -> OrderDetail:
         try:

@@ -6,7 +6,7 @@ No other module may import a broker SDK. Implementations return typed results an
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -126,6 +126,13 @@ class Broker(Protocol):
     def positions(self) -> list[Position]: ...
 
     def open_orders(self) -> list[OrderDetail]: ...
+
+    def order_history(self, wanted: Collection[str], max_pages: int) -> list[OrderDetail]:
+        """Our own rows of the order history (each shaped like its Detail), page by page until
+        every client order id in `wanted` was seen, the last page, or `max_pages` pages. Rows
+        it did not reach are simply absent: the caller learns nothing about them. Raises
+        BrokerError (RateLimited included) when a page cannot be read."""
+        ...
 
     def order_detail(self, client_order_id: str) -> OrderDetail: ...
 

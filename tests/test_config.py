@@ -128,6 +128,17 @@ def test_stop_held_proof_interval_must_be_positive(tmp_path, value):
         config.load(_copy(tmp_path, text))
 
 
+@pytest.mark.parametrize(("key", "value"), [("history_fill_poll_seconds", "2"),
+                                          ("history_fill_max_pages", "0"),
+                                          ("history_fill_poll_seconds", "5")])
+def test_the_engine_history_reads_must_follow_detail_and_fit_the_route(tmp_path, key, value):
+    """Below a Detail poll, no page, or (5 s: 12 reads of Sandbox 10 per 60 s) over the
+    route limit on their own."""
+    text = re.sub(rf"(?m)^{key} = \S+", f"{key} = {value}", BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match="history_fill"):
+        config.load(_copy(tmp_path, text))
+
+
 @pytest.mark.parametrize("value", ["0", "-5"])
 def test_detail_unreadable_wait_must_be_positive(tmp_path, value):
     text = re.sub(r"(?m)^detail_unreadable_seconds = \S+", f"detail_unreadable_seconds = {value}",

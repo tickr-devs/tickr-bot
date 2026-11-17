@@ -396,6 +396,37 @@ def test_history_pages_until_no_key_and_refuses_a_repeated_key():
         b.fills_today(TRADE_DAY)
 
 
+def test_order_history_for_fills_stops_once_every_wanted_order_is_seen():
+    page = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    first = {**copy.deepcopy(page), "pagination_key": "k1"}
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    rows = b.order_history({"ap-6e324fb0-t1-e1"}, 3)
+    assert [r for r, _ in t.sent] == [Route.HISTORY]  # found on the first page
+    entry = next(r for r in rows if r.client_order_id == "ap-6e324fb0-t1-e1")
+    assert (entry.filled_quantity, entry.average_fill_price) == (D(64), D("38.44"))
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    assert b.order_history({"ap-elsewhere"}, 1) != []  # one page at most, nothing found
+    assert len(t.sent) == 1
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    b.order_history({"ap-elsewhere"}, 3)
+    assert [p for _, p in t.sent] == [{}, {"pagination_key": "k1"}]  # the last page
+
+
+def test_order_history_for_fills_skips_foreign_rows_and_refuses_a_bad_own_row():
+    body = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
+    foreign = copy.deepcopy(body["data"][0])
+    foreign["client_order_id"] = foreign["orders"][0]["client_order_id"] = "manual-1"
+    foreign["orders"][0]["side"] = "SHORT_SOMETHING"
+    body["data"].append(foreign)
+    b, _, _ = broker(WireResponse(200, copy.deepcopy(body)))
+    assert {r.client_order_id for r in b.order_history({"ap-6e324fb0-t1-e1"}, 1)} == {
+        "ap-6e324fb0-t1-s2", "ap-6e324fb0-t1-e1"}
+    del body["data"][1]["orders"][0]["filled_quantity"]
+    b, _, _ = broker(WireResponse(200, body))
+    with pytest.raises(MalformedResponse):
+        b.order_history({"ap-6e324fb0-t1-e1"}, 1)
+
+
 # --- cash activities: the exact trade amounts (recorded 2026-11-16) ---------------------------
 
 

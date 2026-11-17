@@ -22,6 +22,7 @@ from typing import Any, get_type_hints
 # The Webull bars route (protocol constant, also `broker.webull.Route.BARS`): the chart's
 # request slice is carved from this route's limit, which must be counted per 60 s.
 BARS_ROUTE = "/market-data/stocks/bars/list"
+HISTORY_ROUTE = "/trading/orders/historical-orders/list"
 SECONDS_PER_MINUTE = 60
 # One folder name: no separator, no "..", never absolute (keeps a cache inside [run] data_dir).
 PLAIN_FOLDER = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -135,6 +136,8 @@ class OrdersConfig:
     max_unprotected_seconds: Decimal
     max_stops_per_trade: int
     stop_listing_polls: int
+    history_fill_poll_seconds: Decimal
+    history_fill_max_pages: int
     detail_unreadable_seconds: Decimal
     max_exit_seconds: Decimal
     shutdown_deadline_seconds: Decimal
@@ -708,6 +711,12 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                               f"and below the bot's bars route limit of [environments.{name}] "
                               f"({bot_count}), or discovery could never read bars")
     orders, api = built["orders"], built["api"]
+    if orders.history_fill_poll_seconds < orders.detail_poll_seconds \
+            or orders.history_fill_max_pages < 1:
+        raise ConfigError("[orders] history_fill_poll_seconds must be at least "
+                          "detail_poll_seconds and history_fill_max_pages at least 1")
+    for name, env in environments.items():
+        check_history_share(orders, name, env)
     if not orders.reconcile_interval_seconds < api.broker_read_warn_seconds \
             < orders.broker_read_max_age_seconds:
         raise ConfigError("[api] broker_read_warn_seconds must be above [orders] "
@@ -732,6 +741,21 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         digest=hashlib.sha256(raw_bytes).hexdigest(),
         renamed_keys=tuple(renamed),
     )
+
+
+def check_history_share(orders: OrdersConfig, name: str, env: EnvironmentConfig) -> None:
+    """The engine's fill reads (`[orders] history_fill_max_pages` every
+    history_fill_poll_seconds) must fit the order-history route limit of `env` on their own;
+    a read our budget refuses (the display's reads share the route) is tried again the next
+    step, nothing being sent."""
+    count, window = env.route_limits.get(HISTORY_ROUTE,
+                                         (env.requests_per_route_per_minute, SECONDS_PER_MINUTE))
+    engine = orders.history_fill_max_pages * math.ceil(window / orders.history_fill_poll_seconds)
+    if engine > count:
+        raise ConfigError(
+            f"[orders] history_fill_max_pages every history_fill_poll_seconds ({engine} per "
+            f"{window} s) must fit the order-history route limit of [environments.{name}] "
+            f"({count} per {window} s)")
 
 
 def check_chart_slice(chart: ChartConfig, name: str, env: EnvironmentConfig) -> None:

@@ -142,6 +142,11 @@ ORDER_HELD = "order-held"
 # (`detail-unreadable` fence) survives a restart.
 DETAIL_FAILED = "detail-read-failed"
 DETAIL_ANSWERED = "detail-read-answered"
+# The first failed order-history read for fills after an answered one (`Engine._read_history`;
+# Detail reads go on), and a history row of a working entry that shows more filled but does not
+# match the entry as sent (ignored: Detail decides).
+HISTORY_READ_FAILED = "history-read-failed"
+HISTORY_ROW_IGNORED = "history-row-ignored"
 # A filled order's exact average fill price, recorded once from the account's cash activity of
 # the fill (runtime/account.py, `record_exact_fills`); the body is the evidence it came from.
 EXACT_FILL_PRICE = "exact-fill-price"
@@ -403,6 +408,10 @@ class Engine:
         # Whether this step's open-orders read for new stops answered (`_verify_listed`);
         # while it does not, new stops go to Detail first.
         self._list_answered = False
+        # Engine-clock time of the latest order-history read for fills (`_read_history`), and
+        # whether the latest one failed (its streak is journaled once). Memory only.
+        self._history_read_at: float | None = None
+        self._history_failing = False
 
     # --- fences ----------------------------------------------------------------------------
 
@@ -1232,6 +1241,9 @@ class Engine:
         closing = {o.symbol for o in self.orders() if o.leg is Leg.EXIT and o.live}
         cancelling = {row.symbol for row in due
                       if self._awaits_cancel_read(row) and row.symbol not in closing}
+        moved = self._read_history(due, held)
+        due = [self.order(row.client_order_id) if row.client_order_id in moved else row
+               for row in due]
         due.sort(key=lambda row: (self._read_first(row, cancelling),
                                   _detail_priority(row, poll)))
         for row in due[:self.config.orders.detail_reads_per_step]:
@@ -1244,6 +1256,89 @@ class Engine:
                 self._set_fence(Fence.DETAIL_BUDGET, "", "Detail reads refused by the budget")
                 return
         self._clear_fence(Fence.DETAIL_BUDGET)
+
+    def _read_history(self, due: list[OrderRow], held: dict[str, Decimal] | None) -> set[str]:
+        """Entries filling together, seen by one order-history read instead of one Detail read
+        each (`[orders] history_fill_poll_seconds`): only while one of our entries is working
+        and more orders are due than this step's Detail reads. A history row is the order as
+        the broker lists it, shaped like its Detail; it counts only for a working acknowledged
+        entry of ours, as sent (symbol, side, quantity), showing more filled than recorded,
+        and only when this step's positions read holds at least what the trade would then be
+        expected to hold: a history fill never sizes a stop on its own (a row ahead of the
+        position waits for a later read, or for Detail). The fill and its average price are
+        then recorded (journal row marked "history") and the trade is protected at once.
+        Nothing else is taken from it: the order's state, fees, send and cancel bookkeeping
+        stay with Detail, which still reads the order in turn and stays the truth: a row can
+        never end an order, and a later Detail read showing less moves the fill back (the
+        extra stop is then trimmed as for any Detail read). No read without a positions read
+        (`held` None). A failed or budget-refused read changes nothing (Detail reads go on);
+        its streak is journaled once; one refused by our budget is tried again next step. The
+        read is synchronous: a hung request holds the loop until the HTTP read timeout, as a
+        Detail read does. With one page of a size and order not recorded yet (H2) it may miss
+        some entries; they are left to Detail. Returns the ids of the orders it updated."""
+        entries = {o.client_order_id: o for o in due
+                   if o.leg is Leg.ENTRY and o.send_state is SendState.ACKNOWLEDGED}
+        orders = self.config.orders
+        updated: set[str] = set()
+        if held is None or not entries or len(due) <= orders.detail_reads_per_step:
+            return updated
+        now = self.clock()
+        if (self._history_read_at is not None
+                and now - self._history_read_at < float(orders.history_fill_poll_seconds)):
+            return updated
+        try:
+            rows = self.broker.order_history(set(entries), orders.history_fill_max_pages)
+        except RateLimited as exc:
+            # Our budget refused it (nothing sent; the display shares the route) or a 429
+            # paused the route: tried again next step, the budget bounding it.
+            self._history_failed(exc)
+            return updated
+        except BrokerError as exc:
+            self._history_read_at = now
+            self._history_failed(exc)
+            return updated
+        self._history_read_at = now
+        self._history_failing = False
+        for listed in rows:
+            row = entries.get(listed.client_order_id)
+            if row is None or listed.filled_quantity <= row.filled_quantity:
+                continue
+            if (listed.symbol != row.symbol or listed.side is not row.side
+                    or listed.quantity != row.quantity or listed.filled_quantity > row.quantity
+                    or listed.average_fill_price is None):
+                with self.store.transaction():
+                    self.store.append(HISTORY_ROW_IGNORED, {
+                        "symbol": listed.symbol, "side": listed.side,
+                        "quantity": listed.quantity, "filled_quantity": listed.filled_quantity,
+                        "average_fill_price": listed.average_fill_price},
+                        key=row.client_order_id, run_id=self.run_id)
+                continue
+            expected = (self.expected_quantity(self.orders(row.trade_id))
+                        + listed.filled_quantity - row.filled_quantity)
+            if held.get(row.symbol, ZERO) < expected:
+                continue  # the position does not show it yet: a later read, or Detail
+            with self.store.transaction():
+                written = self.store.execute(
+                    "UPDATE orders SET filled_quantity = ?, average_fill_price = ?, "
+                    "updated_at = ? WHERE client_order_id = ? AND filled_quantity = ?",
+                    (str(listed.filled_quantity), str(listed.average_fill_price),
+                     self.store.stamp(), row.client_order_id, str(row.filled_quantity)))
+                if written != 1:
+                    continue
+                self.store.append(ORDER_OBSERVED, {
+                    "state": listed.state, "raw_status": listed.raw_status,
+                    "filled_quantity": listed.filled_quantity,
+                    "average_fill_price": listed.average_fill_price, "source": "history"},
+                    key=row.client_order_id, run_id=self.run_id)
+            updated.add(row.client_order_id)
+        return updated
+
+    def _history_failed(self, exc: BrokerError) -> None:
+        if not self._history_failing:
+            self._history_failing = True
+            with self.store.transaction():
+                self.store.append(HISTORY_READ_FAILED, {"error": type(exc).__name__},
+                                  run_id=self.run_id)
 
     def _verify_listed(self) -> None:
         """Verify every new stop with one open-orders read (owner decision 2026-11-17), so
