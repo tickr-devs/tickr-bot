@@ -119,13 +119,19 @@ def assert_unreadable_stop_kept(broker: TeardownWatch, engine: Engine, quantity:
 
 
 class StopDetailUnreadable(TeardownWatch):
-    """The stop works at the broker, its Detail cannot be parsed, a cancel takes."""
+    """The stop works at the broker, its Detail cannot be parsed, a cancel takes; its
+    open-orders row shows a status we cannot map either, so nothing verifies it."""
 
     def read_detail(self, client_order_id):
         order = FakeBroker.order_detail(self, client_order_id)
         if order.order_type is OrderType.STOP_LOSS:
             raise Unreadable("malformed")
         return order
+
+    def open_orders(self):
+        return [replace(o, state=OrderState.UNKNOWN, raw_status="MALFORMED")
+                if o.order_type is OrderType.STOP_LOSS else o
+                for o in FakeBroker.open_orders(self)]
 
 
 def test_bug_a_unreadable_stop_is_not_cancelled_into_a_bare_position(store):

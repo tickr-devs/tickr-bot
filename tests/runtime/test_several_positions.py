@@ -16,7 +16,7 @@ from tickr import config
 from tickr.broker.base import BrokerError
 from tickr.broker.fake import FakeBroker
 from tickr.config import GateResult
-from tickr.engine.core import STOPS_PER_FILL, Engine, EntryRefused, Fence, Leg, TradeState
+from tickr.engine.core import Engine, EntryRefused, Fence, Leg, TradeState
 from tickr.observers.log import DecisionLog
 from tickr.runtime import launchd
 from tickr.runtime.entries import EntryDesk, slots_in_use
@@ -38,8 +38,8 @@ def quote(symbol: str, ask: str = "10.05") -> Quote:
 
 
 class Desk:
-    def __init__(self, tmp_path, cfg: config.Config) -> None:
-        self.broker = FakeBroker()
+    def __init__(self, tmp_path, cfg: config.Config, broker: FakeBroker | None = None) -> None:
+        self.broker = broker or FakeBroker()
         self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
         self.clock = [1_000_000.0]
         self.engine = Engine(self.store, self.broker, cfg, "desk0001",
@@ -241,31 +241,87 @@ def fill_together(desk: Desk, symbols: list[str]) -> list[int]:
     return sorted(done.values())
 
 
-# The most slots the start-time check lets through: a fill's read plus up to two stop reads
-# each, within `max_unprotected_seconds` less a poll.
-BURST = int((float(CFG.orders.max_unprotected_seconds) - POLL) / ((1 + STOPS_PER_FILL) * POLL))
+# The most slots the start-time check lets through: one Detail read per fill, then one
+# open-orders read for the new stops, within `max_unprotected_seconds` less a poll.
+LISTED = CFG.orders.stop_listing_polls
+BURST = int((float(CFG.orders.max_unprotected_seconds) - POLL) / POLL) - 1 - LISTED
 
 
 def test_entries_filling_in_the_same_poll_get_their_stops_in_turn(tmp_path):
-    """Every working entry fills at once: each fill is read, then its new stop, before the
-    next fill, so the k-th position has a verified stop after 2 k polls, not after all the
-    fills were read."""
+    """Every working entry fills at once: the fills are read one per poll, each fill's stop
+    goes out at once, and the next open-orders read verifies it, so the k-th position has a
+    verified stop after k + 1 polls, not after all the fills were read."""
     desk = full(tmp_path, filled=0)
-    assert fill_together(desk, SYMBOLS) == [2 * k for k in range(1, MAX + 1)]
+    assert fill_together(desk, SYMBOLS) == [k + 1 for k in range(1, MAX + 1)]
 
 
-def test_split_fills_in_the_same_poll_are_protected_in_time_at_the_allowed_slots(tmp_path):
-    """With a scale-out each fill gets two stops: three reads each. At the slot count the
-    start-time check allows, the last position is fully stopped within
-    `max_unprotected_seconds` with a poll to spare."""
-    desk = Desk(tmp_path, wide(BURST, max_daily_loss_usd=D(MAX * 10)))
+class NoList(FakeBroker):
+    """The open-orders list cannot be read once `down` is set."""
+
+    down = False
+
+    def open_orders(self):
+        if self.down:
+            raise BrokerError("down")
+        return super().open_orders()
+
+
+def test_without_the_open_orders_list_new_stops_are_read_by_detail_in_turn(tmp_path):
+    """While the list cannot be read, each new stop's Detail is read right after its fill,
+    before the next fill: the k-th position is stopped after 2 k polls."""
+    broker = NoList()
+    desk = Desk(tmp_path, wide(3, max_daily_loss_usd=D(MAX * 10)), broker)
+    symbols = SYMBOLS[:3]
+    for symbol in symbols:
+        assert desk.enter(symbol).admission == "taken"
+    desk.step(6)
+    broker.down = True
+    assert fill_together(desk, symbols) == [2, 4, 6]
+
+
+class LateList(FakeBroker):
+    """The open-orders list shows a new stop only from its `late`+1-th read on."""
+
+    def __init__(self, late: int) -> None:
+        super().__init__()
+        self.late = late
+        self.unseen: dict[str, int] = {}
+
+    def place(self, request):
+        ack = super().place(request)
+        if request.order_type is OrderType.STOP_LOSS:
+            self.unseen[request.client_order_id] = self.late
+        return ack
+
+    def open_orders(self):
+        rows = [o for o in super().open_orders() if self.unseen.get(o.client_order_id, 0) == 0]
+        for cid, left in self.unseen.items():
+            self.unseen[cid] = max(left - 1, 0)
+        return rows
+
+
+@pytest.mark.parametrize("late", [0, 1, 2])
+def test_split_fills_in_the_same_poll_are_protected_in_time_at_the_allowed_slots(tmp_path,
+                                                                               late):
+    """With a scale-out each fill gets two stops, both verified by the same open-orders read;
+    the list is read every step while a stop is unverified, so a stop listed late costs no
+    Detail read the fills need: the k-th position is stopped after k + 1 + late polls.
+    Listed within `stop_listing_polls`, at the slot count the start-time check allows, the
+    last one has a poll to spare under `max_unprotected_seconds`; a poll later, it uses
+    that spare poll."""
+    desk = Desk(tmp_path, wide(BURST, max_daily_loss_usd=D(MAX * 10)), LateList(late))
     symbols = SYMBOLS[:BURST]
     for symbol in symbols:
         assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
     desk.step(2 * BURST)
     done = fill_together(desk, symbols)
-    assert done == [(1 + STOPS_PER_FILL) * k for k in range(1, BURST + 1)]
-    assert done[-1] * POLL <= float(CFG.orders.max_unprotected_seconds) - POLL
+    assert len(done) == BURST
+    if late <= LISTED:
+        assert done == [k + 1 + late for k in range(1, BURST + 1)]
+        assert done[-1] * POLL <= float(CFG.orders.max_unprotected_seconds) - POLL
+    else:
+        assert done == [k + 1 + late for k in range(1, BURST + 1)]
+        assert done[-1] * POLL <= float(CFG.orders.max_unprotected_seconds)
 
 
 def test_at_the_most_slots_a_stop_out_is_seen_in_one_poll(tmp_path):
