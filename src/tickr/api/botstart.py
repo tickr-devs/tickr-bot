@@ -5,6 +5,12 @@ that already runs is never restarted). The job then runs the same preflight and 
 scheduled start: preflight may still refuse (no session, token, disk ...), and GET /status shows
 what happened. Nothing here talks to the broker.
 
+The command runs without any credential variable (`config.credential_variables`): while
+`[chart] webull_enabled` the API holds the Webull app key and secret (runtime/launchd.py), and
+the kickstart needs none of them. The bot job never takes its environment from the caller:
+launchd starts it with the job's own environment, and its shell sources the env file itself
+(ops/launchd/local.tickr.bot.plist.template).
+
 Checks, each a typed refusal with one cause and nothing changed:
 - no start command configured (Docker, the demo): `unavailable`;
 - the bot's fresh status says it is starting, running or stopping: `conflict` (a stale or
@@ -27,26 +33,28 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from tickr.api.contract import BotStartV1, BotState, StatusResponseV1
-from tickr.config import Config
+from tickr.config import Config, credential_variables, environ_without
 from tickr.lock import LOCK_FILE, recorded_holder
 
 UID_PLACEHOLDER = "{uid}"
 
-# Runs a command with a timeout in seconds and returns its exit code; replaced in tests.
-Runner = Callable[[Sequence[str], float], int]
+# Runs a command with a timeout in seconds in the given environment and returns its exit code;
+# replaced in tests.
+Runner = Callable[[Sequence[str], float, Mapping[str, str]], int]
 
 
-def run_command(command: Sequence[str], timeout: float) -> int:
-    """Run the start command; its output is discarded, only the exit code counts."""
+def run_command(command: Sequence[str], timeout: float, environ: Mapping[str, str]) -> int:
+    """Run the start command in `environ`; its output is discarded, only the exit code
+    counts."""
     return subprocess.run(list(command), check=False, stdin=subprocess.DEVNULL,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                          timeout=timeout).returncode
+                          timeout=timeout, env=dict(environ)).returncode
 
 
 class StartRefused(Exception):
@@ -62,6 +70,7 @@ class StartSettings:
     timeout_seconds: float
     stop_marker: Path
     lock_file: Path  # the bot's single-instance lock (lock.LOCK_FILE under data_dir)
+    scrub: frozenset[str]  # credential variable NAMES the command never gets
 
     @classmethod
     def from_config(cls, cfg: Config) -> StartSettings:
@@ -69,7 +78,8 @@ class StartSettings:
         data = cfg.root / cfg.run.data_dir
         return cls(tuple(part.replace(UID_PLACEHOLDER, uid) for part in cfg.api.start_bot_command),
                    float(cfg.api.start_bot_timeout_seconds),
-                   data / cfg.runtime.stop_marker_file, data / LOCK_FILE)
+                   data / cfg.runtime.stop_marker_file, data / LOCK_FILE,
+                   credential_variables(cfg))
 
 
 def _note(line: str) -> None:
@@ -104,7 +114,8 @@ def start_bot(settings: StartSettings, state: StatusResponseV1, now: datetime,
         _note(f"{now.isoformat()} start-bot: operator stop cleared by Start")
     after = " (the operator stop was cleared, so the next scheduled start runs)" if cleared else ""
     try:
-        code = runner(settings.command, settings.timeout_seconds)
+        code = runner(settings.command, settings.timeout_seconds,
+                      environ_without(settings.scrub))
     except subprocess.TimeoutExpired:
         raise StartRefused("unavailable", f"the start command did not return within "
                            f"{settings.timeout_seconds:g} s{after}") from None

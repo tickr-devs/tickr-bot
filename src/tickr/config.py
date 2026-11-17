@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 import tomllib
 import warnings
@@ -786,6 +787,15 @@ def credential_variables(config: Config) -> frozenset[str]:
     for env in config.environments.values():
         names |= {env.app_key_variable, env.app_secret_variable, env.account_variable}
     return frozenset(names)
+
+
+def environ_without(names: frozenset[str]) -> dict[str, str]:
+    """A copy of this process's environment without `names` (credential variables), for a child
+    process that needs none of them. Never printed or logged."""
+    env = os.environ.copy()
+    for name in names:
+        env.pop(name, None)
+    return env
 
 
 def trading_gate(config: Config) -> GateResult:

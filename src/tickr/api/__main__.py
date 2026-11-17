@@ -13,14 +13,23 @@ environment, never the
 account id; it may wait for a token confirmation like the bot). Status and commands (stop,
 emergency) never wait for it: until it is ready GET /chart answers 503 "starting", and if the
 build fails it answers 503 with the cause.
+
+At its start `serve` checks which credential variables it holds (names only): any beyond what its
+launchd job is meant to give it (`runtime.launchd.api_credential_variables`: none with the chart
+off, the active environment's app key and secret with it on) raise the
+`api-credentials-unexpected` alert (Mac notification) and a line in api.log naming them; the API
+still serves. Its plist is then stale or edited: render and reinstall it (docs/operations.md).
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
+import os
+import subprocess
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from tickr import config as config_module
@@ -33,8 +42,12 @@ from tickr.api.server import (
 )
 from tickr.broker.base import BrokerError
 from tickr.data.base import MarketData
+from tickr.runtime.alerts import MACOS, Alerter, AlertKind, Channels, Notifier, mac_notifier
+from tickr.runtime.launchd import api_credential_variables
 
 SECONDS_PER_MINUTE = 60
+# Alert title prefix, the same as the runtime commands' (runtime/__main__.py TITLE).
+ALERT_TITLE = "Tickr"
 CHART_STARTING = "chart market data is starting: its Webull client is still being built"
 
 
@@ -96,6 +109,51 @@ def attach_chart_source(
     return thread
 
 
+def unexpected_credentials(cfg: config_module.Config,
+                           environ: Mapping[str, str]) -> tuple[str, ...]:
+    """NAMES of the credential variables set in `environ` that the API job must not have."""
+    allowed = set(api_credential_variables(cfg))
+    return tuple(sorted(name for name in config_module.credential_variables(cfg) - allowed
+                        if environ.get(name)))
+
+
+def _api_notifier(cfg: config_module.Config) -> Notifier | None:
+    """The Mac notification only (the API has no iMessage recipient variable), run without any
+    credential variable; None off macOS."""
+    if sys.platform != "darwin":
+        return None
+    run = functools.partial(subprocess.run,
+                            env=config_module.environ_without(
+                                config_module.credential_variables(cfg)))
+    return Channels((), ((MACOS, mac_notifier(cfg.alerts, run)),))
+
+
+def check_credentials(cfg: config_module.Config, environ: Mapping[str, str] = os.environ,
+                      notifier: Callable[[config_module.Config], Notifier | None] = _api_notifier,
+                      ) -> threading.Thread | None:
+    """Alert `api-credentials-unexpected` when the API holds a credential variable its job must
+    not give it. The alert is sent in a daemon thread (returned) so serving never waits for it;
+    each outcome is one line in api.log. Names only, never a value."""
+    names = unexpected_credentials(cfg, environ)
+    if not names:
+        return None
+    text = (f"the API holds {', '.join(names)}, which its launchd job must not give it: render "
+            "and reinstall the API plist (docs/operations.md, The API job and the Webull keys)")
+    print(f"tickr api: {AlertKind.API_CREDENTIALS_UNEXPECTED.value}: {text}", file=sys.stderr)
+    alerter = Alerter(cfg.alerts, f"{ALERT_TITLE} {cfg.environment_name}", notifier(cfg))
+
+    def send() -> None:
+        outcomes = [alerter.alert(AlertKind.API_CREDENTIALS_UNEXPECTED, text), *alerter.flush()]
+        for outcome in outcomes:
+            body = outcome.journal_body()
+            print(f"tickr api: alert {body['kind']} {body['delivery']}"
+                  + (f" ({body['error']})" if body["error"] else ""), file=sys.stderr)
+
+    thread = threading.Thread(target=send, name="credentials-alert", daemon=True)
+    thread.start()
+    return thread
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tickr.api")
     parser.add_argument("--config", type=Path, default=Path("config/bot.toml"),
@@ -120,6 +178,11 @@ def main(argv: list[str] | None = None) -> int:
               "Pair with Mac. Once the phone has paired, the link is worthless and the API\n"
               "deletes the file.")
         return 0
+    try:
+        check_credentials(cfg)
+    except config_module.ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
     server = make_server(settings)
     print(f"tickr api on http://{settings.host}:{server.server_port}/", file=sys.stderr)
     remote = None

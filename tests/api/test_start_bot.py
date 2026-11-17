@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import threading
 from dataclasses import replace
 from datetime import timedelta
@@ -43,9 +44,11 @@ class Runner:
 
     def __init__(self, code: int = 0, raises: Exception | None = None) -> None:
         self.code, self.raises, self.calls = code, raises, []
+        self.environs: list[dict[str, str]] = []  # the environment of each run, apart
 
-    def __call__(self, command, timeout):
+    def __call__(self, command, timeout, environ):
         self.calls.append((tuple(command), timeout))
+        self.environs.append(dict(environ))
         if self.raises is not None:
             raise self.raises
         return self.code
@@ -86,9 +89,9 @@ def test_start_clears_the_operator_stop_marker_first(api, settings):
     runner = Runner()
     real = runner.__call__
 
-    def checking(command, timeout):
+    def checking(command, timeout, environ):
         seen.append(marker.exists())  # preflight would refuse while it exists
-        return real(command, timeout)
+        return real(command, timeout, environ)
 
     resp, body = _start(server, checking)
     assert resp.status == 202 and body["stop_marker_cleared"] is True
@@ -233,3 +236,34 @@ def test_get_is_not_allowed_and_bad_key_refused(api):
     server.start_runner = Runner()
     resp, _ = request(server, "POST", "/commands/start-bot", {}, {"Idempotency-Key": "bad key"})
     assert resp.status == 400 and server.start_runner.calls == []
+
+
+def test_the_start_command_never_gets_a_credential_variable(api, settings, monkeypatch):
+    # While [chart] webull_enabled the API holds the Webull app key and secret
+    # (runtime/launchd.py); the kickstart needs none and gets none. Safe: the bot job never takes
+    # its environment from the caller, its shell sources the env file itself
+    # (tests/runtime/test_launchd.py, test_bot_job_sources_its_own_env_file).
+    server, _ = api
+    cfg = config.load(ROOT / "config" / "bot.toml")
+    names = config.credential_variables(cfg)
+    assert settings.start.scrub == names
+    env = cfg.environment
+    assert {env.app_key_variable, env.app_secret_variable, env.account_variable} <= names
+    for name in names:
+        monkeypatch.setenv(name, "dummy-not-a-secret")
+    monkeypatch.setenv("TICKR_TEST_PLAIN", "kept")
+    runner = Runner()
+    resp, _ = _start(server, runner)
+    assert resp.status == 202
+    (child,) = runner.environs
+    assert not names & set(child) and child["TICKR_TEST_PLAIN"] == "kept"
+
+
+def test_run_command_runs_in_the_given_environment(monkeypatch):
+    from tickr.api.botstart import run_command
+
+    monkeypatch.setenv("TICKR_TEST_SECRETLIKE", "dummy")
+    probe = [sys.executable, "-c",
+             "import os, sys; sys.exit(3 if os.environ.get('TICKR_TEST_SECRETLIKE') else 0)"]
+    assert run_command(probe, 30, {"PATH": os.environ.get("PATH", "")}) == 0
+    assert run_command(probe, 30, {"TICKR_TEST_SECRETLIKE": "dummy"}) == 3

@@ -198,8 +198,17 @@ exactly those two variables, named by `[environments.<env>] app_key_variable` an
 chart client reads no account id), never another environment's keys, never the alert recipient,
 the advisor key or any other line of the env file. Its shell reads each of the two in a
 subshell that sources the env file and prints only that one value (the file's own output is
-discarded), then exports it; the API process itself never reads the env file. The Lab replay
-child the API starts gets none of the credential variables.
+discarded), then exports it; the API process itself never reads the env file. No process the
+API starts gets any credential variable: the Lab replay child, the start-bot command
+(`launchctl kickstart`; the bot job sources the env file itself, launchd never hands it the
+caller's environment) and the alert's notification commands.
+
+At its start the API checks the credential variables it holds (names only). Any beyond those
+above (any at all with the chart off; the account id, another environment's keys or any other
+credential with it on) raise the `api-credentials-unexpected` alert and a line in api.log
+naming them; the API still serves. Its plist is then stale or edited: render and reinstall it as
+below. The API sends this alert as a Mac notification only: it has no iMessage recipient
+variable.
 
 The variable names are fixed when the plist is rendered: after changing `[chart]
 webull_enabled` or `[run] environment`, render again and reinstall the API job only:
@@ -509,7 +518,8 @@ straight to the supervisor. Limits:
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
 `exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`,
-`flatten-after-close`, and from
+`flatten-after-close`, from the API `api-credentials-unexpected` (Mac notification only, see
+"The API job and the Webull keys"), and from
 the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
 `watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`. Every alert goes to
 the Mac notification and to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4).

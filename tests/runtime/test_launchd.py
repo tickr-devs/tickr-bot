@@ -352,3 +352,15 @@ def test_api_credential_variables_refuse_unsafe_or_shared_names(config_path, key
                                      cfg.environment_name: replace(env, **changed)})
     with pytest.raises(config_module.ConfigError, match=match):
         launchd.api_credential_variables(bad)
+
+
+def test_bot_job_sources_its_own_env_file(config_path, repo, tmp_path):
+    """POST /commands/start-bot kickstarts this job without any credential variable
+    (api/botstart.py): safe, because the job never takes the caller's environment; its own
+    shell sources the env file before anything else."""
+    bot = _render(config_path, repo, tmp_path / "out")["local.tickr.bot.plist"]
+    args = bot["ProgramArguments"]
+    assert args[2].startswith('set -a; . "$0"; set +a;') and args[3] == str(PATHS.env_file)
+    cfg = config_module.load(config_path)
+    assert list(cfg.api.start_bot_command[:2]) == ["/bin/launchctl", "kickstart"]
+    assert cfg.api.start_bot_command[-1].endswith(f"/{bot['Label']}")

@@ -40,7 +40,7 @@ from tickr.api import contract as api
 from tickr.backtest.errors import BacktestError
 from tickr.backtest.universe import POOL_FILE, read_pool
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar
-from tickr.config import Config, credential_variables
+from tickr.config import Config, credential_variables, environ_without
 from tickr.observers.errors import ObserverError
 from tickr.observers.loader import STRATEGIES_DIR, STRATEGY_FILE, parse_modules, read_identity
 
@@ -390,9 +390,7 @@ class LabReplay:
     def _spawn(self, run: Path, leg: dict[str, Any], sessions: int, day: date | None) -> Any:
         folder = run / leg["dir"]
         folder.mkdir(parents=True, exist_ok=True)
-        env = os.environ.copy()
-        for name in self.settings.scrub:
-            env.pop(name, None)
+        env = environ_without(self.settings.scrub)
         with open(folder / LOG, "w", encoding="utf-8") as log:
             child = self.spawn(self._command(run, leg, sessions, day), cwd=self.settings.root,
                                stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
