@@ -361,14 +361,15 @@ def test_an_unverified_stop_is_not_working_and_never_fills():
             ("10:10", "10:12", D(15), HOT),), D("0.05")), [])
     exchange = world.exchange
 
-    def stop(cid, symbol):
-        exchange.place(OrderRequest(cid, symbol, Side.SELL, OrderType.STOP_LOSS, D(10),
+    def stop(cid, symbol, quantity=D(10)):
+        exchange.place(OrderRequest(cid, symbol, Side.SELL, OrderType.STOP_LOSS, quantity,
                                     TimeInForce.DAY, TradingSession.CORE, None, D(19)))
 
     stop("a-1", "AAA")
     stop("b-1", "BBB")
     exchange.unverify_stops("AAA")
-    stop("a-2", "AAA")  # a later stop of the symbol is unverified too
+    stop("a-2", "AAA", D(5))  # a later stop of the symbol is unverified too (another
+    # quantity: Webull refuses a stop identical to a working one)
     assert {cid: exchange.order_detail(cid).state for cid in ("a-1", "a-2", "b-1")} == {
         "a-1": OrderState.UNKNOWN, "a-2": OrderState.UNKNOWN, "b-1": OrderState.ACCEPTED}
     assert exchange.order_detail("a-1").raw_status == UNVERIFIED_STOP_STATUS

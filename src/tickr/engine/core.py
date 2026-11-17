@@ -24,6 +24,7 @@ from typing import Any
 
 from tickr.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, Refused
 from tickr.config import Config, GateResult
+from tickr.risk.ticks import tick
 from tickr.risk.timers import WindowKind
 from tickr.store import Store
 from tickr.types import (
@@ -1535,10 +1536,31 @@ class Engine:
             with self.store.transaction():
                 cid = self._write_intent(trade.trade_id, Leg.STOP, trade.symbol, Side.SELL,
                                          OrderType.STOP_LOSS, quantity,
-                                         stop_price=trade.stop_price)
+                                         stop_price=self._distinct_stop_price(
+                                             trade.symbol, quantity, trade.stop_price))
             self._send(cid)
             if self.order(cid).send_state is not SendState.ACKNOWLEDGED:
                 return  # the next pass decides again (refusal spacing, unknown outcome)
+
+    def _distinct_stop_price(self, symbol: str, quantity: Decimal, price: Decimal) -> Decimal:
+        """`price`, or one valid tick higher per clash, so that the new SELL stop is not
+        identical to a live one of ours in `symbol`: Webull refuses an order identical to a
+        working one (same quantity and stop price) as a duplicate, while a different quantity
+        or price is accepted (docs/webull-facts.md, probe T D1). Equal pieces (an even
+        scale-out split, equal partial fills) would otherwise be refused and their shares left
+        unstopped. Higher is tighter for a long, so the planned loss only shrinks; no live stop
+        is cancelled or changed. Journaled when it moves the price."""
+        taken = {o.stop_price for o in self.orders()
+                 if o.symbol == symbol and o.leg is Leg.STOP and o.side is Side.SELL
+                 and o.live and o.quantity == quantity}
+        distinct = price
+        while distinct in taken:
+            distinct += tick(distinct)
+        if distinct != price:
+            self.store.append("stop-price-distinct", {"stop": price, "placed": distinct,
+                                                      "quantity": quantity},
+                              key=symbol, run_id=self.run_id)
+        return distinct
 
     def _replace_blocks(self, trade: TradeRow, stops: list[OrderRow]) -> bool:
         """A replace of this trade's stop is unresolved, so Webull may hold a new stop we do

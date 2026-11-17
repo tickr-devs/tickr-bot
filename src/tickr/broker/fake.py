@@ -21,7 +21,18 @@ from tickr.broker.base import (
     Refused,
     ReplaceAck,
 )
-from tickr.types import ComboRole, OrderDetail, OrderRequest, OrderState, Position, Side
+from tickr.types import (
+    ComboRole,
+    OrderDetail,
+    OrderRequest,
+    OrderState,
+    OrderType,
+    Position,
+    Side,
+)
+
+# Webull's refusal code for an order identical to a working one (docs/webull-facts.md).
+DUPLICATE_ORDER = "OPENAPI_ORDER_RISK_RULE_DUPLICATE_ORDER_CHECK"
 
 
 @dataclass
@@ -106,6 +117,15 @@ class FakeBroker:
     def _book(self, request: OrderRequest) -> None:
         if request.client_order_id in self.orders:
             raise Refused("DUPLICATE", "client_order_id already used")
+        # Webull refuses a stop identical to a working one (probe T D1, docs/webull-facts.md;
+        # proven for STOP_LOSS orders only).
+        identity = (request.symbol, request.side, request.order_type, request.quantity,
+                    request.stop_price, request.limit_price)
+        if request.order_type is OrderType.STOP_LOSS and any(
+                not o.state.terminal and identity == (o.symbol, o.side, o.order_type, o.quantity,
+                                                      o.stop_price, o.limit_price)
+                for o in self.orders.values()):
+            raise Refused(DUPLICATE_ORDER, "identical to a working order")
         self.orders[request.client_order_id] = OrderDetail(
             client_order_id=request.client_order_id,
             symbol=request.symbol,

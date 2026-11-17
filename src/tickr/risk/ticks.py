@@ -12,8 +12,12 @@ SUB_DOLLAR_TICK = Decimal("0.0001")
 ONE_DOLLAR = Decimal(1)
 
 
+def tick(price: Decimal) -> Decimal:
+    """The valid price increment at `price`."""
+    return CENT if price >= ONE_DOLLAR else SUB_DOLLAR_TICK
+
+
 def round_to_tick(price: Decimal) -> Decimal:
     """Down to the valid increment: a limit never above the window, a stop never above the
     strategy's stop (the planned loss is recomputed from the rounded prices)."""
-    tick = CENT if price >= ONE_DOLLAR else SUB_DOLLAR_TICK
-    return price.quantize(tick, rounding=ROUND_DOWN)
+    return price.quantize(tick(price), rounding=ROUND_DOWN)

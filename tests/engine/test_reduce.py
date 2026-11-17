@@ -55,6 +55,33 @@ def test_stops_are_split_at_the_scale_out_boundary(store):
     assert [s.quantity for s in legs(e, t, Leg.STOP)] == [D(5), D(5)]
 
 
+def test_an_even_split_places_its_second_stop_one_tick_tighter(store):
+    """Webull refuses a stop identical to a working one (probe T D1; the fake does too): the
+    second of two equal pieces goes one tick higher instead of being refused."""
+    b, e, t = scaled(store)
+    first, second = legs(e, t, Leg.STOP)
+    assert (first.stop_price, second.stop_price) == (D("9.80"), D("9.81"))
+    assert all(e.order(s.client_order_id).verified for s in (first, second))
+    assert [r.body for r in store.journal("stop-price-distinct", "ABC")] == [
+        {"stop": "9.80", "placed": "9.81", "quantity": "5"}]
+    assert_single_sends(b)
+
+
+def test_equal_partial_fills_get_distinct_stops_and_no_refusal(store):
+    b = FakeBroker()
+    e = make(store, b)
+    t = e.open_trade("ABC", D(6), D("10.00"), D("9.80"), D("2"))
+    cid = legs(e, t, Leg.ENTRY)[0].client_order_id
+    b.fill(cid, D(3), D(10))
+    run(e, 3)
+    b.fill(cid, D(3), D(10))
+    run(e, 3)
+    stops = legs(e, t, Leg.STOP)
+    assert [(s.quantity, s.stop_price) for s in stops] == [(D(3), D("9.80")), (D(3), D("9.81"))]
+    assert working_stops(b) == D(6) and not has(e, Fence.UNPROTECTED)
+    assert e.trade(t).stop_failures == 0
+
+
 def test_partial_entry_fills_still_leave_a_boundary_at_the_scale_out(store):
     b = FakeBroker()
     e = make(store, b)
