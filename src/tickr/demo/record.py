@@ -363,7 +363,8 @@ class Sampler:
                      "/settings", "/config", "/advisor", "/lab/replay", "/days",
                      f"/days/{self.day}"):
             self.get(frame, path)
-        for path in ("/flow", "/watching", "/observers", "/skipped", "/symbols", "/movers"):
+        for path in ("/flow", "/watching", "/observers", "/skipped", "/symbols", "/movers",
+                     "/events"):
             self.get(frame, path, d)
         self.get(frame, "/performance", {"from": self.performance_from.isoformat(),
                                          "to": self.day})
@@ -388,6 +389,7 @@ class Sampler:
             if when == self.day:
                 continue
             document = json.loads(self.get(0, f"/days/{when}"))
+            self.get(0, "/events", {"date": when})
             symbols = sorted({t["symbol"] for t in document["trades"]}
                              | set(document["bar_symbols"]))
             for symbol in symbols:

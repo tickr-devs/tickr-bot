@@ -47,7 +47,9 @@ GET_SCHEMAS = {
     "/status": "status-response-v1", "/account": "account-response-v1", "/days": "days-v1",
     "/bars": "bars-v1", "/chart": "chart-v1", "/decisions": "decisions-v1", "/flow": "flow-v1",
     "/watching": "watching-v1", "/observers": "observers-v1", "/skipped": "skipped-v1",
-    "/jobs": "jobs-v1", "/journal": "journal-v1", "/settings": "settings-v1",
+    "/jobs": "jobs-v1", "/journal": "journal-v1",
+    "/events": "day-events-v1", "/symbols": "symbols-v1", "/movers": "movers-v1",
+    "/settings": "settings-v1",
     "/config": "config-v1", "/commands/pending": "pending-commands-v1",
     "/performance": "performance-v1", "/advisor": "advisor-runs-v1",
     "/lab/replay": "lab-replay-v1"}

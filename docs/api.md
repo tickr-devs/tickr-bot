@@ -727,6 +727,19 @@ words) and `symbol` (when the row's body names one). The body itself is not serv
 `last_seq` is the newest row's number; it and the rows are empty with `cause` when there is no
 database yet, it cannot be read, or the journal has no rows yet.
 
+### GET /events?date= (read-only)
+
+The apps' journal: what the bot did on one New York date (`date`, YYYY-MM-DD; today without
+it), oldest first, as events a person reads. Code: `src/tickr/api/journal.py` (`day_events`).
+Reads the database opened read-only and takes each order's symbol and leg from its `orders` and
+`trades` rows. Each event has `seq` (its journal row), `at`, `kind` (`DayEventKind`: bot
+started or stopped, entry sent, filled, order refused, stop placed or moved, exit requested,
+trade closed, fence set or cleared, command done or refused) and the fields that kind fills
+(`symbol`, `leg`, `quantity`, `price`, `stop_price`, `subject`, `cause`; the rest null). A
+fill is listed once, when the order filled in full. The `unprotected` fence every entry fill
+sets until its stop is verified is not listed (the stop placed is). `events` is empty with
+`cause` when there is no database yet or it cannot be read.
+
 ### GET /advisor (read-only, nothing applied)
 
 The Lab's advisor card and the Overview tag. Code: `src/tickr/api/advisor.py`; the files it

@@ -66,7 +66,7 @@ from tickr.api.contract import (
 from tickr.api.decision_cache import DecisionCache
 from tickr.api.history import SYMBOL_PATTERN, History, HistoryPaths, HistoryUnavailable
 from tickr.api.jobs import JobsSettings, jobs_document
-from tickr.api.journal import journal_document
+from tickr.api.journal import day_events, journal_document
 from tickr.api.lab_replay import LabReplay, LabReplayRefused, LabReplaySettings
 from tickr.api.observer_results import ObserverResults, SimulationPaths
 from tickr.api.warm import PastDayWarmer
@@ -547,7 +547,7 @@ _ERROR_CODES = {
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/journal", "/config",
-              "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes")
+              "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
 HTML_TYPE = "text/html; charset=utf-8"
@@ -715,6 +715,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/journal":
                 self._json(200, journal_document(self.server.settings.jobs.database,
                                                  self.server.settings.journal_rows))
+            elif path == "/events":
+                self._events()
             elif path == "/advisor":
                 self._json(200, advisor_document(self.server.settings.advisor_dir,
                                                  self.server.settings.advisor_runs))
@@ -976,6 +978,19 @@ class Handler(BaseHTTPRequestHandler):
             self._error(result.error, result.cause)
         else:
             self._json(200, result)
+
+    def _events(self) -> None:
+        """GET /events?date=: what the bot did on one New York date (today without `date`),
+        from its journal opened read-only (display only)."""
+        try:
+            params = _query(urlsplit(self.path).query, frozenset({"date"}),
+                            optional=frozenset({"date"}))
+            day = (_day(params["date"]) if "date" in params
+                   else ny_date_of(self.server.clock()))
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        self._json(200, day_events(self.server.settings.jobs.database, day))
 
     def _quotes(self) -> None:
         """GET /quotes: the newest quote of every symbol on the bot's stream (display only)."""

@@ -45,6 +45,9 @@ from tickr.api.contract import (
     ConfigKeyV1,
     ConfigSectionV1,
     ConfigV1,
+    DayEventKind,
+    DayEventsV1,
+    DayEventV1,
     DaySummary,
     DaysV1,
     DayTrade,
@@ -334,6 +337,27 @@ def documents() -> dict[str, object]:
             JournalRowV1(730, T0 - timedelta(seconds=4), "reconcile-checked", None),
             JournalRowV1(731, T0, "stop-from-fill", "ABCD")), None),
         "journal-v1.empty": JournalV1(None, (), "the bot has not created its database yet"),
+        # The apps' journal of the day: a trade from entry to its stop's fill, then the
+        # operator's entry stop.
+        "day-events-v1": DayEventsV1(T0.date(), (
+            DayEventV1(700, T0 - timedelta(hours=1), DayEventKind.BOT_STARTED, None, None, None,
+                       None, None, "price-action@1", None),
+            DayEventV1(729, T0 - timedelta(seconds=9), DayEventKind.ENTRY_SENT, "ABCD", None,
+                       Decimal(100), Decimal("4.12"), Decimal("3.95"), None, None),
+            DayEventV1(733, T0 - timedelta(seconds=8), DayEventKind.FILLED, "ABCD", "entry",
+                       Decimal(100), Decimal("4.11"), None, None, None),
+            DayEventV1(736, T0 - timedelta(seconds=6), DayEventKind.STOP_PLACED, "ABCD", None,
+                       Decimal(100), None, Decimal("3.95"), None, None),
+            DayEventV1(741, T0 - timedelta(seconds=4), DayEventKind.STOP_MOVED, "ABCD", None,
+                       None, None, Decimal("4.02"), None, None),
+            DayEventV1(745, T0 - timedelta(seconds=2), DayEventKind.FILLED, "ABCD", "stop",
+                       Decimal(100), Decimal("4.01"), None, None, None),
+            DayEventV1(746, T0 - timedelta(seconds=2), DayEventKind.TRADE_CLOSED, "ABCD", None,
+                       None, None, None, None, "stopped-out"),
+            DayEventV1(750, T0, DayEventKind.FENCE_SET, None, None, None, None, None,
+                       "entry-stop", "operator")), None),
+        "day-events-v1.empty": DayEventsV1(
+            T0.date(), (), "the bot has not created its database yet"),
         # Saturday: the last 20 sessions replayed for the active version, then compared with
         # the price-action-v2 candidate over the same window; both SIMULATED.
         "lab-replay-v1": LabReplayV1(

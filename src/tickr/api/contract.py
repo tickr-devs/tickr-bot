@@ -1000,6 +1000,57 @@ class JournalV1:
     api_version: int = _const(API_VERSION)
 
 
+class DayEventKind(StrEnum):
+    """What one event of a day's readable journal (GET /events) says happened. Each comes from
+    the bot's own journal rows; the fields an event fills are listed with it."""
+
+    BOT_STARTED = "bot-started"  # the bot started: `subject` "<strategy>@<version>"
+    BOT_STOPPED = "bot-stopped"  # the bot stopped: `cause` (finished, interrupted, refused,
+    # shutdown-deadline, "stopped (<how>)")
+    ENTRY_SENT = "entry-sent"  # an entry was placed: symbol, quantity, price (limit), stop_price
+    FILLED = "filled"  # an order filled in full: symbol, leg, quantity, price (average fill)
+    ORDER_REFUSED = "order-refused"  # an order was not created or was rejected: symbol, leg,
+    # cause (the broker's or our own code)
+    STOP_PLACED = "stop-placed"  # the broker took a stop order: symbol, quantity, stop_price
+    STOP_MOVED = "stop-moved"  # a stop replace was confirmed: symbol, stop_price
+    EXIT_REQUESTED = "exit-requested"  # the bot asked to close a trade: symbol, cause
+    TRADE_CLOSED = "trade-closed"  # a trade ended: symbol, cause (exit reason)
+    FENCE_SET = "fence-set"  # new entries blocked: subject (the fence), symbol when one, cause.
+    # Not the `unprotected` fence every entry fill sets until its stop is verified: STOP_PLACED
+    # says that, and a stop still missing after the limit is the `unprotected-timeout` fence.
+    FENCE_CLEARED = "fence-cleared"  # a block lifted: subject, symbol when one, cause (by whom)
+    COMMAND_DONE = "command-done"  # an operator command took effect: subject (CommandKind)
+    COMMAND_REFUSED = "command-refused"  # an operator command was refused: subject, cause
+
+
+@dataclass(frozen=True)
+class DayEventV1:
+    """One event of the day's readable journal; fields its kind does not fill are null."""
+
+    seq: int  # the journal row it comes from
+    at: datetime
+    kind: DayEventKind
+    symbol: str | None
+    leg: str | None  # entry, stop or exit
+    quantity: Decimal | None
+    price: Decimal | None
+    stop_price: Decimal | None
+    subject: str | None
+    cause: str | None
+
+
+@dataclass(frozen=True)
+class DayEventsV1:
+    """GET /events?date=: what the bot did on one New York date, oldest first, read from its
+    journal (database opened read-only) with each order's symbol and leg from its own tables.
+    Empty with `cause` when there is no database or it cannot be read."""
+
+    day: date
+    events: tuple[DayEventV1, ...]
+    cause: str | None
+    api_version: int = _const(API_VERSION)
+
+
 class AdvisorRunStatus(StrEnum):
     """What one AI advisor run produced (advisor.run Status)."""
 
@@ -2286,6 +2337,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "config-v1": ConfigV1,
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
+    "day-events-v1": DayEventsV1,
     "advisor-runs-v1": AdvisorRunsV1,
     "lab-replay-v1": LabReplayV1,
     "trade-whatif-v1": TradeWhatIfV1,
