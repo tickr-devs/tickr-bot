@@ -32,10 +32,8 @@ Section H, account read only (the adapter reads the account id itself; it is nev
 - `history` (H2): how many rows one order-history page holds and in which order they come, read
   page by page up to `[probe] history_max_pages`. Next to a running bot only while its status
   and last broker read show it flat (the bot's own history reads share the route).
-- `history-since` (H2b): whether the order history takes a `start_time`/`end_time` window
-  (today's New York midnight to now, in the documented format and two others) and then lists
-  only today's orders, so one page could cover a day of 20 slots. It records each refusal's
-  message. Read only, flat as above.
+- `history-since` (H2b edges): whether the order history's window may end in the future (the
+  next New York midnight) and whether it filters on placing time. Read only, flat as above.
 
 Every request is sent once and never repeated. Evidence goes to
 `<data_dir>/<[probe] evidence_dir>/<NY date>/<probe>-<UTC time>/`: one JSON line per request and
@@ -85,7 +83,7 @@ from tickr.engine import tick_probe
 from tickr.engine.core import Fence
 from tickr.lock import AlreadyRunning, SingleInstanceLock, recorded_holder
 
-MS_PER_SECOND = 1000  # unit factor: epoch milliseconds
+MICROSECONDS_PER_MILLISECOND = 1000  # unit factor: the history window's milliseconds
 # One bar is enough: the probes count requests and answers, never prices.
 BARS_PER_READ = 1
 
@@ -539,55 +537,74 @@ def history(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
     return verdict, folder
 
 
-def history_windows(start: datetime, end: datetime) -> list[tuple[str, dict[str, str]]]:
-    """The history windows H2b asks for, `start` and `end` aware. The first run (2026-11-17)
-    sent `start_time` alone as +0000, Z and epoch ms: all three HTTP 417 OPENAPI_PARAM_ERR.
-    The API reference gives yyyy-MM-dd'T'HH:mm:ss.SSS'Z' (example 2025-01-05T22:59:59.012Z)
-    for both `start_time` and `end_time`, both optional. So: the documented format alone (to
-    record the refusal's message), then with `end_time`, then the other two formats paired."""
-    def iso(at: datetime, suffix: str) -> str:
-        return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000") + suffix
-
-    def epoch(at: datetime) -> str:
-        return str(int(at.timestamp() * MS_PER_SECOND))
-
-    return [("z-start", {"start_time": iso(start, "Z")}),
-            ("z-pair", {"start_time": iso(start, "Z"), "end_time": iso(end, "Z")}),
-            ("offset-pair", {"start_time": iso(start, "+0000"), "end_time": iso(end, "+0000")}),
-            ("epoch-pair", {"start_time": epoch(start), "end_time": epoch(end)})]
+def history_time(at: datetime) -> str:
+    """An aware instant as the history's window takes it (H2b, 2026-11-17): UTC, three
+    millisecond digits, a literal Z."""
+    utc = at.astimezone(UTC)
+    return (utc.strftime("%Y-%m-%dT%H:%M:%S.")
+            + f"{utc.microsecond // MICROSECONDS_PER_MILLISECOND:03d}Z")
 
 
 def history_since(cfg: Config, *, now: Clock, broker: Callable[[Config], Any],
                   out: Callable[[str], None] = print) -> tuple[str, Path]:
-    """H2b: does the history take a window, in which format, and does it then list only
-    orders placed since today's New York midnight? One read per window of
-    `history_windows`. Read only. Next to a running bot only while it is flat (its own history
-    reads share the route). Passed when a window is accepted and every row it lists is from
-    today."""
+    """H2b edges, read only, next to a running bot only while it is flat (its own history
+    reads share the route). H2b (2026-11-17) proved the window: `start_time` with `end_time`,
+    both UTC yyyy-MM-dd'T'HH:mm:ss.SSS'Z' (alone, +0000 or epoch ms: HTTP 417). Fable's
+    conditions before the bot relies on it (review of #629):
+    - `to-now`: today's New York midnight to now (the form the bot sends);
+    - `to-next-midnight`: the same start, the end at the next New York midnight, a time in the
+      future: accepted, and does it list at least what `to-now` lists? Then the bot can end
+      its window there and no clock skew or exclusive end can hide a just-placed order;
+    - `after-oldest`: from 1 ms after the oldest `place_time_at` of `to-now`, to now: does
+      that oldest order drop out (the window filters on placing time) or stay (it filters on
+      a later time, such as the fill or the last update)?
+    Passed when `to-next-midnight` is accepted, lists no row before midnight and at least as
+    many rows as `to-now`."""
     _, lock_path = data_paths(cfg)
     if recorded_holder(lock_path) is not None:
         _refuse_while_exposed(cfg, now())
     started = now()
-    midnight = datetime.combine(started.astimezone(NEW_YORK).date(), dt_time(), NEW_YORK)
+    day = started.astimezone(NEW_YORK).date()
+    midnight = datetime.combine(day, dt_time(), NEW_YORK)
+    next_midnight = datetime.combine(day + timedelta(days=1), dt_time(), NEW_YORK)
     client = broker(cfg)
     folder = evidence_folder(cfg, "history-since", started)
-    shapes = []
-    for name, window in history_windows(midnight, started):
+    shapes: dict[str, dict[str, Any]] = {}
+
+    def read(name: str, start: datetime, end: datetime) -> dict[str, Any]:
+        window = {"start_time": history_time(start), "end_time": history_time(end)}
         shape = {"name": name, **client.history_window_shape(window)}
         _append(folder / "reads.jsonl", shape)
-        shapes.append(shape)
-    honored = [s["name"] for s in shapes if s.get("rows") is not None and (
-        s["oldest"] is None or datetime.fromisoformat(s["oldest"]) >= midnight)]
+        shapes[name] = shape
+        return shape
+
+    to_now = read("to-now", midnight, started)
+    ahead = read("to-next-midnight", midnight, next_midnight)
+    if to_now.get("oldest"):
+        oldest = datetime.fromisoformat(to_now["oldest"])
+        read("after-oldest", oldest + timedelta(milliseconds=1), started)
+    future_end_ok = (ahead.get("rows") is not None and to_now.get("rows") is not None
+                     and ahead["rows"] >= to_now["rows"]
+                     and (ahead["oldest"] is None
+                          or datetime.fromisoformat(ahead["oldest"]) >= midnight))
+    after = shapes.get("after-oldest", {})
+    filters_on_placing = (None if after.get("rows") is None else
+                          after["oldest"] is None
+                          or after["oldest"] > to_now["oldest"])
     (folder / SUMMARY_FILE).write_text(json.dumps({
         "probe": "history-since", "environment": cfg.environment_name,
         "started_at": started.isoformat(), "start": midnight.isoformat(),
-        "reads": shapes, "honored": honored}, indent=1, sort_keys=True) + "\n", "utf-8")
-    for s in shapes:
+        "next_midnight": next_midnight.isoformat(), "reads": list(shapes.values()),
+        "future_end_ok": future_end_ok, "filters_on_placing": filters_on_placing},
+        indent=1, sort_keys=True) + "\n", "utf-8")
+    for s in shapes.values():
         out(f"h2_since {s['name']}: HTTP {s['status']}"
             + (f" {s.get('error_code')} {s.get('message')!r}" if s.get("rows") is None else
                f", rows {s['rows']} (own {s['own_rows']}), oldest {s['oldest']}, "
-               f"next page {s['next_page']}"))
-    return (PASSED if honored else UNFINISHED), folder
+               f"newest {s['newest']}, next page {s['next_page']}"))
+    out(f"h2_since future end accepted: {future_end_ok}; "
+        f"filters on placing time: {filters_on_placing}")
+    return (PASSED if future_end_ok else UNFINISHED), folder
 
 
 # --------------------------------------------------------------------------------------------

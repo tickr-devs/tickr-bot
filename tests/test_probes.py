@@ -642,45 +642,55 @@ def key(window: dict[str, str]) -> str:
     return "|".join(f"{k}={v}" for k, v in sorted(window.items()))
 
 
-def test_history_windows_use_the_documented_format_first():
-    start = datetime(2026, 11, 17, 5, tzinfo=UTC)  # midnight New York
-    windows = dict(probes.history_windows(start, start + timedelta(hours=16)))
-    assert list(windows) == ["z-start", "z-pair", "offset-pair", "epoch-pair"]
-    assert windows["z-start"] == {"start_time": "2026-11-17T05:00:00.000Z"}
-    assert windows["z-pair"]["end_time"] == "2026-11-17T21:00:00.000Z"
-    assert windows["offset-pair"]["start_time"] == "2026-11-17T05:00:00.000+0000"
-    assert windows["epoch-pair"] == {"start_time": "1794891600000",
-                                     "end_time": "1794949200000"}
+def ny_midnight(days: int = 0) -> datetime:
+    return datetime.combine(T0.astimezone(probes.NEW_YORK).date() + timedelta(days=days),
+                            datetime.min.time(), probes.NEW_YORK)
 
 
-def test_history_since_finds_the_accepted_window_and_records_refusals(tmp_path):
+def listed(n: int, oldest: datetime, newest: datetime) -> dict:
+    return {"status": 200, "rows": n, "own_rows": n, "oldest": oldest.isoformat(),
+            "newest": newest.isoformat(), "next_page": False}
+
+
+def test_history_time_is_utc_milliseconds_with_a_z():
+    at = datetime(2026, 11, 17, 0, 0, 0, 12345, tzinfo=probes.NEW_YORK)
+    assert probes.history_time(at) == "2026-11-17T05:00:00.012Z"
+
+
+def test_history_since_accepts_a_future_end_and_finds_the_placing_time_filter(tmp_path):
     cfg, lines = cfg_in(tmp_path), []
-    midnight = datetime.combine(T0.astimezone(probes.NEW_YORK).date(), datetime.min.time(),
-                                probes.NEW_YORK)
-    pair = dict(probes.history_windows(midnight, T0))["z-pair"]
-    broker = Windows({key(pair): {
-        "status": 200, "rows": 3, "own_rows": 2,
-        "oldest": (midnight + timedelta(hours=4)).isoformat(),
-        "newest": (midnight + timedelta(hours=7)).isoformat(), "next_page": False}})
+    first, last = ny_midnight() + timedelta(hours=4), ny_midnight() + timedelta(hours=7)
+    win = probes.history_time
+    broker = Windows({
+        key({"start_time": win(ny_midnight()), "end_time": win(T0)}): listed(3, first, last),
+        key({"start_time": win(ny_midnight()), "end_time": win(ny_midnight(1))}):
+            listed(3, first, last),
+        key({"start_time": win(first + timedelta(milliseconds=1)), "end_time": win(T0)}):
+            listed(2, first + timedelta(minutes=5), last)})
     verdict, folder = probes.history_since(cfg, now=Clock().now, broker=lambda _: broker,
                                            out=lines.append)
     summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
-    assert verdict == probes.PASSED and summary["honored"] == ["z-pair"]
-    assert len(broker.asked) == 4 and len(lines) == 4
-    assert "HTTP 417 OPENAPI_PARAM_ERR 'bad time'" in lines[0] and "rows 3 (own 2)" in lines[1]
-    assert summary["reads"][0]["message"] == "bad time"
+    assert verdict == probes.PASSED
+    assert (summary["future_end_ok"], summary["filters_on_placing"]) == (True, True)
+    assert [r["name"] for r in summary["reads"]] == ["to-now", "to-next-midnight",
+                                                     "after-oldest"]
+    assert len(lines) == 4 and "filters on placing time: True" in lines[-1]
 
 
-def test_history_since_is_open_when_no_window_limits_the_rows(tmp_path):
-    cfg = cfg_in(tmp_path)
-    yesterday = (T0 - timedelta(days=1)).isoformat()
-    old = {"status": 200, "rows": 1, "own_rows": 1, "oldest": yesterday,
-           "newest": yesterday, "next_page": False}
-    broker = Windows({})
-    broker.history_window_shape = lambda window: {"window": window, **old}
-    verdict, _ = probes.history_since(cfg, now=Clock().now, broker=lambda _: broker,
-                                      out=lambda _: None)
-    assert verdict == probes.UNFINISHED  # accepted but not honored: yesterday's row is listed
+def test_history_since_is_open_when_a_future_end_is_refused(tmp_path):
+    cfg, lines = cfg_in(tmp_path), []
+    first = ny_midnight() + timedelta(hours=4)
+    win = probes.history_time
+    broker = Windows({  # anything else: 417 with its message
+        key({"start_time": win(ny_midnight()), "end_time": win(T0)}): listed(1, first, first),
+        key({"start_time": win(first + timedelta(milliseconds=1)), "end_time": win(T0)}):
+            listed(1, first, first)})
+    verdict, folder = probes.history_since(cfg, now=Clock().now, broker=lambda _: broker,
+                                           out=lines.append)
+    summary = json.loads((folder / probes.SUMMARY_FILE).read_text())
+    assert verdict == probes.UNFINISHED and summary["future_end_ok"] is False
+    assert summary["filters_on_placing"] is False  # the oldest stayed: a later time filters
+    assert "HTTP 417 OPENAPI_PARAM_ERR 'bad time'" in lines[1]
 
 
 def test_history_probe_refuses_next_to_a_bot_with_a_trade_open(tmp_path):
