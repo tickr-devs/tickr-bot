@@ -43,9 +43,10 @@ min_daily_room_usd = 10
 # Position slots: most open trades at once, count; a trade (working entry, position or exit in progress) takes one slot,
 # at most one trade per symbol, every trade has its own broker stop and all share the daily loss ceiling (their planned
 # losses are reserved against it). 1 until the owner enables several positions (backlog X1); at most
-# [market_data] stream_reserved_symbols (each position keeps a stream slot), and the session flatten (one position at a
-# time, two [orders] detail_poll_seconds each) must fit before [session] close_order_cutoff_seconds (checked by the
-# start-time checks, runtime.launchd.check_timings); read by safety, the engine and the status.
+# [market_data] stream_reserved_symbols (each position keeps a stream slot), and the session flatten (one stop at a
+# time, up to [orders] max_stops_per_trade each, two [orders] detail_poll_seconds per stop) must fit before [session]
+# close_order_cutoff_seconds (checked by the start-time checks, runtime.launchd.check_timings); read by safety, the
+# engine and the status.
 max_open_positions = 1
 # Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.
 max_quote_age_seconds = 5
@@ -136,6 +137,11 @@ cancel_retry_spacing_seconds = 6
 cancel_not_sent_alert_seconds = 30
 # Seconds a position may lack a verified broker stop before the engine closes it; read by the engine.
 max_unprotected_seconds = 30
+# Most broker stops one trade holds (each fill observation adds up to 2: its own and a split at the scale-out
+# boundary). With [risk] max_open_positions above 1 only (owner 2026-11-17), an entry still working when its trade
+# holds this many minus 2 is cancelled, so the last observation still fits; the session flatten cancels one stop at a
+# time (checked by runtime.launchd.check_timings, at least 3); read by the engine and the start-time checks.
+max_stops_per_trade = 4
 # Seconds an order's Detail reads may keep failing (no answered read in between) before the engine sets the
 # detail-unreadable fence (entries blocked, alert at once): the order's state is then unknown, a stop is no longer
 # counted as verified and an entry or close no longer excuses a quantity mismatch; read by the engine.

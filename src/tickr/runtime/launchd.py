@@ -120,7 +120,9 @@ def check_timings(config: Config) -> None:
     with a restart command and a positive timeout for it;
     and unless the session flatten can still send its close, for every slot:
     0 <= [session] close_order_cutoff_seconds < flatten_minutes_before_close (in seconds) and
-    max_open_positions x 2 x detail_poll_seconds <= that time minus the cutoff."""
+    max_open_positions x max_stops_per_trade x 2 x detail_poll_seconds <= that time minus
+    the cutoff, with max_stops_per_trade >= 3 (the cap holds only with several slots; one
+    slot's position has the whole window)."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -153,14 +155,19 @@ def check_timings(config: Config) -> None:
     if not 0 <= cutoff < window:
         raise ConfigError(f"[session] close_order_cutoff_seconds ({cutoff}) must be from 0 to "
                           f"below the flatten-to-close time ({window} s)")
-    # The session flatten closes one position at a time, two Detail reads each (the stop's
-    # cancel, then the close goes out): every slot must be closed before the cutoff.
-    flatten = config.risk.max_open_positions * 2 * config.orders.detail_poll_seconds
+    # The session flatten cancels one stop at a time across every trade: the cancel goes out,
+    # the next poll's read confirms it and the shares' close goes out at once (at most two
+    # polls per stop): every slot's stops must be closed before the cutoff.
+    stops = config.orders.max_stops_per_trade
+    if stops < 3:
+        raise ConfigError(f"[orders] max_stops_per_trade ({stops}) must be at least 3: one "
+                          "fill observation adds up to 2 stops")
+    flatten = config.risk.max_open_positions * stops * 2 * config.orders.detail_poll_seconds
     if flatten > window - cutoff:
         raise ConfigError(
-            f"[risk] max_open_positions x 2 x [orders] detail_poll_seconds ({flatten} s) must "
-            f"fit between the flatten and [session] close_order_cutoff_seconds "
-            f"({window - cutoff} s)")
+            f"[risk] max_open_positions x [orders] max_stops_per_trade x 2 x detail_poll_seconds "
+            f"({flatten} s) must fit between the flatten and [session] "
+            f"close_order_cutoff_seconds ({window - cutoff} s)")
     restart = runtime.watchdog_restart_before_flatten_seconds
     entry_gap = (config.session.last_entry_minutes_before_close
                  - config.session.flatten_minutes_before_close) * SECONDS_PER_MINUTE

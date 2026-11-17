@@ -123,7 +123,10 @@ def test_a_reduce_is_refused_while_the_entry_works(store):
     assert not e.request_reduce(t, D(2), "x")
 
 
-def test_an_exit_during_a_reduce_waits_for_the_sale_then_closes_the_rest(store):
+def test_an_exit_during_a_reduce_closes_the_rest_while_the_sale_works(store):
+    """The working sale counts as a close in flight: the kept stop is cancelled and its
+    shares are closed without waiting for the sale's fill, and working sells never exceed
+    what is held (`drive` checks every pass)."""
     b, e, t = scaled(store)
     e.request_reduce(t, D(5), "x")
     drive(e, b, 3)
@@ -131,11 +134,10 @@ def test_an_exit_during_a_reduce_waits_for_the_sale_then_closes_the_rest(store):
     e.request_exit(t, "session-flatten")
     drive(e, b, 3)
     assert e.trade(t).reduce_state is ReduceState.DONE
-    assert len(legs(e, t, Leg.EXIT)) == 1  # nothing more while the sale works
-    b.fill(sale.client_order_id, D(5), D("10.20"))
-    drive(e, b, 4)
     close = [x for x in legs(e, t, Leg.EXIT) if x.client_order_id != sale.client_order_id]
     assert [c.quantity for c in close] == [D(5)]
+    assert not b.orders[sale.client_order_id].state.terminal  # the sale still works
+    b.fill(sale.client_order_id, D(5), D("10.20"))
     b.fill(close[0].client_order_id, D(5), D("10.10"))
     drive(e, b, 3)
     assert e.trade(t).state is TradeState.CLOSED and held(b) == 0
@@ -213,3 +215,27 @@ def test_release_picks_stops_that_add_up_exactly():
     assert [s.client_order_id for s in _stops_to_release(stops, D(7))] == ["s3", "s2"]
     assert _stops_to_release(stops, D(4)) is None  # no exact set: nothing is released
     assert CFG.orders.stop_retry_attempts >= 0
+
+
+def test_a_stop_still_working_after_every_cancel_does_not_hold_back_the_trades_other_stop(store):
+    """Teardown of a split position: one stop's cancels never take (cancel-failed fence,
+    alerted); it keeps covering its shares, and the other stop is cancelled and its shares
+    closed without waiting for it."""
+    from tickr.broker.base import OutcomeUnknown
+
+    b, e, t = scaled(store)
+    first, second = legs(e, t, Leg.STOP)
+    real = b.cancel
+
+    def cancel(cid):
+        if cid == first.client_order_id:
+            raise OutcomeUnknown("lost")
+        real(cid)
+
+    b.cancel = cancel
+    e.request_exit(t, "x")
+    drive(e, b, 60)
+    assert has(e, Fence.CANCEL_FAILED)
+    (close,) = legs(e, t, Leg.EXIT)
+    assert close.quantity == second.quantity
+    assert not b.orders[first.client_order_id].state.terminal  # still covering its shares

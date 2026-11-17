@@ -127,6 +127,7 @@ class OrdersConfig:
     cancel_retry_spacing_seconds: Decimal
     cancel_not_sent_alert_seconds: Decimal
     max_unprotected_seconds: Decimal
+    max_stops_per_trade: int
     detail_unreadable_seconds: Decimal
     max_exit_seconds: Decimal
     shutdown_deadline_seconds: Decimal

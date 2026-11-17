@@ -301,6 +301,11 @@ def _detail_priority(row: OrderRow, poll_seconds: float) -> float:
     return (row.last_detail_at or 0.0) - boost * poll_seconds
 
 
+# The most stops one fill observation adds: its own, and a split at the trade's scale-out
+# boundary (`_stop_pieces`). `[orders] max_stops_per_trade` keeps room for one more.
+STOPS_PER_FILL = 2
+
+
 def _stop_pieces(trade: TradeRow, covered: Decimal, quantity: Decimal) -> list[Decimal]:
     """The stops to place for `quantity` more shares above `covered`: one, or two when the
     trade's planned scale-out boundary falls inside, so that the stops placed first cover
@@ -1190,7 +1195,13 @@ class Engine:
             due += self._lost_fill_suspects(held)
             self._note_moved(held)
         poll = float(self.config.orders.detail_poll_seconds)
-        due.sort(key=lambda row: (self._read_first(row), _detail_priority(row, poll)))
+        # A symbol being closed moves because of our own closes: its other stops are not read
+        # ahead of its cancel (they would only delay it).
+        closing = {o.symbol for o in self.orders() if o.leg is Leg.EXIT and o.live}
+        cancelling = {row.symbol for row in due
+                      if self._awaits_cancel_read(row) and row.symbol not in closing}
+        due.sort(key=lambda row: (self._read_first(row, cancelling),
+                                  _detail_priority(row, poll)))
         for row in due[:self.config.orders.detail_reads_per_step]:
             try:
                 if row.send_state is SendState.ABSENT:
@@ -1216,20 +1227,32 @@ class Engine:
                 *pair, self.clock())
         self._moved = moved
 
-    def _read_first(self, row: OrderRow) -> int:
+    def _read_first(self, row: OrderRow, cancelling: set[str]) -> int:
         """Where this order's Detail read goes, so the delay from a fill or a stop-out to its
-        Detail does not grow with the number of open orders: 0, first, a stop whose cancel
-        waits for Detail, not read since that cancel (its position may have no stop until the
-        read confirms it, and its close waits for it); 1, a live order in a symbol whose
-        broker position moved away from Detail, not read since that was first seen; 2, the
-        common queue. Once each per event: after that read the order is back in the common
-        queue, so a lasting disagreement (shares bought by hand) never starves the others."""
-        last = row.last_detail_at or 0.0
-        if (row.leg is Leg.STOP and row.cancel_state in _CANCEL_AWAITING
-                and row.cancel_at is not None and last < row.cancel_at):
-            return 0
+        Detail does not grow with the number of open orders. 0, first: a live stop in a
+        symbol whose broker position moved away from Detail, not read since that was first
+        seen, when another stop of that symbol waits for its cancel's Detail (`cancelling`):
+        a stop-out Detail has not shown yet changes what that cancel's confirmation leads to
+        (a kept stop filling while a scale-out's stops are released). 1: a stop or entry
+        whose cancel waits for Detail, not read since that cancel (a stop's position may have
+        no stop until the read confirms it, and its close waits for it; an entry's read shows
+        its last fills, which need their stops). 2: the other live orders in a
+        moved symbol, not read since the move. 3: the common queue. Once each per event:
+        after that read the order is back in the common queue, so a lasting disagreement
+        (shares bought by hand) never starves the others. A read stamped at the same instant
+        as the event may have come before it (a step reads, then cancels): it does not count
+        as the read after it."""
+        if self._awaits_cancel_read(row):
+            return 1
         moved = self._moved.get(row.symbol)
-        return 1 if moved is not None and row.live and last < moved[2] else 2
+        if moved is not None and row.live and (row.last_detail_at or 0.0) <= moved[2]:
+            return 0 if row.leg is Leg.STOP and row.symbol in cancelling else 2
+        return 3
+
+    @staticmethod
+    def _awaits_cancel_read(row: OrderRow) -> bool:
+        return (row.leg is not Leg.EXIT and row.cancel_state in _CANCEL_AWAITING
+                and row.cancel_at is not None and (row.last_detail_at or 0.0) <= row.cancel_at)
 
     def _lost_fill_suspects(self, held: dict[str, Decimal]) -> list[OrderRow]:
         """Orders we gave up on whose fill would explain the position: any in a symbol
@@ -1299,7 +1322,7 @@ class Engine:
 
         if trade.state is TradeState.EXITING and trade.reducing:
             # The teardown takes over: a partial sale still working counts as a close in
-            # flight (`_exit_step` waits for it), and the rest is closed after it.
+            # flight (`_exit_step` sells only what it does not), and the rest is closed.
             with self.store.transaction():
                 self._set_reduce(trade, ReduceState.DONE, {"why": "exit requested"})
             trade = self.trade(trade.trade_id)
@@ -1314,8 +1337,29 @@ class Engine:
             if trade.state is TradeState.EXITING and entry.live:
                 self._cancel(entry)
             self._protect(trade, stops, expected)
+            self._cap_stops(trade, entry)
         trade = self.trade(trade.trade_id)
         self._watch_protection(trade, exits, expected - self._reduce_pending(trade, exits))
+
+    def _cap_stops(self, trade: TradeRow, entry: OrderRow) -> None:
+        """An entry filling in pieces adds stops with each observation; the session flatten
+        cancels them one at a time, so their number is bounded: once the trade holds
+        `max_stops_per_trade` minus what one more observation adds, the entry's rest is
+        cancelled (journaled), and the fills Detail shows by the read that confirms it still
+        get their stop (hard rule 2). Only with several slots (owner 2026-11-17): with one, the
+        entry keeps filling to its size and the one position's flatten has the whole window."""
+        if (not entry.live or entry.cancelling
+                or self.config.risk.max_open_positions <= 1):
+            return
+        stops = [o for o in self.orders(trade.trade_id) if o.leg is Leg.STOP and o.live]
+        room = self.config.orders.max_stops_per_trade - STOPS_PER_FILL
+        if len(stops) < room:
+            return
+        with self.store.transaction():
+            self.store.append("entry-capped", {"stops": len(stops), "limit":
+                                               self.config.orders.max_stops_per_trade},
+                              key=trade.trade_id, run_id=self.run_id)
+        self._cancel(entry)
 
     def _reduce_step(self, trade: TradeRow, stops: list[OrderRow], exits: list[OrderRow],
                      held: Decimal | None, expected: Decimal) -> None:
@@ -1573,19 +1617,24 @@ class Engine:
         # An entry still working after every cancel (CANCEL_FAILED, operator alerted) must not
         # keep the filled shares from being closed: they are closed now, and any later fill
         # of that entry is protected and closed by the following passes.
-        if any(e.live for e in exits):
-            self._watch_exit(trade, [e for e in exits if e.live])
-            return
-        if self._has_fence(Fence.EXIT_NOT_FILLED, trade.trade_id):
+        live_stops = [s for s in stops if s.live]
+        live_exits = [e for e in exits if e.live]
+        selling = sum((e.open_quantity for e in live_exits), ZERO)
+        if live_exits:
+            self._watch_exit(trade, live_exits)
+            if (not live_stops and expected <= selling) or self._has_fence(
+                    Fence.EXIT_NOT_FILLED, trade.trade_id):
+                return  # everything held is being sold, or a close waits for the operator
+        elif self._has_fence(Fence.EXIT_NOT_FILLED, trade.trade_id):
             # A close that did not fill in time has ended (cancelled or expired): send no other
             # close until the operator has looked; keep what is held under a stop meanwhile.
             self._protect(trade, stops, max(expected, ZERO))
             return
-        if not self._may_close(trade, held, expected):
+        if not self._may_close(trade, held, expected, selling):
             # Positions and Detail disagree in a way a sale could get wrong: never sell on
-            # that; keep the Detail quantity protected until they agree (the mismatch fence
-            # is already set).
-            self._protect(trade, stops, max(expected, ZERO))
+            # that; keep the Detail quantity no close sells yet protected until they agree
+            # (the mismatch fence is already set).
+            self._protect(trade, stops, max(expected - selling, ZERO))
             return
         if not self._has_fence(Fence.MARKET_CLOSED, trade.trade_id):
             refusal = self.close_refusal()
@@ -1595,18 +1644,33 @@ class Engine:
                     "the stop stays. Close the position in the Webull app, or clear this fence in "
                     "the next regular session and the bot sends the close"))
         if self._has_fence(Fence.MARKET_CLOSED, trade.trade_id):
-            self._protect(trade, stops, expected)  # no MARKET order outside the session
+            self._protect(trade, stops, expected - selling)  # no MARKET order outside the session
             return
         if self._replace_blocks(trade, stops):
             return  # keep our stops; a sale could add to an untracked stop of the replace
-        if self._other_teardown(trade):
-            # One position at a time loses its stop: with several closing at once (session
-            # flatten, emergency), each keeps its stop until the one before it has its close
-            # sent, so no position waits stopless for other positions' Detail reads.
-            self._protect(trade, stops, expected)
+        # Sell what no live stop covers and no working close sells yet: a piece whose stop's
+        # cancel Detail has confirmed goes out at once, never after another piece's fill (a
+        # stop leaves `live` only when Detail shows it ended). Live stops, working closes and
+        # this sale never exceed the agreed quantity.
+        uncovered = expected - sum((s.open_quantity for s in live_stops), ZERO) - selling
+        if uncovered > 0:
+            with self.store.transaction():
+                cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
+                                         OrderType.MARKET, uncovered)
+            self._send(cid)
+        if self._cancel_in_flight():
+            # One stop at a time, across every trade: the next stop is cancelled only once the
+            # previous cancel is confirmed and its shares' close is sent, so shares wait
+            # without a stop and a sale for one cancel read, whatever the slots, the stops per
+            # trade and the closes' fill delays. A trade not yet started keeps its stops whole.
+            if not live_exits and not any(s.cancelling for s in stops):
+                self._protect(trade, stops, expected)
             return
-        live_stops = [s for s in stops if s.live]
         for stop in live_stops:
+            if self._has_fence(Fence.CANCEL_FAILED, stop.client_order_id):
+                # Still working after every cancel (the fence alerts the operator): it keeps
+                # covering its shares, and the trade's other stops go on without it.
+                continue
             if stop.client_order_id not in self._detail_answered_ids:
                 # Spec 9: a cancel only Detail can confirm is sent only after this process's
                 # latest Detail read of the stop was answered; while it fails the stop keeps
@@ -1614,30 +1678,21 @@ class Engine:
                 # A read failing too long sets the detail-unreadable fence, which alerts.
                 continue
             self._cancel(stop)
-        # Sell only what no live stop still covers (a stop leaves `live` only when Detail shows
-        # it ended). Stops plus this sale never exceed the agreed quantity.
-        covered = sum((s.open_quantity for s in live_stops), ZERO)
-        uncovered = expected - covered
-        if uncovered <= 0:
             return
-        with self.store.transaction():
-            cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
-                                     OrderType.MARKET, uncovered)
-        self._send(cid)
 
-    def _other_teardown(self, trade: TradeRow) -> bool:
-        """Whether another trade has a stop whose cancel waits for Detail (its position may be
-        without a stop until its close is sent), so this trade keeps its own stops for now. A
-        trade already cancelling its own stops goes on. A stop whose Detail reads keep failing
-        (the detail-unreadable fence alerts) does not hold the others back."""
-        if any(s.cancelling for s in self.orders(trade.trade_id) if s.leg is Leg.STOP):
-            return False
-        return any(o.leg is Leg.STOP and o.trade_id != trade.trade_id and o.live
-                   and o.cancelling and not self._detail_lost(o) for o in self.orders())
+    def _cancel_in_flight(self) -> bool:
+        """Whether a stop's cancel waits for Detail (its shares may have no stop until the read
+        confirms it and their close is sent). A stop whose Detail reads keep failing (the
+        detail-unreadable fence alerts) does not hold the others back."""
+        return any(o.leg is Leg.STOP and o.live and o.cancelling and not self._detail_lost(o)
+                   for o in self.orders())
 
-    def _may_close(self, trade: TradeRow, held: Decimal | None, expected: Decimal) -> bool:
+    def _may_close(self, trade: TradeRow, held: Decimal | None, expected: Decimal,
+                   selling: Decimal = ZERO) -> bool:
         """Whether a close of this trade's own Detail quantity may be sent (owner decision
-        2026-11-15). Agreement allows it. The broker holding MORE than all open trades in the
+        2026-11-15). Agreement allows it, and so does the broker holding less by no more than
+        `selling`, what this trade's working closes still sell (a close may have filled before
+        Detail shows it; only the rest is sold). The broker holding MORE than all open trades in the
         symbol account for (shares bought by hand, say) allows it too: only `expected` is
         sold, which is never more than held, and the extra shares are never touched; the
         quantity-mismatch fence stays. Not while an entry in the symbol is still working: the
@@ -1645,7 +1700,7 @@ class Engine:
         never sell shares that may not be there."""
         if held is None or expected <= 0:
             return False
-        if held == expected:
+        if held == expected or expected - selling <= held < expected:
             return True
         if held < self._expected_in(trade.symbol):
             return False

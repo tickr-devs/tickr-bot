@@ -21,7 +21,7 @@ from tickr.observers.log import DecisionLog
 from tickr.runtime import launchd
 from tickr.runtime.entries import EntryDesk, slots_in_use
 from tickr.store import Store
-from tickr.types import OrderType, Quote
+from tickr.types import OrderState, OrderType, Quote, Side
 
 from .test_entries import BAR, CALENDAR, CFG, NOW, ROOT, decision
 
@@ -188,12 +188,12 @@ POLL = float(CFG.orders.detail_poll_seconds)
 SYMBOLS = [f"S{n:02d}" for n in range(MAX)]
 
 
-def full(tmp_path, *, filled: int) -> Desk:
+def full(tmp_path, *, filled: int, **overrides: object) -> Desk:
     """Every slot taken: the first `filled` trades hold a protected position, the others have
     their entry working; then long enough that every order has been read in turn."""
     desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)))
     for n, symbol in enumerate(SYMBOLS):
-        assert desk.enter(symbol).admission == "taken"
+        assert desk.enter(symbol, **overrides).admission == "taken"
         if n < filled:
             desk.fill(symbol)
     desk.step(2 * MAX)
@@ -264,6 +264,149 @@ def test_at_the_most_slots_the_flatten_takes_one_position_at_a_time(tmp_path):
     assert (steps + 1) * POLL <= window / 2
 
 
+WINDOW = float(CFG.session.flatten_minutes_before_close * 60
+               - CFG.session.close_order_cutoff_seconds)
+STOPS = CFG.orders.max_stops_per_trade
+# The most slots the start-time check lets through with the shipped poll and stop cap.
+ALLOWED = int(WINDOW / (STOPS * 2 * POLL))
+
+
+def bare_shares(broker: FakeBroker) -> dict[str, D]:
+    """Per symbol, shares the broker holds with no working stop and no working sell."""
+    covered: dict[str, D] = {}
+    for o in broker.open_orders():
+        if o.side is Side.SELL:
+            covered[o.symbol] = covered.get(o.symbol, D(0)) + o.quantity - o.filled_quantity
+    return {p.symbol: p.quantity - covered.get(p.symbol, D(0)) for p in broker.positions()}
+
+
+def flatten(desk: Desk, fill_delay: int, symbols: list[str] = SYMBOLS) -> tuple[int, int]:
+    """Request the session flatten of every trade; closes fill `fill_delay` polls after they
+    are sent. Returns the polls until the broker is flat and the most consecutive polls any
+    symbol had bare shares."""
+    for trade in desk.engine.trades():
+        desk.engine.request_exit(trade.trade_id, "session-flatten")
+    sent: dict[str, int] = {}
+    streak: dict[str, int] = {}
+    worst = 0
+    steps = 0
+    while desk.broker.positions():
+        desk.step()
+        steps += 1
+        for o in desk.engine.orders():
+            if o.leg is Leg.EXIT and o.client_order_id not in sent:
+                sent[o.client_order_id] = steps
+        for cid, at in sent.items():
+            order = desk.broker.orders.get(cid)
+            if order is not None and not order.state.terminal and steps - at >= fill_delay:
+                desk.broker.fill(cid, order.quantity - order.filled_quantity, D("10.00"))
+        bare = bare_shares(desk.broker)
+        for symbol in symbols:
+            streak[symbol] = streak.get(symbol, 0) + 1 if bare.get(symbol, D(0)) > 0 else 0
+            worst = max(worst, streak[symbol])
+        assert steps <= 4 * MAX * STOPS, "the flatten did not finish"
+    return steps, worst
+
+
+@pytest.mark.parametrize("fill_delay", [0, 1, 2, 4])
+@pytest.mark.parametrize("slots", [1, ALLOWED])
+def test_the_flatten_of_split_stops_leaves_shares_bare_for_one_cancel_read(tmp_path, slots,
+                                                                           fill_delay):
+    """One stop is cancelled at a time across every trade, and the shares of a stop whose
+    cancel Detail confirms are sold at once, never after another close's fill: each stop's
+    shares are without a working stop or sell for one poll (its cancel's read), so a
+    position has bare shares for at most one poll per stop, whatever the slots and the
+    closes' fill delay, and the flatten fits the start-time bound."""
+    desk = Desk(tmp_path, wide(slots, max_daily_loss_usd=D(MAX * 10)))
+    for symbol in SYMBOLS[:slots]:
+        assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
+        desk.fill(symbol)
+    desk.step(2 * slots)
+    assert {len(desk.stops(s)) for s in SYMBOLS[:slots]} == {2}
+    steps, worst = flatten(desk, fill_delay)
+    assert worst <= 2  # two stops, one poll each, back to back
+    assert STOPS * POLL < float(CFG.orders.max_unprotected_seconds)
+    assert steps * POLL <= slots * STOPS * 2 * POLL <= WINDOW
+
+
+@pytest.mark.parametrize("fill_delay", [0, 2])
+def test_three_stops_per_position_flatten_as_fast_when_closes_fill_at_once(tmp_path,
+                                                                          fill_delay):
+    """Entries filled 3 + 7 with a scale-out hold three stops each. A close that fills at
+    once moves the position, but that move is our own close: the symbol's other stops are
+    not read ahead of its cancel, so instant fills are no slower than late ones."""
+    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)))
+    for symbol in SYMBOLS:
+        assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
+        entry = desk.engine.orders(desk.trade_of(symbol).trade_id)[0]
+        for piece in (D(3), D(7)):
+            desk.broker.fill(entry.client_order_id, piece, D("10.05"))
+            desk.step(3)
+    desk.step(2 * MAX)
+    assert {len([s for s in desk.stops(x) if s.live]) for x in SYMBOLS} == {3}
+    steps, worst = flatten(desk, fill_delay)
+    assert worst <= 3  # three stops, one poll each
+    assert steps <= MAX * 3 + 3
+
+
+@pytest.mark.parametrize("fill_delay", [0, 1, 2])
+@pytest.mark.parametrize("pieces", [8, 10])
+def test_at_one_slot_a_position_with_many_stops_flattens_in_two_polls_per_stop(tmp_path,
+                                                                              pieces,
+                                                                              fill_delay):
+    """One slot (no stop cap): an entry filled one share per observation holds a stop per
+    piece. Each close of ours moves the position, which must not put the other stops' reads
+    ahead of the waiting cancel: the flatten takes at most two polls per stop, and the
+    shares are bare for one poll per stop at most, whatever the closes' fill delay."""
+    desk = Desk(tmp_path, wide(1))
+    assert desk.enter("AAA", quantity=D(pieces)).admission == "taken"
+    entry = desk.engine.orders(desk.trade_of("AAA").trade_id)[0]
+    for _ in range(pieces):
+        desk.broker.fill(entry.client_order_id, D(1), D("10.05"))
+        desk.step(3)
+    desk.step(6)
+    stops = len([s for s in desk.stops("AAA") if s.live])
+    assert stops >= 7
+    steps, worst = flatten(desk, fill_delay, ["AAA"])
+    assert steps <= 2 * stops
+    assert worst <= stops
+
+
+def test_with_one_slot_an_entry_filling_in_pieces_fills_to_its_size(tmp_path):
+    """Owner 2026-11-17: the stop cap applies only with several slots. With one, an entry
+    filling 1 + 2 + 3 + 4 ends holding all 10, each piece under its stop."""
+    desk = Desk(tmp_path, wide(1))
+    assert desk.enter("AAA").admission == "taken"
+    entry = desk.engine.orders(desk.trade_of("AAA").trade_id)[0]
+    for piece in (1, 2, 3, 4):
+        desk.broker.fill(entry.client_order_id, D(piece), D("10.05"))
+        desk.step(4)
+    assert desk.broker.holdings["AAA"].quantity == 10
+    live = [s for s in desk.stops("AAA") if s.live]
+    assert len(live) == 4 and all(s.verified for s in live)
+    assert sum((s.quantity for s in live), D(0)) == 10
+    assert not desk.store.journal("entry-capped", desk.trade_of("AAA").trade_id)
+
+
+def test_an_entry_filling_in_pieces_is_capped_at_the_stop_limit(tmp_path):
+    """With several slots, each fill observation adds a stop (two across the scale-out
+    boundary); once the trade holds the limit minus what one more observation adds, the
+    entry's rest is cancelled, so the flatten bound's stop count holds."""
+    desk = Desk(tmp_path, wide(2))
+    assert desk.enter("AAA", scale_out=D(6)).admission == "taken"
+    entry = desk.engine.orders(desk.trade_of("AAA").trade_id)[0]
+    for _ in range(4):
+        if desk.broker.orders[entry.client_order_id].state.terminal:
+            break
+        desk.broker.fill(entry.client_order_id, D(1), D("10.05"))
+        desk.step(4)
+    assert desk.broker.orders[entry.client_order_id].state is OrderState.CANCELLED
+    live = [s for s in desk.stops("AAA") if s.live]
+    assert len(live) <= STOPS
+    assert sum((s.quantity for s in live), D(0)) == desk.broker.holdings["AAA"].quantity
+    assert desk.store.journal("entry-capped", desk.trade_of("AAA").trade_id)
+
+
 def test_a_close_never_waits_on_a_stop_whose_detail_cannot_be_read(tmp_path):
     """One position at a time loses its stop, but a stop whose cancel cannot be confirmed
     (its Detail reads keep failing after the cancel) holds the other closes back only until
@@ -299,7 +442,7 @@ def test_config_refuses_a_poll_too_slow_for_the_flatten_of_every_slot(tmp_path):
     text = (ROOT / "config" / "bot.toml").read_text("utf-8")
     window = (CFG.session.flatten_minutes_before_close * 60
               - CFG.session.close_order_cutoff_seconds)
-    poll = int(window / (2 * MAX)) + 1
+    poll = int(window / (2 * STOPS * MAX)) + 1
     text = re.sub(r"(?m)^max_open_positions = \d+", f"max_open_positions = {MAX}", text)
     text = re.sub(r"(?m)^detail_poll_seconds = \d+", f"detail_poll_seconds = {poll}", text)
     (tmp_path / "config").mkdir()
