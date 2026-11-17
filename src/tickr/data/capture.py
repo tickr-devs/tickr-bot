@@ -39,6 +39,7 @@ Bulk market data never enters the trading database (spec section 3). A write fai
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -138,6 +139,14 @@ def screener_record(row: ScreenerRow, provider: str, receipt_time: datetime) -> 
     }
 
 
+def _digest(record: dict[str, str]) -> bytes:
+    """A bar record's identity for the written-today check: BLAKE2b, 16 bytes, of its fields
+    in key order (a collision, about 2^-64 per pair, would only leave one bar version out of the
+    capture file)."""
+    text = "\x1f".join(f"{k}\x1e{record[k]}" for k in sorted(record))
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=16).digest()
+
+
 class CaptureWriter:
     """Appends capture records. Thread safe (stream thread and bot loop both write).
 
@@ -149,7 +158,10 @@ class CaptureWriter:
         self._provider = provider
         self._lock = threading.Lock()
         self._handles: dict[tuple[date, str], IO[str]] = {}
-        self._bars_written: dict[date, set[tuple[str, ...]]] = {}
+        # Per day, a 16-byte digest of every bar record written (about 70 bytes each in the
+        # set, against about 430 for the record's own strings: discovery writes about 2,800 new
+        # bar versions a minute, 2026-11-17, so the whole tuples grew the bot ~1.2 MB/min).
+        self._bars_written: dict[date, set[bytes]] = {}
 
     @classmethod
     def from_config(cls, config: Config, provider: str) -> CaptureWriter:
@@ -225,7 +237,7 @@ class CaptureWriter:
             records = []
             for bar in bars:
                 record = bar_record(bar)
-                key = tuple(record[k] for k in sorted(record))
+                key = _digest(record)
                 if key in seen:
                     continue
                 seen.add(key)
