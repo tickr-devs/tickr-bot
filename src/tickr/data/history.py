@@ -46,10 +46,14 @@ NO_PROGRESS and INCOMPLETE refusals stay as guards, not as expected outcomes.
 
 A minute with no bar inside a session is not a refusal: thin symbols do not trade every minute.
 
-Cache: in memory and on disk at `<directory>/<before>/<symbol>-<sessions>.jsonl`, in the replay
-bar format, written whole through a temporary file. A cache file that does not parse, or a failed
-write, is refused as CACHE; a bad file is never silently re-fetched over. A fetched history stays
-in memory even when its write failed, so the budget is not spent twice.
+Cache: on disk at `<directory>/<before>/<symbol>-<sessions>.jsonl`, in the replay bar format,
+written whole through a temporary file, and in memory for at most `memory_symbols` histories, the
+most recently asked (one history of 5 sessions is about 2 MB; the pre-open preload alone reads
+several hundred symbols, so an unbounded memory cache grew the bot by a history per new symbol
+all day). A history pushed out of memory is read again from its file, with no request. A cache
+file that does not parse, or a failed write, is refused as CACHE; a bad file is never silently
+re-fetched over. A fetched history whose write failed stays in memory all day (it has no file),
+so the budget is not spent twice. Refusals are kept all day (they hold no bars).
 """
 
 from __future__ import annotations
@@ -58,6 +62,7 @@ import json
 import os
 import re
 import threading
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -139,12 +144,14 @@ class HistorySettings:
     max_pages: int  # own pages per symbol
     max_lookback_days: int
     symbols_per_request: int
+    memory_symbols: int  # most histories kept in memory (the rest are read from disk)
 
     @classmethod
     def from_config(cls, config: Config) -> HistorySettings:
         md = config.market_data
         return cls(md.history_bars_per_request, md.history_max_pages_per_symbol,
-                   md.history_max_lookback_days, md.bars_symbols_per_request)
+                   md.history_max_lookback_days, md.bars_symbols_per_request,
+                   md.history_memory_symbols)
 
 
 @dataclass(frozen=True)
@@ -185,7 +192,11 @@ class HistoryReader:
         self._settings = settings
         self._directory = directory
         self._lock = threading.Lock()
-        self._memory: dict[tuple[str, date, int], SessionHistory | HistoryUnavailable] = {}
+        # Histories, least recently asked first, and refusals; `_unstored`: keys whose disk
+        # write failed, never pushed out (they have no file).
+        self._memory: OrderedDict[tuple[str, date, int], SessionHistory] = OrderedDict()
+        self._refusals: dict[tuple[str, date, int], HistoryUnavailable] = {}
+        self._unstored: set[tuple[str, date, int]] = set()
 
     @classmethod
     def from_config(cls, config: Config, source: MarketData,
@@ -206,6 +217,8 @@ class HistoryReader:
             # A new New York day drops older entries: the cache is per day asked on.
             for old in [k for k in self._memory if k[1] != before]:
                 del self._memory[old]
+            self._refusals = {k: v for k, v in self._refusals.items() if k[1] == before}
+            self._unstored = {k for k in self._unstored if k[1] == before}
             missing: list[str] = []
             days: list[MarketDay] | None = None
             for symbol in dict.fromkeys(symbols):
@@ -219,11 +232,13 @@ class HistoryReader:
                         f"sessions must be a positive int, got {sessions!r}")
                     continue
                 key = (symbol, before, sessions)
-                cached = self._memory.get(key)
-                if isinstance(cached, HistoryUnavailable):
-                    refused[symbol] = cached
+                refusal = self._refusals.get(key)
+                if refusal is not None:
+                    refused[symbol] = refusal
                     continue
+                cached = self._memory.get(key)
                 if cached is not None:
+                    self._memory.move_to_end(key)
                     found[symbol] = cached
                     continue
                 try:
@@ -235,7 +250,7 @@ class HistoryReader:
                 if history is None:
                     missing.append(symbol)
                 else:
-                    self._memory[key] = history
+                    self._remember(key, history)
                     found[symbol] = history
             if missing:
                 assert days is not None  # the same days for every symbol of one call
@@ -249,10 +264,22 @@ class HistoryReader:
                         break
         return HistoryRead(found, refused, error, counter[0])
 
+    def _remember(self, key: tuple[str, date, int], history: SessionHistory) -> None:
+        """Keep `history` as the most recently asked; push out the least recently asked
+        histories that have a file while more than `memory_symbols` are held."""
+        self._memory[key] = history
+        self._memory.move_to_end(key)
+        excess = len(self._memory) - self._settings.memory_symbols
+        for old in [k for k in self._memory if k not in self._unstored]:
+            if excess <= 0:
+                break
+            del self._memory[old]
+            excess -= 1
+
     def _refuse(self, refused: dict[str, HistoryUnavailable], before: date, sessions: int,
                 exc: HistoryUnavailable) -> None:
         if exc.cause is not HistoryCause.CACHE:
-            self._memory[(exc.symbol, before, sessions)] = exc  # same answer all day
+            self._refusals[(exc.symbol, before, sessions)] = exc  # same answer all day
         refused[exc.symbol] = exc
 
     # -- calendar
@@ -291,12 +318,15 @@ class HistoryReader:
             except HistoryUnavailable as exc:
                 self._refuse(refused, before, sessions, exc)
                 return
-            self._memory[(item.symbol, before, sessions)] = history  # kept if the write fails
+            key = (item.symbol, before, sessions)
             try:
                 self._store(before, sessions, history)
             except HistoryUnavailable as exc:
+                self._unstored.add(key)  # no file: memory serves it all day
+                self._remember(key, history)
                 refused[item.symbol] = exc  # CACHE: not remembered, memory serves next time
                 return
+            self._remember(key, history)
             found[item.symbol] = history
 
         def fail(item: _Pending, cause: HistoryCause, detail: str) -> None:

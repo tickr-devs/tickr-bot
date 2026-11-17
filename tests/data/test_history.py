@@ -38,7 +38,7 @@ def session_bars(symbol: str, day: date, minutes: int | None = None,
 
 def reader(source, tmp_path: Path | None, **overrides: int) -> HistoryReader:
     values = dict(bars_per_request=1200, max_pages=4, max_lookback_days=14,
-                  symbols_per_request=20)
+                  symbols_per_request=20, memory_symbols=300)
     values.update(overrides)
     return HistoryReader(source, CALENDAR, HistorySettings(**values), tmp_path)
 
@@ -82,6 +82,48 @@ def test_cached_in_memory_then_on_disk_for_the_same_day(tmp_path):
     assert one(again, "AAA", MONDAY, 5) is loaded
     assert len(md.calls) == 2  # only the first reader asked the provider
     assert (tmp_path / "2026-11-16" / "AAA-5.jsonl").exists()
+
+
+def test_memory_holds_the_most_recently_asked_and_the_rest_come_from_disk(tmp_path):
+    """The memory cache is bounded: a history pushed out is read again from its file, never
+    from the provider."""
+    md = FakeMarketData()
+    for symbol in ("AAA", "BBB", "CCC"):
+        for day in [date(2026, 11, 6), *WEEK, MONDAY]:
+            md.add_bars(session_bars(symbol, day))
+    rd = reader(md, tmp_path, memory_symbols=2)
+    first = {s: one(rd, s, MONDAY, 5) for s in ("AAA", "BBB")}
+    assert one(rd, "AAA", MONDAY, 5) is first["AAA"]  # AAA is now the most recent
+    asked = len(md.calls)
+    one(rd, "CCC", MONDAY, 5)  # pushes out BBB, the least recently asked
+    assert len(rd._memory) == 2
+    assert one(rd, "AAA", MONDAY, 5) is first["AAA"]  # still in memory
+    again = one(rd, "BBB", MONDAY, 5)  # from its file
+    assert again is not first["BBB"] and again.bars == first["BBB"].bars and again.pages == 0
+    assert len(md.calls) == asked + 2  # only CCC's two pages went to the provider
+
+
+def test_a_history_whose_write_failed_is_never_pushed_out(tmp_path, monkeypatch):
+    md = FakeMarketData()
+    for symbol in ("AAA", "BBB", "CCC"):
+        for day in [date(2026, 11, 6), *WEEK, MONDAY]:
+            md.add_bars(session_bars(symbol, day))
+    rd = reader(md, tmp_path, memory_symbols=1)
+    store = HistoryReader._store
+
+    def fail_for_aaa(self, before, sessions, history):
+        if history.symbol == "AAA":
+            raise HistoryUnavailable("AAA", HistoryCause.CACHE, "disk full")
+        store(self, before, sessions, history)
+
+    monkeypatch.setattr(HistoryReader, "_store", fail_for_aaa)
+    with pytest.raises(HistoryUnavailable):
+        one(rd, "AAA", MONDAY, 5)  # CACHE refusal; the history stays in memory
+    one(rd, "BBB", MONDAY, 5)
+    one(rd, "CCC", MONDAY, 5)
+    asked = len(md.calls)
+    assert one(rd, "AAA", MONDAY, 5).pages > 0  # memory serves it: no file to read
+    assert len(md.calls) == asked
 
 
 def test_skips_weekend_holiday_and_handles_a_half_day(tmp_path):
