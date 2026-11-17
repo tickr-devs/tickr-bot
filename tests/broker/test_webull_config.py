@@ -53,11 +53,14 @@ def test_budget_uses_default_and_route_limits(tmp_path, name):
     budget = budget_from_config(cfg, clock=lambda: 0.0)
     for route in Route:
         limit = budget.limit_for(route.path)
+        # With charts on, the bot's bars route gives the chart its slice (docs/webull-facts.md C).
+        slice_ = cfg.chart.requests_per_minute if (
+            cfg.chart.webull_enabled and route.path == config.BARS_ROUTE) else 0
         if route.path in env.route_limits:
             count, window = env.route_limits[route.path]
-            assert (limit.max_requests, limit.window_seconds) == (count, float(window))
+            assert (limit.max_requests, limit.window_seconds) == (count - slice_, float(window))
         else:
-            assert limit.max_requests == env.requests_per_route_per_minute
+            assert limit.max_requests == env.requests_per_route_per_minute - slice_
         assert limit.pause_after_429_seconds == float(env.rate_limit_cooldown_seconds)
 
 

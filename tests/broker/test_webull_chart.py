@@ -121,8 +121,8 @@ def test_chart_budget_is_refused_when_spent_and_the_bot_budget_is_untouched():
 
 
 def test_bot_bars_slice_is_unchanged_while_charts_are_off():
-    cfg = config.load(BOT)
-    assert not cfg.chart.webull_enabled
+    loaded = config.load(BOT)
+    cfg = replace(loaded, chart=replace(loaded.chart, webull_enabled=False))
     budget = budget_from_config(cfg)
     assert budget.limit_for(BARS_PATH).max_requests == cfg.environment.requests_per_route_per_minute
     with pytest.raises(AdapterConfigError, match="webull_enabled"):

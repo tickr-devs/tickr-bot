@@ -667,7 +667,7 @@ mac_app_timeout_seconds = 2
 # does not prove Production); C3 must pass before daily ranges (1m/3m/1y) are trusted, C4 before the newest minute and
 # half days are; C5 is optional. false = GET /chart answers 503 unavailable (the demo serves its simulated world
 # instead); read by the api server and the request budget.
-webull_enabled = false
+webull_enabled = true
 # Webull bars requests the API may send per 60 s for charts, count: the chart's own request budget, never the bot's;
 # exhausted = GET /chart answers 429 rate_limited, nothing is queued or retried. With webull_enabled the bot's budget for
 # the bars route is lowered by this many, so the two processes together stay within one route limit (in case Webull

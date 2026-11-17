@@ -414,6 +414,11 @@ def _chart_on(text: str | None = None) -> str:
                                                     "webull_enabled = true", 1)
 
 
+def _chart_off(text: str | None = None) -> str:
+    return (text or BOT.read_text("utf-8")).replace("webull_enabled = true",
+                                                    "webull_enabled = false", 1)
+
+
 def test_chart_slice_is_checked_when_the_config_loads(tmp_path):
     """With the chart on, its slice must fit below every environment's bars limit, counted per
     60 s: refused at load, not later when the bot builds its budget."""
@@ -422,12 +427,14 @@ def test_chart_slice_is_checked_when_the_config_loads(tmp_path):
     smallest = min(e.requests_per_route_per_minute for e in loaded.environments.values())
     too_big = f"requests_per_minute = {smallest}"
     text = BOT.read_text("utf-8").replace("requests_per_minute = 4", too_big, 1)
-    assert config.load(_copy_in(tmp_path, "off", text)).chart.requests_per_minute == smallest
+    off = config.load(_copy_in(tmp_path, "off", _chart_off(text)))
+    assert off.chart.requests_per_minute == smallest
     with pytest.raises(config.ConfigError, match="must be below the bars route limit"):
         config.load(_copy_in(tmp_path, "big", _chart_on(text)))
     window = BOT.read_text("utf-8").replace(
         SANDBOX_ROUTE_LIMITS, f'route_limits = {{ "{config.BARS_ROUTE}" = [50, 30] }}', 1)
-    assert config.load(_copy_in(tmp_path, "window-off", window)).chart.webull_enabled is False
+    window_off = config.load(_copy_in(tmp_path, "window-off", _chart_off(window)))
+    assert window_off.chart.webull_enabled is False
     with pytest.raises(config.ConfigError, match="per 60 s"):
         config.load(_copy_in(tmp_path, "window", _chart_on(window)))
 
