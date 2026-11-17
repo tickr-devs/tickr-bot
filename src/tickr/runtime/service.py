@@ -59,6 +59,7 @@ from tickr.runtime.watchdog import entry_restart_file
 
 if TYPE_CHECKING:
     from tickr.observers.runner import ObserverSet
+    from tickr.runtime.entries import EntryQuotes
     from tickr.runtime.evaluation import Evaluator
     from tickr.runtime.market import MarketRuntime
     from tickr.runtime.quotes import QuoteFile
@@ -177,6 +178,7 @@ class Service:
         self.day_end = DayEnd(engine, calendar, watch)
         self.latency: LatencyLog | None = LatencyLog(engine)
         self._skipping: str | None = None  # cause of the current protect-first episode
+        self._entry_quotes: EntryQuotes | None = None  # built on the first entry guard
         self.stopped_by: str | None = None  # command_id of an obeyed stop-bot command
         self._account_failing = False  # the last account file write failed (journaled once)
         # Balances, account kind and today's fills, read on their own thread (display only).
@@ -409,10 +411,25 @@ class Service:
         """A working entry is cancelled once its quote leaves the price window or goes stale,
         at the last-entry time, and while new entries are blocked (spec 9). Without a market
         there is no quote, so every working entry is cancelled ("no quote")."""
-        from tickr.runtime.entries import guard_entries  # entries imports this module
+        from tickr.runtime.entries import (
+            EntryQuotes,
+            guard_entries,  # entries imports this module
+        )
 
-        latest = self.market.inbox.latest if self.market is not None else _no_quote
-        guard_entries(self.engine, self.config, self.calendar, latest, self.now())
+        if self._entry_quotes is None:
+            market = self.market
+            self._entry_quotes = EntryQuotes(
+                self.engine, self.config,
+                market.inbox.latest if market is not None else _no_quote,
+                # read only when a stream quote is too old: a market's snapshot route
+                None if market is None else (lambda symbols: market.source.snapshot(symbols)),
+                self.engine.clock)
+        now = self.now()
+        quotes = self._entry_quotes
+        quotes.refresh({o.symbol for o in self.engine.orders() if o.leg is Leg.ENTRY and o.live},
+                       now)
+        guard_entries(self.engine, self.config, self.calendar,
+                      lambda symbol: quotes(symbol, now), now)
 
     # --- strategy --------------------------------------------------------------------------
 

@@ -69,6 +69,13 @@ symbol_cooldown_minutes_after_loss = 30
 # Longest a resting limit entry (a strategy's pullback buy below the ask, Decision.rest_bars) may work, in completed M1
 # bars after the decision bar; a decision asking for more is refused (owner 2026-11-16); read by safety.
 max_entry_rest_bars = 10
+# Seconds between REST snapshot reads of one working entry's symbol while its stream quote is older than
+# max_quote_age_seconds (owner 2026-11-17: a thin stock's L1 stream can stay silent for seconds while its book moves,
+# the snapshot then often shows a fresh quote; the snapshot quote passes the same age and window checks, so one as old
+# as the stream's still cancels the entry). All such symbols go in one request, so at most 60 / this many snapshot
+# requests a minute (20), and only while a working entry's stream quote is too old; they share the snapshot route
+# budget with discovery, whose pass stops early on a refusal and keeps its previous candidates; read by runtime.entries.
+entry_snapshot_interval_seconds = 3
 
 [session]
 # Market time zone for all session times; read by the calendar and the scheduler.

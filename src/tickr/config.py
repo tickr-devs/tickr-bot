@@ -94,6 +94,7 @@ class RiskConfig:
     symbol_cooldown_after_loss_enabled: bool
     symbol_cooldown_minutes_after_loss: int
     max_entry_rest_bars: int
+    entry_snapshot_interval_seconds: Decimal
 
 
 @dataclass(frozen=True)
@@ -667,6 +668,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     check_extended_sessions(built["session"])
     if risk.max_entry_rest_bars < 1:
         raise ConfigError("[risk] max_entry_rest_bars must be at least 1")
+    if risk.entry_snapshot_interval_seconds <= 0:
+        raise ConfigError("[risk] entry_snapshot_interval_seconds must be above 0")
     if not 0 <= risk.min_daily_room_usd < risk.max_daily_loss_usd:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
     if built["orders"].detail_unreadable_seconds <= 0:
