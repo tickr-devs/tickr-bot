@@ -296,7 +296,7 @@ class LateList(FakeBroker):
         return rows
 
 
-@pytest.mark.parametrize("late", [0, 1, 2])
+@pytest.mark.parametrize("late", [0, 1, 2, 3])  # 3: one poll past stop_listing_polls
 def test_split_fills_in_the_same_poll_are_protected_in_time_at_the_allowed_slots(tmp_path,
                                                                                late):
     """With a scale-out each fill gets two stops, both verified by the same open-orders read;

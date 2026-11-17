@@ -16,6 +16,9 @@ environment = "demo"
 strategy = "price-action-v3"
 # [strategy] observers in the demo copy of bot.toml: shadow strategies whose decisions the apps show.
 observers = ["price-action-v2"]
+# [risk] max_open_positions in the demo copy of bot.toml, count: the made-up day is written for one position at a
+# time (QRTZ breaks out while MVLD is held and is refused), whatever the real bot allows; read by tickr.demo.
+max_open_positions = 1
 # Simulated-exchange provider name written into the demo's capture files.
 provider = "demo"
 # New York time the bot starts each simulated session (before the open, for warm-up).

@@ -7,7 +7,8 @@ the capture and decision files are exactly what the bot writes on a real day.
 
 Steps:
 1. `<root_dir>` (default `demo/`) is rebuilt: a copy of config/ and strategies/ whose bot.toml
-   runs as environment `[demo] environment`, with the demo's API port, strategy and observers. Its
+   runs as environment `[demo] environment`, with the demo's API port, strategy, observers and
+   position slots. Its
    data_dir lands inside that folder, never in the real one.
 2. Each past session runs from `bot_start` to `past_stop` on a fast clock.
 3. The demo day (today if it is a session, else the latest session before it) runs fast up to
@@ -169,6 +170,7 @@ def build_folder(repo: Path, scenario: Scenario) -> Path:
     text = _set_line(text, "active", f'"{scenario.strategy}"')
     text = _set_line(text, "observers", "[" + ", ".join(f'"{o}"' for o in scenario.observers)
                      + "]")
+    text = _set_line(text, "max_open_positions", str(scenario.max_open_positions))
     text = _set_line(text, "data_dir", f'"{DEMO_DATA_DIR}"')
     text = _set_line(text, "start_bot_command", "[]")  # never the real bot's launchd job
     renamed = table.split("\n", 1)

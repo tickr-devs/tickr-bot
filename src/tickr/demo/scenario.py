@@ -103,6 +103,7 @@ class Scenario:
     environment: str
     strategy: str
     observers: tuple[str, ...]
+    max_open_positions: int
     provider: str
     bot_start: str
     past_stop: str
@@ -369,6 +370,12 @@ def unroll(scenario: Scenario) -> Scenario:
                    commands=tuple(commands), listed=listed)
 
 
+def _slots(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ScenarioError("[demo] max_open_positions must be a whole number of at least 1")
+    return value
+
+
 def load(path: Path) -> Scenario:
     try:
         raw = tomllib.loads(path.read_text("utf-8"))
@@ -377,7 +384,7 @@ def load(path: Path) -> Scenario:
     top = _keys("demo.toml", raw, {"demo", "market", "scenario", "live", "recording"})
     plan = _keys("[scenario]", top["scenario"], {"today", "commands", "past", "faults"})
     demo = _keys("[demo]", top["demo"], {
-        "root_dir", "environment", "strategy", "observers", "provider",
+        "root_dir", "environment", "strategy", "observers", "max_open_positions", "provider",
         "bot_start", "past_stop", "clock", "live_until", "answer_within_seconds"})
     market = _keys("[market]", top["market"], {
         "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume", "texture_drift",
@@ -401,6 +408,7 @@ def load(path: Path) -> Scenario:
         environment=environment,
         strategy=_text("[demo] strategy", demo["strategy"]),
         observers=tuple(observers),
+        max_open_positions=_slots(demo["max_open_positions"]),
         provider=_text("[demo] provider", demo["provider"]),
         bot_start=_clock("[demo] bot_start", demo["bot_start"]),
         past_stop=_clock("[demo] past_stop", demo["past_stop"]),
