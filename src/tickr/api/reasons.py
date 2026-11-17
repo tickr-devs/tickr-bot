@@ -252,6 +252,9 @@ _WIRE = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
 _ERROR = r"[A-Z][A-Za-z]*(?:Error|Exception|Refused|Unavailable|Journal)"
 # The Start button's note that it cleared the operator stop (api/botstart.py).
 _STOP_CLEARED = r" \(the operator stop was cleared, so the next scheduled start runs\)"
+# How to pass the chart's probe C1, as probes.chart_client_gate tells it.
+_CHART_CHECK_HOW = (r"run `python -m tickr\.probes chart-client SYMBOL` next to the running bot, "
+                    r"then start the API again")
 # A strategy.toml key an advisor answer names: `[section] key` (advisor/proposal.py).
 _KEY = r"\[(?P<section>[^\]]*)\] (?P<key>\S+)"
 
@@ -473,6 +476,55 @@ _PROSE = _shapes(
     # a chart without candles (api/chart.py)
     ("no_chart_bars", r"no (?P<interval>\S+) bars from (?P<source>\S+) for (?P<symbol>\S+) in "
                       r"range (?P<range>\S+)"),
+    # GET /chart refused (api/chart.py ChartRefused; its query, api/server.py _query); the
+    # chart's source switched off, still being built or failed to build (api/__main__.py,
+    # probes.chart_client_gate)
+    ("chart_off", r"chart market data is off \(\[chart\] webull_enabled = false\)"),
+    ("chart_check_not_run", r"chart market data is off: chart probe C1 is not recorded for "
+                            r"(?P<environment>\S+); " + _CHART_CHECK_HOW),
+    ("chart_check_not_passed",
+     r"chart market data is off: chart probe C1 last ended '(?P<verdict>[^']*)' for "
+     r"(?P<environment>\S+) \([^)]*\); " + _CHART_CHECK_HOW),
+    ("chart_check_unreadable",
+     r"chart market data is off: chart probe C1: (?P<folder>\S+) cannot be read "
+     r"\((?P<error>\w+)\); remove that run's folder, then " + _CHART_CHECK_HOW),
+    ("chart_check_error",
+     r"chart market data is off: the chart probe C1 gate failed \((?P<error>\w+)\)"),
+    ("chart_starting",
+     r"chart market data is starting: its Webull client is still being built"),
+    ("chart_client_failed",
+     r"chart market data unavailable: client build failed \((?P<error>\w+)\)"),
+    ("chart_client_failed", r"chart market data unavailable: (?P<error>\w+): (?P<detail>.*)"),
+    ("chart_read_budget", r"chart read budget: (?P<detail>.*)"),
+    ("chart_data_delayed", r"market data is delayed: data delayed by (?P<minutes>" + _NUM
+     + r") min for (?P<symbols>.+)"),
+    ("chart_data_delayed", r"market data is delayed: (?P<detail>.*)"),
+    ("chart_symbol_unknown", r"market data read failed: SymbolsRefused: (?P<detail>.*)"),
+    ("chart_read_failed", r"market data read failed: (?P<error>\w+): (?P<detail>.*)"),
+    ("chart_symbol_invalid", r"symbol '(?P<symbol>[^']*)' is not an upper-case US ticker"),
+    ("chart_interval_invalid", r"interval must be one of: (?P<allowed>.+)"),
+    ("chart_range_invalid", r"range must be one of: (?P<allowed>.+)"),
+    ("chart_pair_not_served", r"interval (?P<interval>\S+) is not served for range "
+                              r"(?P<range>\S+): .+"),
+    ("chart_bar_outside_sessions", r"(?P<symbol>\S+) bar at (?P<time>" + _WIRE + r") is outside "
+                                   r"the calendar's sessions of (?P<day>" + _DAY + ")"),
+    ("chart_bar_session_differs", r"(?P<symbol>\S+) bar at (?P<time>" + _WIRE + r"): the provider "
+                                  r"says (?P<provider>\S+), the calendar says (?P<calendar>\S+)"),
+    ("chart_bars_out_of_order", r"(?P<symbol>\S+) bars are not in strictly increasing time order"),
+    ("chart_too_few_sessions", r"fewer than (?P<count>[0-9]+) sessions in the (?P<days>[0-9]+) "
+                               r"days before (?P<day>" + _DAY + r") \(\[chart\] "
+                               r"session_lookback_days\)"),
+    ("chart_request_too_short", r"one request of (?P<count>[0-9]+) M1 bars did not reach the "
+                                r"start of (?P<day>" + _DAY + r") \(\[chart\] bars_per_request\)"),
+    ("chart_daily_out_of_order", r"(?P<symbol>\S+) daily bars: two bars or a step back at "
+                                 r"(?P<day>" + _DAY + ")"),
+    ("chart_year_too_many_bars", r"a year of daily bars needs up to (?P<count>[0-9]+) bars, more "
+                                 r"than \[chart\] bars_per_request"),
+    ("query_malformed", r"malformed query string: (?P<detail>.*)"),
+    ("query_unknown_parameter", r"unknown query parameter '(?P<name>[^']*)'"),
+    ("query_parameter_twice", r"query parameter '(?P<name>[^']*)' given twice"),
+    ("query_parameter_empty", r"query parameter '(?P<name>[^']*)' is empty"),
+    ("query_parameters_missing", r"missing query parameters: (?P<names>.+)"),
     # the AI advisor's folder and an answer it refused (api/advisor.py, advisor/proposal.py);
     # any other refusal of a run is `advisor_refused`
     ("no_advisor_runs", r"no advisor run yet: the proposals folder does not exist"),

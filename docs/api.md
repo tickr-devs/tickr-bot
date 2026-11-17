@@ -264,6 +264,20 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
   `universe_conflicting_rows`, `universe_exchange`, `universe_currency`,
   `universe_type_unknown`, `universe_type` (each {measured});
 - latest size: `binding_not_proven`; chart: `no_chart_bars` {interval, source, symbol, range};
+- GET /chart's error-v1 `cause`: the source `chart_off` (`[chart] webull_enabled = false`),
+  `chart_check_not_run` {environment}, `chart_check_not_passed` {verdict, environment},
+  `chart_check_unreadable` {folder, error}, `chart_check_error` {error} (the chart probe C1
+  gate), `chart_starting`, `chart_client_failed` {error, and detail for the bot's own refusal};
+  a read's `chart_read_budget` {detail} (429), `chart_data_delayed` {minutes, symbols, or
+  detail}, `chart_symbol_unknown` {detail}, `chart_read_failed` {error, detail}, a calendar's
+  `calendar_error` {detail}; the query's `chart_symbol_invalid` {symbol},
+  `chart_interval_invalid` {allowed}, `chart_range_invalid` {allowed}, `chart_pair_not_served`
+  {interval, range}, `query_malformed` {detail}, `query_unknown_parameter` {name},
+  `query_parameter_twice` {name}, `query_parameter_empty` {name}, `query_parameters_missing`
+  {names}; the bars' `chart_bar_outside_sessions` {symbol, time, day},
+  `chart_bar_session_differs` {symbol, time, provider, calendar}, `chart_bars_out_of_order`
+  {symbol}, `chart_too_few_sessions` {count, days, day}, `chart_request_too_short` {count, day},
+  `chart_daily_out_of_order` {symbol, day}, `chart_year_too_many_bars` {count};
 - the AI advisor: `no_advisor_runs`, `proposals_unreadable` {error}, an unreadable run's
   `run_folder_misnamed`, `run_folder_unreadable` {error}, `run_file_missing` {file},
   `run_file_invalid` {file, error}, `run_file_wrong_schema` {file, schema}; a refused answer's

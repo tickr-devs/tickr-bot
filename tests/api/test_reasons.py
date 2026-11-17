@@ -335,8 +335,50 @@ def test_every_refusal_the_apps_show_has_a_code(text):
 # ---------------------------------------------------------------- causes the apps show as text
 
 SRC = API.parent
+# How to pass the chart's probe C1 (probes.chart_client_gate).
+CHART_CHECK_HOW = ("run `python -m tickr.probes chart-client SYMBOL` next to the running bot, then "
+                   "start the API again")
 # One example of every cause the API can put in these fields, as the bot writes it.
 FIELD_SAMPLES = {
+    # GET /chart's error-v1 cause: refused, off, starting or failed (api/chart.py, its query in
+    # api/server.py, its source in api/__main__.py and probes.chart_client_gate)
+    "chart error cause": (
+        "chart market data is off ([chart] webull_enabled = false)",
+        "chart market data is off: chart probe C1 is not recorded for sandbox; " + CHART_CHECK_HOW,
+        "chart market data is off: chart probe C1 last ended 'failed' for sandbox "
+        "(2026-11-16T15:00:00+00:00); " + CHART_CHECK_HOW,
+        "chart market data is off: chart probe C1: 20261116-chart-client-1 cannot be read "
+        "(PermissionError); remove that run's folder, then " + CHART_CHECK_HOW,
+        "chart market data is off: chart probe C1: 20261116-chart-client-1/summary.json cannot "
+        "be read (KeyError); remove that run's folder, then " + CHART_CHECK_HOW,
+        "chart market data is off: the chart probe C1 gate failed (OSError)",
+        "chart market data is starting: its Webull client is still being built",
+        "chart market data unavailable: client build failed (RuntimeError)",
+        "chart market data unavailable: ConfigError: WEBULL_APP_KEY is not set",
+        "chart read budget: market-data-bars: HTTP 429",
+        "market data is delayed: data delayed by 15 min for ABCD",
+        "market data read failed: SymbolsRefused: HTTP 417 INVALID_SYMBOL",
+        "market data read failed: BrokerError: timeout",
+        "calendar: OUT_OF_COVERAGE: 2031-01-02 is not covered by any file",
+        "symbol 'abc' is not an upper-case US ticker",
+        "interval must be one of: 1m, 5m, 30m, 1h, 1d, 1w, 1mo",
+        "range must be one of: 1d, 5d, 1m, 3m, 1y",
+        "interval 1m is not served for range 1y: 1m/5m/30m/1h take 1d or 5d, 1d/1w/1mo take 1m, "
+        "3m or 1y",
+        "ABCD bar at 2026-11-16T01:00:00.000Z is outside the calendar's sessions of 2026-11-16",
+        "ABCD bar at 2026-11-16T14:30:00.000Z: the provider says PRE, the calendar says RTH",
+        "ABCD bars are not in strictly increasing time order",
+        "fewer than 5 sessions in the 14 days before 2026-11-16 ([chart] session_lookback_days)",
+        "one request of 1000 M1 bars did not reach the start of 2026-11-16 ([chart] "
+        "bars_per_request)",
+        "ABCD daily bars: two bars or a step back at 2026-11-13",
+        "a year of daily bars needs up to 400 bars, more than [chart] bars_per_request",
+        "malformed query string: bad query field: 'x'",
+        "unknown query parameter 'x'",
+        "query parameter 'symbol' given twice",
+        "query parameter 'symbol' is empty",
+        "missing query parameters: interval, range",
+    ),
     "movers rules_cause": (
         "the active strategy defines no fast movers ([spike] in its strategy.toml)",),
     "jobs session_cause": (
@@ -512,7 +554,19 @@ CAUSE_WRITERS = (
     ("api/flow.py", "PAST_DAY", ()), ("api/flow.py", "CONFLICTING", ()),
     ("api/flow.py", "change_pct", ()), ("api/flow.py", "reconcile", ()),
     ("api/contract.py", "BINDING_NOT_RECORDED", ()),
-    ("api/chart.py", "answer", ("=cause",)),
+    ("api/chart.py", "OFF_CAUSE", ()),
+    ("api/chart.py", "answer", ("=cause", "ChartRefused")),
+    ("api/chart.py", "parse_query", ("ChartRefused",)),
+    ("api/chart.py", "place", ("ChartRefused",)),
+    ("api/chart.py", "aggregate_intraday", ("ChartRefused",)),
+    ("api/chart.py", "_sessions", ("ChartRefused",)),
+    ("api/chart.py", "_minutes", ("ChartRefused",)),
+    ("api/chart.py", "_daily", ("ChartRefused",)),
+    ("api/chart.py", "_daily_rows", ("ChartRefused",)),
+    ("api/server.py", "_query", ("BadQuery",)),
+    ("api/__main__.py", "CHART_STARTING", ()),
+    ("api/__main__.py", "attach_chart_source", ("=cause", "=refused")),
+    ("probes.py", "chart_client_gate", ("return", "=how", "=remove")),
     ("api/advisor.py", "NO_FOLDER", ()), ("api/advisor.py", "advisor_document", ("AdvisorRunsV1",)),
     ("api/advisor.py", "read_run", ("Unreadable",)), ("api/advisor.py", "_json", ("Unreadable",)),
     ("advisor/proposal.py", "parse_reply", ("AdvisorError", "append")),
@@ -529,8 +583,10 @@ CAUSE_WRITERS = (
 _LETTER = re.compile(r"[A-Za-z]")
 
 
-# Texts in those calls that are not a cause: the exit reason an emergency's flatten records.
-NOT_CAUSES = {"operator-emergency"}
+# Texts in those calls that are not a cause: the exit reason an emergency's flatten records,
+# and a chart refusal's error-v1 code and the attribute its retry time is read from.
+NOT_CAUSES = {"operator-emergency", "bad_request", "unavailable", "rate_limited",
+              "retry_after_seconds"}
 
 
 def _pieces(node) -> list[str]:
@@ -581,3 +637,23 @@ def test_every_written_cause_of_these_fields_has_a_sample():
         missing += [(file, name, piece) for piece in pieces
                     if not any(piece.strip() in sample for sample in SAMPLES)]
     assert missing == []
+
+
+def test_a_chart_refusal_carries_its_code_and_values():
+    """GET /chart's 503 says why in the reader's language: the apps never show the bot's words
+    ("[chart] webull_enabled = false") for a chart that is off, starting or refused."""
+    from tickr.api.__main__ import CHART_STARTING
+    from tickr.api.chart import OFF_CAUSE
+
+    off = contract.to_jsonable(contract.ErrorV1("unavailable", OFF_CAUSE))
+    assert off["cause_codes"] == [{"code": "chart_off", "params": {}}]
+    assert reasons.prose_reasons(CHART_STARTING) == (reasons.Reason("chart_starting"),)
+    assert reasons.prose_reasons(
+        "ABCD bar at 2026-11-16T14:30:00.000Z: the provider says PRE, the calendar says RTH") == (
+        reasons.Reason("chart_bar_session_differs", {"symbol": "ABCD", "time": "09:30",
+                                                     "provider": "PRE", "calendar": "RTH"}),)
+    assert reasons.prose_reasons("market data is delayed: data delayed by 15 min for ABCD") == (
+        reasons.Reason("chart_data_delayed", {"minutes": "15", "symbols": "ABCD"}),)
+    assert reasons.prose_reasons("market data read failed: SymbolsRefused: HTTP 417") == (
+        reasons.Reason("chart_symbol_unknown", {"detail": "HTTP 417"}),)
+
