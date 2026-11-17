@@ -46,6 +46,10 @@ names. The first response of each kind and every failed one are kept in `<out>/r
    gets its own data folder:
    `select --rule liquid --out data/liquid --daily data/backtest --first ... --last ...`, then
    `fetch-minutes --out data/liquid`. The `run` step's gainer gate still applies to such a pool.
+   `select --rule all` keeps every symbol with a bar on the day whose previous close is at least
+   `all_min_price_usd`: the whole universe, so stocks that jumped and faded are in it too (the
+   gainer pool only holds symbols whose day ended up as a gainer). Symbols delisted since are
+   still missing: the universe is Webull's current instrument list.
 4. **Minute bars** (`minutes/<SYMBOL>.jsonl`, replay bar format; `minutes_status.jsonl`): each
    pool day plus replay.toml `history_sessions` sessions before it, merged into contiguous runs
    and paged back with `end_time` (probe M4). Symbols that page from the same end share a request.

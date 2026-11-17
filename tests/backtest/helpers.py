@@ -73,6 +73,8 @@ class FakeHistory:
     def minute_bars(self, symbols: Sequence[str], end: datetime, count: int) -> list[Bar]:
         self.requests += 1
         self.calls.append(("minutes", tuple(symbols), end, count))
+        if any(s in self.invalid for s in symbols):
+            raise SymbolsRefused("BARS", 417, "INVALID_SYMBOL")
         out = []
         for s in symbols:
             out.extend(sorted((b for b in self.minutes.get(s, []) if b.start < end),

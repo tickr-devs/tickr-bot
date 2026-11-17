@@ -15,6 +15,7 @@ from tickr.backtest.universe import (
     active_screen,
     drop_unpriced,
     read_pool,
+    select_all,
     select_liquid,
     select_pool,
     write_pool,
@@ -161,6 +162,19 @@ def test_minutes_page_back_in_batches_and_record_status(tmp_path):
     assert again.requests == 0
 
 
+def test_minutes_skip_a_symbol_the_route_refuses_and_keep_the_others(tmp_path):
+    window = fetch.sessions_between(calendar(), date(2026, 11, 9), date(2026, 11, 13))
+    history = {s: [b for d in DAYS for b in flat_bars(s, d)] for s in ("AAA", "BBB")}
+    source = FakeHistory({}, {}, history, invalid=frozenset({"ODD"}))
+    runs = {s: fetch.needed_runs([DAYS[-1]], window, 4) for s in ("AAA", "BBB", "ODD")}
+    fetch.fetch_minutes(source, cfg(), SETTINGS, runs, tmp_path, no_sleep, quiet)
+    statuses = {s["symbol"]: s for s in fetch.load_statuses(tmp_path)}
+    assert statuses["AAA"]["complete"] and statuses["BBB"]["complete"]
+    assert not statuses["ODD"]["complete"]
+    assert statuses["ODD"]["cause"] == fetch.REFUSED_CAUSE
+    assert (tmp_path / "minutes" / "ODD.jsonl").read_text() == ""
+
+
 def test_minutes_ignore_bars_outside_the_run(tmp_path):
     window = fetch.sessions_between(calendar(), date(2026, 11, 9), date(2026, 11, 13))
     bars = [b for d in DAYS for b in flat_bars("AAA", d)]
@@ -215,6 +229,24 @@ def test_liquid_ranks_by_previous_day_only():
     pool, caps = select_liquid(rows, [date(2026, 11, 12), date(2026, 11, 13)], 3, Decimal(10))
     assert [(e.rank, e.symbol) for e in pool] == [(1, "B"), (2, "A")]
     assert pool[1].day_high_change_percent == Decimal(50)
+    assert (caps[0].candidates, caps[0].kept, caps[0].dropped) == (3, 2, 1)
+
+
+def test_all_keeps_every_symbol_above_the_price_floor_whatever_its_move():
+    def bar(symbol, day, close, volume, high=None):
+        return {"symbol": symbol, "date": day, "open": close, "high": high or close,
+                "low": close, "close": close, "volume": volume}
+    rows = [
+        bar("A", "2026-11-12", "1", "10"),
+        bar("A", "2026-11-13", "1", "10"),               # flat day: kept
+        bar("B", "2026-11-12", "2", "1000"),
+        bar("B", "2026-11-13", "2", "1", high="3"),      # jumped and faded: kept
+        bar("C", "2026-11-12", "0.2", "100000"),         # previous close below the floor
+        bar("C", "2026-11-13", "0.5", "100000"),
+        bar("E", "2026-11-12", "5", "1"),                # no bar on the day
+    ]
+    pool, caps = select_all(rows, [date(2026, 11, 12), date(2026, 11, 13)], Decimal("0.30"))
+    assert [(e.rank, e.symbol) for e in pool] == [(1, "B"), (2, "A")]
     assert (caps[0].candidates, caps[0].kept, caps[0].dropped) == (3, 2, 1)
 
 

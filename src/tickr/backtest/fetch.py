@@ -37,6 +37,7 @@ UNIVERSE_REFUSED_FILE = "universe_refused.jsonl"
 DAILY_DIR = "daily"
 MINUTES_DIR = "minutes"
 MINUTES_STATUS_FILE = "minutes_status.jsonl"
+REFUSED_CAUSE = "REFUSED: unknown symbol"
 
 
 class InstrumentLike(Protocol):
@@ -248,18 +249,25 @@ def fetch_daily(source: HistorySource, calendar: SessionCalendar, cfg: Config,
 
 def _daily_without_refused(source: HistorySource, symbols: Sequence[str], end: datetime,
                            count: int, sleep: Sleep, log: Log) -> tuple[list[Any], list[str]]:
-    """Daily bars of `symbols`; when the route refuses the request for an unknown symbol, the
-    chunk is split in halves until each refused symbol is alone, and those symbols are returned
-    as refused (recorded, never part of the pool). Reads only; each split is a new request."""
+    """Daily bars of `symbols` without the symbols the route refuses (see `_without_refused`)."""
+    return _without_refused(lambda s: source.daily_bars(s, end, count), symbols, "daily",
+                            sleep, log)
+
+
+def _without_refused[T](read: Callable[[Sequence[str]], list[T]], symbols: Sequence[str],
+                        what: str, sleep: Sleep, log: Log) -> tuple[list[T], list[str]]:
+    """`read(symbols)`; when the route refuses the request for an unknown symbol, the chunk is
+    split in halves until each refused symbol is alone, and those symbols are returned as
+    refused (recorded, never fetched). Reads only; each split is a new request."""
     try:
-        return patiently(lambda: source.daily_bars(symbols, end, count), sleep, log), []
+        return patiently(lambda: read(symbols), sleep, log), []
     except SymbolsRefused:
         if len(symbols) == 1:
-            log(f"daily: {symbols[0]} refused as an unknown symbol")
+            log(f"{what}: {symbols[0]} refused as an unknown symbol")
             return [], list(symbols)
     middle = len(symbols) // 2
-    left = _daily_without_refused(source, symbols[:middle], end, count, sleep, log)
-    right = _daily_without_refused(source, symbols[middle:], end, count, sleep, log)
+    left = _without_refused(read, symbols[:middle], what, sleep, log)
+    right = _without_refused(read, symbols[middle:], what, sleep, log)
     return left[0] + right[0], left[1] + right[1]
 
 
@@ -389,9 +397,13 @@ def fetch_minutes(source: HistorySource, cfg: Config, settings: BacktestSettings
             for end, group in sorted(by_end.items(), reverse=True):
                 for chunk in _unique_chunks(group, size):
                     symbols = [c.symbol for c in chunk]
-                    page = patiently(
-                        lambda s=symbols, e=end: source.minute_bars(s, e, per_request), sleep, log)
+                    page, refused = _without_refused(
+                        lambda s, e=end: source.minute_bars(s, e, per_request), symbols,
+                        "minutes", sleep, log)
                     for cursor in chunk:
+                        if cursor.symbol in refused:
+                            cursor.done, cursor.cause = True, REFUSED_CAUSE
+                            continue
                         own = [b for b in page if b.symbol == cursor.symbol]
                         _accept(cursor, own, settings.minute_max_pages_per_run)
         statuses: list[RunStatus] = []

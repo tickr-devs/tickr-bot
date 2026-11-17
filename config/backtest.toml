@@ -49,6 +49,9 @@ instrument_statuses = ["OC", "CO"]
 liquid_top_count = 300
 # Rule "liquid": lowest previous-session close a symbol may have to be ranked, USD; read by backtest/universe.py.
 liquid_min_price_usd = 10
+# Rule "all" of `select` (the whole universe, against survivorship: stocks that jumped and faded are kept): lowest
+# previous-session close a symbol may have, USD; read by backtest/universe.py.
+all_min_price_usd = 0.30
 # Nightly refresh (`nightly`, docs/backtest.md): sessions the rolling folder keeps, the newest ending at the last
 # completed session; older pool days and the minute files only they used are dropped; count; read by
 # backtest/nightly.py.

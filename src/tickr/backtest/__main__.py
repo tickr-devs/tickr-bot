@@ -24,6 +24,7 @@ from tickr.backtest.universe import (
     active_screen,
     drop_unpriced,
     read_pool,
+    select_all,
     select_liquid,
     select_pool,
     write_caps,
@@ -54,6 +55,7 @@ def history_from_config_raw(cfg: Config, raw: Path) -> fetch.HistorySource:
 
 RULE_GAINERS = "gainers"
 RULE_LIQUID = "liquid"
+RULE_ALL = "all"
 
 
 def step_select(cfg: Config, settings: BacktestSettings, out: Path, first: date,
@@ -62,7 +64,9 @@ def step_select(cfg: Config, settings: BacktestSettings, out: Path, first: date,
                                 cfg.market_data.history_max_lookback_days)
     rows, refused = drop_unpriced(fetch.load_daily((daily or out) / fetch.DAILY_DIR))
     sessions = [d.ny_date for d in window]
-    if rule == RULE_LIQUID:
+    if rule == RULE_ALL:
+        pool, caps = select_all(rows, sessions, settings.all_min_price_usd)
+    elif rule == RULE_LIQUID:
         pool, caps = select_liquid(rows, sessions, settings.liquid_top_count,
                                    settings.liquid_min_price_usd)
     else:
@@ -76,7 +80,7 @@ def step_select(cfg: Config, settings: BacktestSettings, out: Path, first: date,
     if refused:
         print(f"{len(refused)} symbols left out for non-positive daily prices -> {REFUSED_FILE}")
     bound = [c for c in caps if c.dropped]
-    if bound and rule == RULE_LIQUID:
+    if bound and rule in (RULE_LIQUID, RULE_ALL):
         print(f"{sum(c.dropped for c in bound)} chosen symbol-days had no bar on the day")
     elif bound:
         print(f"pool cap {settings.max_pool_per_day} bound on {len(bound)} sessions, "
@@ -119,8 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
             step.add_argument("--first", type=date.fromisoformat, required=True)
             step.add_argument("--last", type=date.fromisoformat, required=True)
         if name == "select":
-            step.add_argument("--rule", choices=(RULE_GAINERS, RULE_LIQUID), default=RULE_GAINERS,
-                              help="gainers (default) or liquid: top previous-day dollar volume")
+            step.add_argument("--rule", choices=(RULE_GAINERS, RULE_LIQUID, RULE_ALL),
+                              default=RULE_GAINERS,
+                              help="gainers (default), liquid: top previous-day dollar volume, "
+                                   "or all: every symbol above a minimum price")
             step.add_argument("--daily", type=Path,
                               help="data directory whose daily/ to read (default: --out)")
     nightly = sub.add_parser("nightly", help="add the newest completed sessions to a rolling "

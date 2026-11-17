@@ -171,6 +171,15 @@ def select_liquid(rows: Iterable[dict[str, Any]], sessions: Sequence[date], top_
     return pool, caps
 
 
+def select_all(rows: Iterable[dict[str, Any]], sessions: Sequence[date],
+               min_price: Decimal) -> tuple[list[PoolEntry], list[CapRecord]]:
+    """Every symbol with a bar on the day whose previous close is at least `min_price`: the whole
+    universe, so stocks that moved and faded are in it too (no survivorship from the day's own
+    move). Ranked by previous-session dollar volume, as the liquid rule."""
+    rows = list(rows)
+    return select_liquid(rows, sessions, len({r["symbol"] for r in rows}), min_price)
+
+
 def active_screen(cfg: Config) -> Liquidity:
     """The active strategy (bot.toml [strategy] active), whose liquidity rules choose the pool."""
     try:
