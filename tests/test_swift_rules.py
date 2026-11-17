@@ -544,6 +544,38 @@ def test_format_rule_flags_numbers_formatted_outside_the_design_system(tmp_path)
     assert [line for line, _ in found] == [1, 2, 3, 4, 5, 6, 7]
 
 
+def test_money_is_written_with_its_dollar_sign(tmp_path):
+    """The figures that slipped past the number rule (2026-11-16): a bare `Money.signed/plain` at
+    cents (also inside a string interpolation), the bot's raw text of a money or price field, and
+    "USD" written after an amount."""
+    source = (
+        "Text(verbatim: Money.signed(value))\n"
+        'text: "\\(trade.symbol) \\(Money.signed(result))"\n'
+        "value: risk.map { Money.plain($0) }\n"
+        "Text(verbatim: Money.signed(r, fractionDigits: Money.centsDigits))\n"
+        "Text(verbatim: fill.feesUsd?.text ?? Format.missing)\n"
+        "Text(verbatim: position.avgPrice?.description ?? missing)\n"
+        'Text(verbatim: "fee \\(fill.feesUsd)")\n'
+        "Text(verbatim: Money.signedUSD(value) + Money.usd(room) + Money.price(p.value))\n"
+        "Text(verbatim: Money.signed(r, fractionDigits: 1))\n"
+        "// figure: a calendar cell without $, as the board\n"
+        "Text(verbatim: Money.signed(day, fractionDigits: Money.centsDigits))\n"
+        "Text(verbatim: position.quantity.text)\n"
+        "Text(verbatim: Money.priceChange(change.value, at: price?.value))\n"
+    )
+    found = load().format_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_l10n_text_never_writes_usd_after_an_amount(tmp_path):
+    source = (
+        'LocalizedStringResource("a", defaultValue: "of \\(limit) USD left", bundle: b)\n'
+        'LocalizedStringResource("b", defaultValue: "Gross USD by trade close", bundle: b)\n'
+    )
+    found = load().format_violations(write(tmp_path, source, "L10n.swift"))
+    assert [line for line, _ in found] == [1]
+
+
 def test_stop_symbol_rule_wants_the_shared_stop_symbols(tmp_path):
     source = (
         'static let verifiedSymbol = "checkmark.shield.fill"\n'

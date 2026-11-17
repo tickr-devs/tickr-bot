@@ -147,7 +147,8 @@ part of the loop: it is an offline tool that needs the Anthropic API.
 
 Both apps have a "Demo day" switch (Mac: Settings › General; iPhone: Settings). On, the app shows
 the demo day and only that day: the day picker, the day menu and the previous/next buttons stand
-still and a DEMO chip sits next to the day, and the command surfaces carry the demo banner. Off,
+still, the environment badge in the header reads DEMO (dashed violet, the one demo look), and the
+command surfaces carry the demo banner and a dashed DEMO tag on every command. Off,
 the app is back on the bot, on today, and any recorded day can be picked again.
 
 The apps carry the demo day with them, so it works on its own: any time (also while the bot
@@ -161,7 +162,7 @@ trades), on the phone away from the Mac, with no `tickr demo` running and no net
   symbol stopped out the cycle before), every `[api] poll_seconds` of simulated time (3 s, the
   apps' status poll; 200 frames) the bot is held while the demo's own API is asked for everything
   the apps read: status, account, pending commands, jobs, journal, settings, config, advisor, Lab
-  replay, the day list and the day, flow, watching, observers, skipped, performance over
+  replay, the day list and the day, flow, watching, observers, skipped, symbols, fast movers, performance over
   `[recording] performance_days`, and per symbol of the day its decisions and bars; once a minute
   its charts in every range and interval the apps offer; once, the past days with their trades'
   bars and decisions. Right after the cycle, every command the apps can send (each kind, flatten

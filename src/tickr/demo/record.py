@@ -363,7 +363,7 @@ class Sampler:
                      "/settings", "/config", "/advisor", "/lab/replay", "/days",
                      f"/days/{self.day}"):
             self.get(frame, path)
-        for path in ("/flow", "/watching", "/observers", "/skipped"):
+        for path in ("/flow", "/watching", "/observers", "/skipped", "/symbols", "/movers"):
             self.get(frame, path, d)
         self.get(frame, "/performance", {"from": self.performance_from.isoformat(),
                                          "to": self.day})
