@@ -69,6 +69,7 @@ from tickr.api.jobs import JobsSettings, jobs_document
 from tickr.api.journal import journal_document
 from tickr.api.lab_replay import LabReplay, LabReplayRefused, LabReplaySettings
 from tickr.api.observer_results import ObserverResults, SimulationPaths
+from tickr.api.warm import PastDayWarmer
 from tickr.calendar import ny_date_of
 from tickr.config import Config, ConfigError
 from tickr.data.capture import CapturedBarsDays, CaptureError
@@ -82,6 +83,8 @@ from tickr.research.records import DecisionRecord
 from tickr.strategy.base import Role
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+# What a failed read of a past day's files raises while warming it (api/warm.py).
+WARM_ERRORS = (HistoryUnavailable, CaptureError, RecordFileError, ObserverError, OSError)
 COMMAND_SOURCE = "api"
 JSON_TYPE = "application/json"
 ENTRY_STOP_STATES = {"on": CommandKind.ENTRY_STOP_ON, "off": CommandKind.ENTRY_STOP_OFF}
@@ -326,11 +329,20 @@ def _now() -> datetime:
 
 class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
+    # The readers and their caches; the phone's listener shares the local one's.
+    captured_bars: CapturedBarsDays
+    history: History
+    decisions: DecisionCache
+    observer_results: ObserverResults
+    screener_chips: flow.ScreenerChips
+    discovery_day: symbols.DiscoveryDay
+    skipped: SkippedAfter
+    warmer: PastDayWarmer
 
     def __init__(self, settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
                  remote: bool = False, inbox_lock: threading.Lock | None = None,
                  start_lock: threading.Lock | None = None,
-                 lab: LabReplay | None = None) -> None:
+                 lab: LabReplay | None = None, shared: ApiServer | None = None) -> None:
         self.settings = settings
         self.clock = clock
         # GET /status api_started_at: clients read /settings again when it changes.
@@ -346,22 +358,45 @@ class ApiServer(ThreadingHTTPServer):
         # Shared too, so one replay at a time whichever listener started it.
         self.lab = lab or LabReplay(settings.lab, clock)
         self.page = (STATIC_DIR / "status.html").read_bytes()
-        # Captured bars by symbol, read on as the bot appends; shared by every reader below.
-        self.captured_bars = CapturedBarsDays()
-        self.history = History(settings.history, settings.after, self.captured_bars)
-        # Today's decision records, parsed once and read on as the bot appends.
-        self.decisions = DecisionCache(DecisionLog(settings.decisions))
-        self.observer_results = ObserverResults(
-            settings.simulation, settings.observer_trades_max_rows, self.captured_bars)
-        self.screener_chips = flow.ScreenerChips(settings.universe, settings.change_pct_places)
-        self.discovery_day = symbols.DiscoveryDay()  # GET /symbols and /movers
-        self.skipped = SkippedAfter(settings.simulation, settings.after.minutes,
-                                    settings.check_places, self.captured_bars)
+        if shared is not None:
+            # The phone's listener reads through the local one's caches: one parse per file.
+            self.captured_bars = shared.captured_bars
+            self.history = shared.history
+            self.decisions = shared.decisions
+            self.observer_results = shared.observer_results
+            self.screener_chips = shared.screener_chips
+            self.discovery_day = shared.discovery_day
+            self.skipped = shared.skipped
+            self.warmer = shared.warmer
+        else:
+            # Captured bars by symbol, read on as the bot appends; shared by every reader below.
+            self.captured_bars = CapturedBarsDays()
+            self.history = History(settings.history, settings.after, self.captured_bars)
+            # Decision records: today's read on as the bot appends, the last past day's kept.
+            self.decisions = DecisionCache(DecisionLog(settings.decisions))
+            self.observer_results = ObserverResults(
+                settings.simulation, settings.observer_trades_max_rows, self.captured_bars)
+            self.screener_chips = flow.ScreenerChips(settings.universe,
+                                                     settings.change_pct_places)
+            self.discovery_day = symbols.DiscoveryDay()  # GET /symbols and /movers
+            self.skipped = SkippedAfter(settings.simulation, settings.after.minutes,
+                                        settings.check_places, self.captured_bars)
+            # The latest past day's files, read once per New York date (api/warm.py).
+            self.warmer = PastDayWarmer(self.history.latest_past_day, self._warm_past_day,
+                                        WARM_ERRORS)
         # No source until one is attached (python -m tickr.api, or the demo's world).
         self.chart = Chart(settings.chart)
         self.start_runner = run_command  # runs [api] start_bot_command; replaced in tests
         port = settings.remote_port if remote else settings.port
         super().__init__((settings.host, port), Handler)
+
+    def _warm_past_day(self, day: date, today: date) -> None:
+        """Reads what a pick of past day `day` reads first: its decision records, its trades
+        (which read its captured bars) and its screener file (GET /flow)."""
+        self.decisions.records(day, today)
+        self.history.day(day, today)
+        self.screener_chips.chips(flow.screener_path(self.settings.history.capture, day),
+                                  open_tail=False)
 
     @property
     def allowed_host_headers(self) -> frozenset[str]:
@@ -657,6 +692,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
         if not self._guard():
             return
+        self.server.warmer.on_request(ny_date_of(self.server.clock()))
         try:
             path = self._path()
             if path == "/":
@@ -1160,14 +1196,19 @@ class Handler(BaseHTTPRequestHandler):
     do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
 
 
-def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now) -> ApiServer:
-    return ApiServer(settings, clock)
+def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
+                warm: bool = False) -> ApiServer:
+    """`warm`: read the latest past day into the caches once per New York date (api/warm.py);
+    `python -m tickr.api serve` turns it on."""
+    server = ApiServer(settings, clock)
+    server.warmer.enabled = warm
+    return server
 
 
 def make_remote_server(local: ApiServer) -> ApiServer:
     """The phone-facing listener next to `local`, sharing its settings, clock and inbox lock."""
     return ApiServer(local.settings, local.clock, remote=True, inbox_lock=local.inbox_lock,
-                     start_lock=local.start_lock, lab=local.lab)
+                     start_lock=local.start_lock, lab=local.lab, shared=local)
 
 
 def _write_private(path: Path, text: str) -> None:

@@ -570,6 +570,10 @@ class History:
             if store is not None:
                 store.close()
 
+    def latest_past_day(self, today: date) -> date | None:
+        """The newest New York date before `today` with a capture folder, or None."""
+        return max((d for d in self._capture_days() if d < today), default=None)
+
     def days(self, today: date) -> api.DaysV1:
         trades, runs = self._read_db()
         dates = runs | self._capture_days() | {ny_date_of(t.closed_at) for t in trades}

@@ -55,6 +55,11 @@ def parse_bar(path: str, line: int, text: str) -> Bar:
         raise BarFileError(path, line, f"invalid JSON: {exc.msg}") from exc
     if not isinstance(record, dict):
         raise BarFileError(path, line, "record is not a JSON object")
+    return bar_from_record(path, line, record)
+
+
+def bar_from_record(path: str, line: int, record: dict[str, object]) -> Bar:
+    """The bar of one decoded line (`parse_bar` without the JSON step), refused the same way."""
     keys = set(record)
     if keys != BAR_KEYS:
         missing = sorted(BAR_KEYS - keys)

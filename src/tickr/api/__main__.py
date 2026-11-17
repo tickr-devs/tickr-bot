@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     except config_module.ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
-    server = make_server(settings)
+    server = make_server(settings, warm=True)
     print(f"tickr api on http://{settings.host}:{server.server_port}/", file=sys.stderr)
     remote = None
     if settings.remote_hosts:

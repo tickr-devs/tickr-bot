@@ -95,17 +95,66 @@ def test_a_replaced_or_shorter_file_is_read_from_the_top(log, tmp_path):
         [_record(minute=2).bar_start, _record(minute=1).bar_start]
 
 
-def test_other_days_and_archived_files_are_read_as_before(log, monkeypatch):
+def test_an_archived_todays_file_is_read_by_decision_log(log, monkeypatch):
     _append(log, _record(), _observer(minute=1))
     parsed = _counting(monkeypatch)
     cache = DecisionCache(log)
-    later = DAY + timedelta(days=1)
-    _same(cache, log, today=later)  # a past day: never cached
-    assert parsed == []
     compress(log.path(DAY))
     assert not log.path(DAY).exists()
     _same(cache, log)  # archived today's file: read by DecisionLog
     assert parsed == []
+
+
+def test_a_past_day_is_parsed_once_for_every_read(log, monkeypatch):
+    _append(log, _record(), _observer(minute=1), _record(symbol="WXYZ", minute=2))
+    parsed = _counting(monkeypatch)
+    cache = DecisionCache(log)
+    later = DAY + timedelta(days=1)
+    _same(cache, log, today=later)  # every filter, the answers of DecisionLog.records
+    assert parsed == ["ABCD", "ABCD", "WXYZ"]  # one parse of the file for all of them
+    _same(cache, log, today=later)
+    assert len(parsed) == 3
+
+
+def test_a_past_day_is_parsed_again_when_its_file_changes(log, monkeypatch):
+    _append(log, _record())
+    parsed = _counting(monkeypatch)
+    cache = DecisionCache(log)
+    later = DAY + timedelta(days=1)
+    assert len(cache.records(DAY, later)) == 1
+    _append(log, _record(symbol="WXYZ", minute=1))  # longer file
+    assert [r.symbol for r in cache.records(DAY, later)] == ["ABCD", "WXYZ"]
+    compress(log.path(DAY))  # archived: another file
+    _same(cache, log, today=later)
+    assert parsed == ["ABCD", "ABCD", "WXYZ", "ABCD", "WXYZ"]
+
+
+def test_only_the_last_past_day_asked_for_is_kept(log, monkeypatch):
+    before = DAY - timedelta(days=1)
+    _append(log, _record(), _record(symbol="WXYZ", day_offset=-1))
+    parsed = _counting(monkeypatch)
+    cache = DecisionCache(log)
+    later = DAY + timedelta(days=1)
+    cache.records(DAY, later)
+    cache.records(before, later)
+    cache.records(DAY, later)
+    assert parsed.count("ABCD") == 2  # read again after another past day was asked for
+
+
+def test_a_malformed_line_of_a_past_day_refuses_what_decision_log_refuses(log):
+    cache = DecisionCache(log)
+    _append(log, _record(), _observer(minute=1),
+            tail='{"role": "observer", "symbol": "ABCD", broken\n')
+    later = DAY + timedelta(days=1)
+    for f in FILTERS:
+        try:
+            expected = log.records(DAY, **f)
+        except RecordFileError as exc:
+            with pytest.raises(RecordFileError) as refused:
+                cache.records(DAY, later, **f)
+            assert (refused.value.line, str(refused.value)) == (exc.line, str(exc))
+        else:
+            assert cache.records(DAY, later, **f) == expected, f
 
 
 def test_a_malformed_line_refuses_what_decision_log_refuses(log):

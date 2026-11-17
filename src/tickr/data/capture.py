@@ -59,7 +59,7 @@ from tickr.data.base import (
     ScreenerSession,
     StreamNotice,
 )
-from tickr.replay.bars import BAR_KEYS, parse_bar
+from tickr.replay.bars import BAR_KEYS, bar_from_record
 from tickr.replay.errors import BarFileError
 from tickr.types import Bar, Quote
 
@@ -338,7 +338,7 @@ def _captured_bar(captured: Path, number: int, text: str) -> Bar:
         raise CaptureError(f"{captured}:{number}: not a captured bar record")
     bar_only = {k: record[k] for k in BAR_KEYS}
     try:
-        return parse_bar(str(captured), number, json.dumps(bar_only))
+        return bar_from_record(str(captured), number, bar_only)
     except BarFileError as exc:
         raise CaptureError(str(exc)) from exc
 
@@ -426,10 +426,11 @@ class CapturedBarsDays:
     day's trades and bars, the observers' and the skipped signals' simulations, a trade's
     what-if). Today's file is read on as the bot appends (`_BarsTail`): re-reading all of it
     whenever it grew cost the API tens of seconds of CPU per request on a busy day. Holds the
-    file read with `open_tail` (today's) and the last other one. Thread safe."""
+    file read with `open_tail` (today's) and the last other one. Thread safe: each of the two has
+    its own lock, so today's reads never wait for a past day's file being parsed."""
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._locks = {"_open": threading.Lock(), "_closed": threading.Lock()}
         self._open: _BarsTail | None = None  # today's file, still being appended to
         self._closed: _BarsTail | None = None  # the last other day's file read
 
@@ -437,8 +438,8 @@ class CapturedBarsDays:
         """Each symbol's bars of `captured` (plain or archived), oldest first, one per start:
         what `read_captured_bars` keeps. Raises CaptureError (a malformed line: the file is
         read anew next time) or OSError."""
-        with self._lock:
-            slot = "_open" if open_tail else "_closed"
+        slot = "_open" if open_tail else "_closed"
+        with self._locks[slot]:
             tail: _BarsTail | None = getattr(self, slot)
             if tail is None or tail.captured != captured:
                 tail = _BarsTail(captured)

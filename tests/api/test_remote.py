@@ -416,3 +416,9 @@ def test_pair_waits_for_the_pairing_lock(remote_settings):
     os.close(fd)
     worker.join(5)
     assert remote_settings.pairing_code_path.exists()
+
+
+def test_the_phones_listener_reads_through_the_local_caches(local_api, remote_api):
+    for name in ("captured_bars", "history", "decisions", "observer_results", "screener_chips",
+                 "discovery_day", "skipped", "warmer"):
+        assert getattr(remote_api, name) is getattr(local_api, name), name
