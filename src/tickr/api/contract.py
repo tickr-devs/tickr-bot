@@ -872,6 +872,25 @@ class SessionTimesV1:
     extended_close: datetime
 
 
+class SessionKind(StrEnum):
+    """The kind of a regular session in the session calendar."""
+
+    REGULAR = "regular"
+    HALF_DAY = "half_day"  # the calendar's early close
+
+
+@dataclass(frozen=True)
+class NextSessionV1:
+    """The next regular session that opens after `served_at`, from the session calendar (the one
+    the bot and preflight read): display only, for the apps' "Opens in" countdown overnight and
+    over weekends and holidays. A half day is listed as one whether or not the bot trades it."""
+
+    day: date
+    regular_open: datetime
+    regular_close: datetime
+    kind: SessionKind
+
+
 @dataclass(frozen=True)
 class JournalRowV1:
     """One row of the bot's durable journal. `kind` is the bot's own event name
@@ -1044,7 +1063,8 @@ class JobsV1:
     """GET /jobs: when the bot's scheduled work last ran and runs next, for the Settings jobs
     strip. Read-only: from the status file, the database (read-only), config and calendar.
     `bot_state` and `bot_started_at` are null without a valid status file; `session` is null
-    with `session_cause` when today has no session the bot trades."""
+    with `session_cause` when today has no session the bot trades; `next_session` is the next
+    regular session that opens after `served_at`."""
 
     served_at: datetime
     bot_state: BotState | None
@@ -1059,6 +1079,11 @@ class JobsV1:
     api_version: int = _const(API_VERSION)
 
     session_cause_codes: tuple[ReasonV1, ...] = _reasons_of("session_cause")
+    # The next regular session after `served_at`; null with `next_session_cause` when the
+    # calendar cannot answer (not covered, invalid, none within [api] next_session_search_days).
+    next_session: NextSessionV1 | None = _added_later(None)
+    next_session_cause: str | None = _added_later(None)
+    next_session_cause_codes: tuple[ReasonV1, ...] = _reasons_of("next_session_cause")
 
 # ---------------------------------------------------------------- lab replay
 

@@ -79,5 +79,13 @@
     "cause_codes": []
   },
   "api_version": 1,
-  "session_cause_codes": []
+  "session_cause_codes": [],
+  "next_session": {
+    "day": "2026-11-17",
+    "regular_open": "2026-11-17T14:30:00.000Z",
+    "regular_close": "2026-11-17T21:00:00.000Z",
+    "kind": "regular"
+  },
+  "next_session_cause": null,
+  "next_session_cause_codes": []
 }

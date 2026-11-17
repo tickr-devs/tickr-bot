@@ -159,3 +159,66 @@ def test_nightly_fetch_outcome_is_read_as_written(tmp_path):
     assert refused.last_day is None and refused.cause == "refused during the regular session"
     (tmp_path / "nightly.json").write_text("{")
     assert _nightly(tmp_path / "nightly.json").cause.startswith("nightly.json unreadable")
+
+
+def _next(settings, now):
+    return jobs_document(settings.jobs, _response(settings, now, status(written_at=now)))
+
+
+@pytest.mark.parametrize(("now", "day", "kind"), [
+    # Inside Monday's session the next to open is Tuesday's; Monday before its open is Monday's.
+    (T0, date(2026, 11, 17), contract.SessionKind.REGULAR),
+    (datetime(2026, 11, 16, 12, 0, tzinfo=UTC), MONDAY, contract.SessionKind.REGULAR),
+    # A weekday evening: tomorrow.
+    (datetime(2026, 11, 17, 23, 30, tzinfo=UTC), date(2026, 11, 18), contract.SessionKind.REGULAR),
+    # Friday after the close: Monday.
+    (datetime(2026, 11, 20, 22, 0, tzinfo=UTC), date(2026, 11, 23), contract.SessionKind.REGULAR),
+    # The evening before Thanksgiving (closed): the day after, a half day (13:00 close).
+    (datetime(2026, 11, 25, 22, 0, tzinfo=UTC), date(2026, 11, 27), contract.SessionKind.HALF_DAY),
+    # Christmas Eve's half day after its close: past Christmas and the weekend, to Monday.
+    (datetime(2026, 12, 24, 19, 0, tzinfo=UTC), date(2026, 12, 28), contract.SessionKind.REGULAR),
+    # New Year's Eve after the close: past New Year's Day and the weekend, in the next year's file.
+    (datetime(2026, 12, 31, 22, 0, tzinfo=UTC), date(2027, 1, 4), contract.SessionKind.REGULAR),
+])
+def test_next_session_is_the_next_regular_open_after_now(cfg, now, day, kind):
+    settings = settings_from_config(cfg)
+    jobs = _next(settings, now)
+    assert jobs.next_session_cause is None
+    nxt = jobs.next_session
+    assert nxt is not None and (nxt.day, nxt.kind) == (day, kind) and nxt.regular_open > now
+    assert nxt.regular_open == datetime.combine(day, datetime.min.time(), tzinfo=UTC).replace(
+        hour=14, minute=30)
+    close_hour = 18 if kind is contract.SessionKind.HALF_DAY else 21
+    assert nxt.regular_close.astimezone(UTC).hour == close_hour
+
+
+def test_half_day_is_listed_even_when_the_bot_does_not_trade_it(cfg):
+    off = settings_from_config(replace(cfg, session=replace(cfg.session, half_days_enabled=False)))
+    jobs = _next(off, datetime(2026, 11, 25, 22, 0, tzinfo=UTC))
+    assert jobs.next_session is not None
+    assert jobs.next_session.kind is contract.SessionKind.HALF_DAY
+
+
+def test_no_next_session_when_the_calendar_cannot_answer(cfg, tmp_path):
+    for later in (tmp_path / "config" / "calendar").glob("us-equity-2027*.json"):
+        later.unlink()
+    settings = settings_from_config(cfg)
+    # New Year's Eve after the close, with no 2027 calendar file: not covered.
+    jobs = _next(settings, datetime(2026, 12, 31, 22, 0, tzinfo=UTC))
+    assert jobs.next_session is None
+    assert jobs.next_session_cause == "OUT_OF_COVERAGE: 2027-01-01 is not covered by any file"
+    body = contract.to_jsonable(jobs)
+    assert body["next_session_cause_codes"] == [{"code": "calendar_not_covered",
+                                                 "params": {"day": "2027-01-01"}}]
+
+
+def test_no_next_session_within_the_search_days(cfg):
+    short = replace(cfg, api=replace(cfg.api, next_session_search_days=1))
+    settings = settings_from_config(short)
+    # Friday evening: Saturday is the last day looked at.
+    jobs = _next(settings, datetime(2026, 11, 20, 22, 0, tzinfo=UTC))
+    assert jobs.next_session is None
+    assert jobs.next_session_cause == "no regular session within 1 days after 2026-11-20"
+    body = contract.to_jsonable(jobs)
+    assert body["next_session_cause_codes"] == [{"code": "no_next_session",
+                                                 "params": {"days": "1", "day": "2026-11-20"}}]

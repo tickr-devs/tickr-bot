@@ -405,6 +405,10 @@ lab_replay_outside_session_only = true
 # true = GET /trades/whatif (another strategy version replayed on one trade's day) is refused during the regular
 # session of a trading day (calendar), to keep the CPU for the bot; read by the api server.
 trade_whatif_outside_session_only = true
+# Days ahead of today (New York) GET /jobs looks in the session calendar for the next regular session, the apps'
+# "Opens in" overnight and over weekends and holidays; none within them = null with a cause (the longest US closure
+# run is a few days); read by the api server.
+next_session_search_days = 10
 
 [market_data]
 # Seconds between discovery passes in the regular session, counted from the start of the minute the pass began, so with

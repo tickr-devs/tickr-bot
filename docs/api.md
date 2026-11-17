@@ -250,7 +250,8 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
 - fast movers: `no_fast_mover_rules`;
 - the session calendar and the day's session: `calendar_weekend` {day}, `calendar_holiday`
   {day}, `calendar_not_covered` {day}, `calendar_invalid` {detail}, `calendar_naive_time`
-  {detail}, `calendar_invalid_offset` {detail}, `half_day_off` {day};
+  {detail}, `calendar_invalid_offset` {detail}, `half_day_off` {day}, `no_next_session`
+  {days, day};
 - jobs: `no_database`, `database_unreadable` {error}, `no_backup`, `nightly_never_ran`,
   `nightly_file_unreadable` {error}; the nightly fetch's own refusals `nightly_in_session`,
   `nightly_low_disk` {free_mb, min_mb}, `nightly_no_pool`, `nightly_pool_empty`,
@@ -672,6 +673,14 @@ reads and writes nothing for it.
   `half_days_enabled = false`, a calendar that does not cover today). `premarket_open` and
   `extended_close` were added after version 1 shipped: a reader takes a session without them as
   having unknown extended hours; the bot always writes them.
+- `next_session`: the next regular session that opens after `served_at`, from the same session
+  calendar: `{day, regular_open, regular_close, kind}`, `kind` `regular` or `half_day` (the
+  calendar's early close; listed whatever `half_days_enabled` says, since it is shown, not
+  traded). Display only, for the apps' "Opens in" overnight and over weekends and holidays. Null
+  with `next_session_cause` (and `next_session_cause_codes`) when the calendar cannot answer: a
+  day not covered by any calendar file, an invalid file, or no session within `[api]
+  next_session_search_days` days (`no_next_session`). Added after version 1 shipped (with its
+  cause fields): a reader takes a document without it as null.
 - `nightly_fetch`: the nightly backtest-data refresh's last outcome, from its `nightly.json`
   (docs/backtest.md, "Nightly"): `finished_at`, `last_day` (where the Lab's data now ends),
   `new_sessions` added (0 = already up to date) and `cause` when it was refused or stopped (the

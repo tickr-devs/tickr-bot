@@ -234,6 +234,7 @@ class ApiConfig:
     lab_replay_niceness: int
     lab_replay_outside_session_only: bool
     trade_whatif_outside_session_only: bool
+    next_session_search_days: int
 
 
 @dataclass(frozen=True)
@@ -651,6 +652,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if built["api"].account_stale_seconds <= built["orders"].reconcile_interval_seconds:
         raise ConfigError("[api] account_stale_seconds must be above [orders] "
                           "reconcile_interval_seconds (the account file is written per reconcile)")
+    if built["api"].next_session_search_days < 1:
+        raise ConfigError("[api] next_session_search_days must be at least 1 (tomorrow)")
     chart: ChartConfig = built["chart"]
     if chart.requests_per_minute < 1 or chart.bars_per_request < 1:
         raise ConfigError("[chart] requests_per_minute and bars_per_request must be at least 1")

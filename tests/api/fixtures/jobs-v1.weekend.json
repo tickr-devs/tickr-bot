@@ -83,5 +83,13 @@
         "day": "2026-11-21"
       }
     }
-  ]
+  ],
+  "next_session": {
+    "day": "2026-11-23",
+    "regular_open": "2026-11-23T14:30:00.000Z",
+    "regular_close": "2026-11-23T21:00:00.000Z",
+    "kind": "regular"
+  },
+  "next_session_cause": null,
+  "next_session_cause_codes": []
 }

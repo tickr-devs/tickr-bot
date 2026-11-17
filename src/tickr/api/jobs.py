@@ -17,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from tickr.api import contract as api
-from tickr.calendar import CalendarRefused, SessionCalendar
+from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.config import Config
 from tickr.runtime.launchd import NIGHTLY_OUTCOME_FILE, LocalTime, schedule
 from tickr.runtime.watch import BACKUP, BACKUP_FAILED
@@ -38,6 +38,7 @@ class JobsSettings:
     half_days_enabled: bool
     launchd: tuple[api.LaunchdJobV1, ...]
     nightly_outcome: Path  # the nightly job's nightly.json
+    next_session_search_days: int  # how far ahead the next regular session is looked for
 
     @classmethod
     def from_config(cls, config: Config) -> JobsSettings:
@@ -54,7 +55,8 @@ class JobsSettings:
                      api.LaunchdJobV1("bot", _hhmm(plan.bot), days),
                      api.LaunchdJobV1("watchdog", _hhmm(plan.watchdog), days),
                      api.LaunchdJobV1("nightly-fetch", _hhmm(plan.nightly), days)),
-            nightly_outcome=config.root / config.runtime.nightly_fetch_out / NIGHTLY_OUTCOME_FILE)
+            nightly_outcome=config.root / config.runtime.nightly_fetch_out / NIGHTLY_OUTCOME_FILE,
+            next_session_search_days=config.api.next_session_search_days)
 
 
 def _hhmm(at: LocalTime) -> str:
@@ -73,6 +75,7 @@ def jobs_document(settings: JobsSettings, response: api.StatusResponseV1) -> api
         next_read = last_read + timedelta(seconds=float(settings.reconcile_interval_seconds))
     started, backup = _from_database(settings, status.run_id if status is not None else None)
     session, cause = _session(settings, now)
+    next_session, next_cause = _next_session(settings, now)
     return api.JobsV1(
         served_at=now,
         bot_state=status.bot_state if status is not None else None,
@@ -84,6 +87,8 @@ def jobs_document(settings: JobsSettings, response: api.StatusResponseV1) -> api
         session=session,
         session_cause=cause,
         nightly_fetch=_nightly(settings.nightly_outcome),
+        next_session=next_session,
+        next_session_cause=next_cause,
     )
 
 
@@ -149,3 +154,32 @@ def _session(settings: JobsSettings,
         return None, f"no session {day.ny_date}: half day, half_days_enabled = false"
     return api.SessionTimesV1(day.ny_date, day.regular_open, times.last_entry, times.flatten,
                               day.regular_close, day.premarket_open, day.extended_close), None
+
+
+# A day the calendar answers with no session: the search for the next one goes on past it.
+_NO_SESSION = frozenset({CalendarCause.WEEKEND, CalendarCause.HOLIDAY})
+
+
+def _next_session(settings: JobsSettings,
+                  now: datetime) -> tuple[api.NextSessionV1 | None, str | None]:
+    """The first regular session in the calendar whose open is after `now`, looked for over
+    `[api] next_session_search_days` days from today; any other calendar refusal is the cause.
+    Display only: a half day is listed as one whether or not the bot trades it."""
+    try:
+        calendar = SessionCalendar.load(settings.calendar)
+        today = ny_date_of(now)
+        for ahead in range(settings.next_session_search_days + 1):
+            try:
+                day = calendar.day(today + timedelta(days=ahead))
+            except CalendarRefused as refused:
+                if refused.cause in _NO_SESSION:
+                    continue
+                raise
+            if day.regular_open > now:
+                kind = api.SessionKind.HALF_DAY if day.half_day else api.SessionKind.REGULAR
+                return api.NextSessionV1(day.ny_date, day.regular_open, day.regular_close,
+                                         kind), None
+    except CalendarRefused as exc:
+        return None, str(exc)
+    return None, (f"no regular session within {settings.next_session_search_days} days after "
+                  f"{today.isoformat()}")

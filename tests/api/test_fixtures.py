@@ -74,6 +74,7 @@ from tickr.api.contract import (
     LatestSizeV1,
     LaunchdJobV1,
     MoversV1,
+    NextSessionV1,
     NightlyFetchJobV1,
     ObserverDecisionV1,
     ObserversV1,
@@ -84,6 +85,7 @@ from tickr.api.contract import (
     PriceAfterV1,
     ReconcileJobV1,
     RiskSettings,
+    SessionKind,
     SessionSettings,
     SessionTimesV1,
     SettingDifferenceV1,
@@ -282,7 +284,12 @@ def documents() -> dict[str, object]:
                 datetime(2026, 11, 17, 1, 0, tzinfo=UTC)), None,
             # Last night added Friday 2026-11-13 to the Lab's data.
             NightlyFetchJobV1(datetime(2026, 11, 14, 1, 42, 7, tzinfo=UTC), DAY - timedelta(days=3),
-                              1, None)),
+                              1, None),
+            # Inside Monday's session the next one to open is Tuesday's.
+            next_session=NextSessionV1(DAY + timedelta(days=1),
+                                       datetime(2026, 11, 17, 14, 30, tzinfo=UTC),
+                                       datetime(2026, 11, 17, 21, 0, tzinfo=UTC),
+                                       SessionKind.REGULAR)),
         # A Saturday with the bot stopped: no session, the last backup failed after Friday's.
         "jobs-v1.weekend": JobsV1(
             T0 + timedelta(days=5), BotState.STOPPED, True, None,
@@ -294,7 +301,25 @@ def documents() -> dict[str, object]:
             NightlyFetchJobV1(T0 + timedelta(days=4, hours=21), None, 0,
                               "stopped at 2026-11-23T12:30:00+00:00, before the next session "
                               "([backtest] nightly_stop_minutes_before_open); current is "
-                              "unchanged")),
+                              "unchanged"),
+            next_session=NextSessionV1(DAY + timedelta(days=7),
+                                       datetime(2026, 11, 23, 14, 30, tzinfo=UTC),
+                                       datetime(2026, 11, 23, 21, 0, tzinfo=UTC),
+                                       SessionKind.REGULAR)),
+        # New Year's Eve after the close on a Mac with no calendar file for 2027 yet.
+        "jobs-v1.no-next-session": JobsV1(
+            datetime(2026, 12, 31, 22, 0, tzinfo=UTC), BotState.STOPPED, False, None,
+            ReconcileJobV1(Decimal("10"), None, None),
+            BackupJobV1(None, None, None, "no backup recorded yet"),
+            _LAUNCHD, SessionTimesV1(
+                date(2026, 12, 31), datetime(2026, 12, 31, 14, 30, tzinfo=UTC),
+                datetime(2026, 12, 31, 20, 45, tzinfo=UTC),
+                datetime(2026, 12, 31, 20, 55, tzinfo=UTC),
+                datetime(2026, 12, 31, 21, 0, tzinfo=UTC),
+                datetime(2026, 12, 31, 9, 0, tzinfo=UTC),
+                datetime(2027, 1, 1, 1, 0, tzinfo=UTC)), None,
+            NightlyFetchJobV1(None, None, None, "the nightly fetch has not run yet"),
+            next_session_cause="OUT_OF_COVERAGE: 2027-01-01 is not covered by any file"),
         # The Overview's journal card: the latest rows, oldest first; "line #731".
         "journal-v1": JournalV1(731, (
             JournalRowV1(728, T0 - timedelta(seconds=9), "order-intent", "ABCD"),
