@@ -338,7 +338,7 @@ def documents() -> dict[str, object]:
             JournalRowV1(731, T0, "stop-from-fill", "ABCD")), None),
         "journal-v1.empty": JournalV1(None, (), "the bot has not created its database yet"),
         # The apps' journal of the day: a trade from entry to its stop's fill, then the
-        # operator's entry stop.
+        # operator's entry stop, and a command refused while the bot stops (its cause in codes).
         "day-events-v1": DayEventsV1(T0.date(), (
             DayEventV1(700, T0 - timedelta(hours=1), DayEventKind.BOT_STARTED, None, None, None,
                        None, None, "price-action@1", None),
@@ -355,7 +355,9 @@ def documents() -> dict[str, object]:
             DayEventV1(746, T0 - timedelta(seconds=2), DayEventKind.TRADE_CLOSED, "ABCD", None,
                        None, None, None, None, "stopped-out"),
             DayEventV1(750, T0, DayEventKind.FENCE_SET, None, None, None, None, None,
-                       "entry-stop", "operator")), None),
+                       "entry-stop", "operator"),
+            DayEventV1(752, T0, DayEventKind.COMMAND_REFUSED, None, None, None, None, None,
+                       "flatten", "read after stop-bot cmd-7: the bot is stopping")), None),
         "day-events-v1.empty": DayEventsV1(
             T0.date(), (), "the bot has not created its database yet"),
         # Saturday: the last 20 sessions replayed for the active version, then compared with

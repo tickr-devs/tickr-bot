@@ -11,7 +11,8 @@
       "price": null,
       "stop_price": null,
       "subject": "price-action@1",
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "seq": 729,
@@ -23,7 +24,8 @@
       "price": "4.12",
       "stop_price": "3.95",
       "subject": null,
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "seq": 733,
@@ -35,7 +37,8 @@
       "price": "4.11",
       "stop_price": null,
       "subject": null,
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "seq": 736,
@@ -47,7 +50,8 @@
       "price": null,
       "stop_price": "3.95",
       "subject": null,
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "seq": 741,
@@ -59,7 +63,8 @@
       "price": null,
       "stop_price": "4.02",
       "subject": null,
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "seq": 745,
@@ -71,7 +76,8 @@
       "price": "4.01",
       "stop_price": null,
       "subject": null,
-      "cause": null
+      "cause": null,
+      "cause_codes": []
     },
     {
       "seq": 746,
@@ -83,7 +89,8 @@
       "price": null,
       "stop_price": null,
       "subject": null,
-      "cause": "stopped-out"
+      "cause": "stopped-out",
+      "cause_codes": []
     },
     {
       "seq": 750,
@@ -95,7 +102,28 @@
       "price": null,
       "stop_price": null,
       "subject": "entry-stop",
-      "cause": "operator"
+      "cause": "operator",
+      "cause_codes": []
+    },
+    {
+      "seq": 752,
+      "at": "2026-11-16T15:00:00.123Z",
+      "kind": "command-refused",
+      "symbol": null,
+      "leg": null,
+      "quantity": null,
+      "price": null,
+      "stop_price": null,
+      "subject": "flatten",
+      "cause": "read after stop-bot cmd-7: the bot is stopping",
+      "cause_codes": [
+        {
+          "code": "command_after_stop",
+          "params": {
+            "command": "cmd-7"
+          }
+        }
+      ]
     }
   ],
   "cause": null,

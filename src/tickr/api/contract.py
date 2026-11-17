@@ -1038,6 +1038,16 @@ class DayEventV1:
     subject: str | None
     cause: str | None
 
+    # The codes of a command's cause (the bot's prose, as GET /status's command records); the
+    # other kinds' causes are codes already (an exit reason, how the bot stopped): empty.
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("command_cause")
+
+    @property
+    def command_cause(self) -> str | None:
+        """`cause` of a command event; None for every other kind."""
+        commands = (DayEventKind.COMMAND_DONE, DayEventKind.COMMAND_REFUSED)
+        return self.cause if self.kind in commands else None
+
 
 @dataclass(frozen=True)
 class DayEventsV1:
