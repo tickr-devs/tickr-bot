@@ -147,7 +147,8 @@ LAB_DAYS = tuple(DAY - timedelta(days=d) for d in (3, 4, 5, 6, 7, 10, 11))
 def _response(st, age, stale, cause=None) -> StatusResponseV1:
     return StatusResponseV1(served_at=T0 + timedelta(seconds=2), status=st, age_seconds=age,
                             stale=stale, unavailable_cause=cause,
-                            summary=contract.summarize(st, age, stale, cause), poll_seconds=POLL)
+                            summary=contract.summarize(st, age, stale, cause), poll_seconds=POLL,
+                            api_started_at=T0 - timedelta(hours=1))
 
 
 def documents() -> dict[str, object]:

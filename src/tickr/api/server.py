@@ -333,6 +333,8 @@ class ApiServer(ThreadingHTTPServer):
                  lab: LabReplay | None = None) -> None:
         self.settings = settings
         self.clock = clock
+        # GET /status api_started_at: clients read /settings again when it changes.
+        self.started_at = clock()
         self.remote = remote
         # Shared with the other listener so both count the inbox under one lock.
         self.inbox_lock = inbox_lock or threading.Lock()
@@ -393,6 +395,7 @@ class ApiServer(ThreadingHTTPServer):
             unavailable_cause=cause,
             summary=contract.summarize(status, age, stale, cause),
             poll_seconds=self.settings.poll_seconds,
+            api_started_at=self.started_at,
         )
 
     def account_response(self) -> AccountResponseV1 | ErrorV1:

@@ -450,6 +450,9 @@ class StatusResponseV1:
     summary: str  # the single entry-blocking reason in plain words, or "Entries allowed."
     poll_seconds: Decimal
     api_version: int = _const(API_VERSION)
+    # When this API process started (added after version 1 shipped). Its settings are fixed for
+    # the process's life, so clients read GET /settings again when this changes.
+    api_started_at: datetime | None = _added_later(None)
 
     unavailable_cause_codes: tuple[ReasonV1, ...] = _reasons_of("unavailable_cause")
 

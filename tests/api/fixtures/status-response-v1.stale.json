@@ -140,5 +140,6 @@
   "summary": "Bot status is 42.500 s old: the bot may be down. Do not trust the rest of this page.",
   "poll_seconds": "3",
   "api_version": 1,
+  "api_started_at": "2026-11-16T14:00:00.123Z",
   "unavailable_cause_codes": []
 }

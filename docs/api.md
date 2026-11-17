@@ -141,7 +141,9 @@ version, unreadable capture file).
 missing, invalid or dated in the future. `age_seconds` = `served_at - status.written_at`.
 `stale` is true when the age exceeds `[api] status_stale_seconds`. `summary` is the one line to
 show first, in plain words: the single entry-blocking reason, "Entries allowed.", or why the status
-cannot be trusted. Clients should poll every `poll_seconds`.
+cannot be trusted. Clients should poll every `poll_seconds`. `api_started_at` (added after
+version 1 shipped; `null` from an older API) is when the API process started: its `/settings`
+are fixed for the process's life, so clients read `/settings` again when it changes.
 
 `entry_block` is `null` only when admission could take an entry now. Its `cause` is a stable
 code and `attention` says how to show it. `attention: true` is a real block (trading gate,

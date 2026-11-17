@@ -157,6 +157,8 @@ def test_status_served_with_age(api, settings):
     assert body["summary"] == status().entry_block.text
     assert body["poll_seconds"] == format(settings.poll_seconds, "f")
     assert contract.from_jsonable(contract.StatusResponseV1, body).status == status()
+    # The API's own start, so the apps read /settings again after a restart.
+    assert body["api_started_at"] == contract.to_jsonable(server.started_at)
     assert errors(schema("status-response-v1"), body) == []
 
 
