@@ -83,8 +83,8 @@ half_days_enabled = false
 # Extended sessions (owner 2026-11-16). Each enabled session is its own trading window that flattens itself before it
 # ends: no position is carried into the next session or overnight. Orders in them are LIMIT only with Webull session ALL.
 # The offsets and sizes below are proposals awaiting the owner's confirmation before either session is enabled.
-# Off until the bot-watched protection outside the regular session is built (Webull takes no stop there: F7 in
-# docs/webull-facts.md; owner decision 2026-11-16 in docs/decisions.md).
+# config.load refuses either *_enabled = true until the bot-watched protection outside the regular session is built
+# (Webull takes no stop there: F7 in docs/webull-facts.md; owner decision 2026-11-16 in docs/decisions.md).
 # Trade in the pre-market (calendar premarket_open to regular_open, 04:00-09:30 ET); read by risk.timers.
 premarket_enabled = false
 # Pre-market: first entry this many minutes after the pre-market opens (05:00 ET: the first hour is the thinnest); read by risk.timers.

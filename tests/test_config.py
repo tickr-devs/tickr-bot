@@ -480,3 +480,18 @@ def test_discovery_bars_reserve_must_leave_discovery_some_requests(tmp_path, res
                   f"discovery_bars_reserve_requests = {reserve}", BOT.read_text("utf-8"))
     with pytest.raises(config.ConfigError, match="discovery_bars_reserve_requests"):
         config.load(_copy(tmp_path, text))
+
+
+@pytest.mark.parametrize("key, value, match", [
+    ("premarket_enabled", "true", "premarket_enabled = true is not supported"),
+    ("postmarket_enabled", "true", "postmarket_enabled = true is not supported"),
+    ("premarket_size_fraction", "5", "premarket_size_fraction"),
+    ("postmarket_size_fraction", "0", "postmarket_size_fraction"),
+    ("postmarket_flatten_minutes_before_close", "300", "postmarket: needs"),
+    ("premarket_flatten_minutes_before_close", "0", "premarket: needs"),
+    ("premarket_first_entry_minutes_after_open", "-1", "premarket: needs"),
+])
+def test_extended_sessions_refused_at_load(tmp_path, key, value, match):
+    text = re.sub(rf"(?m)^{key} = \S+", f"{key} = {value}", BOT.read_text("utf-8"))
+    with pytest.raises(config.ConfigError, match=match):
+        config.load(_copy(tmp_path, text))
