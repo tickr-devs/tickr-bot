@@ -45,6 +45,11 @@ max_daily_loss_usd = 5000
 # (owner 2026-11-14), but below this room entries stop and status says "daily ceiling" (a smaller trade is not worth
 # its costs; owner confirmed 2026-11-14); read by runtime.entries (strategy loss budget and status).
 min_daily_room_usd = 10
+# Oldest broker read of the day buying power an entry may rely on, seconds: before admitting an entry the bot reads
+# the account balance again when its last read is older, and refuses the entry (BUYING_POWER_UNKNOWN) when that read
+# fails; the entry's value must fit the day buying power less the entry value of the bot's open trades (owner
+# 2026-11-17: never send an order the account cannot pay for); read by runtime.entries and safety.
+buying_power_max_age_seconds = 15
 # Position slots: most open trades at once, count; a trade (working entry, position or exit in progress) takes one slot,
 # at most one trade per symbol, every trade has its own broker stop and all share the daily loss ceiling (their planned
 # losses are reserved against it). At most [market_data] stream_reserved_symbols (each position keeps a stream slot),

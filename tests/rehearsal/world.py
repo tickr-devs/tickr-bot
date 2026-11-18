@@ -16,6 +16,8 @@ from tickr.types import Bar
 CALENDAR = SessionCalendar.load(Path(__file__).resolve().parents[2] / "config" / "calendar")
 QUOTE_SIZE = Decimal(500)
 WICK = Decimal("0.05")
+# The rehearsal account's day buying power, USD: the Sandbox account's 4x on 1,000,000.
+BUYING_POWER = Decimal(4_000_000)
 
 
 def flat_session(symbol: str, day: date, price: Decimal, volume: Decimal) -> list[Bar]:
@@ -31,4 +33,4 @@ def build_day(symbol: str, day: date, base: Decimal, volume: Decimal,
 class World(demo_world.World):
     def __init__(self, start: datetime, half_spread: Decimal = CENT) -> None:
         super().__init__(start, CALENDAR.day(ny_date_of(start)), half_spread, QUOTE_SIZE,
-                         "rehearsal")
+                         "rehearsal", demo_world.cash_account(BUYING_POWER))

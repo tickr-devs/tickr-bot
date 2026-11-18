@@ -41,7 +41,7 @@ from datetime import UTC, date, datetime, timedelta
 from datetime import time as wall_time
 from decimal import ROUND_FLOOR, Decimal
 
-from tickr.broker.base import Acknowledgement
+from tickr.broker.base import AccountBalance, Acknowledgement
 from tickr.broker.fake import FakeBroker
 from tickr.calendar import NEW_YORK, MarketDay, ny_date_of
 from tickr.data.base import (
@@ -220,8 +220,11 @@ def textured(bars: Sequence[Bar], texture: Texture) -> list[Bar]:
 
 class World:
     def __init__(self, start: datetime, market_day: MarketDay, half_spread: Decimal,
-                 quote_size: Decimal, provider: str) -> None:
+                 quote_size: Decimal, provider: str, account: AccountBalance | None = None,
+                 ) -> None:
         self.now = start
+        # What every exchange of this world answers a balance read with (None: the read fails).
+        self.account = account
         self.monotonic = 0.0
         self.market_day = market_day
         self.half_spread = half_spread
@@ -329,10 +332,21 @@ class World:
         return [b for b in self.today.get(symbol, []) if b.start <= self.now]
 
 
+def cash_account(buying_power: Decimal) -> AccountBalance:
+    """The simulated account's balance read: all cash, nothing held, `buying_power` to spend
+    (what the bot's entry admission reads)."""
+    zero = Decimal(0)
+    return AccountBalance(net_liquidation=buying_power, cash=buying_power, market_value=zero,
+                          unrealized_profit_loss=zero, day_profit_loss=zero,
+                          day_buying_power=buying_power, overnight_buying_power=buying_power,
+                          maintenance_margin=zero, margin_calls=0, day_trades_left=None)
+
+
 class Exchange(FakeBroker):
     def __init__(self, world: World) -> None:
         super().__init__()
         self.world = world
+        self.funds = world.account
         self.requests: dict[str, OrderRequest] = {}
         self.fills: list[tuple[datetime, str, Side, OrderType, Decimal, Decimal]] = []
         self.unverified_symbols: set[str] = set()

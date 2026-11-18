@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 from baseline import load_baseline
+from funded import FUNDS
 
 from tickr import config
 from tickr.broker.fake import FakeBroker
@@ -30,7 +31,13 @@ from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.config import GateResult
 from tickr.engine.core import Engine, Leg
 from tickr.observers.log import DecisionLog
-from tickr.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation, admit
+from tickr.risk.admission import (
+    AdmissionInputs,
+    AdmissionLimits,
+    BuyingPower,
+    Reconciliation,
+    admit,
+)
 from tickr.risk.ticks import round_to_tick
 from tickr.runtime.entries import (
     EntryDesk,
@@ -88,7 +95,7 @@ class Closed:
 class Rig:
     def __init__(self, path: Path, now: datetime) -> None:
         self.clock = Clock(now)
-        self.broker = FakeBroker()
+        self.broker = FakeBroker(funds=FUNDS)
         self.store = Store.open(path / "db.sqlite3", busy_timeout_seconds=0, now=self.clock)
         self.engine = Engine(self.store, self.broker, CFG, "prop0001",
                              lambda: GateResult(True, "t"),
@@ -459,5 +466,6 @@ def _admissible(now: datetime, decision, q: Quote) -> AdmissionInputs:
         own_working_orders=0, open_positions=0, working_entries=0, symbol_last_loss_at=None,
         decision=decision,
         limit_price=None, stop_price=None, setup_valid=True, quote=q,
-        realized_loss_today_usd=ZERO, open_reservations_usd=ZERO, entry_budget_available=True,
+        realized_loss_today_usd=ZERO, open_reservations_usd=ZERO,
+        buying_power=BuyingPower(D(4_000_000), now, ZERO), entry_budget_available=True,
         stop_budget_available=True)

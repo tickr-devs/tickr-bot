@@ -230,6 +230,12 @@ _REFUSAL = {
         ("", r"realized (?P<realized>" + _NUM + r") \+ reserved (?P<reserved>" + _NUM
          + r") \+ new (?P<new>" + _NUM + r") = (?P<total>" + _NUM + r") vs ceiling "
          r"(?P<ceiling>" + _NUM + r")")),
+    "BUYING_POWER_UNKNOWN": _shapes(
+        ("", r"no balance read"),
+        ("", r"balance read (?P<age>" + _NUM + r") s ago > (?P<limit>" + _NUM + r") s")),
+    "BUYING_POWER_SHORT": _shapes(
+        ("", r"value (?P<value>" + _NUM + r") > buying power (?P<buying_power>" + _NUM
+         + r") - committed (?P<committed>" + _NUM + r") = (?P<free>" + _NUM + r")")),
 }
 
 

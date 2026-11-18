@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from baseline import load_baseline
+from funded import FUNDS
 
 from tickr import config
 from tickr.broker.fake import FakeBroker
@@ -53,7 +54,7 @@ def quote(ask="10.05", age_seconds=1) -> Quote:
 
 class Desk:
     def __init__(self, tmp_path: Path, broker: FakeBroker | None = None) -> None:
-        self.broker = broker or FakeBroker()
+        self.broker = broker or FakeBroker(funds=FUNDS)
         self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
         self.engine = Engine(self.store, self.broker, CFG, "desk0001",
                              lambda: GateResult(True, "t"))
@@ -347,7 +348,7 @@ def test_cooldown_is_built_from_the_store_across_a_restart(tmp_path):
         return datetime(2026, 11, day, hh, mm, tzinfo=NEW_YORK)
 
     clock = Clock(at(13, 11, 0))
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     path = tmp_path / "db.sqlite3"
     store = Store.open(path, busy_timeout_seconds=0, now=clock)
     engine = Engine(store, broker, CFG, "run00001", lambda: GateResult(True, "t"))
@@ -410,3 +411,61 @@ def test_manual_orders_without_an_id_are_all_seen(tmp_path, monkeypatch):
     assert record.admission == "refused" and record.refusal_cause.startswith("FOREIGN_EXPOSURE")
     other = desk.decide(decision(symbol="QQQ"), replace(quote(), symbol="QQQ"))
     assert other.admission == "taken", other.refusal_cause
+
+
+def _later(desk: Desk, seconds: float) -> tuple[datetime, Quote]:
+    """An instant `seconds` after NOW with the broker read and a quote fresh at it."""
+    at = NOW + timedelta(seconds=seconds)
+    desk.read_at = at
+    return at, replace(quote(), provider_time=at, receipt_time=at)
+
+
+def test_a_failing_balance_read_is_tried_once_per_max_age_not_per_decision(tmp_path):
+    """Whatever its outcome, the desk tries the balance at most once per
+    `buying_power_max_age_seconds`: ten admissible entries while the read fails cost one
+    request and all refuse BUYING_POWER_UNKNOWN; past that age it tries again."""
+    desk = Desk(tmp_path, FakeBroker())  # no funds: every balance read fails
+    records = [desk.decide(decision()) for _ in range(10)]
+    assert desk.broker.balance_reads == 1
+    assert {r.refusal_cause for r in records} == {"BUYING_POWER_UNKNOWN: no balance read"}
+    max_age = float(CFG.risk.buying_power_max_age_seconds)
+    at, q = _later(desk, max_age / 2)
+    assert desk.decide(decision(), q=q, now=at).refusal_cause.startswith("BUYING_POWER_UNKNOWN")
+    assert desk.broker.balance_reads == 1  # tried less than the age ago: no request
+    desk.broker.funds = FUNDS
+    at, q = _later(desk, max_age)
+    assert desk.decide(decision(), q=q, now=at).admission == "taken"
+    assert desk.broker.balance_reads == 2
+    assert desk.broker.sent  # only the admitted entry was sent
+
+
+def test_no_balance_read_for_a_decision_another_check_refuses(tmp_path):
+    """The balance is read only for an entry every other check admits: decisions refused by
+    the price window or by full slots cost no request, even with an old, failing read."""
+    desk = Desk(tmp_path)
+    for _ in range(5):
+        record = desk.decide(decision(), q=quote(ask="10.50"))
+        assert record.refusal_cause.startswith("PRICE_OUTSIDE_WINDOW")
+    assert desk.broker.balance_reads == 0
+    assert desk.decide(decision()).admission == "taken"
+    assert desk.broker.balance_reads == 1
+    desk.broker.funds = None
+    at, q = _later(desk, float(CFG.risk.buying_power_max_age_seconds) * 2)
+    for _ in range(10):  # the one slot is taken
+        record = desk.decide(decision(symbol="XYZ"), q=replace(q, symbol="XYZ"), now=at)
+        assert record.refusal_cause.startswith("POSITION_LIMIT_REACHED")
+    assert desk.broker.balance_reads == 1
+
+
+def test_an_entry_the_account_cannot_pay_for_is_refused_and_nothing_is_sent(tmp_path):
+    desk = Desk(tmp_path, FakeBroker(funds=replace(FUNDS, day_buying_power=D(100))))
+    record = desk.decide(decision())  # 10 x 10.10 = 101
+    assert record.refusal_cause.startswith("BUYING_POWER_SHORT")
+    assert desk.broker.sent == []
+
+
+def test_open_trades_entry_value_is_taken_off_the_buying_power(tmp_path):
+    desk = Desk(tmp_path)
+    assert desk.decide(decision()).admission == "taken"
+    later = desk.desk._inputs(decision(symbol="XYZ"), quote(), NOW).buying_power
+    assert later.committed_usd == D("101.00")  # 10 x 10.10

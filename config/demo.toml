@@ -41,6 +41,9 @@ answer_within_seconds = 10
 [market]
 # Half of the bid/ask spread of every simulated quote, USD.
 half_spread_usd = "0.01"
+# Day buying power the simulated account reports on every balance read, USD (the bot refuses an entry its buying
+# power cannot pay for); the Sandbox account's 4x intraday buying power on 1,000,000 USD.
+buying_power_usd = "4000000"
 # Bid and ask size of every simulated quote, shares.
 quote_size_shares = "500"
 # How far each simulated bar's high and low stick out beyond its open and close, USD.

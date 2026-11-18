@@ -1114,7 +1114,8 @@ decision file keeps the text):
   `NOTIONAL_OVER_CAP` `{notional, cap}`; `PLANNED_LOSS_OVER_LIMIT` `{planned_loss, limit}`;
   `DAILY_MONEY_UNKNOWN` `{missing}`; `DAILY_CEILING` `{room, ceiling, realized, reserved,
   min_room}` (room below the minimum) or `{realized, reserved, new, total, ceiling}` (the new
-  trade would cross the ceiling); `GATE_CLOSED` `{gate, ...}` (the gate's code and params, as
+  trade would cross the ceiling); `BUYING_POWER_UNKNOWN` `{}` (no balance read) or `{age,
+  limit}`; `BUYING_POWER_SHORT` `{value, buying_power, committed, free}`; `GATE_CLOSED` `{gate, ...}` (the gate's code and params, as
   `trading_gate` above). Every other code: `{}`.
 - A cause that is not exactly one of the shapes admission and the entry path write (no `: `,
   an unknown code, a detail of a timed code that does not match, or a detail of any other code

@@ -50,6 +50,7 @@ from tickr.calendar import CalendarRefused, SessionCalendar, ny_date_of
 from tickr.demo.scenario import DemoCommand, Scenario, SymbolPlan
 from tickr.demo.world import (
     World,
+    cash_account,
     daily_history,
     day_bars,
     flat_bars,
@@ -228,7 +229,7 @@ class Session:
         listed_from = {symbol: ny(self.day, at) for symbol, at in listed}
         market_day = self.calendar.day(self.day)
         world = World(ny(self.day, start or s.bot_start), market_day, s.half_spread, s.quote_size,
-                      s.provider)
+                      s.provider, cash_account(s.buying_power))
         for plan in plans:
             history = [b for d in self.history_days for b in textured(flat_bars(
                 plan.symbol, self.calendar.day(d), plan.base, s.history_volume), s.texture)]

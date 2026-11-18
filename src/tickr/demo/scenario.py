@@ -110,6 +110,7 @@ class Scenario:
     clock: str
     live_until: str
     half_spread: Decimal
+    buying_power: Decimal
     quote_size: Decimal
     wick: Decimal
     history_volume: Decimal
@@ -387,9 +388,9 @@ def load(path: Path) -> Scenario:
         "root_dir", "environment", "strategy", "observers", "max_open_positions", "provider",
         "bot_start", "past_stop", "clock", "live_until", "answer_within_seconds"})
     market = _keys("[market]", top["market"], {
-        "half_spread_usd", "quote_size_shares", "wick_usd", "history_volume", "texture_drift",
-        "texture_pull", "texture_wick", "texture_move", "texture_move_cap", "texture_volume",
-        "chart_days", "chart_daily_move", "chart_daily_gap", "chart_daily_wick"})
+        "half_spread_usd", "buying_power_usd", "quote_size_shares", "wick_usd", "history_volume",
+        "texture_drift", "texture_pull", "texture_wick", "texture_move", "texture_move_cap",
+        "texture_volume", "chart_days", "chart_daily_move", "chart_daily_gap", "chart_daily_wick"})
     observers = demo["observers"]
     if not isinstance(observers, list) or not all(isinstance(o, str) for o in observers):
         raise ScenarioError("[demo] observers must be a list of strings")
@@ -415,6 +416,7 @@ def load(path: Path) -> Scenario:
         clock=clock,
         live_until=live_until,
         half_spread=_positive("[market] half_spread_usd", market["half_spread_usd"]),
+        buying_power=_positive("[market] buying_power_usd", market["buying_power_usd"]),
         quote_size=_positive("[market] quote_size_shares", market["quote_size_shares"]),
         wick=_positive("[market] wick_usd", market["wick_usd"]),
         history_volume=_positive("[market] history_volume", market["history_volume"]),

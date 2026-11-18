@@ -246,6 +246,7 @@ def build(now: datetime, day: date | None = None) -> dict:
     fields.update(
         now=now, session=CALENDAR.day(day or now.date()),
         reconciliation=replace(base.reconciliation, last_broker_read_at=now - timedelta(seconds=2)),
+        buying_power=replace(base.buying_power, read_at=now - timedelta(seconds=2)),
         quote=quote(provider_time=now - timedelta(seconds=1),
                     receipt_time=now - timedelta(milliseconds=500)))
     return fields

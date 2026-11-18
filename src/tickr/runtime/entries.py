@@ -10,6 +10,7 @@ decision file as the observers (`observers.log.DecisionLog`), so skipped signals
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -36,7 +37,14 @@ from tickr.engine.core import (
 from tickr.observers.log import DecisionLog
 from tickr.research.records import Admission as RecordAdmission
 from tickr.research.records import DecisionRecord
-from tickr.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation, admit
+from tickr.risk.admission import (
+    AdmissionInputs,
+    AdmissionLimits,
+    BuyingPower,
+    Reconciliation,
+    admit,
+    refusal_before_buying_power,
+)
 from tickr.risk.causes import ENGINE_REFUSED
 from tickr.risk.ticks import round_to_tick
 from tickr.strategy.base import Decision, Role, Verdict
@@ -338,11 +346,39 @@ class EntryDesk:
         self.last_broker_read_at = last_broker_read_at
         self.log = log
         self.limits = AdmissionLimits.from_config(config)
+        # The latest successful balance read: (day buying power, when).
+        self._balance: tuple[Decimal, datetime] | None = None
+        # When the desk last tried to read the balance, whatever the outcome.
+        self._balance_tried_at: datetime | None = None
 
     # --- money -----------------------------------------------------------------------------
 
     def _reservations(self) -> Decimal:
         return sum((t.reservation for t in self.engine.trades()), ZERO)
+
+    def _read_balance(self, now: datetime) -> None:
+        """Read the broker's balance unless a read was tried less than
+        `[risk] buying_power_max_age_seconds` ago, whatever its outcome: a failing read costs
+        one request per that age, never one per decision (no retry on the loop thread). A
+        failed read keeps the old figure, which admission then finds too old."""
+        max_age = timedelta(seconds=float(self.config.risk.buying_power_max_age_seconds))
+        tried = self._balance_tried_at
+        if tried is not None and timedelta(0) <= now - tried < max_age:
+            return
+        self._balance_tried_at = now
+        try:
+            self._balance = (self.engine.broker.balance().day_buying_power, now)
+        except BrokerError:
+            pass
+
+    def _buying_power(self) -> BuyingPower:
+        """The latest balance read's day buying power (no read here), less the entry value of
+        our open trades."""
+        committed = sum((t.entry_quantity * t.entry_limit_price for t in self.engine.trades()),
+                        ZERO)
+        if self._balance is None:
+            return BuyingPower(None, None, committed)
+        return BuyingPower(self._balance[0], self._balance[1], committed)
 
     # --- admission -------------------------------------------------------------------------
 
@@ -380,6 +416,7 @@ class EntryDesk:
             quote=quote,
             realized_loss_today_usd=realized_loss_today(engine, now),
             open_reservations_usd=self._reservations(),
+            buying_power=self._buying_power(),
             entry_budget_available=engine.broker.can_place(1),
             stop_budget_available=engine.broker.can_place(1 + stop_requests_owed(engine)),
         )
@@ -393,7 +430,12 @@ class EntryDesk:
         cause: str | None = None
         if decision.verdict is Verdict.ENTER:
             inputs = self._inputs(decision, quote, now)
-            result = admit(inputs, self.limits)
+            # The balance is read only for an entry every other check admits.
+            refused = refusal_before_buying_power(inputs, self.limits)
+            if refused is None:
+                self._read_balance(now)
+                inputs = replace(inputs, buying_power=self._buying_power())
+            result = refused or admit(inputs, self.limits)
             if not result.ok:
                 admission, cause = RecordAdmission.REFUSED, f"{result.cause}: {result.detail}"
             else:

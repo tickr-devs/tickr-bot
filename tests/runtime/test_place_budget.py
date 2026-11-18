@@ -7,6 +7,7 @@ from __future__ import annotations
 from decimal import Decimal as D
 
 import pytest
+from funded import FUNDS
 
 from tickr.broker.base import RateLimited
 from tickr.broker.budget import RequestBudget, RouteLimit
@@ -24,7 +25,7 @@ class Budgeted(FakeBroker):
     """A fake whose places take a real rolling budget on the desk's clock."""
 
     def __init__(self, clock: list[float], limit: int = PLACES) -> None:
-        super().__init__()
+        super().__init__(funds=FUNDS)
         self.budget = RequestBudget(RouteLimit(limit, 60, 60), clock=lambda: clock[0])
         self.refused = 0
 

@@ -10,7 +10,7 @@ from baseline import load_baseline
 
 from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.config import GateResult
-from tickr.risk.admission import AdmissionInputs, AdmissionLimits, Reconciliation
+from tickr.risk.admission import AdmissionInputs, AdmissionLimits, BuyingPower, Reconciliation
 from tickr.strategy.base import Decision, Verdict
 from tickr.types import Quote
 
@@ -65,6 +65,7 @@ def inputs(**changes) -> AdmissionInputs:
         quote=quote(),
         realized_loss_today_usd=D("0"),
         open_reservations_usd=D("0"),
+        buying_power=BuyingPower(D("4000000"), NOW - timedelta(seconds=2), D("0")),
         entry_budget_available=True,
         stop_budget_available=True,
     )

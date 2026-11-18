@@ -10,7 +10,7 @@ import pytest
 from tickr.api.contract import RefusalCode, refusal_of
 from tickr.calendar import NEW_YORK, CalendarCause, CalendarRefused
 from tickr.config import GateResult
-from tickr.risk.admission import CHECKS, admit
+from tickr.risk.admission import CHECKS, BuyingPower, admit, refusal_before_buying_power
 from tickr.risk.causes import AdmissionCause as C
 from tickr.strategy.base import Verdict
 
@@ -55,7 +55,17 @@ def test_cooldown_turned_off(lim):
 
 
 def test_there_are_seven_checks():
-    assert len(CHECKS) == 7
+    # Spec 7's seven, then check 6's buying power part, run last so the desk reads the
+    # balance only for an entry the others admit.
+    assert len(CHECKS) == 8 and CHECKS[-1].__name__ == "_check_buying_power"
+
+
+def test_the_buying_power_refusal_comes_after_every_other_check(lim):
+    unread = BuyingPower(None, None, D(0))
+    assert admit(inputs(buying_power=unread, stop_budget_available=False),
+                 lim).cause is C.STOP_BUDGET_UNAVAILABLE
+    assert refusal_before_buying_power(inputs(buying_power=unread), lim) is None
+    assert admit(inputs(buying_power=unread), lim).cause is C.BUYING_POWER_UNKNOWN
 
 
 def _at(hh: int, mm: int, day: date = TODAY) -> datetime:
@@ -66,7 +76,8 @@ def _moved(now: datetime, **changes):
     """Inputs at another instant with broker read and quote kept fresh."""
     recon = replace(RECON, last_broker_read_at=now - timedelta(seconds=1))
     q = quote(provider_time=now - timedelta(seconds=1), receipt_time=now)
-    base = dict(now=now, reconciliation=recon, quote=q)
+    bp = replace(inputs().buying_power, read_at=now - timedelta(seconds=1))
+    base = dict(now=now, reconciliation=recon, quote=q, buying_power=bp)
     base.update(changes)
     return inputs(**base)
 
@@ -151,6 +162,11 @@ REFUSALS = [
     (C.DAILY_MONEY_INVALID, lambda: inputs(realized_loss_today_usd=D("-5"))),
     (C.DAILY_CEILING, lambda: inputs(realized_loss_today_usd=D("200"),
                                      open_reservations_usd=D("60.01"))),
+    (C.BUYING_POWER_UNKNOWN, lambda: inputs(buying_power=BuyingPower(None, None, D(0)))),
+    (C.BUYING_POWER_UNKNOWN, lambda: inputs(
+        buying_power=BuyingPower(D(4000000), NOW - timedelta(seconds=16), D(0)))),
+    (C.BUYING_POWER_SHORT, lambda: inputs(
+        buying_power=BuyingPower(D("1019.99"), NOW, D(0)))),
     # 7
     (C.ENTRY_BUDGET_UNAVAILABLE, lambda: inputs(entry_budget_available=False)),
     (C.STOP_BUDGET_UNAVAILABLE, lambda: inputs(stop_budget_available=False)),
@@ -405,6 +421,19 @@ def test_extended_entry_reserves_its_whole_position(lim):
     assert tight.cause is C.DAILY_CEILING
     regular = admit(_moved(_at(10, 0)), on)
     assert regular.reserved_usd is None and regular.window == "regular"
+
+
+def test_the_entry_must_fit_the_buying_power_left_after_open_trades(lim):
+    # 100 shares at the 10.20 limit cost 1,020.
+    exact = BuyingPower(D("3020"), NOW - timedelta(seconds=15), D("2000"))
+    assert admit(inputs(buying_power=exact), lim).ok
+    short = admit(inputs(buying_power=replace(exact, committed_usd=D("2000.01"))), lim)
+    assert short.cause is C.BUYING_POWER_SHORT
+    assert short.detail == "value 1020.00 > buying power 3020 - committed 2000.01 = 1019.99"
+    future = admit(inputs(buying_power=replace(exact, read_at=NOW + timedelta(seconds=1))), lim)
+    assert future.cause is C.CLOCK_INVALID
+    bad = admit(inputs(buying_power=replace(exact, day_usd=D("NaN"))), lim)
+    assert bad.cause is C.BUYING_POWER_UNKNOWN
 
 
 def test_an_entry_beyond_the_working_entries_limit_is_refused(lim):

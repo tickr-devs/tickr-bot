@@ -8,6 +8,7 @@ from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
+from funded import FUNDS
 
 from tickr.broker.base import BrokerError, RateLimited
 from tickr.broker.fake import FakeBroker
@@ -54,7 +55,7 @@ def test_every_slot_filling_at_once_is_protected_within_one_history_interval(tmp
     shows every fill, every stop goes out at once and the next open-orders read verifies
     them, so the last position waits one history interval plus the listing polls, whatever
     the number of slots, with a poll to spare."""
-    desk = working(tmp_path, FakeBroker())
+    desk = working(tmp_path, FakeBroker(funds=FUNDS))
     done = fill_together(desk, SYMBOLS)
     assert len(done) == MAX
     bound = -(-EVERY // POLL) + 1 + LISTED
@@ -67,7 +68,7 @@ def test_every_slot_filling_at_once_is_protected_within_one_history_interval(tmp
 def test_without_the_history_fills_are_read_by_detail_in_turn(tmp_path):
     """A failing history changes nothing but speed: each fill is read by Detail in turn,
     as before, and the failure streak is journaled once."""
-    broker = FakeBroker(history_down=True)
+    broker = FakeBroker(history_down=True, funds=FUNDS)
     slots = 3
     desk = working(tmp_path, broker, slots)
     assert fill_together(desk, SYMBOLS[:slots]) == [k + 1 for k in range(1, slots + 1)]
@@ -76,7 +77,7 @@ def test_without_the_history_fills_are_read_by_detail_in_turn(tmp_path):
 
 def test_the_history_is_read_only_when_detail_cannot_keep_up(tmp_path):
     """No working entry, or no more orders due than one step's Detail reads: no read."""
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     desk = Desk(tmp_path, wide(2), broker)
     assert desk.enter(SYMBOLS[0]).admission == "taken"
     desk.step(10)  # one working entry, nothing else due
@@ -90,7 +91,7 @@ def test_the_history_is_read_only_when_detail_cannot_keep_up(tmp_path):
 
 
 def test_a_history_fill_is_recorded_and_detail_still_finishes_the_order(tmp_path):
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     desk = working(tmp_path, broker, 2)
     first = entry(desk, SYMBOLS[0])
     broker.fill(first.client_order_id, D(4), D("10.05"))  # partial
@@ -119,7 +120,7 @@ def test_a_history_fill_is_recorded_and_detail_still_finishes_the_order(tmp_path
 
 
 def test_a_stale_history_row_never_moves_a_fill_back(tmp_path):
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     desk = working(tmp_path, broker, 2)
     first = entry(desk, SYMBOLS[0])
     broker.fill(first.client_order_id, D(6), D("10.05"))
@@ -132,7 +133,7 @@ def test_a_stale_history_row_never_moves_a_fill_back(tmp_path):
 
 
 def test_a_history_row_unlike_the_entry_as_sent_is_ignored_and_journaled(tmp_path):
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     desk = working(tmp_path, broker, 2)
     first = entry(desk, SYMBOLS[0])
     broker.history_hidden.add(first.client_order_id)
@@ -151,7 +152,7 @@ def test_a_history_row_unlike_the_entry_as_sent_is_ignored_and_journaled(tmp_pat
 
 
 def test_a_read_refused_by_the_budget_is_tried_again_next_step(tmp_path):
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     desk = working(tmp_path, broker, 2)
     calls: list[int] = []
     real = broker.order_history
@@ -173,7 +174,7 @@ def test_a_history_fill_ahead_of_the_position_never_sizes_a_stop(tmp_path):
     """Fable's #614 case: the broker filled 4 of 10, the history row says 10. The engine waits
     until the positions read holds what the trade would then hold; Detail sizes the stop for
     the 4 meanwhile, never one for shares not held."""
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     desk = working(tmp_path, broker, 2)
     first = entry(desk, SYMBOLS[0])
     broker.fill(first.client_order_id, D(4), D("10.05"))
@@ -200,7 +201,7 @@ def test_a_history_fill_ahead_of_the_position_never_sizes_a_stop(tmp_path):
 
 
 def test_no_history_read_without_a_positions_read(tmp_path):
-    broker = FakeBroker()
+    broker = FakeBroker(funds=FUNDS)
     desk = working(tmp_path, broker, 2)
     reads = broker.history_reads
     broker.positions = lambda: (_ for _ in ()).throw(BrokerError("down"))

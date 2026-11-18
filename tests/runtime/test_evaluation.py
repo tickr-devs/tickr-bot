@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from baseline import load_baseline
+from funded import FUNDS
 
 from tickr import config
 from tickr.broker.base import RateLimited
@@ -115,7 +116,7 @@ class Scripted:
 
 class Rig:
     def __init__(self, tmp_path: Path, history: object | None = None) -> None:
-        self.broker = FakeBroker()
+        self.broker = FakeBroker(funds=FUNDS)
         self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
         self.engine = Engine(self.store, self.broker, CFG, "eval0001",
                              lambda: GateResult(True, "t"))

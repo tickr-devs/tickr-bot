@@ -89,6 +89,7 @@ class RiskConfig:
     position_notional_cap_usd: Decimal
     max_daily_loss_usd: Decimal
     min_daily_room_usd: Decimal
+    buying_power_max_age_seconds: Decimal
     max_open_positions: int
     max_working_entries: int
     max_quote_age_seconds: Decimal
@@ -689,6 +690,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[risk] entry_snapshot_interval_seconds must be above 0")
     if not 0 <= risk.min_daily_room_usd < risk.max_daily_loss_usd:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
+    if risk.buying_power_max_age_seconds <= 0:
+        raise ConfigError("[risk] buying_power_max_age_seconds must be above 0")
     if built["orders"].detail_unreadable_seconds <= 0:
         raise ConfigError("[orders] detail_unreadable_seconds must be above 0")
     if built["orders"].stop_held_proof_seconds <= 0:
