@@ -507,10 +507,10 @@ def test_live_loop_prices_compound_from_where_each_symbol_was_left():
     ('kind = "flatten", role = ""', 'kind = "flatten", role = "nobody"', "not a role"),
     ('kind = "entry-stop-on", role = ""', 'kind = "entry-stop-on", role = "win"', "only flatten"),
     ("cycle_minutes = 10", "cycle_minutes = 0", "cycle_minutes"),
-    ('[[0, 2, "0.015", "40000"], [2, 4,', '[[0, 3, "0.015", "40000"], [2, 4,', "overlaps"),
-    ('[4, 5, "-0.01", "15000"]', '[4, 11, "-0.01", "15000"]', "whole minute from 0 to 10"),
-    ('[4, 5, "-0.01", "15000"]', '[4, 5, "-1", "15000"]', "above -1"),
-    ("at_seconds = 285", "at_seconds = 600", "inside the cycle"),
+    ('[[0, 3, "0.018", "40000"], [3, 5,', '[[0, 4, "0.018", "40000"], [3, 5,', "overlaps"),
+    ('[5, 6, "-0.03", "15000"]', '[5, 11, "-0.03", "15000"]', "whole minute from 0 to 10"),
+    ('[5, 6, "-0.03", "15000"]', '[5, 6, "-1", "15000"]', "above -1"),
+    ("at_seconds = 305", "at_seconds = 600", "inside the cycle"),
 ])
 def test_bad_live_loop_is_refused(tmp_path, old, new, cause):
     with pytest.raises(ScenarioError, match=cause):

@@ -177,27 +177,55 @@ listed_minutes_before_clock = 5
 # of the cycle, change of the price over the leg (ratio, "0.08" = +8 %), volume per minute]; the
 # price holds between legs. A stopped-out symbol must not come back within [risk]
 # symbol_cooldown_minutes_after_loss of its loss, hence four "loss" symbols with ten-minute cycles.
+#
+# The bot holds one position, so the cycle is written for who gets that one place, minute by
+# minute (the bot decides as each minute's bar closes). Four rules keep it the same on every run,
+# whatever the bars' texture does (2026-11-17: the recorded cycle began and ended with a position
+# nobody wrote):
+# 1. Whenever the place is free and entries are allowed, only the symbol meant to be bought is
+#    rising, for three bars: "win" alone in minutes 0-3 (the others start at minute 3), "loss"
+#    alone in minutes 5-8 (the others fall or rest; "blocked" starts at minute 7 and is first
+#    looked at as minute 8's bar closes, the last chance "loss" has).
+# 2. A symbol meant to be bought, or to be refused for a reason of the platform, rises about
+#    0.6 % a bar. The strategy enters only while the ask is above the recent highs and within one
+#    ATR (about 0.7 % here) of them: 0.4 % a bar does not clear the highs' wicks, 0.75 % and more
+#    runs out of the window by a cent every few bars.
+# 3. No leg rises faster than about 1.2 % a bar: the textured price lags a faster plan, is still
+#    rising when the plan already falls, and is bought there (seen with a leg of 3.75 % a bar).
+# 4. Every rise ends in a fall, never in a hold: a price that ran below its plan catches up when
+#    the plan holds, and that catch-up closes above the recent highs. After a fall the recent
+#    highs stay above the price, so a symbol that had its turn is not bought again.
+# The cycle starts and ends with no position: "loss" is stopped out in minute 8-9, the entry stop
+# covers the rest, and in the last bar every symbol falls or rests. Rises and falls of a symbol
+# about cancel out over its turns, so it stays near its session VWAP and can break out again.
 roles = [
-  # Breaks out at the start of the cycle and is bought; keeps climbing until the flatten below.
-  { role = "win", symbols = ["NVRA", "QELM", "SKYV"], legs = [[0, 2, "0.015", "40000"], [2, 4, "0.035", "40000"], [4, 5, "-0.01", "15000"]] },
-  # Breaks out while "win" is held: refused (one position at a time); then collapses.
-  { role = "busy", symbols = ["TRVX", "VDMQ"], legs = [[1, 4, "0.03", "40000"], [4, 5, "-0.03", "30000"]] },
-  # Bought on its breakout after the flatten, then collapses through its stop: a stop-out.
-  { role = "loss", symbols = ["FYRE", "GLDX", "JNTR", "ORVN"], legs = [[5, 9, "0.035", "40000"], [9, 10, "-0.05", "40000"]] },
-  # The previous cycle's "loss" symbol breaks out again inside its pause after the loss: refused;
-  # then collapses (through its stop, should it have been bought) and recovers slowly. Lists as
-  # many symbols as there are cycles, so each cycle names the one stopped out just before it (the
-  # first cycle has none: MVLD then breaks out once more and is refused while "win" is held).
-  { role = "cooldown", symbols = ["MVLD", "FYRE", "GLDX", "JNTR", "ORVN", "FYRE", "GLDX"], legs = [[1, 5, "0.06", "40000"], [5, 6, "-0.08", "30000"], [6, 10, "0.04", "9000"]] },
-  # Drifts back up, breaks out while "loss" is held and then under the operator's entry stop:
-  # refused; then collapses (through its stop, should it have been bought).
-  { role = "blocked", symbols = ["PLMZ", "WXYR"], legs = [[0, 4, "0.01", "9000"], [5, 9, "0.035", "40000"], [9, 10, "-0.045", "40000"]] },
+  # Breaks out at the start of the cycle and is bought; climbs faster once held, until the
+  # flatten below, then gives the gain back.
+  { role = "win", symbols = ["NVRA", "QELM", "SKYV"], legs = [[0, 3, "0.018", "40000"], [3, 5, "0.022", "40000"], [5, 6, "-0.03", "15000"]] },
+  # Breaks out while "win" is held: refused (one position at a time); then falls back.
+  { role = "busy", symbols = ["TRVX", "VDMQ"], legs = [[3, 5, "0.012", "40000"], [5, 6, "-0.012", "30000"]] },
+  # Starts as the flatten frees the place, is bought on its breakout, then collapses through its
+  # stop (which sits just below where it started): a stop-out, about a minute before the cycle
+  # ends.
+  { role = "loss", symbols = ["FYRE", "GLDX", "JNTR", "ORVN"], legs = [[5, 8, "0.018", "40000"], [8, 9, "-0.035", "40000"]] },
+  # The previous cycle's "loss" symbol wins back what it lost while "win" is held, at the fastest
+  # pace the texture allows: mostly too fast for the strategy's price window (a fast mover the
+  # bot does not chase), refused for the taken place when it does fit. Lists as many symbols as
+  # there are cycles, so each cycle names the one stopped out just before it (the first cycle has
+  # none: MVLD then moves once more).
+  { role = "cooldown", symbols = ["MVLD", "FYRE", "GLDX", "JNTR", "ORVN", "FYRE", "GLDX"], legs = [[3, 5, "0.024", "40000"], [5, 6, "-0.005", "30000"]] },
+  # Breaks out while "loss" is held and then under the operator's entry stop: refused; then falls
+  # back.
+  { role = "blocked", symbols = ["PLMZ", "WXYR"], legs = [[7, 9, "0.012", "40000"], [9, 10, "-0.012", "40000"]] },
 ]
 # Operator commands of every cycle, seconds after the cycle starts: kind (contract CommandKind
-# value) and role (flatten only: that cycle's symbol of the role; empty = none).
+# value) and role (flatten only: that cycle's symbol of the role; empty = none). The flatten comes
+# just after minute 5's bar closed, at the top of "win" (the place is still taken at that bar, so
+# "busy" is refused there); the entry stop goes on after minute 8's bar closed ("loss" has had its
+# three chances) and before "loss" is stopped out, and comes off before the next cycle.
 commands = [
-  { at_seconds = 285, kind = "flatten", role = "" },
-  { at_seconds = 470, kind = "entry-stop-on", role = "" },
+  { at_seconds = 305, kind = "flatten", role = "" },
+  { at_seconds = 490, kind = "entry-stop-on", role = "" },
   { at_seconds = 590, kind = "entry-stop-off", role = "" },
 ]
 

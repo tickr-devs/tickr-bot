@@ -147,7 +147,9 @@ def test_the_committed_recording_holds_the_whole_cycle_and_every_screen():
     status = [json.loads(answer(index, pieces, "/status", f)[1]) for f in range(index["frames"])]
     assert len({s["served_at"] for s in status}) == index["frames"]  # a new answer every frame
     assert any(s["status"]["positions"] for s in status)  # the loop holds a position ...
-    assert not status[0]["status"]["positions"] or not status[-1]["status"]["positions"]
+    # ... and its seam is flat: the apps play the cycle in a loop, so it starts and ends with
+    # no position ([live] in config/demo.toml is written for that).
+    assert not status[0]["status"]["positions"] and not status[-1]["status"]["positions"]
     kinds = {key.split(" ")[0] for key in index["posts"]}
     assert {"/commands/flatten", "/commands/entry-stop", "/commands/stop-bot",
             "/commands/emergency", "/commands/cancel-own-orders", "/commands/start-bot"} <= kinds

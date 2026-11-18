@@ -125,21 +125,27 @@ nothing else changes, the bot is the real one. One cycle, in minutes from its st
 
 | Minute | Role / command | What the real bot does, what the apps get |
 | --- | --- | --- |
-| 0-4 | `win` breaks out | WATCH, then ENTER around minute 2: entry sent, filled, broker stop placed and verified; flow stages advance, position appears |
-| 1-4 | `busy` breaks out | ENTER refused `OWN_POSITION_OPEN` (one position at a time): refused tray, "Not taken" |
-| 1-5 | `cooldown` (last cycle's `loss` symbol) breaks out | refused `SYMBOL_COOLDOWN` once flat (or `OWN_POSITION_OPEN` before), with its `until` |
-| 4:45 | flatten (everything) | operator command toast, exit `operator-flatten` with a win, day result and curve move |
-| 5-9 | `loss` breaks out, collapses at 9-10 | entry, fill, stop verified, then `stopped-out`: a loss, daily room shrinks |
-| 5-9 | `blocked` breaks out | refused `OWN_POSITION_OPEN`, then `ENTRY_STOP_SET` |
-| 7:50 / 9:50 | entry-stop on / off | entries pill and entry block change, command toasts |
+| 0-5 | `win` breaks out, alone for three bars | ENTER in minute 1-3: entry sent, filled, broker stop placed and verified; flow stages advance, position appears |
+| 3-5 | `busy` breaks out | ENTER refused `POSITION_LIMIT_REACHED` (the one place is taken): refused tray, "Not taken" |
+| 3-5 | `cooldown` (last cycle's `loss` symbol) wins its loss back fast | a fast mover: mostly past the strategy's price window, so watched and not chased; refused for the taken place when it fits |
+| 5:05 | flatten (everything) | operator command toast, exit `operator-flatten` with a win, day result and curve move |
+| 5-6 | `win`, `busy`, `cooldown` fall back | nothing to buy: their recent highs stay above the price |
+| 5-8 | `loss` breaks out, alone for three bars; collapses at 8-9 | entry, fill, stop verified, then `stopped-out`: a loss, daily room shrinks |
+| 7-9 | `blocked` breaks out, falls at 9-10 | refused `ENTRY_STOP_SET` (sometimes `POSITION_LIMIT_REACHED` first, while `loss` is held) |
+| 8:10 / 9:50 | entry-stop on / off | entries pill and entry block change, command toasts |
 
 All the time: quotes tick, minute bars close, discovery runs every minute (screener chips move),
-reconciliation every 10 s (account and reconcile ages), the observer decides on every bar. The
-textured tape makes the exact minute of an entry vary by a minute or so from day to day (the
-noise is seeded by symbol and day): most cycles show every row of the table; the cooldown refusal
-needs its symbol to have been stopped out in the cycle before, so it shows in about every second or
-third cycle. A symbol a role did not mean to be bought (it broke out while the bot was flat) is
-stopped out by its own collapse or closed by the next flatten, so the loop never sticks.
+reconciliation every 10 s (account and reconcile ages), the observer decides on every bar.
+
+The bot holds one position, and the cycle is written for who gets that one place, so it plays the
+same whatever the textured tape does (the noise is seeded by symbol and day). The rules are in
+the comment above `[live] roles` in `config/demo.toml`: only the symbol meant to be bought rises
+while the place is free; it rises at the pace the strategy's entry window takes; no leg is so fast
+that the textured price lags it; every rise ends in a fall, never in a hold. The cycle starts and ends
+with no position, so the recorded cycle loops without a seam (`tests/demo/test_recording.py`
+checks it). Over five demo days times six cycles the win and the `busy` refusal showed in every
+cycle and the loss in 28 of 30; no other symbol was bought. The texture still moves an entry by a
+bar or two and decides whether a refusal shows once or twice.
 Wins are bigger than the losses, so the day stays inside its loss ceiling. The AI advisor is not
 part of the loop: it is an offline tool that needs the Anthropic API.
 
@@ -158,8 +164,8 @@ trades), on the phone away from the Mac, with no `tickr demo` running and no net
   --record`, `src/tickr/demo/record.py`): the real bot runs the scenario on the simulated exchange
   exactly as `tickr demo` does (past sessions and the day up to `[demo] clock` fast, then the bot
   again from `clock` with the live loop), fast and in its own folder (`demo-record/`, deleted
-  afterwards). Through `[recording] cycle` of the live loop (cycle 1: its cooldown refusal has the
-  symbol stopped out the cycle before), every `[api] poll_seconds` of simulated time (3 s, the
+  afterwards). Through `[recording] cycle` of the live loop (cycle 1: the day's last
+  position is closed by then, so the cycle starts and ends flat), every `[api] poll_seconds` of simulated time (3 s, the
   apps' status poll; 200 frames) the bot is held while the demo's own API is asked for everything
   the apps read: status, account, pending commands, jobs, journal, settings, config, advisor, Lab
   replay, the day list and the day, flow, watching, observers, skipped, symbols, fast movers, performance over
