@@ -6,17 +6,27 @@ name: cancel-conflicted
 # whole account) those runs keep other pull requests waiting. After every push to main this job
 # asks GitHub which open pull requests into main now conflict and cancels their unfinished pull
 # request runs. Linux only; it checks out no code.
+#
+# It also stops the checks of merge-queue groups that no longer exist. When the queue drops or
+# rebuilds a group (a check failed or timed out, a pull request left the queue) it deletes the
+# group's `gh-readonly-queue/main/...` branch, but the group's runs that were still waiting for a
+# macOS runner stay queued, later take a runner each, and their result is never used. 2026-11-18:
+# with every macOS runner busy the queue timed groups out, rebuilt them, and the dead groups' runs
+# kept the new groups waiting until those timed out too. So every new group, and every push to
+# main, cancels the unfinished merge-queue runs whose branch is gone.
 on:
   push:
     branches: [main]
+  merge_group:
   workflow_dispatch:
-# The newest push to main supersedes an earlier pass that is still waiting for GitHub's answer.
+# The newest push or group supersedes an earlier pass that is still waiting for GitHub's answer.
 concurrency:
   group: cancel-conflicted
   cancel-in-progress: true
-# Cancelling a run needs `actions: write`; the pull requests are only read.
+# Cancelling a run needs `actions: write`; the pull requests and the queue's branches are only read.
 permissions:
   actions: write
+  contents: read
   pull-requests: read
 jobs:
   conflicted-runs-cancel:
@@ -32,7 +42,28 @@ jobs:
       # The most open pull requests and runs per pull request read in one pass.
       PAGE: 100
     steps:
+      - name: Cancel the unfinished runs of merge-queue groups that no longer exist
+        run: |
+          # The runs are read first and the queue's branches after them: a group made between the
+          # two reads then has its branch in the list, or no run in it, and is never cancelled (the
+          # other order would cancel a healthy group's required checks). If GitHub does not answer
+          # either question, the step fails here and cancels nothing.
+          runs=$(for status in queued in_progress; do
+            gh api "repos/$GH_REPO/actions/runs?event=merge_group&status=$status&per_page=$PAGE" \
+              --jq '.workflow_runs[] | "\(.id) \(.name) \(.head_branch)"'
+          done)
+          alive=$(gh api "repos/$GH_REPO/git/matching-refs/heads/gh-readonly-queue/" --paginate \
+            --jq '.[].ref | sub("^refs/heads/"; "")')
+          while read -r run workflow branch; do
+            # No unfinished run at all reads as one empty line.
+            if [ -z "$run" ] || grep -qxF "$branch" <<<"$alive"; then continue; fi
+            echo "merge-queue group $branch is gone: cancelling $workflow run $run"
+            # A run that finished in the meantime cannot be cancelled; that is not a failure.
+            gh run cancel "$run" || echo "run $run was not cancelled (already finished?)"
+          done <<<"$runs"
       - name: Cancel the unfinished runs of pull requests that now conflict with main
+        # A new merge-queue group changes no pull request's base: only a push to main does.
+        if: ${{ github.event_name != 'merge_group' }}
         run: |
           for attempt in $(seq "$ATTEMPTS"); do
             prs=$(gh pr list --state open --base main --limit "$PAGE" --json number,mergeable,headRefOid)
