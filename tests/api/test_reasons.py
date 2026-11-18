@@ -194,6 +194,17 @@ def test_every_cause_in_the_fixtures_has_a_code():
     ("skipped_overlap: an earlier simulated trade of ABCD was still open",
      (("skipped_overlap", {"symbol": "ABCD"}),)),
     ("something new; no order-intent row", (("unrecognized", {}), ("no_intent_row", {}))),
+    ("rejected: before regular open", (("replay_before_open", {}),)),
+    ("rejected: after last entry time", (("replay_after_last_entry", {}),)),
+    ("missed: last entry time", (("replay_after_last_entry", {}),)),
+    ("rejected: half day: trading disabled", (("replay_half_day", {}),)),
+    ("missed: price outside window", (("replay_price_outside", {}),)),
+    ("missed: no further bars", (("replay_no_further_bars", {}),)),
+    ("ignored: position open", (("replay_position_open", {}),)),
+    ("ignored: entry pending", (("replay_entry_pending", {}),)),
+    ("rejected: scale-out (partial exits) is not modelled",
+     (("simulation_outcome", {"outcome": "rejected",
+                              "detail": "scale-out (partial exits) is not modelled"}),)),
 ])
 def test_prose_reasons(text, expected):
     assert tuple((r.code, r.params) for r in reasons.prose_reasons(text)) == expected

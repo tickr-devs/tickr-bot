@@ -313,6 +313,15 @@ _PROSE = _shapes(
     ("skipped_same_signal", r"skipped_same_signal: the same signal \(setup (?P<setup>\S+), "
                             r"trigger (?P<trigger>\S+)\) already made a simulated trade of "
                             r"(?P<symbol>\S+) that day"),
+    # the replay engine's own fixed outcomes (replay/engine.py, replay/clock.py), before the
+    # general shape so the apps can put them in words
+    ("replay_before_open", r"rejected: before regular open"),
+    ("replay_after_last_entry", r"rejected: after last entry time|missed: last entry time"),
+    ("replay_half_day", r"rejected: half day: trading disabled"),
+    ("replay_price_outside", r"missed: price outside window"),
+    ("replay_no_further_bars", r"missed: no further bars"),
+    ("replay_position_open", r"ignored: position open"),
+    ("replay_entry_pending", r"ignored: entry pending"),
     ("simulation_outcome", r"(?P<outcome>filled|missed|rejected|ignored|not_simulated): "
                            r"(?P<detail>.*)"),
     ("no_decisions", r"no decisions recorded that day"),
