@@ -36,10 +36,11 @@ extended_hours_strategies = []
 [risk]
 # Planned loss per trade in USD (owner 2026-11-07); read by the strategy for sizing and by safety for the check.
 planned_loss_usd = 50
-# Maximum notional per position in USD (owner 2026-10-31); read by safety.
-position_notional_cap_usd = 2500
-# Daily loss ceiling in USD: today's NET realized loss (wins offset losses) + open reservations + new planned loss (owner 2026-11-14); read by safety.
-max_daily_loss_usd = 300
+# Maximum notional per position in USD (owner 2026-11-17: 1000, with 20 positions in view); read by safety.
+position_notional_cap_usd = 1000
+# Daily loss ceiling in USD: today's NET realized loss (wins offset losses) + open reservations + new planned loss (owner
+# 2026-11-17: 5000, so the reservations of 20 trades at planned_loss_usd fit); read by safety.
+max_daily_loss_usd = 5000
 # Smallest daily-loss room a new trade is sized into, USD: near the ceiling a trade is sized down to the room left
 # (owner 2026-11-14), but below this room entries stop and status says "daily ceiling" (a smaller trade is not worth
 # its costs; owner confirmed 2026-11-14); read by runtime.entries (strategy loss budget and status).

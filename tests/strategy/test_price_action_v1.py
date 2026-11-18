@@ -31,7 +31,10 @@ from tickr.strategy.base import PositionView, SymbolContext, Verdict
 def make(**overrides):
     """Strategy from the repo toml. Rule tests use a warm-up multiple of 1 so short generated
     sessions are enough; the warm-up itself is tested with the repo value."""
-    overrides = {"indicators__warmup_period_multiple": 1, **overrides}
+    # The sizing tests below were written for a 2500 USD notional cap (the shipped one is 1000
+    # since 2026-11-17, owner): pinned so their numbers still test the loss and cap sizing.
+    overrides = {"indicators__warmup_period_multiple": 1,
+                 "sizing__max_position_notional_usd": 2500, **overrides}
     values = copy.deepcopy(strategy_values())
     for dotted, value in overrides.items():
         section, key = dotted.split("__")

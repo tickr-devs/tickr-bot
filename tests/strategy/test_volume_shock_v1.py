@@ -27,7 +27,9 @@ SIGNAL_TESTS_FLOOR = 1
 
 def make(**overrides):
     vals = copy.deepcopy(VALUES)
-    overrides = {"liquidity__min_dollar_volume_usd": SIGNAL_TESTS_FLOOR, **overrides}
+    # Written for a 2500 USD notional cap (the shipped one is 1000 since 2026-11-17, owner).
+    overrides = {"liquidity__min_dollar_volume_usd": SIGNAL_TESTS_FLOOR,
+                 "sizing__max_position_notional_usd": 2500, **overrides}
     for dotted, value in overrides.items():
         section, key = dotted.split("__")
         vals[section][key] = value

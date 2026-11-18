@@ -277,6 +277,25 @@ def test_active_strategy_needing_more_history_than_configured_is_refused(tmp_pat
         load_active(short)
 
 
+@pytest.mark.parametrize(("key", "platform"), [
+    ("max_position_notional_usd", "position_notional_cap_usd"),
+    ("planned_loss_usd", "planned_loss_usd"),
+])
+def test_active_strategy_sizing_above_the_platform_limit_is_refused(tmp_path, key, platform):
+    """A strategy sizing above the platform's [risk] limit would have its entries refused
+    (Fable, review of #638): refused when it loads, as preflight and the bot load it."""
+    cfg = _config(tmp_path)
+    load_active(cfg)
+    own = config.load(ROOT / "config" / "bot.toml").risk
+    below = replace(cfg, risk=replace(cfg.risk, **{platform: getattr(own, platform) - 1}))
+    with pytest.raises(ObserverError, match=f"{key} .* exceeds the platform's"):
+        load_active(below)
+
+
+def test_the_shipped_active_strategy_fits_the_shipped_platform_limits():
+    load_active(config.load(ROOT / "config" / "bot.toml"))
+
+
 def test_values_refused_by_the_strategy(tmp_path):
     cfg = _config(tmp_path, ["broken"])
     _variant(tmp_path, "broken", "2", change=("lookback_bars = 5", "lookback_bars = 5\nx = 1"))

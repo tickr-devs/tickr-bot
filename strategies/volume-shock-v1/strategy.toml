@@ -45,4 +45,4 @@ min_previous_close_usd = 10
 # Planned loss per trade the quantity is sized for, USD; must not exceed config/bot.toml [risk]. Read by strategy.simple.
 planned_loss_usd = 50
 # Maximum position notional, USD (quantity x top of entry window); must not exceed config/bot.toml [risk]. Read by strategy.simple.
-max_position_notional_usd = 2500
+max_position_notional_usd = 1000

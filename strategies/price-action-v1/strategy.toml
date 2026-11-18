@@ -73,4 +73,4 @@ min_dollar_volume_usd = 5000000
 planned_loss_usd = 50
 # Maximum position notional the quantity is capped at, USD (quantity x top of entry window).
 # Read by price_action_v1. Must not exceed the platform notional cap in config/bot.toml [risk].
-max_position_notional_usd = 2500
+max_position_notional_usd = 1000

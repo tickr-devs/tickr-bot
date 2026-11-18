@@ -177,6 +177,8 @@ def _strategy() -> Strategy:
                            .read_text())
     values = copy.deepcopy(values)
     values["indicators"]["warmup_period_multiple"] = 1  # short generated sessions suffice
+    # The strategy sizes to the baseline's platform notional cap (tests/baseline.py pins it).
+    values["sizing"]["max_position_notional_usd"] = int(CFG.risk.position_notional_cap_usd)
     return active_module().create(values)
 
 

@@ -77,7 +77,7 @@ Modules (`src/tickr/`): `config`, `store`, `broker/` (interface, `fake.py`, `web
 
 ## 7. Risk and the safety layer
 
-Numbers in `config/bot.toml` `[risk]`: planned loss 50 USD per trade; notional cap 2,500 USD per position; daily loss ceiling 300 USD on the net realized result of the New York day (winning trades offset losing ones; owner 2026-11-14); one position slot (`max_open_positions`; with several, every open trade's planned loss is reserved against the one daily ceiling, so the worst case of all stops filling stays inside it); quote age 5 s; 30 min per-symbol pause after a loss; no limit on the number of entries per day or per symbol (owner 2026-11-14).
+Numbers in `config/bot.toml` `[risk]`: planned loss 50 USD per trade; notional cap 1,000 USD per position; daily loss ceiling 5,000 USD on the net realized result of the New York day (winning trades offset losing ones; owner 2026-11-14; 1,000 / 5,000 since 2026-11-17); one position slot (`max_open_positions`; with several, every open trade's planned loss is reserved against the one daily ceiling, so the worst case of all stops filling stays inside it); quote age 5 s; 30 min per-symbol pause after a loss; no limit on the number of entries per day or per symbol (owner 2026-11-14).
 
 Admission (all must hold; the first failure is the single recorded cause):
 1. Trading gate open for the active environment.

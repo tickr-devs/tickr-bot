@@ -3,10 +3,10 @@ values those tests were written for pinned.
 
 The owner's goal (2026-11-17) is that switching the live strategy, or its limits, is a change to
 config alone. The platform tests (rehearsals, admission, the daily room, the demo) are written
-around price-action-v3's breakout bars and the 50 / 300 USD limits, so they read the shipped file
-with those few values pinned; every other key stays the shipped one, so the tests still run on
-the real config. Tests of the shipped config itself (tests/test_config.py, preflight of the real
-file) read config/bot.toml directly.
+around price-action-v3's breakout bars and the 50 / 300 / 2500 USD limits, so they read the
+shipped file with those few values pinned; every other key stays the shipped one, so the tests
+still run on the real config. Tests of the shipped config itself (tests/test_config.py,
+preflight of the real file) read config/bot.toml directly.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ PINNED: dict[tuple[str, str], str] = {
     ("strategy", "observers"): '["price-action-v3-relvol-1.5", "price-action-v3-relvol-1.75"]',
     ("risk", "planned_loss_usd"): "50",
     ("risk", "max_daily_loss_usd"): "300",
+    ("risk", "position_notional_cap_usd"): "2500",
     # The rehearsals and the demo script one trade at a time; several slots have their own
     # tests (tests/runtime/test_several_positions.py).
     ("risk", "max_open_positions"): "1",

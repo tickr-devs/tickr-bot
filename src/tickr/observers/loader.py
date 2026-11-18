@@ -15,6 +15,7 @@ import importlib
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -121,9 +122,42 @@ def check_history(loaded: LoadedStrategy, history_sessions: int) -> None:
         )
 
 
+# A strategy's [sizing] keys and the platform `[risk]` limit each must not exceed.
+SIZING_LIMITS = (("planned_loss_usd", "planned_loss_usd"),
+                 ("max_position_notional_usd", "position_notional_cap_usd"))
+
+
+def check_limits(root: Path, folder: str, risk: Any) -> None:
+    """Refuse a strategy whose own sizing limits exceed the platform's (`[risk]`): it would
+    size entries the platform refuses (a notional cap above the platform's refuses every
+    entry with a close stop as NOTIONAL_OVER_CAP). A [sizing] key the strategy does not set
+    is not compared; one that is not a number refuses."""
+    sizing = read_values(root, folder).get("sizing")
+    if sizing is None:
+        return
+    if not isinstance(sizing, dict):
+        raise ObserverError(f"{folder}: [sizing] is not a table")
+    for key, platform_key in SIZING_LIMITS:
+        if key not in sizing:
+            continue
+        value = sizing[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ObserverError(f"{folder}: [sizing] {key} is not a number")
+        try:
+            own = Decimal(str(value))
+        except InvalidOperation as exc:
+            raise ObserverError(f"{folder}: [sizing] {key} is not a number") from exc
+        limit = getattr(risk, platform_key)
+        if not own <= limit:
+            raise ObserverError(f"{folder}: [sizing] {key} {own} exceeds the platform's "
+                                f"[risk] {platform_key} {limit}")
+
+
 def load_active(config: Config) -> LoadedStrategy:
-    """The active strategy, refused (ObserverError) when it cannot be built or when the
-    configured history is shorter than it needs."""
+    """The active strategy, refused (ObserverError) when it cannot be built, when the
+    configured history is shorter than it needs, or when its sizing limits exceed the
+    platform's (`check_limits`)."""
+    check_limits(config.root, config.strategy.active, config.risk)
     loaded = load_strategy(config.root, config.strategy.active,
                            parse_modules(config.observers.strategy_modules))
     check_history(loaded, config.market_data.history_sessions)
