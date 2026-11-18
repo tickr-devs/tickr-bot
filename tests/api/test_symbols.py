@@ -112,6 +112,8 @@ def test_every_symbol_with_its_furthest_stage_and_where_it_stands_now(api, cfg):
     assert rows["THIN"]["check"]["measured"] == "812345.1234"  # rounded like every check
     assert where("SLOW") == ("bars", "bars", "not_reached", "bars budget")
     assert where("LATE") == ("quote", "quote", "dropped", "QUOTE_STALE")
+    # An age to a tenth of a second, the signs as signs.
+    assert rows["LATE"]["detail"] == "7.2 s (needs \u2264 5.0 s)"
     assert rows["LATE"]["first_seen"] == "2026-11-16T14:55:00.000Z"
     # The detail panel: the price, when each stage was reached and the last decision's checks.
     assert rows["ABCD"]["price"] == "11.24"  # the latest screener row
