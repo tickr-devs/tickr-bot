@@ -9,7 +9,9 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 
 - Every item has a stable id (`R3`, `T7`, ...). Ids are never reused or renumbered; a moved item keeps
   its id. Prefixes: `R` strategy research, `T` trading and safety, `S` settings, `M` real money,
-  `P` standalone product, `F` legal and business, `X` later trading features, `Q` open owner question.
+  `P` standalone product, `F` legal and business, `X` later trading features, `Q` open owner question,
+  `V` v1 work, `A` apps, `O` owner's own setup tasks. Each item added from 2026-11-18 on carries a
+  status: decided, proposed (owner has not confirmed), in progress, in review (PR), done.
 - Versions are built in order, and development never waits for data (owner, 2026-11-16). A version
   is done when its items are merged, reviewed and released; the released version keeps running and
   collecting data while the next one is built, and several versions may run side by side. Only
@@ -46,6 +48,26 @@ Goal, scope and stages: `docs/spec-v1.md`. What is left:
   stop", which T1 needs.
 - **V2** Release v1 and keep it running on Sandbox days. The 5 clean days of spec section 1 are
   collected while v1.1 and v2 are built; they do not block them.
+- **V3** GTC protective stop at entry (decided 2026-11-18): the broker-side stop is placed GTC
+  instead of DAY, so it survives the session boundary. First a Sandbox probe of GTC STOP_LOSS
+  (accepted, visible, cancel and replace), recorded in `docs/webull-facts.md`; then the change.
+  Trading-critical: Fable review. Status: decided, probe not run.
+- **V4** Safety controls redesign (decided 2026-11-18, own thread): a Close button per position;
+  "Close all" in the positions header (pauses entries, cancels working entries, closes every
+  position); the "Cancel orders" and "Emergency stop" buttons are removed; the Safety card keeps
+  "Pause entries" and "Stop bot"; stopping asks "Close and stop / Leave open / Cancel"; while the
+  bot is stopped with positions open, a warning "bot stopped, N positions open" stays on screen.
+  Both apps and the API. Status: decided, in progress.
+- **V5** iOS API address per build destination and the Simulator's own token (`pair-simulator`).
+  Status: in review, #673 (API, Fable) and #674 (iOS); then one `pair-simulator` run on the Mac.
+- **A1** Chart: a click (Mac) or a lifted finger (iOS) holds the crosshair on its candle; pinch to
+  zoom on iOS. Status: Mac done (#663); iOS in review (#664 hold, #667 pinch).
+- **A2** "System" card in both apps: watchdog, supervisor restarts, Webull link freshness, the 03:30
+  preflight result, caffeinate, model training progress. Status: proposed, owner not confirmed.
+
+Owner's own setup tasks (outside the repository):
+- **O1** Merge-queue timeout 30 to 60 minutes in the GitHub repository settings (decided
+  2026-11-18). Status: owner to change.
 
 ## v1.1: Tools to find an edge
 
@@ -84,6 +106,8 @@ research runs and candidates: they go on in every later version and never gate a
   history has only minute bars, so it cannot be backtested. First step: record every L1 quote of
   WATCH symbols from the stream the bot already holds (no extra bars quota), check the capture
   (`quotes.jsonl`) misses none, then judge the variant by quote-level replay and as an observer.
+- **R13** Model research order (decided 2026-11-18): train the remaining 6 questions of the wide
+  model overnight, then the entry model, then the exit model. Status: in progress.
 
 Exit: R1-R5 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
 while later versions are built.
@@ -238,6 +262,12 @@ Exit: P7 passes.
 - **F4** Company, securities lawyer (tool, not advice), direct sale of the notarized Mac app by
   subscription (App Store rule 3.2.1(viii) blocks trading apps from individuals), closed beta.
 - **F5** Strategy marketplace: postponed until demand is proven (owner 2026-11-15).
+- **F6** Selling access through ticker.bot (owner idea 2026-11-18, to discuss later): software, not
+  advice; the user sets the main settings. Subscription covers Sandbox only (N hours of bot runtime,
+  N model trainings); Production and extra Sandbox time paid by credits, charged for time, never a
+  share of profit; backtests on the user's own settings sold too. Credits running out stops new
+  entries early with warnings and keeps a reserve to finish open trades, never leaving a position
+  without a broker stop. Status: idea, not started; F2 still gates it.
 
 ## Owner questions
 
