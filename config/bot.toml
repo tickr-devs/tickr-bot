@@ -394,6 +394,10 @@ remote_hosts_file = "remote-hosts.txt"
 remote_port = 8767
 # File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m tickr.api pair`, never the token itself; read by the api server.
 remote_token_hash_file = "remote-token.sha256"
+# File holding the SHA-256 (hex) of the iOS Simulator's own bearer token, relative to data_dir: a second token beside the phone's, so pairing one never revokes the other; written by `python -m tickr.api pair-simulator`, never the token itself; read by the api server, which then also answers the remote port on its loopback Host (host:remote_port) for the Simulator, and accepts that token there only; `unpair-simulator` deletes it.
+remote_simulator_token_hash_file = "remote-simulator-token.sha256"
+# File where `pair-simulator` leaves the Simulator's bearer token itself with the address it opens (JSON: address from host and remote_port, token), relative to data_dir, written 0600 and never printed, for a Simulator build of the iOS app on this Mac to read at launch (TICKR_SIMULATOR_TOKEN_FILE in apps/ios/Config/Local.xcconfig); deleted by `unpair-simulator`; read by the iOS app in the Simulator only.
+remote_simulator_token_file = "remote-simulator-token"
 # Local port `tickr demo` serves its made-up day's API on (docs/demo.md), for looking at it from a browser, `curl`, the layout sweep and the macOS screen tour; the apps' "Demo day" switch never uses it (the apps carry the demo day as a recording); 0 = no demo port (the demo's own copy of this file); read by the api server's config check and `tickr demo`.
 demo_port = 8776
 # Random bytes in a newly made bearer token and in a one-time pairing code (URL-safe text is about 4/3 as long), at least 16 (128 bits); read by `python -m tickr.api pair` and the api server (POST /pair).

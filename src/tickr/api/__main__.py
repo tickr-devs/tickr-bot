@@ -38,7 +38,9 @@ from tickr.api.server import (
     make_remote_server,
     make_server,
     pair,
+    pair_simulator,
     settings_from_config,
+    unpair_simulator,
 )
 from tickr.broker.base import BrokerError
 from tickr.data.base import MarketData
@@ -158,17 +160,33 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tickr.api")
     parser.add_argument("--config", type=Path, default=Path("config/bot.toml"),
                         help="path to bot.toml")
-    parser.add_argument("command", nargs="?", choices=("serve", "pair"), default="serve",
-                        help="serve the API (default) or pair a phone")
+    parser.add_argument("command", nargs="?",
+                        choices=("serve", "pair", "pair-simulator", "unpair-simulator"),
+                        default="serve",
+                        help="serve the API (default), pair a phone, or give the iOS Simulator "
+                             "on this Mac its own token (unpair-simulator revokes it)")
     args = parser.parse_args(argv)
     try:
         cfg = config_module.load(args.config)
         settings = settings_from_config(cfg, args.config)
         if args.command == "pair":
             link_file = pair(settings)
+        if args.command == "pair-simulator":
+            token_file = pair_simulator(settings)
+        if args.command == "unpair-simulator":
+            unpair_simulator(settings)
     except config_module.ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
+    if args.command == "pair-simulator":
+        print("The iOS Simulator has a new token of its own; the phone's token is unchanged.\n"
+              f"It is in {token_file} (readable by you only) with the address it opens. Put\n"
+              "that path in apps/ios/Config/Local.xcconfig as TICKR_SIMULATOR_TOKEN_FILE; a\n"
+              "Simulator build reads it at launch.")
+        return 0
+    if args.command == "unpair-simulator":
+        print("The iOS Simulator's token is revoked; the phone's token is unchanged.")
+        return 0
     if args.command == "pair":
         minutes = settings.pairing_code_ttl_seconds // SECONDS_PER_MINUTE
         print("Started a new pairing; any earlier phone token no longer works.\n"

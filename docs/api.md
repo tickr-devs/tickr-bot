@@ -68,6 +68,27 @@ The phone keeps the token in its Keychain (this device only) together with the a
 paired with, and sends it only over HTTPS to exactly that address; changing the address by hand
 drops the token.
 
+### The iOS Simulator's own token
+
+The Simulator on this Mac reads the remote port too, so it goes through the same server path as
+the iPhone, with a token of its own: pairing one never revokes the other.
+
+- `python -m tickr.api --config config/bot.toml pair-simulator` makes the Simulator's token. The
+  Mac keeps its SHA-256 (`[api] remote_simulator_token_hash_file`) and leaves the token with the
+  address it opens, `http://<[api] host>:<[api] remote_port>`, in a 0600 JSON file
+  (`[api] remote_simulator_token_file`); nothing secret is printed. A Simulator build reads that
+  file at launch (its path in `TICKR_SIMULATOR_TOKEN_FILE`, apps/ios/Config/Local.xcconfig), so
+  a new Simulator needs no pairing by hand. Running it again revokes the previous Simulator token.
+- `python -m tickr.api --config config/bot.toml unpair-simulator` revokes it: both files go, and
+  the loopback `Host` below is refused again.
+
+Each token opens its own `Host` only. The phone's token works on the `remote_hosts_file` names;
+the Simulator's on the remote port's loopback address (`127.0.0.1:<remote_port>`) only, which the
+remote port answers only while a Simulator token is paired and only for a request no proxy
+forwarded: one carrying `Forwarded`, `X-Forwarded-*`, `X-Real-IP` or Tailscale's identity
+headers came through `tailscale serve`, whose caller chose its `Host`, and gets `403
+forbidden_host`. So a copy of the Simulator's file opens nothing from the tailnet.
+
 ## Wire rules
 
 - Money, prices and quantities are decimal strings (`"12.34"`), never JSON numbers.
