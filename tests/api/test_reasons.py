@@ -132,6 +132,9 @@ def test_size_and_daily_refusals_carry_their_values():
      {"open": "09:30", "close": "16:00"}),
     ("AFTER_LAST_ENTRY", "last entry was 2026-11-16T15:45:00-05:00", {"time": "15:45"}),
     ("QUOTE_STALE", "quote 6.2 s old > 5 s", {"age": "6.2", "limit": "5"}),
+    # As risk/admission.py writes it since extended hours: the window last, the age to the µs.
+    ("QUOTE_STALE", "quote 183.415621 s old > 5 s (regular)", {"age": "183.4", "limit": "5"}),
+    ("BROKER_READ_STALE", "last broker read 31.06 s ago > 30 s", {"age": "31.1", "limit": "30"}),
     ("PRICE_OUTSIDE_WINDOW", "ask 12.40 outside 12.00..limit 12.10",
      {"ask": "12.40", "entry_low": "12.00", "limit": "12.10"}),
     ("GATE_CLOSED", "trading is disabled for environment 'paper'",
