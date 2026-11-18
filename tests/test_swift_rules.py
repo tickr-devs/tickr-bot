@@ -780,3 +780,49 @@ def test_cause_rule_flags_a_coded_cause_shown_in_the_bots_words(tmp_path):
     )
     found = module.cause_violations(write(tmp_path, source))
     assert [line for line, _ in found] == [1, 2]
+
+
+def test_scroll_indicators_are_hidden_once_per_scene(tmp_path):
+    module = load()
+    own = write(tmp_path, (
+        "ScrollView(.horizontal, showsIndicators: false) { row }\n"
+        "list.scrollIndicators(.hidden)\n"
+        "// .scrollIndicators(.never) in a comment\n"
+        "ScrollView(.horizontal) { row }\n"
+    ))
+    assert [line for line, _ in module.scrollbar_violations(own)] == [1, 2]
+    source = (
+        "ScrollView { rows }\n"
+        "ScrollView(.vertical) { rows }\n"
+        "Form { rows }\n"
+        "ScrollView(.horizontal) { chips }\n"
+        "  .scrollEdgeHints()\n"
+    )
+    assert [line for line, _ in module.scrollbar_violations(write(tmp_path, source))] == [1, 2, 3]
+    hinted = source.replace(
+        "Form { rows }\n", "Form { rows }.scrollEdgeHints(position: $scroll)\n")
+    assert [line for line, _ in module.scrollbar_violations(write(tmp_path, hinted))] == [3]
+    faded = source.replace("Form { rows }\n", "Form { rows }.scrollEdgeFades()\n")
+    faded += "  .scrollEdgeHints(position: $scroll)\n"
+    assert module.scrollbar_violations(write(tmp_path, faded)) == []
+    app = (
+        "struct TickrApp: App {\n"
+        "  var body: some Scene {\n"
+        "    WindowGroup {\n"
+        "      RootView()\n"
+        "        .withoutScrollIndicators()\n"
+        "    }\n"
+        "    Settings {\n"
+        "      SettingsView()\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    assert [line for line, _ in module.scrollbar_violations(write(tmp_path, app))] == [3, 7]
+    fixed = app.replace(
+        "      SettingsView()\n", "      SettingsView()\n        .withoutScrollIndicators()\n")
+    assert module.scrollbar_violations(write(tmp_path, fixed)) == []
+
+
+def test_the_scrollbar_rule_is_an_app_rule():
+    assert "scrollbars" in load().APP_RULES
