@@ -368,6 +368,9 @@ class ApiServer(ThreadingHTTPServer):
             self.discovery_day = shared.discovery_day
             self.skipped = shared.skipped
             self.warmer = shared.warmer
+            # One chart source and one request budget for both listeners: the source is
+            # attached to the local listener (python -m tickr.api), and the phone reads it too.
+            self.chart = shared.chart
         else:
             # Captured bars by symbol, read on as the bot appends; shared by every reader below.
             self.captured_bars = CapturedBarsDays()
@@ -384,8 +387,8 @@ class ApiServer(ThreadingHTTPServer):
             # The latest past day's files, read once per New York date (api/warm.py).
             self.warmer = PastDayWarmer(self.history.latest_past_day, self._warm_past_day,
                                         WARM_ERRORS)
-        # No source until one is attached (python -m tickr.api, or the demo's world).
-        self.chart = Chart(settings.chart)
+            # No source until one is attached (python -m tickr.api, or the demo's world).
+            self.chart = Chart(settings.chart)
         self.start_runner = run_command  # runs [api] start_bot_command; replaced in tests
         port = settings.remote_port if remote else settings.port
         super().__init__((settings.host, port), Handler)
