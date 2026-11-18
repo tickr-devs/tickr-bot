@@ -108,6 +108,23 @@ def test_foreign_host_refused(api, host):
     assert doc(payload)["error"] == "forbidden_host"
 
 
+def test_refusal_logs_port_and_host(api, capsys):
+    server, _ = api
+    resp, _ = request(server, "GET", "/status", host="127.0.0.1:8767")
+    assert resp.status == 403
+    line = next(x for x in capsys.readouterr().err.splitlines() if "GET /status" in x)
+    assert f"403 - port={server.server_port} host='127.0.0.1:8767'" in line
+
+
+def test_answered_request_logs_port_not_host(api, capsys):
+    server, _ = api
+    resp, _ = request(server, "GET", "/status")
+    assert resp.status == 200
+    line = next(x for x in capsys.readouterr().err.splitlines() if "GET /status" in x)
+    assert f"port={server.server_port}" in line
+    assert "host=" not in line
+
+
 def test_localhost_name_allowed(api):
     server, _ = api
     resp, _ = request(server, "GET", "/status", host=f"localhost:{server.server_port}")

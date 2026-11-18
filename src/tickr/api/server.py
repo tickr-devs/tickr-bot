@@ -37,6 +37,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -544,6 +545,10 @@ class ApiServer(ThreadingHTTPServer):
                 continue
 
 
+# HTTP statuses of a refused caller (bad token, foreign Host or Origin): their access lines
+# also carry the Host the caller sent (`Handler.log_request`).
+REFUSAL_CODES = frozenset({401, 403})
+
 _ERROR_CODES = {
     "forbidden_host": 403, "forbidden_origin": 403, "not_found": 404,
     "method_not_allowed": 405, "length_required": 411, "payload_too_large": 413,
@@ -717,6 +722,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
         sys.stderr.write(f"{self.log_date_time_string()} api {format % args}\n")
+
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        """The access line names the listener's port, and on a refusal (401, 403) the Host the
+        caller sent: which client was refused, and why, is then readable from the log alone.
+        The Host is untrusted text, so it is written with repr; no token or header value
+        other than the Host is ever written."""
+        if isinstance(code, HTTPStatus):
+            code = code.value
+        line = f'"{self.requestline}" {code} {size} port={self.server.server_port}'
+        if code in REFUSAL_CODES:
+            line += f" host={self.headers.get('Host')!r}"
+        self.log_message("%s", line)
 
     # ------------------------------------------------------------ methods
 
