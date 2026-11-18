@@ -58,3 +58,12 @@ def test_the_job_reader_finds_ids_and_display_names():
     text = ("on:\n  push:\njobs:\n  a-b:\n    runs-on: x\n"
             "  c:\n    name: Other\n    steps:\n      - name: s\n")
     assert jobs_of(text) == (["a-b", "c"], ["c"])
+
+
+def test_a_workflow_that_runs_pytest_installs_it():
+    # 2026-11-18: record-demo ran `uv run --no-sync pytest` after a plain `uv sync --frozen`, so
+    # the nightly recording failed with "Failed to spawn: pytest". pytest comes with the dev extra.
+    problems = [path.name for path in sorted(WORKFLOWS.glob("*.yml"))
+                if "uv run --no-sync pytest" in (text := path.read_text(encoding="utf-8"))
+                and "--extra dev" not in text]
+    assert not problems, problems

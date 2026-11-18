@@ -36,7 +36,9 @@ jobs:
           version: "0.11.32"
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      # --extra dev: the recording test below needs pytest (2026-11-18: without it the run failed
+      # with "Failed to spawn: pytest" after a good recording).
+      - run: uv sync --frozen --extra dev
       - run: uv run --no-sync tickr demo --record
       # The new recording must pass its own tests before it is offered: a recording the tests
       # refuse (2026-11-17: the recorded cycle began and ended with a position held, so the apps'
