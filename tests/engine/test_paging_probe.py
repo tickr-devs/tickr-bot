@@ -163,3 +163,122 @@ def test_a_cancel_that_never_takes_stops_the_run_with_the_order_left(tmp_path: P
     assert second in summary["unresolved"]
     assert summary["broker_after"]["working_probe_orders"] == [second]
     assert "pages" not in summary  # the history is not read with an order left working
+
+
+class OpenPagingBroker(FakeBroker):
+    """A fake whose open-orders shapes list every working order, `PAGE` rows a page."""
+
+    def __init__(self, page: int = PAGE) -> None:
+        super().__init__()
+        self.page = page
+        self.asked: list[tuple[int, str | None]] = []
+        self.working_when_read = 0
+
+    def open_orders_page_shapes(self, max_pages: int,
+                                listed_prefix: str | None = None) -> list[dict[str, Any]]:
+        self.asked.append((max_pages, listed_prefix))
+        ids = [o.client_order_id for o in self.open_orders()]
+        self.working_when_read = len(ids)
+        pages = []
+        for start in range(0, len(ids), self.page):
+            chunk = ids[start:start + self.page]
+            pages.append({"combos": len(chunk), "rows": len(chunk), "own_rows": len(chunk),
+                          "next_page": start + self.page < len(ids),
+                          "listed": [c for c in chunk if c.startswith(listed_prefix or "")]})
+        return pages[:max_pages]
+
+
+def run_open(world: World) -> tuple[int, dict]:
+    code = pp.run_open_orders(CFG, world.broker, world.market, SYMBOL, world.folder,
+                              now=world.now, sleep=world.sleep, out=world.lines.append,
+                              session=sp.POST, session_end=POST_TIME + timedelta(hours=3))
+    return code, json.loads((world.folder / "summary.json").read_text("utf-8"))
+
+
+def test_open_orders_probe_keeps_every_order_working_reads_the_pages_then_cancels(tmp_path):
+    broker = OpenPagingBroker()
+    world = World(tmp_path, broker)
+    code, summary = run_open(world)
+    count = CFG.probe.open_orders_paging_orders
+    assert code == sp.EXIT_ANSWERED
+    assert broker.working_when_read == count  # all working together when the list was read
+    assert len(broker.sent) == count and len({r.limit_price for r in broker.sent}) == count
+    assert all(r.side is Side.BUY and r.order_type is OrderType.LIMIT for r in broker.sent)
+    assert not broker.open_orders() and not broker.positions()  # every one cancelled after
+    assert summary["verdict"] == pp.PASSED and summary["listed_of_placed"] == count
+    assert summary["paged"] and summary["page_size"] == PAGE
+    assert broker.asked == [(CFG.environment.open_orders_max_pages,
+                             CFG.orders.probe_client_order_id_prefix)]
+    assert any(line.startswith("h2d_open_orders: passed") for line in world.lines)
+
+
+def test_open_orders_probe_on_one_page_is_answered(tmp_path):
+    world = World(tmp_path, OpenPagingBroker(page=CFG.probe.open_orders_paging_orders + 1))
+    code, summary = run_open(world)
+    assert code == sp.EXIT_ANSWERED and summary["verdict"] == pp.PASSED
+    assert summary["rows_per_page"] == [CFG.probe.open_orders_paging_orders]
+    assert summary["page_size"] is None
+
+
+def test_open_orders_probe_cancels_what_it_placed_when_an_order_fills(tmp_path):
+    class FillsThird(OpenPagingBroker):
+        def place(self, request: Any) -> Any:
+            ack = super().place(request)
+            if len(self.sent) == 3:
+                self.fill(request.client_order_id, Decimal(1), request.limit_price)
+            return ack
+
+    world = World(tmp_path, FillsThird())
+    code, summary = run_open(world)
+    assert len(world.broker.sent) == 3 and "not working" in summary["stopped"]
+    assert not world.broker.open_orders()  # the two working ones were cancelled
+    assert code == sp.EXIT_OPERATOR  # a share is held: the operator sells it
+    assert summary["broker_after"]["position"] == "1"
+
+
+def test_open_orders_probe_names_an_order_it_cannot_cancel(tmp_path):
+    class Sticky(OpenPagingBroker):
+        def cancel(self, client_order_id: str) -> None:
+            if client_order_id != self.sent[1].client_order_id:
+                super().cancel(client_order_id)
+
+    world = World(tmp_path, Sticky())
+    code, summary = run_open(world)
+    second = world.broker.sent[1].client_order_id
+    assert code == sp.EXIT_OPERATOR
+    assert any(second in u for u in summary["unresolved"])
+    assert summary["broker_after"]["working_probe_orders"] == [second]
+    assert len(world.broker.open_orders()) == 1  # every other order was still cancelled
+
+
+def test_open_orders_probe_stops_placing_when_an_earlier_order_fills(tmp_path):
+    """Fable, review of #639: an order placed earlier fills while later ones are placed (a
+    falling stock); the position read before the next order stops the placing at once,
+    every working order is still cancelled, and the operator is told to sell the share."""
+    class FillsFirstAtFourth(OpenPagingBroker):
+        def place(self, request: Any) -> Any:
+            ack = super().place(request)
+            if len(self.sent) == 4:
+                first = self.sent[0]
+                self.fill(first.client_order_id, Decimal(1), first.limit_price)
+            return ack
+
+    world = World(tmp_path, FillsFirstAtFourth())
+    code, summary = run_open(world)
+    assert len(world.broker.sent) == 4  # nothing after the fill was seen
+    assert "before open-4" in summary["stopped"] and "holds 1" in summary["stopped"]
+    assert not world.broker.open_orders()
+    assert code == sp.EXIT_OPERATOR and summary["broker_after"]["position"] == "1"
+    assert "pages" not in summary
+
+
+def test_open_orders_probe_is_refused_too_close_to_the_session_end(tmp_path):
+    world = World(tmp_path, OpenPagingBroker())
+    margin = timedelta(minutes=CFG.probe.open_orders_end_margin_minutes)
+    code = pp.run_open_orders(CFG, world.broker, world.market, SYMBOL, world.folder,
+                              now=world.now, sleep=world.sleep, out=world.lines.append,
+                              session=sp.POST,
+                              session_end=POST_TIME + margin - timedelta(minutes=1))
+    summary = json.loads((world.folder / "summary.json").read_text("utf-8"))
+    assert code == sp.EXIT_ANSWERED and "min left" in summary["stopped"]
+    assert world.broker.sent == []

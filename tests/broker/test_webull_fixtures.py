@@ -476,6 +476,23 @@ def test_history_page_shapes_with_a_day_send_its_window_and_list_only_the_prefix
         b.history_page_shapes(5, TRADE_DAY)
 
 
+def test_open_orders_page_shapes_follow_the_pages_and_list_only_the_prefix():
+    page = copy.deepcopy(load("open_orders_working_stop.json").body)
+    first = {**copy.deepcopy(page), "pagination_key": "k1"}
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    shapes = b.open_orders_page_shapes(5, "ap-6e324fb0-t1-s")
+    assert [p for _, p in t.sent] == [{}, {"pagination_key": "k1"}]
+    assert [(s["rows"], s["own_rows"], s["next_page"]) for s in shapes] == [
+        (1, 1, True), (1, 1, False)]
+    assert [s["listed"] for s in shapes] == [["ap-6e324fb0-t1-s2"], ["ap-6e324fb0-t1-s2"]]
+    assert "TSCO" not in json.dumps(shapes) and "ORDERID" not in json.dumps(shapes)
+    b, t, _ = broker(WireResponse(200, first), WireResponse(200, page))
+    assert len(b.open_orders_page_shapes(1)) == 1 and len(t.sent) == 1
+    b, _, _ = broker(WireResponse(200, first), WireResponse(200, first))
+    with pytest.raises(BrokerReadFailed):
+        b.open_orders_page_shapes(5)
+
+
 def test_history_window_shape_sends_the_window_and_names_no_order():
     page = copy.deepcopy(load("historical_orders_fill_and_stop.json").body)
     b, t, _ = broker(WireResponse(200, page))

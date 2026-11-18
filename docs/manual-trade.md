@@ -163,6 +163,31 @@ It takes about 9 minutes and buys nothing.
    Webull app. Exit 3: refused, nothing sent.
 5. Re-enable and restart the bot (step 1), and paste `run.txt` and `summary.json`.
 
+## Open-orders paging probe (H2d)
+
+`tickr probe-open-orders-paging SYMBOL` answers how the open-orders list pages while more
+orders work than the bot holds at 20 slots (20 x 4 stops + 6 entries = 86): the page size,
+whether paging works, and whether every working order is listed exactly once. The bot reads
+this list every poll to verify new stops and to reconcile; more pages than
+`open_orders_max_pages` refuse the read (`PAGE_LIMIT_REACHED`, a broker-read fence). Slots are
+not raised to 20 before it is answered. Details: `src/tickr/engine/paging_probe.py`.
+
+When, and the bot: as for the history paging probe above. It places `[probe]
+open_orders_paging_orders` BUY LIMIT orders, `[probe] paging_far_percent` below the bid and
+one tick apart so none fills, and keeps them all working; then it reads the list and cancels
+every order, proving each over. Before each order it reads the position: a share held (an
+earlier order filled) stops the placing and goes to the cancels. It is refused with less than
+`[probe] open_orders_end_margin_minutes` left in the session. It takes about 20 minutes and
+buys nothing; its orders stay in that day's order history. If it is
+interrupted, cancel every working `probe-` order in the Webull app before starting the bot.
+
+1. Step 1 of the extended-hours probe.
+2. A liquid stock under `[probe] max_price_usd` whose quote is fresh enough (step 2 above).
+3. `mkdir -p data/probe-open-orders && tickr probe-open-orders-paging SYM 2>&1 | tee -i data/probe-open-orders/run.txt`.
+4. Exit 0: answered (the `h2d_open_orders` line). Exit 4: a probe order or share is left;
+   cancel or sell it in the Webull app. Exit 3: refused, nothing sent.
+5. Re-enable and restart the bot (step 1), and paste `run.txt` and `summary.json`.
+
 ## Attached-stop probe (F8)
 
 `tickr probe-attached-stop SYMBOL` answers whether an entry can carry its own stop at the

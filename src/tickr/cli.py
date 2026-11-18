@@ -401,6 +401,33 @@ def _probe_history_paging(args: argparse.Namespace) -> int:
         return code
 
 
+def _probe_open_orders_paging(args: argparse.Namespace) -> int:
+    """Probe H2d in the pre-market or post-market: how the open-orders list pages while more
+    orders work than the bot holds at 20 slots (engine/paging_probe.py). Exit 0 answered, 3
+    refused, 4 the operator must cancel a leftover probe order in the Webull app."""
+    from tickr.engine import paging_probe, session_probe
+
+    cfg = config_module.load(args.config)
+    gate = config_module.trading_gate(cfg)
+    if not gate.open:
+        raise ManualRefused(f"trading gate closed: {gate.cause}")
+    if not session_probe.SYMBOL.match(args.symbol):
+        raise ManualRefused(f"{args.symbol!r} is not a ticker")
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    session, end = session_probe.check_time(cfg, calendar, NOW())
+    _, lock_path = data_paths(cfg)
+    with SingleInstanceLock(lock_path):
+        broker, market = PROBE_ADAPTERS(cfg)
+        folder = session_probe.evidence_folder(cfg, NOW(), "open-orders")
+        print(f"probe-open-orders-paging {args.symbol} in the {session} "
+              f"(ends {end.isoformat()}); evidence in {folder}")
+        code = paging_probe.run_open_orders(cfg, broker, market, args.symbol, folder, now=NOW,
+                                            sleep=SLEEP, out=print, session=session,
+                                            session_end=end)
+        print(f"summary: {folder / 'summary.json'}")
+        return code
+
+
 def _probe_attached_stop(args: argparse.Namespace) -> int:
     """Probe F8 in the regular session: does Webull hold an entry's attached stop from the
     moment the entry fills (engine/attached_probe.py)? Exit 0 answered, 3 refused, 4 the
@@ -825,6 +852,10 @@ def main(argv: list[str] | None = None) -> int:
                             "post-market, bot stopped, account flat: far limit orders placed "
                             "and cancelled until the history pages")
     paging.add_argument("symbol")
+    open_paging = sub.add_parser("probe-open-orders-paging", help="probe H2d in the "
+                                 "pre-market or post-market, bot stopped, account flat: far "
+                                 "limit orders kept working while the open-orders list is read")
+    open_paging.add_argument("symbol")
     attached = sub.add_parser("probe-attached-stop", help="probe F8 in the regular session, "
                               "bot stopped, account flat: does an entry's attached stop protect "
                               "its fill at once")
@@ -879,6 +910,8 @@ def main(argv: list[str] | None = None) -> int:
             return _probe_extended(args)
         if args.command == "probe-history-paging":
             return _probe_history_paging(args)
+        if args.command == "probe-open-orders-paging":
+            return _probe_open_orders_paging(args)
         if args.command == "probe-attached-stop":
             return _probe_attached_stop(args)
         if args.command == "probe-trailing":

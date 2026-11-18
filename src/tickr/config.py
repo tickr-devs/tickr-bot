@@ -202,6 +202,8 @@ class ProbeConfig:
     paging_orders: int
     paging_far_percent: Decimal
     paging_send_interval_seconds: int
+    open_orders_paging_orders: int
+    open_orders_end_margin_minutes: int
 
 
 @dataclass(frozen=True)
@@ -661,9 +663,13 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                           "least 0) and tick_cap_steps at least 1")
     if probe.history_max_pages < 1:
         raise ConfigError("[probe] history_max_pages must be at least 1")
-    if (probe.paging_orders < 1 or not 0 < probe.paging_far_percent < PERCENT_WHOLE
+    if (probe.paging_orders < 1 or probe.open_orders_paging_orders < 1
+            or probe.open_orders_end_margin_minutes < 1
+            or not 0 < probe.paging_far_percent < PERCENT_WHOLE
             or probe.paging_send_interval_seconds <= 0):
-        raise ConfigError("[probe] paging_orders and paging_send_interval_seconds must be above "
+        raise ConfigError("[probe] paging_orders, open_orders_paging_orders, "
+                          "open_orders_end_margin_minutes and paging_send_interval_seconds "
+                          "must be above "
                           "0 and paging_far_percent between 0 and 100")
     for name, values in (("trailing_tight_percents", probe.trailing_tight_percents),
                          ("trailing_amount_steps_usd", probe.trailing_amount_steps_usd),

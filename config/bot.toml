@@ -363,6 +363,14 @@ paging_far_percent = 20
 # Probe H2c: seconds between two orders (each a place and a cancel: 30 sends a minute in Sandbox); read by
 # tickr.engine.paging_probe.
 paging_send_interval_seconds = 4
+# Probe H2d (tickr probe-open-orders-paging): far BUY LIMIT orders (each [probe] paging_far_percent below the bid, one
+# tick apart, sent [probe] paging_send_interval_seconds apart) kept working together while the open-orders list is
+# read, then cancelled one by one; at least the orders the bot can hold at 20 slots (20 x [orders] max_stops_per_trade
+# stops + [risk] max_working_entries entries = 86); a count; read by tickr.engine.paging_probe.
+open_orders_paging_orders = 90
+# Probe H2d: least minutes left in the extended session when the probe starts (placing, reading and cancelling 90 orders
+# takes about 20 min); read by tickr.engine.paging_probe.
+open_orders_end_margin_minutes = 30
 
 [api]
 # Local API bind address; loopback only; read by the api server.
