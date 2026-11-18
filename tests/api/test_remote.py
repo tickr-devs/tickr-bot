@@ -19,7 +19,13 @@ import pytest
 from tickr import config
 from tickr.api import __main__ as api_main
 from tickr.api import contract
-from tickr.api.server import make_remote_server, make_server, pair, settings_from_config
+from tickr.api.server import (
+    GET_ROUTES,
+    make_remote_server,
+    make_server,
+    pair,
+    settings_from_config,
+)
 
 from .samples import T0
 from .schema_check import errors
@@ -442,3 +448,22 @@ def test_the_phone_reads_the_chart_source_attached_to_the_local_listener(local_a
     # Both listeners now answer from the same source (here without a calendar to read it by).
     assert doc(payload).get("cause") != OFF_CAUSE
     assert (resp.status, payload) == (local.status, served_locally)
+
+
+@pytest.mark.parametrize("path", [
+    *[route for route in GET_ROUTES if route != "/"], "/days/2026-11-16",
+    "/chart?symbol=ABCD&interval=5m&range=1d", "/days/2026-11-16/trades"])
+def test_every_get_route_answers_the_phone_as_it_answers_the_mac(local_api, remote_api,
+                                                                 remote_settings, path):
+    """The phone's listener reads through the local one's caches and sources: a route that
+    answers on the Mac's port answers the same on the phone's (#668: /chart was off there)."""
+    from tickr.data.base import FakeMarketData
+
+    local_api.chart.use(FakeMarketData("fake"))
+    token = paired(remote_api, remote_settings)
+    mac, mac_body = request(local_api, "GET", path)
+    phone, phone_body = remote(remote_api, "GET", path, token=token)
+    assert phone.status == mac.status, (path, phone_body)
+    if mac.status >= 400:
+        assert (doc(phone_body)["error"], doc(phone_body).get("cause")) == \
+            (doc(mac_body)["error"], doc(mac_body).get("cause")), path
