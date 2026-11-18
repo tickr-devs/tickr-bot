@@ -444,16 +444,20 @@ class History:
                     "SELECT * FROM orders WHERE trade_id = ? ORDER BY rowid", (row["trade_id"],))]
                 if not any(o.leg is Leg.ENTRY and o.filled_quantity > 0 for o in orders):
                     continue
+                closed = (None if row["closed_at"] is None
+                          else datetime.fromisoformat(row["closed_at"]))
                 try:
                     times = fill_times(store, orders)
                 except MalformedJournal:
-                    state = api.FlowStopState.UNKNOWN
-                else:
-                    open_today = day == today and row["closed_at"] is None
-                    state = (api.FlowStopState.VERIFIED if times.stop_confirmed is not None
-                             else api.FlowStopState.PENDING if open_today
-                             else api.FlowStopState.NEVER_VERIFIED)
-                found.append(api.FlowStopV1(row["trade_id"], row["symbol"], state))
+                    found.append(api.FlowStopV1(row["trade_id"], row["symbol"],
+                                                api.FlowStopState.UNKNOWN, closed_at=closed))
+                    continue
+                open_today = day == today and row["closed_at"] is None
+                state = (api.FlowStopState.VERIFIED if times.stop_confirmed is not None
+                         else api.FlowStopState.PENDING if open_today
+                         else api.FlowStopState.NEVER_VERIFIED)
+                found.append(api.FlowStopV1(row["trade_id"], row["symbol"], state,
+                                            times.first_fill, times.stop_confirmed, closed))
             return tuple(found)
         except sqlite3.Error as exc:
             raise HistoryUnavailable(f"database unreadable: {exc}") from exc

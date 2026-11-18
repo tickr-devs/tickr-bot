@@ -204,12 +204,48 @@
               "never_verified",
               "unknown"
             ]
+          },
+          "filled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stop_confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "trade_id",
           "symbol",
-          "state"
+          "state",
+          "filled_at",
+          "stop_confirmed_at",
+          "closed_at"
         ],
         "additionalProperties": false
       }

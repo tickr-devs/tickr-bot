@@ -434,9 +434,14 @@ def test_flow_stages_on_a_fake_broker_day(api, cfg):
         "risk": (2, ["ABCD", "WXYZ"]),
         "order": (2, ["ABCD", "WXYZ"]),
         "stop": (1, ["ABCD"])}
+    # Each stop with the journal's times: the first read showing the fill, the first showing
+    # the stop working; both trades are still open.
     assert body["stops"] == [
-        {"trade_id": verified, "symbol": "ABCD", "state": "verified"},
-        {"trade_id": pending, "symbol": "WXYZ", "state": "pending"}]
+        {"trade_id": verified, "symbol": "ABCD", "state": "verified",
+         "filled_at": "2026-11-16T15:00:00.000Z", "stop_confirmed_at": "2026-11-16T15:00:00.000Z",
+         "closed_at": None},
+        {"trade_id": pending, "symbol": "WXYZ", "state": "pending",
+         "filled_at": "2026-11-16T15:00:00.000Z", "stop_confirmed_at": None, "closed_at": None}]
     assert body["reconcile"] == {
         "agreement": "match", "agreement_cause": None, "read_at": "2026-11-16T15:00:00.000Z",
         "mismatch": None, "fences_cause": None,

@@ -151,17 +151,26 @@
     {
       "trade_id": "t-0001",
       "symbol": "WXYZ",
-      "state": "verified"
+      "state": "verified",
+      "filled_at": null,
+      "stop_confirmed_at": null,
+      "closed_at": null
     },
     {
       "trade_id": "t-0002",
       "symbol": "EFGH",
-      "state": "never_verified"
+      "state": "never_verified",
+      "filled_at": null,
+      "stop_confirmed_at": null,
+      "closed_at": null
     },
     {
       "trade_id": "t-0003",
       "symbol": "ABCD",
-      "state": "pending"
+      "state": "pending",
+      "filled_at": null,
+      "stop_confirmed_at": null,
+      "closed_at": null
     }
   ],
   "reconcile": {

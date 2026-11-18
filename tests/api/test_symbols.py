@@ -159,6 +159,26 @@ def test_a_filled_trade_is_at_the_stop_stage():
         contract.SymbolStage.STOP, contract.SymbolStage.STOP, contract.SymbolState.WAITING)
 
 
+def test_the_order_and_stop_stages_carry_the_journal_times_not_a_later_decisions():
+    folded = symbols.DiscoveryFolded()
+    folded.fold(_pass(0, candidates=("ABCD", "EFGH")))
+    filled, confirmed = BAR + timedelta(minutes=1), BAR + timedelta(minutes=1, seconds=4)
+    stops = (contract.FlowStopV1("t1", "ABCD", contract.FlowStopState.VERIFIED, filled, confirmed),
+             contract.FlowStopV1("t2", "EFGH", contract.FlowStopState.PENDING, filled))
+    # A HOLD long after the entry: never the time the stop stage shows.
+    records = (_watch("ABCD", 0, PASS, verdict=Verdict.ENTER, admission=Admission.TAKEN),
+               _watch("ABCD", 30, PASS, verdict=Verdict.HOLD),
+               _watch("EFGH", 0, PASS, verdict=Verdict.ENTER, admission=Admission.TAKEN))
+    rows = {r.symbol: r for r in symbols.symbols_document(DAY, folded, (), records, stops,
+                                                          4).rows}
+    reached = {r.stage: r.at for r in rows["ABCD"].reached}
+    assert reached[contract.SymbolStage.ORDER] == filled
+    assert reached[contract.SymbolStage.STOP] == confirmed
+    assert rows["ABCD"].at == confirmed
+    assert rows["EFGH"].at == filled
+    assert {r.stage: r.at for r in rows["EFGH"].reached}[contract.SymbolStage.ORDER] == filled
+
+
 def test_no_pass_yet_says_so(api):
     body = _get(api, "/symbols", "symbols-v1")
     assert body["as_of"] is None and body["as_of_cause"] == symbols.NO_PASS

@@ -1896,11 +1896,16 @@ class FlowStageV1:
 
 @dataclass(frozen=True)
 class FlowStopV1:
-    """The stop of one trade whose entry filled that day (FlowStopState)."""
+    """The stop of one trade whose entry filled that day (FlowStopState), with the journal times
+    behind it: the first read showing the entry filled, the first read showing its stop working,
+    and the trade's close (null while open, or where the journal cannot be read)."""
 
     trade_id: str
     symbol: str
     state: FlowStopState
+    filled_at: datetime | None = None
+    stop_confirmed_at: datetime | None = None
+    closed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -2227,8 +2232,9 @@ class SymbolState(StrEnum):
 @dataclass(frozen=True)
 class SymbolReachV1:
     """When a symbol first got to `stage` that day: the end of the discovery pass, the time of
-    the decision, or, for `screeners`, the start of the first pass that listed it. Null where
-    no record says when (the order and stop stages, which come from trades)."""
+    the decision, for `screeners` the start of the first pass that listed it, for `order` the
+    first read showing its entry filled and for `stop` the first read showing its stop working.
+    Null where no record says when."""
 
     stage: SymbolStage
     at: datetime | None

@@ -1169,6 +1169,10 @@ state}`. `state` is its own enum, not status-v1's stop state:
   trade, a stop that filled before any read saw it working) or the date is past;
 - `unknown`: its journal rows cannot be read.
 The live state of an open position's stop (`missing` included) is in `/status`.
+Added after v1 shipped (null in an older document): `filled_at` (the first read showing the
+entry filled), `stop_confirmed_at` (the first read showing a stop working after it) and
+`closed_at` (the trade's close; null while open). The fill and stop times are null where the
+journal cannot be read.
 
 `reconcile`: the bot keeps only its latest reconciliation and status, so only today has them.
 `agreement` (`match` / `mismatch`), `read_at` and `mismatch` come from the account file when
@@ -1285,7 +1289,9 @@ Each row:
   - `reached`: every stage up to `furthest`, in pipeline order, as `{stage, at}`: when it first
     got there (`screeners` the start of the first listing pass, a discovery stage the end of the
     pass that judged it, `strategy` the pass that made it a candidate or its first decision,
-    `risk` its first taken entry). `at` is null for `order` and `stop`, which come from trades.
+    `risk` its first taken entry, `order` the first read showing its entry filled, `stop` the
+    first read showing its stop working; the `/flow` stop's `filled_at` and `stop_confirmed_at`).
+    The `stop` stage's `at` row time is that confirmation too, or the fill while it waits.
   - `decided_at`, `strategy` (`name@version`) and `checks`: the active strategy's latest decision
     on it and every check of that decision, rounded like `check`.
 

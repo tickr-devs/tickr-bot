@@ -278,13 +278,16 @@ def symbols_document(day: date, folded: DiscoveryFolded, chips: Sequence[api.Flo
         stop = stop_of.get(symbol)
         if stop is not None:
             furthest = _later(furthest, S.ORDER)
+            # Each stage at its own journal time (the fill, the stop seen working), never the
+            # time of a later decision on the symbol (owner test 2026-11-18: two trades of a
+            # day both showed 12:22, the minute of a later HOLD).
             if stop.state is api.FlowStopState.VERIFIED:
                 furthest = S.STOP
-                now = _Outcome(S.STOP, api.SymbolState.PASSED, now.at if now else None)
+                now = _Outcome(S.STOP, api.SymbolState.PASSED, stop.stop_confirmed_at)
             elif stop.state is api.FlowStopState.PENDING:
-                now = _Outcome(S.STOP, api.SymbolState.WAITING, now.at if now else None)
+                now = _Outcome(S.STOP, api.SymbolState.WAITING, stop.filled_at)
             else:
-                now = _Outcome(S.STOP, api.SymbolState.DROPPED, now.at if now else None,
+                now = _Outcome(S.STOP, api.SymbolState.DROPPED, stop.filled_at,
                                stop.state.value)
         if now is None:  # listed by a screener after the latest recorded pass
             now = _Outcome(S.UNIVERSE, api.SymbolState.NOT_REACHED, None, NO_PASS)
@@ -295,6 +298,11 @@ def symbols_document(day: date, folded: DiscoveryFolded, chips: Sequence[api.Flo
             times.setdefault(S.STRATEGY, first_record[symbol])
         if symbol in first_taken:
             times.setdefault(S.RISK, first_taken[symbol])
+        if stop is not None:
+            if stop.filled_at is not None:
+                times.setdefault(S.ORDER, stop.filled_at)
+            if stop.stop_confirmed_at is not None:
+                times.setdefault(S.STOP, stop.stop_confirmed_at)
         reached = tuple(api.SymbolReachV1(stage, times.get(stage))
                         for stage in ORDER[:ORDER.index(furthest) + 1])
         rows.append(api.SymbolRowV1(
