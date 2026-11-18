@@ -119,7 +119,9 @@
         "code": "binding_not_proven",
         "params": {}
       }
-    ]
+    ],
+    "price": null,
+    "limits": []
   },
   "api_version": 1
 }

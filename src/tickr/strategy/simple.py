@@ -192,6 +192,9 @@ def enter(strategy: Any, c: Common, context: SymbolContext, checks: list[Check],
     distance = ONE - c.minimum_stop_percent / PERCENT
     stop = min(stop_level, entry_low * distance, quote.bid * distance)
     risk = entry_high - stop + spread
+    checks.append(v1._check("sizing_risk_per_share", risk, ">", ZERO, "entry_high - stop + spread"))
+    checks.extend(v1.sizing_inputs(entry_high, c.planned_loss_usd, c.max_position_notional_usd,
+                                   context.loss_budget_usd))
     planned_loss = c.planned_loss_usd
     if context.loss_budget_usd is not None and context.loss_budget_usd < planned_loss:
         planned_loss = max(context.loss_budget_usd, ZERO)

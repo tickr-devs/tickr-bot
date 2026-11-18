@@ -1960,7 +1960,23 @@ class WatchingRowV1:
     quote_age_cause_codes: tuple[ReasonV1, ...] = _reasons_of("quote_age_cause")
 
 class SizeBinding(StrEnum):
-    DAILY_ROOM = "daily_room"  # sized down to the room the daily loss ceiling leaves
+    """A limit that sizes an entry: the shares it allows are floor(limit / per share)."""
+
+    PLANNED_LOSS = "planned_loss"  # the planned loss per trade / the sizing risk per share
+    NOTIONAL_CAP = "notional_cap"  # the notional cap per position / the price per share
+    DAILY_ROOM = "daily_room"  # the room the daily loss ceiling leaves / the risk per share
+
+
+@dataclass(frozen=True)
+class SizeLimitV1:
+    """One sizing limit of a sized decision, from the inputs its strategy recorded: `limit_usd`
+    divided by `per_share_usd` (the sizing risk per share, or the price for the notional cap),
+    rounded down, is `shares`, the most that limit allows."""
+
+    limit: SizeBinding
+    limit_usd: Decimal
+    per_share_usd: Decimal
+    shares: Decimal
 
 
 @dataclass(frozen=True)
@@ -1968,9 +1984,15 @@ class LatestSizeV1:
     """The size the active strategy gave its latest sized decision of the day: the measured
     value of its recorded `quantity` check (whole shares; below 1 = too small to enter), on any
     verdict: the last size given, not a forecast of the next one. `binding`: the limit that cut
-    it, only where the record proves it (`daily_room`: a `daily_loss_budget_usd` check and
-    floor(its room / the recorded `sizing_risk_per_share`) equal to the quantity); otherwise null
-    with `binding_cause`. Read from the decision record, never resized."""
+    it, only where the record proves it; otherwise null with `binding_cause`. `limits`: what
+    each sizing limit allowed (planned loss, notional cap, then the daily room when the platform
+    gave one), from the sizing inputs the strategy recorded; their smallest is the quantity, and
+    `binding` is the one that gave it (the daily room first when it lowered the planned loss).
+    Empty for a record without those inputs (older strategies), where `binding` is `daily_room`
+    only when a `daily_loss_budget_usd` check and floor(its room / the recorded
+    `sizing_risk_per_share`) equal the quantity. `price`: the price per share the size was worked
+    out at (the top of the entry window), null when not recorded. Read from the decision record,
+    never resized."""
 
     symbol: str
     at: datetime  # the decision's bar start
@@ -1981,6 +2003,8 @@ class LatestSizeV1:
     binding_cause: str | None
 
     binding_cause_codes: tuple[ReasonV1, ...] = _reasons_of("binding_cause")
+    price: Decimal | None = _added_later(None)
+    limits: tuple[SizeLimitV1, ...] = _added_later(())
 
 @dataclass(frozen=True)
 class WatchingV1:
@@ -2003,6 +2027,10 @@ _FALL = ("<", "<=")  # passes once measured falls to the threshold
 QUANTITY_RULE = "quantity"
 DAILY_ROOM_RULE = "daily_loss_budget_usd"
 SIZING_RISK_RULE = "sizing_risk_per_share"
+SIZING_PRICE_RULE = "sizing_price"
+PLANNED_LOSS_RULE = "planned_loss_limit_usd"
+NOTIONAL_CAP_RULE = "notional_cap_usd"
+ROOM_RULE = "daily_loss_room_usd"
 BINDING_NOT_RECORDED = ("not proven by the record: the planned loss, the notional cap or "
                         "the daily room")
 
@@ -2110,6 +2138,46 @@ def _room_binds(checks: dict[str, Check], quantity: Decimal) -> bool:
     return (room.measured / risk.measured).to_integral_value(rounding=ROUND_FLOOR) == quantity
 
 
+def _measured(checks: dict[str, Check], rule: str) -> Decimal | None:
+    check = checks.get(rule)
+    return None if check is None else check.measured
+
+
+def size_limits(checks: dict[str, Check]) -> tuple[SizeLimitV1, ...]:
+    """What each sizing limit allowed, from the sizing inputs a decision recorded
+    (strategy/price_action_v1.sizing_inputs); empty when any input is missing or not positive."""
+    risk, price = _measured(checks, SIZING_RISK_RULE), _measured(checks, SIZING_PRICE_RULE)
+    planned, cap = _measured(checks, PLANNED_LOSS_RULE), _measured(checks, NOTIONAL_CAP_RULE)
+    if risk is None or price is None or planned is None or cap is None:
+        return ()
+    if risk <= 0 or price <= 0:
+        return ()
+
+    def limit(kind: SizeBinding, usd: Decimal, per_share: Decimal) -> SizeLimitV1:
+        return SizeLimitV1(kind, usd, per_share,
+                           (usd / per_share).to_integral_value(rounding=ROUND_FLOOR))
+
+    limits = [limit(SizeBinding.PLANNED_LOSS, planned, risk),
+              limit(SizeBinding.NOTIONAL_CAP, cap, price)]
+    room = _measured(checks, ROOM_RULE)
+    if room is not None:
+        limits.append(limit(SizeBinding.DAILY_ROOM, room, risk))
+    return tuple(limits)
+
+
+def _binding(limits: tuple[SizeLimitV1, ...], quantity: Decimal) -> SizeBinding | None:
+    """The limit that gave `quantity`: the smallest allowance, only when it is the quantity (else
+    the record does not prove it). The daily room first when it lowered the planned loss, then
+    the limits in order."""
+    if not limits or min(x.shares for x in limits) != quantity:
+        return None
+    by_kind = {x.limit: x for x in limits}
+    room, planned = by_kind.get(SizeBinding.DAILY_ROOM), by_kind[SizeBinding.PLANNED_LOSS]
+    if room is not None and room.shares == quantity and room.limit_usd < planned.limit_usd:
+        return SizeBinding.DAILY_ROOM
+    return next(x.limit for x in limits if x.shares == quantity)
+
+
 def latest_size(records: tuple[DecisionRecord, ...]) -> LatestSizeV1 | None:
     """The newest record of `records` with a measured `quantity` check, as LatestSizeV1."""
     for r in reversed(_oldest_first(records)):
@@ -2117,11 +2185,16 @@ def latest_size(records: tuple[DecisionRecord, ...]) -> LatestSizeV1 | None:
         quantity = checks.get(QUANTITY_RULE)
         if quantity is None or quantity.measured is None:
             continue
-        binding = SizeBinding.DAILY_ROOM if _room_binds(checks, quantity.measured) else None
+        limits = size_limits(checks)
+        if limits:
+            binding = _binding(limits, quantity.measured)
+        else:
+            binding = SizeBinding.DAILY_ROOM if _room_binds(checks, quantity.measured) else None
         d = r.decision
         return LatestSizeV1(r.symbol, r.bar_start, StrategyId(d.strategy, d.version), d.verdict,
                             quantity.measured, binding,
-                            None if binding else BINDING_NOT_RECORDED)
+                            None if binding else BINDING_NOT_RECORDED,
+                            price=_measured(checks, SIZING_PRICE_RULE), limits=limits)
     return None
 
 

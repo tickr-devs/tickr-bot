@@ -277,6 +277,8 @@
                 {
                   "type": "string",
                   "enum": [
+                    "planned_loss",
+                    "notional_cap",
                     "daily_room"
                   ]
                 },
@@ -313,6 +315,52 @@
                 "required": [
                   "code",
                   "params"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "price": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "string",
+                    "enum": [
+                      "planned_loss",
+                      "notional_cap",
+                      "daily_room"
+                    ]
+                  },
+                  "limit_usd": {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  "per_share_usd": {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  },
+                  "shares": {
+                    "type": "string",
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+                  }
+                },
+                "required": [
+                  "limit",
+                  "limit_usd",
+                  "per_share_usd",
+                  "shares"
                 ],
                 "additionalProperties": false
               }

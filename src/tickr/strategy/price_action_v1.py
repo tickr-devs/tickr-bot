@@ -241,6 +241,24 @@ def _flag(rule: str, passed: bool, note: str) -> Check:
     return Check(rule, None, "is", None, passed, note)
 
 
+def sizing_inputs(price: Decimal, planned_loss_usd: Decimal, notional_cap_usd: Decimal,
+                  loss_budget_usd: Decimal | None) -> list[Check]:
+    """What each sizing limit was given, recorded so the API can show the shares every limit
+    allows (`api/contract.latest_size`). They only describe the sizing and always pass: the
+    price the notional cap divides, the configured planned loss and notional cap, and the
+    daily-loss room (never below zero) when the platform gave one. The risk per share is the
+    caller's `sizing_risk_per_share` check."""
+    checks = [
+        _check("sizing_price", price, ">", ZERO, "price per share the notional cap divides"),
+        _check("planned_loss_limit_usd", planned_loss_usd, ">", ZERO, "configured planned loss"),
+        _check("notional_cap_usd", notional_cap_usd, ">", ZERO, "configured notional cap"),
+    ]
+    if loss_budget_usd is not None:
+        checks.append(_check("daily_loss_room_usd", max(loss_budget_usd, ZERO), ">=", ZERO,
+                             "room the daily loss ceiling leaves"))
+    return checks
+
+
 def spread_check(quote: Quote, max_spread_ratio: Decimal) -> Check:
     """(ask - bid) / mid of a valid quote (0 < bid <= ask) against the strategy's limit."""
     mid = (quote.ask + quote.bid) / TWO
@@ -435,6 +453,8 @@ class PriceActionV1:
         )
         # Quantity: whole shares within the planned loss and the notional cap. Near the
         # platform's daily ceiling the planned loss shrinks to the room it leaves.
+        checks.extend(sizing_inputs(entry_high, s.planned_loss_usd, s.max_position_notional_usd,
+                                    context.loss_budget_usd))
         planned_loss = s.planned_loss_usd
         if context.loss_budget_usd is not None and context.loss_budget_usd < planned_loss:
             planned_loss = max(context.loss_budget_usd, ZERO)

@@ -1230,11 +1230,19 @@ newest sized decision that day (any verdict, entering included), read from the r
 recomputed. The strategy sizes each signal itself (owner decision 2026-11-14); the platform only
 verifies that quantity on admission, so there is no size before a signal. Fields: `symbol`, `at`,
 `strategy`, `verdict`, `quantity` (the measured value of the recorded `quantity` check: whole
-shares, below 1 means too small to enter), and `binding`: `daily_room` only when the record
+shares, below 1 means too small to enter), `price` (the price per share it was sized at, the top
+of the entry window; `null` when not recorded) and `limits`: what each sizing limit allowed, from
+the sizing inputs the strategy recorded (`sizing_risk_per_share`, `sizing_price`,
+`planned_loss_limit_usd`, `notional_cap_usd` and, when the platform gave a daily room,
+`daily_loss_room_usd`). Each limit is `{limit, limit_usd, per_share_usd, shares}` with `shares` =
+floor(`limit_usd` / `per_share_usd`): `planned_loss` (planned loss / risk per share),
+`notional_cap` (notional cap / price), `daily_room` (room left / risk per share). Their smallest
+is the strategy's quantity, and `binding` names the limit that gave it (`daily_room` first when the
+room lowered the planned loss; on a tie, the first in that order). A record without those inputs
+(older decisions) has empty `limits`, and its `binding` is `daily_room` only when the record
 proves it: a `daily_loss_budget_usd` check (the planned loss was lowered to the room the daily
 loss ceiling leaves) and floor(that room / the recorded `sizing_risk_per_share`) equal to the
-quantity. The room check alone proves nothing: the notional cap can still cut below it.
-Otherwise `binding` is `null` with `binding_cause`. It is the last size given, not a forecast of
+quantity. Otherwise `binding` is `null` with `binding_cause`. It is the last size given, not a forecast of
 the next one (that depends on the next signal's price and stop). `latest_size` is `null` when no
 decision that day reached sizing.
 

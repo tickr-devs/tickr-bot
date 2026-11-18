@@ -251,7 +251,8 @@ def test_latest_size_is_the_newest_recorded_quantity_with_its_structured_binding
         "symbol": "ABCD", "at": "2026-11-16T15:00:00.000Z",
         "strategy": {"name": ACTIVE[0], "version": ACTIVE[1]}, "verdict": "ENTER",
         "quantity": "200", "binding": None, "binding_cause": contract.BINDING_NOT_RECORDED,
-        "binding_cause_codes": [{"code": "binding_not_proven", "params": {}}]}
+        "binding_cause_codes": [{"code": "binding_not_proven", "params": {}}],
+        "price": None, "limits": []}
     risk = check("0.335", ">", "0", contract.SIZING_RISK_RULE)
     risk = Check(risk.rule, risk.measured, risk.operator, risk.threshold, True)
     records = (_watch("ABCD", 0, sized), _watch("QRST", 4, PASS, room, risk, small))
@@ -270,6 +271,48 @@ def test_latest_size_is_the_newest_recorded_quantity_with_its_structured_binding
     assert contract.watching_document(DAY, without_risk, 4, 4).latest_size.binding is None
     assert contract.watching_document(DAY, (_watch("ABCD", 0, FAIL),), 4, 4
                                       ).latest_size is None
+
+
+def _inputs(risk, price, planned, cap, room=None):
+    rules = [(contract.SIZING_RISK_RULE, risk), (contract.SIZING_PRICE_RULE, price),
+             (contract.PLANNED_LOSS_RULE, planned), (contract.NOTIONAL_CAP_RULE, cap)]
+    if room is not None:
+        rules.append((contract.ROOM_RULE, room))
+    return tuple(Check(rule, Decimal(value), ">", Decimal(0), True) for rule, value in rules)
+
+
+def _quantity(value):
+    return Check(contract.QUANTITY_RULE, Decimal(value), ">=", Decimal(1), True)
+
+
+def test_latest_size_shows_what_each_recorded_limit_allows():
+    # IQ at 0.71, risk 0.012: loss 50 allows 4166, cap 2500 allows 3521, room 292 allows 24333.
+    records = (_watch("IQ", 0, PASS, *_inputs("0.012", "0.71", "50", "2500", "292"),
+                      _quantity("3521")),)
+    latest = contract.watching_document(DAY, records, 4, 4).latest_size
+    assert [(x.limit, x.limit_usd, x.per_share_usd, x.shares) for x in latest.limits] == [
+        (contract.SizeBinding.PLANNED_LOSS, Decimal(50), Decimal("0.012"), Decimal(4166)),
+        (contract.SizeBinding.NOTIONAL_CAP, Decimal(2500), Decimal("0.71"), Decimal(3521)),
+        (contract.SizeBinding.DAILY_ROOM, Decimal(292), Decimal("0.012"), Decimal(24333))]
+    assert (latest.binding, latest.binding_cause, latest.price) == (
+        contract.SizeBinding.NOTIONAL_CAP, None, Decimal("0.71"))
+
+
+@pytest.mark.parametrize(("inputs", "quantity", "binding"), [
+    (("0.62", "21.70", "50", "2500", "292"), "80", contract.SizeBinding.PLANNED_LOSS),
+    (("0.62", "21.70", "50", "2500"), "80", contract.SizeBinding.PLANNED_LOSS),  # no room given
+    # The room lowered the planned loss: floor(12.5 / 0.335) = 37 is the room's, not the loss's.
+    (("0.335", "10", "50", "2500", "12.5"), "37", contract.SizeBinding.DAILY_ROOM),
+    # A tie of loss and cap with the room above: the first limit in order.
+    (("0.5", "25", "50", "2500", "300"), "100", contract.SizeBinding.PLANNED_LOSS),
+    # The recorded quantity is not the smallest allowance: nothing is claimed.
+    (("0.012", "0.71", "50", "2500", "292"), "3000", None),
+])
+def test_latest_size_binding_is_the_limit_that_gave_the_quantity(inputs, quantity, binding):
+    records = (_watch("ABCD", 0, PASS, *_inputs(*inputs), _quantity(quantity)),)
+    latest = contract.watching_document(DAY, records, 4, 4).latest_size
+    assert latest.binding == binding
+    assert latest.binding_cause == (None if binding else contract.BINDING_NOT_RECORDED)
 
 
 def test_check_decimal_places_is_configured(cfg):

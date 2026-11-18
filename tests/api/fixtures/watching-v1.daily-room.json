@@ -13,7 +13,9 @@
     "quantity": "37",
     "binding": "daily_room",
     "binding_cause": null,
-    "binding_cause_codes": []
+    "binding_cause_codes": [],
+    "price": null,
+    "limits": []
   },
   "api_version": 1
 }

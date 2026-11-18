@@ -99,6 +99,7 @@ from tickr.api.contract import (
     SettingDifferenceV1,
     SettingsV1,
     SizeBinding,
+    SizeLimitV1,
     SkippedSignalV1,
     SkippedV1,
     StatusResponseV1,
@@ -600,6 +601,16 @@ def documents() -> dict[str, object]:
         "watching-v1.daily-room": WatchingV1(DAY, 0, (), LatestSizeV1(
             "QRST", T0.replace(microsecond=0), StrategyId("price-action-v1", "1"),
             Verdict.WATCH, Decimal("37"), SizeBinding.DAILY_ROOM, None)),
+        # A strategy that records its sizing inputs: the notional cap set the size (2500 / 0.71).
+        "watching-v1.notional-cap": WatchingV1(DAY, 0, (), LatestSizeV1(
+            "IQ", T0.replace(microsecond=0), StrategyId("price-action-v3", "2"), Verdict.ENTER,
+            Decimal("3521"), SizeBinding.NOTIONAL_CAP, None, price=Decimal("0.71"), limits=(
+                SizeLimitV1(SizeBinding.PLANNED_LOSS, Decimal("50"), Decimal("0.012"),
+                            Decimal("4166")),
+                SizeLimitV1(SizeBinding.NOTIONAL_CAP, Decimal("2500"), Decimal("0.71"),
+                            Decimal("3521")),
+                SizeLimitV1(SizeBinding.DAILY_ROOM, Decimal("292"), Decimal("0.012"),
+                            Decimal("24333"))))),
         "watching-v1.empty": WatchingV1(DAY - timedelta(days=3), 0, (), None),
         "symbols-v1": SymbolsV1(DAY, T0.replace(microsecond=0), None, tuple(
             SymbolStageCountV1(stage, count) for stage, count in zip(

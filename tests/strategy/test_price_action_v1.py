@@ -21,6 +21,7 @@ from strategy_bars import (
     strategy_values,
 )
 
+from tickr.api import contract
 from tickr.api.contract import TRIGGER_RULES
 from tickr.strategy import indicators as ind
 from tickr.strategy import price_action_v1 as pa
@@ -148,6 +149,9 @@ def test_breakout_enter():
         "round_trip_atr_ratio",
         "round_trip_risk_ratio",
         "sizing_risk_per_share",
+        "sizing_price",
+        "planned_loss_limit_usd",
+        "notional_cap_usd",
         "quantity",
     ]
     by_rule = {c.rule: c for c in decision.checks}
@@ -530,6 +534,13 @@ def test_quantity_shrinks_to_the_daily_loss_budget():
     # a budget at or above the strategy's own planned loss changes nothing
     assert quantity(sized(d(50))) == d(71) and "daily_loss_budget_usd" not in rules(sized(d(50)))
     assert quantity(sized(None)) == d(71)
+    # the recorded sizing inputs give the API the same size (api/contract.latest_size)
+    for budget in (d(20), d(50), d(500), None):
+        decision = sized(budget)
+        checks = {c.rule: c for c in decision.checks}
+        limits = contract.size_limits(checks)
+        assert min(x.shares for x in limits) == quantity(decision)
+        assert ("daily_loss_room_usd" in checks) is (budget is not None)
     # no room: refused with the quantity rule, never a negative or zero order
     assert_refused(sized(d(0)), Verdict.IGNORE, "quantity")
 

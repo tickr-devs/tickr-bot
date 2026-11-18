@@ -313,6 +313,11 @@ class Composed:
             return self._decide(context, Verdict.IGNORE, checks, **levels)
         stop = self.stop_block.stop(entry_high, quote)
         risk = entry_high - stop + (quote.ask - quote.bid)
+        checks.append(v1._check("sizing_risk_per_share", risk, ">", ZERO,
+                                "entry_high - stop + spread"))
+        checks.extend(v1.sizing_inputs(entry_high, self.sizing.planned_loss_usd,
+                                       self.sizing.max_position_notional_usd,
+                                       context.loss_budget_usd))
         planned = self.sizing.planned_loss_usd
         if context.loss_budget_usd is not None and context.loss_budget_usd < planned:
             planned = max(context.loss_budget_usd, ZERO)

@@ -12,6 +12,7 @@ import pytest
 from strategy_bars import SYMBOL, TODAY, bar, d, minute, quote
 
 from tickr import config
+from tickr.api import contract
 from tickr.observers.loader import load_strategy, parse_modules
 from tickr.strategy import composed
 from tickr.strategy.base import PositionView, SymbolContext, Verdict
@@ -63,6 +64,8 @@ def test_ignition_enters_at_the_ask_with_the_stop_twenty_percent_under():
     assert decision.quantity == (Decimal(1000) / decision.entry_high).to_integral_value(
         rounding="ROUND_FLOOR")
     assert decision.setup == "ignition-v1"
+    limits = contract.size_limits({c.rule: c for c in decision.checks})
+    assert min(x.shares for x in limits) == decision.quantity
 
 
 def test_without_a_quote_the_signal_is_watched():

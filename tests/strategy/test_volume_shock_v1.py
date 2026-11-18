@@ -10,6 +10,7 @@ import pytest
 from strategy_bars import SYMBOL, TODAY, bar, d, prior_sessions, quote
 
 from tickr import config
+from tickr.api import contract
 from tickr.observers.loader import check_history, load_strategy, parse_modules
 from tickr.strategy import volume_shock_v1 as vs
 from tickr.strategy.base import PositionView, SymbolContext, Verdict
@@ -96,6 +97,9 @@ def test_loss_budget_sizes_down():
     small = make().evaluate(SymbolContext(SYMBOL, bars, prior_sessions(), q, None, d("5")))
     assert small.verdict is Verdict.ENTER and small.quantity < full.quantity
     assert ("daily_loss_budget_usd", True) in rules(small)
+    for decision in (full, small):
+        limits = contract.size_limits({c.rule: c for c in decision.checks})
+        assert min(x.shares for x in limits) == decision.quantity
 
 
 def test_a_signal_older_than_signal_valid_minutes_minutes_expires():
