@@ -748,3 +748,12 @@ def test_demo_world_serves_charts(tmp_path):
     days = chart.answer("ABCD", IV.D1, R.M1, world.now)
     assert [c.start for c in days.bars] == [ny(d, "00:00")
                                             for d in (date(2026, 11, 12), FRIDAY, MONDAY)]
+
+
+def test_http_refusal_cause_is_logged(served, capsys):
+    """A refused GET /chart logs its cause beside the status line: a 503 alone says nothing."""
+    served.chart.use(None, "chart market data is starting: test")
+    resp, _ = request(served, "GET", "/chart?symbol=ABCD&interval=5m&range=1d")
+    assert resp.status == 503
+    assert "GET /chart refused: unavailable: chart market data is starting: test" in \
+        capsys.readouterr().err

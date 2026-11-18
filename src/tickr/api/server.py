@@ -1054,15 +1054,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, result)
 
     def _chart(self) -> None:
-        """GET /chart?symbol=&interval=&range=: candles from market data (api/chart.py)."""
+        """GET /chart?symbol=&interval=&range=: candles from market data (api/chart.py). Every
+        refusal's cause is logged next to its status line: a 503 alone does not say why."""
         try:
             params = _query(urlsplit(self.path).query, frozenset({"symbol", "interval", "range"}))
             symbol, interval, span = parse_query(params)
             document = self.server.chart.answer(symbol, interval, span, self.server.clock())
         except BadQuery as exc:
+            self.log_message("GET /chart refused: bad_request: %s", exc)
             self._error("bad_request", str(exc))
             return
         except ChartRefused as exc:
+            self.log_message("GET /chart refused: %s: %s", exc.error, exc.cause)
             extra = {}
             if exc.retry_after is not None and math.isfinite(exc.retry_after):
                 extra["Retry-After"] = str(math.ceil(exc.retry_after))
