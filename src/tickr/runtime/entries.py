@@ -295,6 +295,11 @@ def own_exposure(engine: Engine, symbol: str | None = None) -> tuple[int, int]:
     return own_positions, working
 
 
+def working_entries(engine: Engine) -> int:
+    """Our entries working in any symbol, against `[risk] max_working_entries`."""
+    return sum(1 for o in engine.orders() if o.leg is Leg.ENTRY and o.live)
+
+
 def stop_requests_owed(engine: Engine) -> int:
     """Place requests the stops may need if every working entry of ours, and the one about to
     be placed, filled in the same poll: each fill observation places up to
@@ -304,8 +309,7 @@ def stop_requests_owed(engine: Engine) -> int:
     waiting on our own budget for their stops (with 30 places per 60 s: at most 7 entries
     working at once). Not counted: a later piecemeal fill of an entry already observed, closes,
     stop retries and forced exits; they draw on the rest of the window."""
-    working = sum(1 for o in engine.orders() if o.leg is Leg.ENTRY and o.live)
-    return STOP_PLACES_PER_FILL * (working + 1)
+    return STOP_PLACES_PER_FILL * (working_entries(engine) + 1)
 
 
 def slots_in_use(engine: Engine) -> int:
@@ -367,6 +371,7 @@ class EntryDesk:
             own_open_positions=own_positions,
             own_working_orders=working,
             open_positions=slots_in_use(engine),
+            working_entries=working_entries(engine),
             symbol_last_loss_at=last_loss_at(engine, decision.symbol, now),
             decision=decision,
             limit_price=limit,

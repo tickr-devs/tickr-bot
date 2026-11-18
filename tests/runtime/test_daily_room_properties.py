@@ -456,7 +456,8 @@ def _admissible(now: datetime, decision, q: Quote) -> AdmissionInputs:
         reconciliation=Reconciliation(startup_done=True, last_broker_read_at=now,
                                       foreign_exposure=False, unresolved_exposure=False),
         entry_stop=False, session=CALENDAR.day(now.date()), now=now, own_open_positions=0,
-        own_working_orders=0, open_positions=0, symbol_last_loss_at=None, decision=decision,
+        own_working_orders=0, open_positions=0, working_entries=0, symbol_last_loss_at=None,
+        decision=decision,
         limit_price=None, stop_price=None, setup_valid=True, quote=q,
         realized_loss_today_usd=ZERO, open_reservations_usd=ZERO, entry_budget_available=True,
         stop_budget_available=True)

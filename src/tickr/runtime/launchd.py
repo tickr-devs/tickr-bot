@@ -131,9 +131,10 @@ def check_timings(config: Config) -> None:
     max_open_positions x max_stops_per_trade x 2 x detail_poll_seconds <= that time minus
     the cutoff, with max_stops_per_trade >= 3 (the cap holds only with several slots; one
     slot's position has the whole window);
-    and unless every slot's entry can fill in the same poll and still have its stops verified
-    in time, with a poll to spare: (max_open_positions + 1 + stop_listing_polls) x
-    detail_poll_seconds <= [orders] max_unprotected_seconds - detail_poll_seconds."""
+    and unless every working entry can fill in the same poll and still have its stops verified
+    in time, with a poll to spare: (working + 1 + stop_listing_polls) x detail_poll_seconds
+    <= [orders] max_unprotected_seconds - detail_poll_seconds, where working is the lesser of
+    [risk] max_working_entries and max_open_positions (a working entry takes a slot)."""
     schedule(config.runtime)
     drain = config.orders.shutdown_deadline_seconds
     alert_after = config.runtime.stop_alert_after_seconds
@@ -168,7 +169,10 @@ def check_timings(config: Config) -> None:
                           f"below the flatten-to-close time ({window} s)")
     # The session flatten cancels one stop at a time across every trade: the cancel goes out,
     # the next poll's read confirms it and the shares' close goes out at once (at most two
-    # polls per stop): every slot's stops must be closed before the cutoff.
+    # polls per stop): every slot's stops must be closed before the cutoff. It counts no entry
+    # reads, which go ahead of a cancel's read (`Engine._read_first`): it relies on no entry
+    # working at flatten time (working entries are cancelled at the last-entry time, before
+    # the flatten).
     stops = config.orders.max_stops_per_trade
     if stops < 3:
         raise ConfigError(f"[orders] max_stops_per_trade ({stops}) must be at least 3: one "
@@ -186,17 +190,19 @@ def check_timings(config: Config) -> None:
             f"[session] flatten_grace_seconds ({grace}) must be above the flatten of every slot "
             f"({flatten} s) plus [orders] reconcile_interval_seconds "
             f"({config.orders.reconcile_interval_seconds})")
-    # Entries of every slot may fill in the same poll (resting limits). One Detail read per
-    # poll serves their fills in turn; each fill's stops go out at once and the next poll's
-    # open-orders read verifies every new stop it lists (a stop may be listed up to
-    # stop_listing_polls reads late), so the last fill waits slots + 1 + that many polls for
-    # its verified stops; a poll is kept spare.
+    # Every working entry may fill in the same poll (resting limits); a position already held
+    # needs no new stop. One Detail read per poll serves the fills in turn (a moved symbol's
+    # entry is read ahead of the other moved orders: `Engine._read_first`); each fill's stops
+    # go out at once and the next poll's open-orders read verifies every new stop it lists (a
+    # stop may be listed up to stop_listing_polls reads late), so the last fill waits
+    # working + 1 + that many polls for its verified stops; a poll is kept spare.
     poll = config.orders.detail_poll_seconds
-    burst = (config.risk.max_open_positions + 1 + config.orders.stop_listing_polls) * poll
+    working = min(config.risk.max_working_entries, config.risk.max_open_positions)
+    burst = (working + 1 + config.orders.stop_listing_polls) * poll
     limit = config.orders.max_unprotected_seconds - poll
     if burst > limit:
         raise ConfigError(
-            f"([risk] max_open_positions + 1 + [orders] stop_listing_polls) x "
+            f"([risk] max_working_entries + 1 + [orders] stop_listing_polls) x "
             f"detail_poll_seconds ({burst} s) must not exceed [orders] "
             f"max_unprotected_seconds less one poll ({limit} s): fills arriving together are "
             "read one at a time")

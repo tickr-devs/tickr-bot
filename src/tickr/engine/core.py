@@ -1404,29 +1404,41 @@ class Engine:
         symbol whose broker position moved away from Detail, not read since that was first
         seen, when another stop of that symbol waits for its cancel's Detail (`cancelling`):
         a stop-out Detail has not shown yet changes what that cancel's confirmation leads to
-        (a kept stop filling while a scale-out's stops are released). 1: a stop or entry
-        whose cancel waits for Detail, not read since that cancel (a stop's position may have
-        no stop until the read confirms it, and its close waits for it; an entry's read shows
-        its last fills, which need their stops), and, while the open-orders list cannot be
-        read, a stop never read (entries filling in the same poll each get their stops
-        verified before the next entry is read, so the first fills are not left waiting
-        behind the last). While the list answers it verifies new stops, however late it shows
+        (a kept stop filling while a scale-out's stops are released). 1: an entry that may
+        hold a fill without its stops: a live entry in a symbol whose broker position grew
+        past what Detail says we hold, not read since that was first seen, or an entry whose
+        cancel waits for Detail, not read since that cancel (its read shows its last fills);
+        and, while the open-orders list cannot be read, a stop never read
+        (entries filling in the same poll each get their stops verified before the next entry
+        is read, so the first fills are not left waiting behind the last). At most `[risk]
+        max_working_entries` entries work at once, so these reads are bounded and the
+        fills-together start-time bound holds however many stops wait for their cancel's
+        read (a flatten or reduce of many positions) or how many symbols are stopped out in
+        the same poll. While the list answers it verifies new stops, however late it shows
         them, and their Detail stays in the common queue (a rejected stop is never listed),
-        so the fills' reads are never spent on them. 2: the other live orders in a
-        moved symbol, not read since the move. 3: the common queue. Once each per event:
-        after that read the order is back in the common queue, so a lasting disagreement
-        (shares bought by hand) never starves the others. A read stamped at the same instant
-        as the event may have come before it (a step reads, then cancels): it does not count
-        as the read after it."""
-        if self._awaits_cancel_read(row):
+        so the fills' reads are never spent on them. 2: a stop whose cancel waits for Detail,
+        not read since that cancel (its position may have no stop until the read confirms
+        it, and its close waits for it): behind at most the working entries' reads. 3: the
+        other live orders in a moved symbol, not read since the move. 4: the common queue.
+        Once each per event: after that read the order is back in the common queue, so a
+        lasting disagreement (shares bought by hand) never starves the others. A read stamped
+        at the same instant as the event may have come before it (a step reads, then
+        cancels): it does not count as the read after it."""
+        moved = self._moved.get(row.symbol)
+        moved_unread = (moved is not None and row.live
+                        and (row.last_detail_at or 0.0) <= moved[2])
+        awaits_cancel = self._awaits_cancel_read(row)
+        bought = moved_unread and moved is not None and moved[0] > moved[1]
+        if row.leg is Leg.ENTRY and (bought or awaits_cancel):
             return 1
         if (row.leg is Leg.STOP and row.live and not row.verified and row.last_detail_at is None
                 and not self._list_answered):
             return 1
-        moved = self._moved.get(row.symbol)
-        if moved is not None and row.live and (row.last_detail_at or 0.0) <= moved[2]:
-            return 0 if row.leg is Leg.STOP and row.symbol in cancelling else 2
-        return 3
+        if awaits_cancel:
+            return 2
+        if moved_unread:
+            return 0 if row.leg is Leg.STOP and row.symbol in cancelling else 3
+        return 4
 
     @staticmethod
     def _awaits_cancel_read(row: OrderRow) -> bool:

@@ -32,6 +32,7 @@ def test_limits_come_from_config(lim):
     assert lim.position_notional_cap_usd == D(2500)
     assert lim.max_daily_loss_usd == D(300)
     assert lim.max_open_positions == 1
+    assert lim.max_working_entries == 6
     assert lim.max_quote_age_seconds == D(5)
     assert lim.max_clock_skew_seconds == D(1)
     assert lim.active_strategy == "price-action-v3"
@@ -104,6 +105,7 @@ REFUSALS = [
     (C.OWN_POSITION_OPEN, lambda: inputs(own_open_positions=1, open_positions=1)),
     (C.OWN_ORDER_WORKING, lambda: inputs(own_working_orders=1)),
     (C.POSITION_LIMIT_REACHED, lambda: inputs(open_positions=1)),
+    (C.COUNT_INVALID, lambda: inputs(working_entries=-1)),
     (C.SYMBOL_COOLDOWN, lambda: inputs(symbol_last_loss_at=NOW - timedelta(minutes=29))),
     (C.SYMBOL_COOLDOWN, lambda: inputs(symbol_last_loss_at=NOW + timedelta(seconds=1))),
     (C.CLOCK_INVALID, lambda: inputs(symbol_last_loss_at=datetime(2026, 11, 16, 9, 45))),
@@ -166,9 +168,10 @@ def test_each_refusal_has_its_cause(lim, cause, make):
 
 
 # Causes that need other limits: SESSION_TIMES_INVALID (test_invalid_session_offsets_refuse) and
-# the extended windows' own (test_extended_window_*).
+# the extended windows' own (test_extended_window_*), WORKING_ENTRY_LIMIT_REACHED (several slots:
+# test_an_entry_beyond_the_working_entries_limit_is_refused).
 OTHER_LIMITS = {C.SESSION_TIMES_INVALID, C.BEFORE_FIRST_ENTRY, C.STRATEGY_NOT_EXTENDED,
-                C.SPREAD_TOO_WIDE}
+                C.SPREAD_TOO_WIDE, C.WORKING_ENTRY_LIMIT_REACHED}
 
 
 def test_every_cause_is_exercised():
@@ -402,3 +405,12 @@ def test_extended_entry_reserves_its_whole_position(lim):
     assert tight.cause is C.DAILY_CEILING
     regular = admit(_moved(_at(10, 0)), on)
     assert regular.reserved_usd is None and regular.window == "regular"
+
+
+def test_an_entry_beyond_the_working_entries_limit_is_refused(lim):
+    wider = replace(lim, max_open_positions=20)
+    limit = lim.max_working_entries
+    assert admit(inputs(open_positions=limit, working_entries=limit - 1), wider).ok
+    refused = admit(inputs(open_positions=limit, working_entries=limit), wider)
+    assert refused.cause is C.WORKING_ENTRY_LIMIT_REACHED
+    assert refused.detail == f"{limit} entries working, limit {limit}"

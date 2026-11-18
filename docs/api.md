@@ -1098,7 +1098,7 @@ decision file keeps the text):
   code: both `null`.
 - `params`: the values in the detail, for a translated sentence (`{}` when the code has none or
   the detail is in no known shape; then show `message`): `POSITION_LIMIT_REACHED` `{open,
-  limit}`; `OWN_POSITION_OPEN` / `OWN_ORDER_WORKING` `{count}`; `BROKER_READ_STALE` and
+  limit}`; `WORKING_ENTRY_LIMIT_REACHED` `{working, limit}`; `OWN_POSITION_OPEN` / `OWN_ORDER_WORKING` `{count}`; `BROKER_READ_STALE` and
   `QUOTE_STALE` `{age, limit}`; `CLOCK_INVALID` `{seconds}` (a broker read in the future);
   `QUOTE_TIME_INVALID` `{seconds, limit}`; `CALENDAR_UNKNOWN` `{calendar}`;
   `CALENDAR_DAY_MISMATCH` `{calendar_day, today}`; `HALF_DAY` `{day}`;

@@ -47,15 +47,19 @@ max_daily_loss_usd = 5000
 min_daily_room_usd = 10
 # Position slots: most open trades at once, count; a trade (working entry, position or exit in progress) takes one slot,
 # at most one trade per symbol, every trade has its own broker stop and all share the daily loss ceiling (their planned
-# losses are reserved against it). 1 until the owner enables several positions (backlog X1); at most
-# [market_data] stream_reserved_symbols (each position keeps a stream slot), and the session flatten (one stop at a
-# time, up to [orders] max_stops_per_trade each, two [orders] detail_poll_seconds per stop) must fit before [session]
-# close_order_cutoff_seconds, and every slot's entry filling in one poll must get its verified stops within [orders]
-# max_unprotected_seconds less a poll ((slots + 1) x [orders] detail_poll_seconds: one Detail read per fill, then one
-# open-orders read verifies the new stops, up to [orders] stop_listing_polls late; 6 slots at 3 s, 2 polls and 30 s) (both
-# checked by the start-time checks, runtime.launchd.check_timings). 6 since 2026-11-17 (owner; probe T L2 recorded): the
-# most the fills-together bound allows; 20 needs fills read in bulk; read by safety, the engine and the status.
+# losses are reserved against it). At most [market_data] stream_reserved_symbols (each position keeps a stream slot),
+# and the session flatten (one stop at a time, up to [orders] max_stops_per_trade each, two [orders]
+# detail_poll_seconds per stop) must fit before [session] close_order_cutoff_seconds (checked by the start-time checks,
+# runtime.launchd.check_timings: 480 s at 20 slots, 4 stops and 3 s). Entries filling together are bounded by
+# max_working_entries below, not by the slots. 6 since 2026-11-17 (owner); the owner's target of 20 waits for the daily
+# loss and position size decision and the open-orders paging probe; read by safety, the engine and the status.
 max_open_positions = 6
+# Most of our entries working at once, count (a working entry also takes a slot, so max_open_positions caps it too): only working entries can fill in the same
+# poll, and every one of them must get its verified stops within [orders] max_unprotected_seconds less a poll
+# ((entries + 1 + [orders] stop_listing_polls) x [orders] detail_poll_seconds: one Detail read per fill, then the
+# open-orders reads verifying the new stops; 6 at 3 s, 2 polls and 30 s; checked by runtime.launchd.check_timings).
+# An entry beyond it is refused (WORKING_ENTRY_LIMIT_REACHED); read by admission and the start-time checks.
+max_working_entries = 6
 # Maximum quote age for any decision, seconds, end to end from provider time (owner 2026-10-15); read by safety and strategy input.
 max_quote_age_seconds = 5
 # Allowed lead of the provider clock over ours, seconds: a quote time up to this far ahead counts as age 0, further ahead = refuse; read by safety.

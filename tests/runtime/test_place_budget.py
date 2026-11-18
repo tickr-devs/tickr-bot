@@ -43,7 +43,9 @@ class Budgeted(FakeBroker):
 def budgeted_desk(tmp_path, limit: int = PLACES) -> tuple[Desk, Budgeted]:
     clock = [1_000_000.0]
     broker = Budgeted(clock, limit)
-    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)), broker)
+    # The budget alone bounds the working entries here (not `max_working_entries`).
+    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10), max_working_entries=MAX),
+                broker)
     desk.clock = clock  # one clock for the engine and the budget
     desk.engine.clock = lambda: clock[0]
     return desk, broker

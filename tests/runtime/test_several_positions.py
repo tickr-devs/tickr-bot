@@ -188,7 +188,8 @@ def full(tmp_path, *, filled: int, broker: FakeBroker | None = None,
          **overrides: object) -> Desk:
     """Every slot taken: the first `filled` trades hold a protected position, the others have
     their entry working; then long enough that every order has been read in turn."""
-    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)), broker)
+    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10), max_working_entries=MAX),
+                broker)
     for n, symbol in enumerate(SYMBOLS):
         assert desk.enter(symbol, **overrides).admission == "taken"
         if n < filled:
@@ -238,8 +239,8 @@ def fill_together(desk: Desk, symbols: list[str]) -> list[int]:
     return sorted(done.values())
 
 
-# The most slots the start-time check lets through: one Detail read per fill, then one
-# open-orders read for the new stops, within `max_unprotected_seconds` less a poll.
+# The most working entries the start-time check lets through: one Detail read per fill, then
+# one open-orders read for the new stops, within `max_unprotected_seconds` less a poll.
 LISTED = CFG.orders.stop_listing_polls
 BURST = int((float(CFG.orders.max_unprotected_seconds) - POLL) / POLL) - 1 - LISTED
 
@@ -551,10 +552,12 @@ def test_config_refuses_a_poll_too_slow_for_the_flatten_of_every_slot(tmp_path):
         launchd.check_timings(config.load(path, ROOT))
 
 
-def test_config_refuses_more_slots_than_fills_it_can_protect_in_time(tmp_path):
+def test_config_refuses_more_working_entries_than_fills_it_can_protect_in_time(tmp_path):
     text = (ROOT / "config" / "bot.toml").read_text("utf-8")
+    text = re.sub(r"(?m)^max_open_positions = \d+", f"max_open_positions = {MAX}", text)
     for count, refused in ((BURST, False), (BURST + 1, True)):
-        changed = re.sub(r"(?m)^max_open_positions = \d+", f"max_open_positions = {count}", text)
+        changed = re.sub(r"(?m)^max_working_entries = \d+", f"max_working_entries = {count}",
+                         text)
         (tmp_path / "config").mkdir(exist_ok=True)
         path = tmp_path / "config" / "bot.toml"
         path.write_text(changed, "utf-8")
@@ -563,3 +566,138 @@ def test_config_refuses_more_slots_than_fills_it_can_protect_in_time(tmp_path):
                 launchd.check_timings(config.load(path, ROOT))
         else:
             launchd.check_timings(config.load(path, ROOT))
+
+
+def test_working_entries_beyond_the_slot_count_are_bounded_by_the_slots(tmp_path):
+    """A working entry takes a slot: with fewer slots than `max_working_entries` the slots
+    bound the fills arriving together (the demo's one slot)."""
+    text = (ROOT / "config" / "bot.toml").read_text("utf-8")
+    text = re.sub(r"(?m)^max_open_positions = \d+", f"max_open_positions = {BURST}", text)
+    text = re.sub(r"(?m)^max_working_entries = \d+", f"max_working_entries = {MAX}", text)
+    (tmp_path / "config").mkdir()
+    path = tmp_path / "config" / "bot.toml"
+    path.write_text(text, "utf-8")
+    launchd.check_timings(config.load(path, ROOT))
+
+
+def test_entries_beyond_max_working_entries_are_refused_while_slots_are_free(tmp_path):
+    limit = 2
+    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10), max_working_entries=limit))
+    for symbol in SYMBOLS[:limit]:
+        assert desk.enter(symbol).admission == "taken"
+    refused = desk.enter(SYMBOLS[limit])
+    assert refused.admission == "refused"
+    assert refused.refusal_cause.startswith("WORKING_ENTRY_LIMIT_REACHED")
+    desk.fill(SYMBOLS[0])  # a filled entry no longer works: the next one is taken
+    desk.step(4)
+    assert desk.enter(SYMBOLS[limit]).admission == "taken"
+
+
+def test_a_fill_is_read_ahead_of_stop_outs_moving_in_the_same_poll(tmp_path):
+    """With every slot taken, the working entries fill in the same poll as stop-outs in every
+    other symbol (a market-wide drop): a moved symbol's entry is read ahead of the other moved
+    orders, so each fill still gets its verified stops as if the stop-outs were not there."""
+    working = BURST
+    desk = full(tmp_path, filled=MAX - working, broker=FakeBroker(history_down=True))
+    held = SYMBOLS[:MAX - working]
+    for symbol in held:
+        (stop,) = desk.stops(symbol)
+        desk.broker.fill(stop.client_order_id, D(10), D("9.70"))
+    assert fill_together(desk, SYMBOLS[MAX - working:]) == [k + 1 for k in range(1, working + 1)]
+
+
+@pytest.mark.parametrize("late", [0, LISTED])
+@pytest.mark.parametrize(("stop_out", "flatten"), [(False, False), (True, True)])
+def test_working_entries_filling_with_a_stop_out_and_a_flatten_at_twenty_slots(
+        tmp_path, late, stop_out, flatten):
+    """The worst queue the start-time bound must hold (Fable, review of the slot raise): every
+    slot taken, 14 held positions with two stops each (scale-out), the 6 working entries
+    filling in one poll while one held position is stopped out and another's stops wait for
+    their cancel's Detail (a flatten). Read by Detail alone (no history), each new stop listed
+    up to `stop_listing_polls` reads late: a moved symbol's entry is read first, so neither the
+    stop-out nor the cancel delays the fills, and every fill's stops are verified within
+    `max_unprotected_seconds` less a poll; the flatten still sends its close."""
+    working = int(CFG.risk.max_working_entries)
+    held = MAX - working
+    broker = LateList(late)
+    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)), broker)
+    for symbol in SYMBOLS[:held]:
+        assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
+        desk.fill(symbol)
+    for symbol in SYMBOLS[held:]:
+        assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
+    desk.step(4 * MAX)
+    assert all(len(desk.stops(s)) == 2 and all(o.verified for o in desk.stops(s))
+               for s in SYMBOLS[:held])
+    stopped, flattened = SYMBOLS[0], SYMBOLS[1]
+    if stop_out:
+        first = desk.stops(stopped)[0]
+        broker.fill(first.client_order_id, first.quantity, D("9.70"))
+    if flatten:
+        desk.engine.request_exit(desk.trade_of(flattened).trade_id, "session-flatten")
+    done = fill_together(desk, SYMBOLS[held:])
+    assert done == [k + 1 + late for k in range(1, working + 1)]
+    assert done[-1] * POLL <= float(CFG.orders.max_unprotected_seconds) - POLL
+    if flatten:
+        assert any(o.leg is Leg.EXIT and o.symbol == flattened for o in desk.engine.orders())
+
+
+def held_by(broker: FakeBroker, symbol: str) -> D:
+    return next((p.quantity for p in broker.positions() if p.symbol == symbol), D(0))
+
+
+def working_to_sell(broker: FakeBroker, symbol: str) -> D:
+    """Shares the broker's working SELL orders other than stops still sell, as it lists them."""
+    return sum((o.quantity - o.filled_quantity for o in broker.open_orders()
+                if o.symbol == symbol and o.side is Side.SELL
+                and o.order_type is not OrderType.STOP_LOSS), D(0))
+
+
+@pytest.mark.parametrize("cause", ["exit", "session-flatten"])
+def test_an_exit_during_working_entry_fills_waits_at_most_those_reads(tmp_path, cause):
+    """The other side of reading fills first (Fable, review of #637): an exit or a flatten
+    requested in the same poll as `max_working_entries` fills waits behind those entries'
+    reads. Its first stop is cancelled at once; the cancel's Detail read comes after at most
+    the working entries' reads, and the shares are sold at once: they are without a stop
+    or a sell for at most working + 1 polls (spec section 9), inside
+    `max_unprotected_seconds`, the close is sent within working + 3 polls, and never more
+    shares are working to sell than the broker holds."""
+    working = int(CFG.risk.max_working_entries)
+    held = MAX - working
+    broker = FakeBroker(history_down=True)
+    desk = Desk(tmp_path, wide(MAX, max_daily_loss_usd=D(MAX * 10)), broker)
+    for symbol in SYMBOLS[:held]:
+        assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
+        desk.fill(symbol)
+    for symbol in SYMBOLS[held:]:
+        assert desk.enter(symbol, scale_out=D(4)).admission == "taken"
+    desk.step(4 * MAX)
+    leaving = SYMBOLS[0]
+    for symbol in SYMBOLS[held:]:
+        entry = desk.engine.orders(desk.trade_of(symbol).trade_id)[0]
+        broker.fill(entry.client_order_id, D(10), D("10.05"))
+    desk.engine.request_exit(desk.trade_of(leaving).trade_id, cause)
+    first = desk.stops(leaving)[0].client_order_id
+    bare = steps = 0
+    sold = False
+    while not sold and steps < 4 * working:
+        desk.step()
+        steps += 1
+        stop_working = any(o.client_order_id == first for o in broker.open_orders())
+        assert working_to_sell(broker, leaving) <= held_by(broker, leaving)
+        sold = any(o.leg is Leg.EXIT and o.symbol == leaving for o in desk.engine.orders())
+        if not sold and not stop_working:
+            bare += 1
+    assert sold and steps <= working + 3
+    assert bare <= working + 1
+    trade_id = desk.trade_of(leaving).trade_id
+    while desk.engine.trade(trade_id).state is not TradeState.CLOSED and steps < 8 * working:
+        for o in broker.open_orders():  # the market fills each close as it arrives
+            if (o.symbol == leaving and o.side is Side.SELL
+                    and o.order_type is not OrderType.STOP_LOSS):
+                broker.fill(o.client_order_id, o.quantity - o.filled_quantity, D("9.90"))
+        desk.step()
+        steps += 1
+        assert working_to_sell(broker, leaving) <= held_by(broker, leaving)
+    assert desk.engine.trade(trade_id).state is TradeState.CLOSED
+    assert (bare + 1) * POLL <= float(CFG.orders.max_unprotected_seconds)

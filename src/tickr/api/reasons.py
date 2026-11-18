@@ -180,6 +180,8 @@ _REFUSAL = {
     "OWN_ORDER_WORKING": _shapes(("", r"(?P<count>[0-9]+) own order\(s\) working")),
     "POSITION_LIMIT_REACHED": _shapes(
         ("", r"(?P<open>[0-9]+) open position\(s\), limit (?P<limit>[0-9]+)")),
+    "WORKING_ENTRY_LIMIT_REACHED": _shapes(
+        ("", r"(?P<working>[0-9]+) entries working, limit (?P<limit>[0-9]+)")),
     "SYMBOL_COOLDOWN": _shapes(("", r"(?P<symbol>\S+) closed at a loss at \S+; no entry before "
                                     r"\S+")),
     "DECISION_NOT_ENTER": _shapes(("", r"verdict is (?P<verdict>\S+)")),

@@ -36,6 +36,9 @@ class AdmissionLimits:
     min_daily_room_usd: Decimal
     """Below this room left under the daily ceiling no new entry is admitted."""
     max_open_positions: int
+    max_working_entries: int
+    """Most of our entries working at once (`[risk] max_working_entries`): entries filling in
+    the same poll are read one at a time and each must get its stops in time."""
     max_quote_age_seconds: Decimal
     max_clock_skew_seconds: Decimal
     broker_read_max_age_seconds: Decimal
@@ -59,6 +62,7 @@ class AdmissionLimits:
             max_daily_loss_usd=risk.max_daily_loss_usd,
             min_daily_room_usd=risk.min_daily_room_usd,
             max_open_positions=risk.max_open_positions,
+            max_working_entries=risk.max_working_entries,
             max_quote_age_seconds=risk.max_quote_age_seconds,
             max_clock_skew_seconds=risk.max_clock_skew_seconds,
             broker_read_max_age_seconds=config.orders.broker_read_max_age_seconds,
@@ -105,6 +109,8 @@ class AdmissionInputs:
     """Slots in use against `max_open_positions`: the bot's open trades in any symbol (a
     position, a working entry or an exit in progress), as `Engine.open_trade` counts them.
     Manual trades are ignored (owner 2026-11-16)."""
+    working_entries: int
+    """The bot's own entries working in any symbol, against `max_working_entries`."""
     symbol_last_loss_at: datetime | None
     """When the latest trade in the decision's symbol that closed today (New York date) at a
     loss, or with an unknown result, closed; None = no such trade today."""
@@ -249,7 +255,7 @@ def window_limits(window: TradingWindow, lim: AdmissionLimits,
 def _check_own_state(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     counts = {"own_open_positions": i.own_open_positions,
               "own_working_orders": i.own_working_orders,
-              "open_positions": i.open_positions}
+              "open_positions": i.open_positions, "working_entries": i.working_entries}
     for name, value in counts.items():
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return _refuse(C.COUNT_INVALID, f"{name} {value!r} is not a count")
@@ -262,6 +268,9 @@ def _check_own_state(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | No
     if i.open_positions >= lim.max_open_positions:
         return _refuse(C.POSITION_LIMIT_REACHED,
                        f"{i.open_positions} open position(s), limit {lim.max_open_positions}")
+    if i.working_entries >= lim.max_working_entries:
+        return _refuse(C.WORKING_ENTRY_LIMIT_REACHED,
+                       f"{i.working_entries} entries working, limit {lim.max_working_entries}")
     return _check_cooldown(i, lim)
 
 

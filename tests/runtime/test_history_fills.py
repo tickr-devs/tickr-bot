@@ -33,7 +33,8 @@ UNPROTECTED = float(CFG.orders.max_unprotected_seconds)
 
 def working(tmp_path, broker: FakeBroker, slots: int = MAX, **overrides: object) -> Desk:
     """`slots` entries working, every order read in turn."""
-    desk = Desk(tmp_path, wide(slots, max_daily_loss_usd=D(MAX * 10)), broker)
+    desk = Desk(tmp_path, wide(slots, max_daily_loss_usd=D(MAX * 10), max_working_entries=slots),
+                broker)
     for symbol in SYMBOLS[:slots]:
         assert desk.enter(symbol, **overrides).admission == "taken"
     desk.step(2 * slots)

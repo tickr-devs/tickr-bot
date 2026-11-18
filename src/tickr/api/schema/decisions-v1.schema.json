@@ -171,6 +171,7 @@
                       "OWN_POSITION_OPEN",
                       "OWN_ORDER_WORKING",
                       "POSITION_LIMIT_REACHED",
+                      "WORKING_ENTRY_LIMIT_REACHED",
                       "SYMBOL_COOLDOWN",
                       "DECISION_NOT_ENTER",
                       "DECISION_NOT_ACTIVE",

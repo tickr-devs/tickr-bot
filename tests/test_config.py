@@ -24,9 +24,11 @@ def _copy(tmp_path: Path, text: str | None = None) -> Path:
     return target
 
 
-def test_the_shipped_config_keeps_six_slots():
-    """6 since 2026-11-17 (owner, probe T L2 recorded; docs/decisions.md)."""
-    assert config.load(BOT).risk.max_open_positions == 6
+def test_the_shipped_config_keeps_six_slots_and_six_working_entries():
+    """6 slots since 2026-11-17 (owner, probe T L2 recorded; docs/decisions.md), and as many
+    entries working at once as the fills-together bound allows."""
+    risk = config.load(BOT).risk
+    assert (risk.max_open_positions, risk.max_working_entries) == (6, 6)
 
 
 def test_bot_toml_loads():

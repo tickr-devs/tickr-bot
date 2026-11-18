@@ -90,6 +90,7 @@ class RiskConfig:
     max_daily_loss_usd: Decimal
     min_daily_room_usd: Decimal
     max_open_positions: int
+    max_working_entries: int
     max_quote_age_seconds: Decimal
     max_clock_skew_seconds: Decimal
     symbol_cooldown_after_loss_enabled: bool
@@ -679,6 +680,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if not 1 <= risk.max_open_positions <= md.stream_reserved_symbols:
         raise ConfigError("[risk] max_open_positions must be at least 1 and at most "
                           "[market_data] stream_reserved_symbols (a stream slot per position)")
+    if risk.max_working_entries < 1:
+        raise ConfigError("[risk] max_working_entries must be at least 1")
     check_extended_sessions(built["session"])
     if risk.max_entry_rest_bars < 1:
         raise ConfigError("[risk] max_entry_rest_bars must be at least 1")
