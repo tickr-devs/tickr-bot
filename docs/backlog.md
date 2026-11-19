@@ -157,7 +157,8 @@ project files):
   decided, after R24 and T12.
 - **R26** Sandbox, regular session. Status: decided, after R25.
 - **R27** Pre- and post-market. Status: decided, after R26 and X4.
-- **R28** Cleanup of the old hand-written strategies. Status: decided, after R26.
+- **R28** Cleanup of the old hand-written strategies, right after R26 once the models trade the
+  regular session; it does not wait for R27 (owner, 2026-11-19). Status: decided, after R26.
 - **T12** (moved from v2, 2026-11-19) Simulations obey platform rules: observers, replay and "what if"
   run through the same admission rules (position limit, pause after a loss, daily ceiling) from one
   shared code path, and the apps label each result with the rules it was computed under. R25 needs
