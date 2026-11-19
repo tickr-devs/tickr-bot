@@ -164,5 +164,5 @@ def test_every_translation_names_the_same_values_as_the_english():
     for key, entry in strings.items():
         if not key.startswith(("kit.gate.", "kit.fenceReason.", "kit.refusal.", "kit.prose.")):
             continue
-        units = {lang: entry["localizations"][lang]["stringUnit"]["value"] for lang in ("en", "ru")}
-        assert set(token.findall(units["en"])) == set(token.findall(units["ru"])), key
+        units = {lang: entry["localizations"][lang]["stringUnit"]["value"] for lang in ("en", "es")}
+        assert set(token.findall(units["en"])) == set(token.findall(units["es"])), key

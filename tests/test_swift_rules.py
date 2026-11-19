@@ -109,7 +109,7 @@ def test_indentation_is_two_spaces(tmp_path):
     assert found == [(3, "1"), (5, "tab"), (6, "let d = 3")]
 
 
-def test_every_l10n_key_needs_a_russian_translation(tmp_path):
+def test_every_l10n_key_needs_a_spanish_translation(tmp_path):
     l10n = write(
         tmp_path,
         'static let quit = LocalizedStringResource("app.quit", defaultValue: "Quit")\n'
@@ -124,7 +124,7 @@ def test_every_l10n_key_needs_a_russian_translation(tmp_path):
     catalog = {
         "sourceLanguage": "en",
         "strings": {
-            "app.quit": unit("ru", "Выйти"),
+            "app.quit": unit("es", "Salir"),
             "app.open": unit("en", "Open"),
         },
     }
@@ -160,7 +160,7 @@ def test_only_the_bearer_scheme_may_be_a_capitalised_constant(tmp_path):
     assert [line for line, _ in found] == [1, 5, 7, 9]
 
 
-def test_info_plist_texts_need_a_russian_translation(tmp_path):
+def test_info_plist_texts_need_a_spanish_translation(tmp_path):
     import plistlib
 
     support = tmp_path / "App" / "Support"
@@ -171,7 +171,7 @@ def test_info_plist_texts_need_a_russian_translation(tmp_path):
     catalog = {
         "strings": {
             "NSFaceIDUsageDescription": {
-                "localizations": {"ru": {"stringUnit": {"state": "translated", "value": "Да"}}}
+                "localizations": {"es": {"stringUnit": {"state": "translated", "value": "Sí"}}}
             }
         }
     }
@@ -191,18 +191,18 @@ def test_info_plist_declares_every_catalog_language(tmp_path):
     support = tmp_path / "App" / "Support"
     support.mkdir(parents=True)
     plist = support / "Info.plist"
-    catalog(tmp_path / "App" / "Sources" / "Localizable.xcstrings", "ru")
+    catalog(tmp_path / "App" / "Sources" / "Localizable.xcstrings", "es")
     catalog(tmp_path / "Shared" / "Localizable.xcstrings", "uk")
     shared = tmp_path / "Shared"
     plist.write_bytes(plistlib.dumps({"CFBundleName": "Tickr"}))
     assert load().localization_violations(plist, shared) == [
         (1, "CFBundleLocalizations lacks en"),
-        (1, "CFBundleLocalizations lacks ru"),
+        (1, "CFBundleLocalizations lacks es"),
         (1, "CFBundleLocalizations lacks uk"),
     ]
-    plist.write_bytes(plistlib.dumps({"CFBundleLocalizations": ["en", "ru"]}))
+    plist.write_bytes(plistlib.dumps({"CFBundleLocalizations": ["en", "es"]}))
     assert load().localization_violations(plist, shared) == [(1, "CFBundleLocalizations lacks uk")]
-    plist.write_bytes(plistlib.dumps({"CFBundleLocalizations": ["en", "ru", "uk"]}))
+    plist.write_bytes(plistlib.dumps({"CFBundleLocalizations": ["en", "es", "uk"]}))
     assert load().localization_violations(plist, shared) == []
 
 

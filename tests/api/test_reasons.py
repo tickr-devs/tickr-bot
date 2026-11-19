@@ -342,7 +342,7 @@ def test_every_written_refusal_has_a_sample():
 @pytest.mark.parametrize("text", REFUSAL_SAMPLES)
 def test_every_refusal_the_apps_show_has_a_code(text):
     """So the apps say it in the person's language (apps/scripts/kit_reason_strings.py gives
-    every code an English and a Russian sentence: tests/test_api_codes.py)."""
+    every code an English and a Spanish sentence: tests/test_api_codes.py)."""
     assert [r.code for r in reasons.prose_reasons(text)] != [reasons.UNRECOGNIZED]
 
 
@@ -524,7 +524,7 @@ SAMPLES = tuple(s for samples in FIELD_SAMPLES.values() for s in samples)
 
 @pytest.mark.parametrize("text", SAMPLES)
 def test_every_cause_these_fields_show_has_a_code(text):
-    """So the apps say it in the person's language (an English and a Russian sentence per code:
+    """So the apps say it in the person's language (an English and a Spanish sentence per code:
     tests/test_api_codes.py), never in the bot's words."""
     codes = [r.code for r in reasons.prose_reasons(text)]
     assert codes and reasons.UNRECOGNIZED not in codes
