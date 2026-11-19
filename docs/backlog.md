@@ -19,9 +19,11 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
   running version feed later decisions (R1, the enabling day of v4); they never block a merge.
 - Every setting has exactly one source of truth (owner, 2026-11-15). No item may add a value that
   already lives somewhere else.
-- The standalone product (v5) comes before anything legal or commercial (v6), and v6 happens only if
-  the owner still wants it after v5. Exception (owner, 2026-11-19): ticker.bot (v1.2) starts right
-  after the model is trained and in the apps, before v2; strangers still wait for F2.
+- The product (v5) comes before anything legal or commercial (v6), and v6 happens only if
+  the owner still wants it after v5.
+- ticker.bot (owner, 2026-11-19) comes only after the main bot and app work (v1 to v4), in order.
+  Until then every item respects the design rules W9-W14, so the bot and the apps fit ticker.bot
+  later without being redone.
 - Done items move to "Done" at the end with the pull request that did them.
 
 ## Overview
@@ -30,11 +32,10 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
 | **v1.1** | Tools to find a strategy with an edge | R1-R5 merged | observer and replay results per candidate |
-| **v1.2** | ticker.bot: public coming-soon site, and the full user flow for the owner only | W1-W8 decided in a spec with the owner, then built | |
 | **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T14, X3, X4 merged and released | unattended Sandbox days |
 | **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S7, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
-| **v5** | Standalone Mac product (still for the owner's own use) | P7 passes on a clean Mac | |
+| **v5** | The product: ticker.bot (site, accounts, one cloud bot per user) and the apps signed in to it; standalone Mac scope settled in W1 | W1 spec agreed with the owner, W2-W8 built | |
 | **v6** | Selling it: legal and business | only if the owner still wants it after v5; F2 gates the rest | |
 
 Why this order: the biggest risk is that no strategy has an edge after costs (every family tested on
@@ -60,11 +61,11 @@ Goal, scope and stages: `docs/spec-v1.md`. What is left:
   "Pause entries" and "Stop bot"; stopping asks "Close and stop / Leave open / Cancel"; while the
   bot is stopped with positions open, a warning "bot stopped, N positions open" stays on screen.
   Both apps and the API. Status: decided, in progress.
-- **V5** iOS API address per build destination and the Simulator's own token (`pair-simulator`).
+- **V5** (W9) iOS API address per build destination and the Simulator's own token (`pair-simulator`).
   Status: in review, #673 (API, Fable) and #674 (iOS); then one `pair-simulator` run on the Mac.
 - **A1** Chart: a click (Mac) or a lifted finger (iOS) holds the crosshair on its candle; pinch to
   zoom on iOS. Status: Mac done (#663); iOS in review (#664 hold, #667 pinch).
-- **A2** "System" card in both apps: watchdog, supervisor restarts, Webull link freshness, the 03:30
+- **A2** (W9, W11) "System" card in both apps: watchdog, supervisor restarts, Webull link freshness, the 03:30
   preflight result, caffeinate, model training progress. Status: proposed, owner not confirmed.
 
 Owner's own setup tasks (outside the repository):
@@ -110,34 +111,38 @@ research runs and candidates: they go on in every later version and never gate a
   (`quotes.jsonl`) misses none, then judge the variant by quote-level replay and as an observer.
 - **R13** Model research order (decided 2026-11-18): train the remaining 6 questions of the wide
   model overnight, then the entry model, then the exit model. Status: in progress.
-- **R14** Integrate the trained model into the macOS and iOS apps (owner 2026-11-19: comes before
-  ticker.bot). Status: decided, after R13.
+- **R14** Integrate the trained model into the macOS and iOS apps. Training runs as a job (W13).
+  Status: decided, after R13.
 
 Exit: R1-R5 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
 while later versions are built.
 
-## v1.2: ticker.bot (owner 2026-11-19, after R13 and R14)
+## Design rules for ticker.bot (apply from now on)
 
-Goal: the product's own site and cloud. Rough notes and the open questions:
-`docs/ticker-bot-draft.md`. The spec is written later with the owner; nothing is built before it.
+ticker.bot is built after v4, but the bot and the apps are built now. These rules keep that work
+from being redone later. Each lists the items it applies to; a PR on those items says how it meets
+the rule.
 
-- **W1** Spec for ticker.bot, written with the owner from the draft. Status: not started.
-- **W2** Public "coming soon" landing page on ticker.bot: clear product description, iOS / macOS /
-  Android "coming soon", made to look good. Status: decided, waits for W1.
-- **W3** Hidden full flow that only the owner can use on the public site: sign up, log in (email;
-  maybe Google, Apple), what a user sees after sign-up, free tier or trial, paid subscription.
-  Status: decided, details in W1.
-- **W4** One account for the site, the Mac app, the iOS app and the user's bot. Status: decided.
-- **W5** Site features: settings, model training, maybe statistics; the dashboard stays in the apps.
-  Status: decided, scope in W1.
-- **W6** One bot per user in the cloud on a rented server (AWS or similar), with a limited set of
-  settings and a model trained on them; no Tailscale, the apps connect to the server. Status:
-  decided, design in W1.
-- **W7** Broker token security for live accounts, designed before any server work: who holds the
-  credentials, how they are stored, used and revoked, what happens on a leak. Status: decided as a
-  must, design in W1.
-- **W8** Deployment: server, domain, TLS, how the owner (with Claude) deploys and updates it.
-  Status: not started.
+- **W9** Apps talk only to the API, over a server address plus a bearer token, never to bot files
+  and never assuming Tailscale or a LAN (Tailscale is only today's transport). The token check sits
+  in one place, so an account token can replace pairing tokens later. Applies to: V5, A1, A2, V4,
+  S4, S6, every app screen.
+- **W10** One bot instance = one config folder + one data folder. Nothing global outside them, so
+  a second instance with another config runs on the same machine. Owner settings change only through
+  the settings schema and API, never a hand edit. Applies to: S1-S5, T2-T7, R14.
+- **W11** The trading core stays headless and portable. Mac-only services (launchd, iMessage through
+  Messages.app, caffeinate, the watchdog) sit behind small interfaces outside the core, and alerts go
+  through a channel interface, so a server can run the same bot with other services. Applies to:
+  A2, T14, V3, P1, the alert code.
+- **W12** Broker credentials are read through one provider (environment variable names today),
+  never assumed to sit on the machine that runs the apps. A Keychain or a server secret store then
+  replaces that provider in one place. Hard rule 4 holds everywhere. Applies to: P2, W7, M1.
+- **W13** Model training is a job: settings and data in, a versioned model out, progress readable
+  through the API. The same job can then run on a server for each user's settings. Applies to:
+  R13, R14, W5.
+- **W14** Every API change stays versioned and tested (`docs/api.md`), with the account or bot
+  identity as a later field and no hidden single-user assumption in the wire format. Applies to:
+  every API PR.
 
 ## v2: Unattended Sandbox
 
@@ -181,7 +186,7 @@ Platform checks (old group B):
   admission rules (position limit, pause after a loss, daily ceiling) from one shared code path, and
   the apps label each result with the rules it was computed under.
 - **T13** Profit target and time exit as strategy rules.
-- **T14** Notification settings in the apps (`docs/api-planned.md` section 4).
+- **T14** (W11) Notification settings in the apps (`docs/api-planned.md` section 4).
 
 Trading outside the regular session (owner 2026-11-16, ids kept):
 - **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
@@ -203,7 +208,7 @@ duplicate-key test green, v2 released and running unattended in the Sandbox.
 Goal: the owner configures and runs the bot from the Mac and iPhone apps like a user; no owner
 setting needs a config file. Order: design first, then macOS, then iOS.
 
-- **S1** Settings schema: one record per setting (key, owner: platform or one strategy, type, unit,
+- **S1** (W10) Settings schema: one record per setting (key, owner: platform or one strategy, type, unit,
   min, max, step, group, description in English and Russian, when a change applies, whether it needs
   biometrics) plus cross-field rules. TOML comments, validation, app forms and the advisor's limits
   all come from it.
@@ -212,7 +217,7 @@ setting needs a config file. Order: design first, then macOS, then iOS.
   authorization, secrets) never changeable from an app.
 - **S3** Strategy version computed by the bot as a fingerprint of the values; the owner only names
   it. Every decision and trade references the settings version.
-- **S4** Settings API: schema, current values, validate a draft, apply, history, rollback; every
+- **S4** (W9, W10) Settings API: schema, current values, validate a draft, apply, history, rollback; every
   change journaled with time and device.
 - **S5** Apply rules: tightening protection applies at once; strategy parameters and the active
   strategy apply when flat, by a safe restart through normal startup and reconciliation; loosening
@@ -255,14 +260,45 @@ owner decision plus the authorization file (rule 5), never a code change.
 Exit: M1-M5 merged. Which strategy goes live, and when, is the owner's decision on the enabling
 day (R1's rungs inform it); Production days then run beside v5 work.
 
-## v5: Standalone Mac product
+## v5: The product (ticker.bot)
+
+Goal: the product people use: the ticker.bot site and accounts, one bot per user in the cloud, and
+the macOS and iOS apps signed in to it. Still for the owner's own use; no legal or business step.
+Which standalone-Mac items (P1-P7) stay, change or go is settled in the spec (W1): a bot in the
+cloud replaces "the bot bundled on the user's Mac" (P1) and moves broker credentials off the
+user's Mac (P2).
+
+### ticker.bot (owner 2026-11-19)
+
+The product's own site and cloud, after v1 to v4. Rough notes and the open questions:
+`docs/ticker-bot-draft.md`. The spec is written later with the owner; nothing is built before it.
+
+- **W1** Spec for ticker.bot, written with the owner from the draft. Status: not started.
+- **W2** Public "coming soon" landing page on ticker.bot: clear product description, iOS / macOS /
+  Android "coming soon", made to look good. Status: decided, waits for W1.
+- **W3** Hidden full flow that only the owner can use on the public site: sign up, log in (email;
+  maybe Google, Apple), what a user sees after sign-up, free tier or trial, paid subscription.
+  Status: decided, details in W1.
+- **W4** One account for the site, the Mac app, the iOS app and the user's bot. Status: decided.
+- **W5** Site features: settings, model training, maybe statistics; the dashboard stays in the apps.
+  Status: decided, scope in W1.
+- **W6** One bot per user in the cloud on a rented server (AWS or similar), with a limited set of
+  settings and a model trained on them; no Tailscale, the apps connect to the server. Status:
+  decided, design in W1.
+- **W7** Broker token security for live accounts, designed before any server work: who holds the
+  credentials, how they are stored, used and revoked, what happens on a leak. Status: decided as a
+  must, design in W1.
+- **W8** Deployment: server, domain, TLS, how the owner (with Claude) deploys and updates it.
+  Status: not started.
+
+### Standalone Mac items (scope settled in W1)
 
 Goal: a person with a Mac and a Webull account installs and runs Tickr without a terminal, a code
 checkout or any developer tool. Still for the owner's own use; no legal or business step.
 
 - **P1** One installable Mac app with the bot, local API and scheduled jobs: signed and notarized,
   bundled runtime; no Python install, no repository, no hand-written launchd files.
-- **P2** First-run setup in the app: broker credentials typed once into the Keychain (never a file or
+- **P2** (W12) First-run setup in the app: broker credentials typed once into the Keychain (never a file or
   a log), account check, alert channel (app push with the Apple Developer Program and APNs, Q6), phone pairing, preflight as a checklist.
 - **P3** Running it from the app: start, stop, status and the reason the bot is not trading; settings
   only through v3 screens.

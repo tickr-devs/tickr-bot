@@ -2,13 +2,13 @@
 
 Status: owner's first rough ideas (2026-11-19), recorded so the spec can start from them. This is
 NOT a spec and nothing here is decided beyond what is marked "owner". The spec is written later
-together with the owner. Backlog items: `W1`-`W8` in `docs/backlog.md`.
+together with the owner. Backlog items: `W1`-`W8` (v5) and the design rules `W9`-`W14` in `docs/backlog.md`.
 
 ## Order (owner)
 
-1. Finish training the model (backlog R13).
-2. Integrate the model into the apps (R14).
-3. Then ticker.bot.
+ticker.bot comes after the main bot and app work (backlog v1 to v4), in order, as backlog v5. Until
+then the bot and the apps follow the design rules W9-W14 in `docs/backlog.md`, so nothing built now
+has to be redone for ticker.bot.
 
 ## What the owner described
 
