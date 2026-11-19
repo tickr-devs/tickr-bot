@@ -1,0 +1,6 @@
+# Local Terraform state and plugins stay on the owner's Mac.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl.bak
