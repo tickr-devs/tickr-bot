@@ -395,6 +395,18 @@ def test_combine_through_swiftui_fails(tmp_path):
     assert [line for line, _ in found] == [1, 2, 3, 4]
 
 
+def test_string_drawing_measurement_fails(tmp_path):
+    source = (
+        "let a = (word as NSString).size(withAttributes: [.font: font]).width\n"
+        "let b = NSAttributedString(string: word, attributes: attributes).size().width\n"
+        "let c = text.boundingRect(with: size, options: [], context: nil)\n"
+        "let d = TextMeasure.width(word, font: font)\n"
+        "let e = CGSize(width: 1, height: 1)\n"
+    )
+    found = load().legacy_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2, 3]
+
+
 def test_settings_below_swift_6_or_os_26_fail(tmp_path):
     package = (
         "// swift-tools-version:5.9\n"
