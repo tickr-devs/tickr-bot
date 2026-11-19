@@ -239,13 +239,14 @@ Platform checks (old group B):
 The owner's own bot in the cloud (owner 2026-11-19, pulled forward from W6; plan:
 https://claude.ai/artifact/QhzoePqMNyeqFeYwUga59C):
 - **T15** (W9-W13) The owner's bot runs on one AWS server (Sandbox only) instead of the Mac; the apps
-  reach it over HTTPS with a per-device token, no Tailscale. Parts, each its own small PR: an alert
-  channel that works off the Mac (unblocks `alert-channel-missing`), several device tokens in the API,
+  reach it over HTTPS with a per-device token, no Tailscale. Parts, each its own small PR: a Telegram
+  alert channel that works off the Mac (unblocks `alert-channel-missing`; app push through APNs
+  comes later as a second channel), several device tokens in the API,
   the Mac app paired by address and token like the iPhone, `render-systemd` and a server deploy that
   refuses unless flat, an off-server heartbeat alarm, and the infrastructure as code. Cut over on a
   weekend while flat, not before V2; the Mac stays the fallback for two weeks, then Tailscale goes.
-  Trading-critical and auth parts: Fable review. Status: decided (order); alert channel, domain and
-  AWS account wait for the owner.
+  Trading-critical and auth parts: Fable review. Status: decided (order, Telegram alerts); domain and AWS
+  account wait for the owner.
 
 Trading outside the regular session (owner 2026-11-16, ids kept):
 - **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
