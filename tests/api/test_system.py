@@ -48,7 +48,9 @@ PMSET = "\n".join([
 
 
 @pytest.fixture
-def cfg(tmp_path):
+def cfg(tmp_path, monkeypatch):
+    # The shipped training file is under ~/: keep it inside the test's folder.
+    monkeypatch.setenv("HOME", str(tmp_path))
     shutil.copytree(ROOT / "config" / "calendar", tmp_path / "config" / "calendar")
     return config.load(ROOT / "config" / "bot.toml", root=tmp_path)
 

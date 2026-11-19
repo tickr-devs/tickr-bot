@@ -515,7 +515,8 @@ system_restart_rows = 50
 # Training progress file a model training job writes (training-progress-v1, docs/api.md "GET /system"): relative to
 # data_dir, or an absolute or ~/ path outside the release (research jobs never write into it); missing = no job
 # reporting; read by the api server.
-training_progress_file = "training-progress.json"
+# Owner 2026-11-19: the research folder on the Mac, where the training scripts write it.
+training_progress_file = "~/Development/Trading/.scratch/massive/results/feat/wide/training-progress.json"
 
 [market_data]
 # Seconds between discovery passes in the regular session, counted from the start of the minute the pass began, so with
