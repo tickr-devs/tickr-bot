@@ -30,7 +30,7 @@ has to be redone for ticker.bot.
   easier with AI. How the user's broker credentials are given, stored and used must be designed
   before anything else on the server side.
 
-Earlier owner ideas on selling access (2026-11-18): backlog F6 (subscription covers Sandbox only,
+Earlier owner ideas on selling access (2026-11-18): backlog F6, now part of W1 (subscription covers Sandbox only,
 Production and extras paid by credits charged for time, never a share of profit).
 
 ## Questions the spec has to answer
@@ -46,6 +46,6 @@ Production and extras paid by credits charged for time, never a share of profit)
   can see.
 - Which settings are user-facing first (backlog S1-S2 is the base), and how a training run is
   started, limited and paid for.
-- Legal gates that still apply before strangers use it: F2 (Webull's answer on third-party use).
-- How this relates to v5 (standalone Mac product): the cloud bot replaces "the bot on the user's
-  Mac", so v5's scope changes once the spec is agreed.
+- Legal gates that still apply before strangers use it: O3 (Webull's answer on third-party use, asked now) and W15 (business market-data licence).
+- How this relates to the standalone Mac items: the cloud bot replaces "the bot on the user's
+  Mac" (2026-11-19: P1 and P7 dropped, P2-P6 kept in cloud form, confirmed here).
