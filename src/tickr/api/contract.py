@@ -1231,6 +1231,188 @@ class JobsV1:
     next_session_cause: str | None = _added_later(None)
     next_session_cause_codes: tuple[ReasonV1, ...] = _reasons_of("next_session_cause")
 
+# ---------------------------------------------------------------- system (read-only)
+
+
+class LinkState(StrEnum):
+    """How old the bot's last successful broker read is, against [api] broker_read_warn_seconds
+    and [orders] broker_read_max_age_seconds."""
+
+    FRESH = "fresh"  # younger than the warning age
+    AGING = "aging"  # past the warning age, entries still allowed
+    STALE = "stale"  # past the block age: the bot blocks new entries
+    UNKNOWN = "unknown"  # no status file, or no broker read recorded in it
+
+
+@dataclass(frozen=True)
+class BrokerLinkV1:
+    """The link to Webull as the bot's status reports it: its last successful broker read and
+    the quote stream's health. `stream` and `last_read_at` are null without a status file;
+    `cause` says why `state` is unknown."""
+
+    last_read_at: datetime | None
+    warn_seconds: Decimal
+    max_age_seconds: Decimal
+    state: LinkState
+    stream: StreamHealth | None
+    cause: str | None
+
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
+
+
+class PreflightOutcome(StrEnum):
+    READY = "ready"  # every check passed
+    FAILED = "failed"  # a check failed: `cause` names the first
+    CONFIG_INVALID = "config-invalid"
+    NO_SESSION = "no-session"  # no session that day: not a failure
+
+
+class PreflightJobName(StrEnum):
+    PREFLIGHT = "preflight"  # the morning preflight job ([runtime] preflight_start_local)
+    BOT_START = "bot-start"  # the bot job's own preflight before it starts the bot
+
+
+@dataclass(frozen=True)
+class PreflightCheckV1:
+    """One preflight check: `name` is a check code (docs/api.md, "GET /system"), `cause` the
+    cause code of a failed check (null when it passed)."""
+
+    name: str
+    passed: bool
+    cause: str | None
+
+
+@dataclass(frozen=True)
+class MorningCheckV1:
+    """The latest preflight, from its record file ([runtime] preflight_result_file). `day` is
+    the New York date it ran on; `blocks_start`: the bot does not start on this result (a
+    refused strategy alone does not block). `cause` is the first failed check's cause code."""
+
+    job: PreflightJobName
+    started_at: datetime
+    finished_at: datetime
+    day: date
+    outcome: PreflightOutcome
+    blocks_start: bool
+    cause: str | None
+    checks: tuple[PreflightCheckV1, ...]
+
+
+class TrainingState(StrEnum):
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"  # stopped without a model: `cause` says why
+
+
+@dataclass(frozen=True)
+class TrainingV1:
+    """The model training job's own progress file (training-progress-v1): `job` is the name the
+    job gives itself (shown as written), `done` of `total` steps, when it started and last
+    wrote."""
+
+    job: str
+    state: TrainingState
+    done: int
+    total: int
+    started_at: datetime
+    updated_at: datetime
+    cause: str | None
+
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
+
+
+class RestartOutcome(StrEnum):
+    STARTED = "started"  # the bot job was started
+    FAILED = "failed"  # the start command failed: `cause`
+    REFUSED = "refused"  # the watchdog would not start it (an operator stop ...): `cause`
+
+
+@dataclass(frozen=True)
+class WatchdogRestartV1:
+    """One watchdog restart attempt from its journal. `early`: the restart for an entry resting
+    while the bot was down (before the flatten restart time); `open_trades` as the database
+    showed them, null on a refusal."""
+
+    at: datetime
+    outcome: RestartOutcome
+    early: bool
+    open_trades: int | None
+    cause: str | None
+
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
+
+
+@dataclass(frozen=True)
+class WatchdogV1:
+    """The watchdog launchd job, from its journal ([runtime] watchdog_journal_file).
+    `started_day`: the New York date of its latest start; `last_check_*`: its latest broker
+    check (after the flatten time): whether the read worked and found nothing open.
+    `restarts`: newest first, at most [api] system_restart_rows of `restart_count`. `cause` when
+    the journal cannot be read (everything else is then null or empty)."""
+
+    started_day: date | None
+    last_check_at: datetime | None
+    last_check_read: bool | None
+    last_check_flat: bool | None
+    restarts: tuple[WatchdogRestartV1, ...]
+    restart_count: int
+    cause: str | None
+
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
+
+
+class SleepState(StrEnum):
+    HELD = "held"  # a caffeinate no-sleep assertion is held
+    NOT_HELD = "not_held"
+    UNKNOWN = "unknown"  # the check could not run: `cause`
+
+
+@dataclass(frozen=True)
+class SleepV1:
+    """The Mac's no-sleep hold: the bot and watchdog jobs each run caffeinate beside them.
+    `holds`: caffeinate processes holding one, null when unknown."""
+
+    state: SleepState
+    holds: int | None
+    cause: str | None
+
+    cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
+
+
+@dataclass(frozen=True)
+class HostV1:
+    """Services of the machine the bot runs on, apart from the portable bot ([api]
+    system_services). `kind` "mac": launchd's watchdog job and caffeinate. Another machine kind
+    would be another key set, so clients show this block only for a kind they know."""
+
+    kind: str
+    watchdog: WatchdogV1
+    sleep: SleepV1
+
+
+@dataclass(frozen=True)
+class SystemV1:
+    """GET /system: the System card. Portable parts first (the Webull link, the latest
+    preflight, model training), then `host` with the machine's own services, null with
+    `host_cause` on a machine without them. Each part null with its cause when its source is
+    missing or unreadable. `bot_state` and `status_stale` as in GET /jobs."""
+
+    served_at: datetime
+    bot_state: BotState | None
+    status_stale: bool
+    broker_link: BrokerLinkV1
+    morning_check: MorningCheckV1 | None
+    morning_check_cause: str | None
+    training: TrainingV1 | None
+    training_cause: str | None
+    host: HostV1 | None
+    host_cause: str | None
+    api_version: int = _const(API_VERSION)
+
+    morning_check_cause_codes: tuple[ReasonV1, ...] = _reasons_of("morning_check_cause")
+    training_cause_codes: tuple[ReasonV1, ...] = _reasons_of("training_cause")
+    host_cause_codes: tuple[ReasonV1, ...] = _reasons_of("host_cause")
+
 # ---------------------------------------------------------------- lab replay
 
 
@@ -2426,6 +2608,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "config-v1": ConfigV1,
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
+    "system-v1": SystemV1,
     "day-events-v1": DayEventsV1,
     "advisor-runs-v1": AdvisorRunsV1,
     "lab-replay-v1": LabReplayV1,

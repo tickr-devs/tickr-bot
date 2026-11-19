@@ -34,6 +34,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from tickr import config as config_module
+from tickr.api import contract
 from tickr.broker.base import Broker, BrokerError
 from tickr.calendar import CalendarRefused
 from tickr.runtime import launchd, watchdog
@@ -48,8 +49,11 @@ from tickr.runtime.alerts import (
 from tickr.runtime.preflight import (
     ExitCode,
     PreflightCause,
+    PreflightJob,
     PreflightResult,
     TokenProbe,
+    record_path,
+    record_text,
     run_preflight,
 )
 from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
@@ -111,10 +115,12 @@ def _token_probe(config_path: Path) -> TokenProbe:
 TOKEN_PROBE = _token_probe
 
 
-def _preflight(config_path: Path, failure: AlertKind) -> PreflightResult:
-    result = run_preflight(config_path, now=datetime.now(UTC), environ=os.environ,
+def _preflight(config_path: Path, failure: AlertKind, job: PreflightJob) -> PreflightResult:
+    started = datetime.now(UTC)
+    result = run_preflight(config_path, now=started, environ=os.environ,
                            token_probe=TOKEN_PROBE(config_path))
     _emit("preflight", result.journal_body())
+    _record(result, job, started)
     if result.cause is not None:
         # A refused strategy alone does not stop the bot job: say "preflight failed", not
         # "bot did not start".
@@ -123,13 +129,30 @@ def _preflight(config_path: Path, failure: AlertKind) -> PreflightResult:
     return result
 
 
+def _record(result: PreflightResult, job: PreflightJob, started: datetime) -> None:
+    """The preflight's record for GET /system. Only with a loaded config (it names the data
+    folder) that exists: the record never creates the data folder, whose absence is itself a
+    preflight failure. It is for display only: any failure is printed and changes nothing else,
+    the job goes on (a bot start never waits on it)."""
+    cfg = result.config
+    if cfg is None:
+        return
+    try:
+        if not (cfg.root / cfg.run.data_dir).is_dir():
+            return
+        contract.write_atomic(record_path(cfg),
+                              record_text(result, job, started, datetime.now(UTC)))
+    except Exception as exc:  # noqa: BLE001 - a display record never stops the job
+        _emit("preflight-record-failed", {"error": type(exc).__name__})
+
+
 def _run_bot(config_path: Path, command: list[str]) -> int:
     if command[:1] == ["--"]:
         command = command[1:]
     if not command:
         print("run-bot: give the bot command after --", file=sys.stderr)
         return int(ExitCode.CONFIG_INVALID)
-    result = _preflight(config_path, AlertKind.BOT_DID_NOT_START)
+    result = _preflight(config_path, AlertKind.BOT_DID_NOT_START, PreflightJob.BOT_START)
     if result.blocks_start or result.config is None:
         return int(result.exit_code)
     stop = StopRequest()
@@ -328,7 +351,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
-            return int(_preflight(args.config, AlertKind.PREFLIGHT_FAILED).exit_code)
+            return int(_preflight(args.config, AlertKind.PREFLIGHT_FAILED,
+                                  PreflightJob.PREFLIGHT).exit_code)
         if args.command == "run-bot":
             return _run_bot(args.config, args.bot_command)
         if args.command == "watchdog":

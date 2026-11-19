@@ -124,6 +124,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. |
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
+| GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
 | GET | `/advisor` | `200` `advisor-runs-v1`: the AI advisor's newest `[api] advisor_runs` runs with their proposals, ideas, hold-out verdicts and the owner's decision (read-only; see GET /advisor below). |
 | POST | `/advisor/decision` | Body `{"run": "<run id>", "verdict": "accepted"\|"rejected"}`. Records the owner's review of a proposal or idea (a note, nothing is deployed): `200` `advisor-runs-v1`; `404 not_found` without that run; `409 conflict` for a refused, no-change or unreadable run. Not a bot command. |
@@ -283,6 +284,12 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
   `nightly_low_disk` {free_mb, min_mb}, `nightly_no_pool`, `nightly_pool_empty`,
   `nightly_too_many_missing` {count, day, max}, `nightly_no_session_ahead` {days, day},
   `nightly_stopped_before_open`, and any other as `nightly_refused` {detail} (the whole text);
+- the System card: `no_broker_read`, `no_preflight_record`, `preflight_record_unreadable`
+  {error}, `no_training_job`, `training_progress_unreadable` {error}, `no_host_services`,
+  `watchdog_journal_unreadable` {error}, `sleep_check_failed` {error}, `sleep_check_exited`
+  {code}; the watchdog's restart causes `restart_command_exited` {code},
+  `restart_command_failed` {error}, `restart_refused_operator_stop` (any other is
+  `unrecognized`: show the text);
 - the bot's status and account files: `no_status_file`, `status_file_invalid` {detail},
   `status_from_future`, `account_file_invalid` {detail}, `past_day_reconciliation`,
   `past_day_status`, `broker_read_other_day` {day}, `status_other_day` {day};
@@ -738,6 +745,61 @@ reads and writes nothing for it.
   `new_sessions` added (0 = already up to date) and `cause` when it was refused or stopped (the
   data then stays as it was). All null with `cause` when it never ran or the file is unreadable.
   `launchd` lists it as `nightly-fetch`.
+
+### GET /system (read-only)
+
+The apps' System card. Code: `src/tickr/api/system.py`. Nothing is written for it and the bot
+reads nothing for it. Portable parts come first, which any machine running the bot has; the
+machine's own services follow under `host`, so a bot on a server keeps the rest of the card.
+
+- `bot_state`, `status_stale`: as in GET /jobs.
+- `broker_link`: the bot's last successful broker read (`status.freshness.last_broker_read_at`)
+  and the quote stream's health (`stream`). `state` compares the read's age at `served_at` with
+  `warn_seconds` ([api] broker_read_warn_seconds) and `max_age_seconds` ([orders]
+  broker_read_max_age_seconds, past which the bot blocks new entries): `fresh`, `aging`,
+  `stale`; `unknown` with `cause` when there is no status file or no read in it. While the bot
+  is not running an old read is expected: clients judge `state` together with `bot_state`.
+- `morning_check`: the latest preflight from its record file (`[runtime]
+  preflight_result_file` under `data_dir`), written by both launchd jobs that run one: `job`
+  `preflight` (the morning job, `[runtime] preflight_start_local`) or `bot-start` (the bot job's
+  own, just before it starts the bot). `day` is the New York date it ran on, so a client tells
+  today's result from an older one. `outcome` `ready`, `failed`, `config-invalid` or
+  `no-session` (not a failure); `blocks_start`: the bot does not start on it (a refused
+  strategy alone does not block); `cause` the first failed check's cause code
+  (`runtime/preflight.py` PreflightCause, e.g. `token-unusable`). `checks[].name` is a check
+  code: `config`, `code-version`, `disk`, `calendar`, `credentials`, `alert-channel`,
+  `alert-recipient`, `token-dir`, `stop-marker`, `database`, `strategy`, `token`; `cause` is a
+  failed check's cause code, null when it passed (the checks' own words stay in the job's log:
+  they hold paths and the config digest). Null with
+  `morning_check_cause` when no record exists yet or it cannot be read. A preflight whose config
+  does not load, or whose data folder is missing, writes no record (it does not know where, and
+  never creates the data folder): the previous record stays, with its older `day`.
+- `training`: the model training job's progress file (`[api] training_progress_file`, under
+  `data_dir` or an absolute or `~/` path outside the release), `training-progress-v1`, which the job writes atomically whenever it moves on:
+  `{"schema_version": 1, "job": "<its own name>", "state": "running" | "done" | "failed",
+  "done": <steps done>, "total": <steps>, "started_at": <ISO time with offset>, "updated_at":
+  <ISO time with offset>, "cause": <text when failed, else null>}`, `done` at most `total`.
+  `job` is shown as written. Null with `training_cause` when no job writes it, or it is out of
+  shape (refused, never guessed).
+- `host`: the machine's own services, `[api] system_services`. `"none"`: null with `host_cause`.
+  `"mac"` (`kind`), from launchd's jobs:
+  - `watchdog`: from its journal (`[runtime] watchdog_journal_file`). `started_day`: the New
+    York date of its latest start (compare with today and the launchd time in GET /jobs);
+    `last_check_at`, `last_check_read` (the broker read worked) and `last_check_flat` (nothing
+    open, null when the read failed) of its latest broker check after the flatten time.
+    `restarts`: its attempts to start a down bot job, newest first, at most `[api]
+    system_restart_rows` of `restart_count`: `outcome` `started`, `failed` (the command failed)
+    or `refused` (it would not start it, e.g. the operator stopped the bot), `early` (the
+    restart for an entry resting while the bot was down), `open_trades` (null on a refusal),
+    `cause`. A journal that cannot be read gives `cause` with no rows.
+  - `sleep`: the no-sleep hold the bot and watchdog jobs each keep with caffeinate while they
+    run. `[api] sleep_check_command` (`pmset -g assertions`) is run with `[api]
+    sleep_check_timeout_seconds`; `holds` counts caffeinate processes holding
+    PreventUserIdleSystemSleep or PreventSystemSleep (`held` or `not_held`; nothing else of the
+    output is kept). `unknown` with `cause` when the command fails. A hold is expected while
+    the bot runs.
+
+No part of this document is per user: a later bot or account identity is one more key.
 
 ### GET /journal (read-only)
 

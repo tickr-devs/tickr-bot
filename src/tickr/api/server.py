@@ -70,6 +70,7 @@ from tickr.api.jobs import JobsSettings, jobs_document
 from tickr.api.journal import day_events, journal_document
 from tickr.api.lab_replay import LabReplay, LabReplayRefused, LabReplaySettings
 from tickr.api.observer_results import ObserverResults, SimulationPaths
+from tickr.api.system import SystemSettings, system_document
 from tickr.api.warm import PastDayWarmer
 from tickr.calendar import ny_date_of
 from tickr.config import Config, ConfigError
@@ -158,6 +159,7 @@ class ApiSettings:
     chart: ChartSettings  # GET /chart: source switch, cache and calendar
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
+    system: SystemSettings  # GET /system: link, preflight record, training, machine services
     lab: LabReplaySettings  # GET and POST /lab/replay: the Lab's simulated replay
     start: StartSettings  # POST /commands/start-bot: launchd's start of the bot job
     trade_whatif: trade_whatif.TradeWhatIfSettings  # GET /trades/whatif
@@ -291,6 +293,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         after=AfterSettings(minutes, api.after_r_decimal_places,
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
+        system=SystemSettings.from_config(cfg),
         lab=LabReplaySettings.from_config(cfg, config_path),
         start=StartSettings.from_config(cfg),
         trade_whatif=trade_whatif.TradeWhatIfSettings.from_config(cfg),
@@ -558,7 +561,7 @@ _ERROR_CODES = {
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
-              "/watching", "/performance", "/chart", "/jobs", "/journal", "/config",
+              "/watching", "/performance", "/chart", "/jobs", "/system", "/journal", "/config",
               "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
@@ -760,6 +763,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/jobs":
                 self._json(200, jobs_document(self.server.settings.jobs,
                                               self.server.status_response()))
+            elif path == "/system":
+                self._json(200, system_document(self.server.settings.system,
+                                                self.server.status_response()))
             elif path == "/journal":
                 self._json(200, journal_document(self.server.settings.jobs.database,
                                                  self.server.settings.journal_rows))

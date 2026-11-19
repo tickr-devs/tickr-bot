@@ -500,6 +500,22 @@ trade_whatif_outside_session_only = true
 # "Opens in" overnight and over weekends and holidays; none within them = null with a cause (the longest US closure
 # run is a few days); read by the api server.
 next_session_search_days = 10
+# Machine services GET /system reports under `host`: "mac" (the launchd watchdog's journal and restarts, and
+# caffeinate's no-sleep hold read with sleep_check_command) or "none" (a machine without them: `host` is null with a
+# cause); read by the api server.
+system_services = "mac"
+# Command GET /system runs to list the Mac's power assertions (its output is parsed for caffeinate's no-sleep holds,
+# nothing else is kept); used only when system_services = "mac"; read by the api server.
+sleep_check_command = ["/usr/bin/pmset", "-g", "assertions"]
+# Seconds GET /system waits for sleep_check_command before reporting the hold as unknown; read by the api server.
+sleep_check_timeout_seconds = 2
+# Newest watchdog restart records GET /system returns (newest first; the apps show a few and the rest on demand);
+# read by the api server.
+system_restart_rows = 50
+# Training progress file a model training job writes (training-progress-v1, docs/api.md "GET /system"): relative to
+# data_dir, or an absolute or ~/ path outside the release (research jobs never write into it); missing = no job
+# reporting; read by the api server.
+training_progress_file = "training-progress.json"
 
 [market_data]
 # Seconds between discovery passes in the regular session, counted from the start of the minute the pass began, so with
@@ -780,6 +796,10 @@ discovery_stop_seconds = 2
 # Stop marker the bot writes when it obeys a stop-bot command, relative to data_dir; while it exists preflight fails and
 # `tickr run` refuses, until `tickr clear-stop`; read by runtime.stopmarker (bot, preflight, cli).
 stop_marker_file = "stopped-by-operator.json"
+# Record of the last preflight (the morning preflight job and the bot job's own), relative to data_dir: its time,
+# outcome and checks, replaced atomically after each run (a failed write is printed, never stops the job); read by
+# runtime (writer) and the api server (GET /system).
+preflight_result_file = "preflight.json"
 # Seconds one outside step of `python -m tickr.runtime release` may take (git fetch and worktree, `uv sync`, the new
 # release's preflight, which may wait [environments.*] token_check_duration_seconds for the token); must be above that
 # wait; read by runtime.release.

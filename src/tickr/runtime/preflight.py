@@ -33,6 +33,7 @@ Exit codes: 0 ready, 1 failed, 2 config invalid, 3 no session today.
 
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 import stat
@@ -168,6 +169,45 @@ class PreflightResult:
         """One line for an alert: the failed checks, in order."""
         failed = [f"{c.name.value}: {c.detail}" for c in self.checks if not c.passed]
         return "; ".join(failed) if failed else "all checks passed"
+
+
+# Schema of the preflight record file ([runtime] preflight_result_file): GET /system reads it.
+RECORD_SCHEMA_VERSION = 1
+# Outcome words of the record, by exit code (docs/api.md, "GET /system").
+OUTCOMES = {ExitCode.READY: "ready", ExitCode.FAILED: "failed",
+            ExitCode.CONFIG_INVALID: "config-invalid", ExitCode.NO_SESSION: "no-session"}
+
+
+class PreflightJob(StrEnum):
+    """Which launchd job ran the preflight: the morning preflight job, or the bot job's own
+    before it starts the bot."""
+
+    PREFLIGHT = "preflight"
+    BOT_START = "bot-start"
+
+
+def record_text(result: PreflightResult, job: PreflightJob, started_at: datetime,
+                finished_at: datetime) -> str:
+    """The record file's text: when and by which job it ran, the outcome, the single cause and
+    every check by name with its cause code. The checks' own words are left out: they hold
+    paths, the config digest and folder names, and the file is served to the apps."""
+    return json.dumps({
+        "schema_version": RECORD_SCHEMA_VERSION,
+        "job": job.value,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "ny_date": ny_date_of(started_at).isoformat(),
+        "outcome": OUTCOMES[result.exit_code],
+        "blocks_start": result.blocks_start,
+        "cause": result.cause.value if result.cause else None,
+        "checks": [{"name": c.name.value, "passed": c.passed,
+                    "cause": c.cause.value if c.cause else None}
+                   for c in result.checks],
+    }, sort_keys=True) + "\n"
+
+
+def record_path(cfg: config_module.Config) -> Path:
+    return cfg.root / cfg.run.data_dir / cfg.runtime.preflight_result_file
 
 
 DiskFree = Callable[[Path], int]

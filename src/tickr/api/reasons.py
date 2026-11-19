@@ -475,6 +475,21 @@ _PROSE = _shapes(
     ("no_backup", r"no backup recorded yet"),
     ("nightly_never_ran", r"the nightly fetch has not run yet"),
     ("nightly_file_unreadable", r"nightly\.json unreadable \((?P<error>\w+)\)"),
+    # the System card (api/system.py) and the watchdog's restart causes (runtime/watchdog.py)
+    ("no_broker_read", r"no broker read recorded yet"),
+    ("no_preflight_record", r"no preflight recorded yet"),
+    ("preflight_record_unreadable", r"preflight record unreadable \((?P<error>\w+)\)"),
+    ("no_training_job", r"no training job is reporting"),
+    ("training_progress_unreadable", r"training progress unreadable \((?P<error>\w+)\)"),
+    ("no_host_services",
+     r"no machine services on this host \(\[api\] system_services = none\)"),
+    ("watchdog_journal_unreadable", r"watchdog journal unreadable \((?P<error>\w+)\)"),
+    ("sleep_check_failed", r"sleep check failed \((?P<error>\w+)\)"),
+    ("sleep_check_exited", r"sleep check exited (?P<code>-?[0-9]+)"),
+    ("restart_command_exited", r"restart command exited (?P<code>-?[0-9]+)"),
+    ("restart_command_failed", r"restart command failed \((?P<error>\w+)\)"),
+    ("restart_refused_operator_stop",
+     r".+; the watchdog never starts a bot the operator stopped"),
     # the nightly fetch's own refusals (backtest/nightly.py); any other is `nightly_refused`
     ("nightly_in_session", r"refused during the regular session"),
     ("nightly_low_disk", r"(?P<free_mb>[0-9]+) MB free, below \[backtest\] "

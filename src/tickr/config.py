@@ -208,6 +208,11 @@ class ProbeConfig:
     open_orders_end_margin_minutes: int
 
 
+# [api] system_services values: the machine services GET /system can report (docs/api.md).
+SYSTEM_SERVICES_MAC = "mac"
+SYSTEM_SERVICES = (SYSTEM_SERVICES_MAC, "none")
+
+
 @dataclass(frozen=True)
 class ApiConfig:
     host: str
@@ -260,6 +265,11 @@ class ApiConfig:
     lab_replay_outside_session_only: bool
     trade_whatif_outside_session_only: bool
     next_session_search_days: int
+    system_services: str
+    sleep_check_command: tuple[str, ...]
+    sleep_check_timeout_seconds: Decimal
+    system_restart_rows: int
+    training_progress_file: str
 
 
 @dataclass(frozen=True)
@@ -377,6 +387,7 @@ class RuntimeConfig:
     evaluation_budget_seconds: Decimal
     discovery_stop_seconds: Decimal
     stop_marker_file: str
+    preflight_result_file: str
     release_step_timeout_seconds: int
     release_stop_wait_seconds: int
     release_poll_seconds: Decimal
@@ -714,6 +725,16 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                           "reconcile_interval_seconds (the account file is written per reconcile)")
     if built["api"].next_session_search_days < 1:
         raise ConfigError("[api] next_session_search_days must be at least 1 (tomorrow)")
+    system = built["api"]
+    if system.system_services not in SYSTEM_SERVICES:
+        raise ConfigError("[api] system_services must be one of "
+                          + ", ".join(SYSTEM_SERVICES))
+    if system.system_services == SYSTEM_SERVICES_MAC and not system.sleep_check_command:
+        raise ConfigError("[api] sleep_check_command must name a command when "
+                          'system_services = "mac"')
+    if system.sleep_check_timeout_seconds <= 0 or system.system_restart_rows < 1:
+        raise ConfigError("[api] sleep_check_timeout_seconds must be above 0 and "
+                          "system_restart_rows at least 1")
     chart: ChartConfig = built["chart"]
     if chart.requests_per_minute < 1 or chart.bars_per_request < 1:
         raise ConfigError("[chart] requests_per_minute and bars_per_request must be at least 1")

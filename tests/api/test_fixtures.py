@@ -331,6 +331,58 @@ def documents() -> dict[str, object]:
                 datetime(2027, 1, 1, 1, 0, tzinfo=UTC)), None,
             NightlyFetchJobV1(None, None, None, "the nightly fetch has not run yet"),
             next_session_cause="OUT_OF_COVERAGE: 2027-01-01 is not covered by any file"),
+        # The System card at 10:00 New York on a Monday: link fresh, the morning check passed,
+        # the wide model training, the watchdog started with two restarts on record.
+        "system-v1": contract.SystemV1(
+            T0, BotState.RUNNING, False,
+            contract.BrokerLinkV1(T0 - timedelta(seconds=4), Decimal("30"), Decimal("90"),
+                                  contract.LinkState.FRESH, contract.StreamHealth.FRESH, None),
+            contract.MorningCheckV1(
+                contract.PreflightJobName.PREFLIGHT, T0.replace(hour=8, minute=30),
+                T0.replace(hour=8, minute=30, second=41), DAY, contract.PreflightOutcome.READY,
+                False, None, (
+                    contract.PreflightCheckV1("config", True, None),
+                    contract.PreflightCheckV1("calendar", True, None),
+                    contract.PreflightCheckV1("credentials", True, None),
+                    contract.PreflightCheckV1("token", True, None))), None,
+            contract.TrainingV1("wide model", contract.TrainingState.RUNNING, 130, 209,
+                                T0 - timedelta(hours=9), T0 - timedelta(minutes=2), None), None,
+            contract.HostV1("mac", contract.WatchdogV1(
+                DAY, None, None, None, (
+                    contract.WatchdogRestartV1(T0 - timedelta(days=4, hours=-10, minutes=20),
+                                               contract.RestartOutcome.STARTED, False, 1, None),
+                    contract.WatchdogRestartV1(T0 - timedelta(days=10),
+                                               contract.RestartOutcome.REFUSED, False, None,
+                                               "stop marker stopped-by-operator.json exists; "
+                                               "the watchdog never starts a bot the operator "
+                                               "stopped")), 2, None),
+                contract.SleepV1(contract.SleepState.HELD, 2, None)), None),
+        # Before the open with problems: no broker read in 2 minutes, the token needed
+        # confirmation, no training job, the watchdog's restart command failed once.
+        "system-v1.attention": contract.SystemV1(
+            T0, BotState.RUNNING, False,
+            contract.BrokerLinkV1(T0 - timedelta(seconds=134), Decimal("30"), Decimal("90"),
+                                  contract.LinkState.STALE, contract.StreamHealth.LOST, None),
+            contract.MorningCheckV1(
+                contract.PreflightJobName.BOT_START, T0.replace(hour=9),
+                T0.replace(hour=9, minute=5),
+                DAY, contract.PreflightOutcome.FAILED, True, "token-unusable", (
+                    contract.PreflightCheckV1("config", True, None),
+                    contract.PreflightCheckV1("token", False, "token-unusable"))), None,
+            None, "no training job is reporting",
+            contract.HostV1("mac", contract.WatchdogV1(
+                None, T0 - timedelta(days=3), True, False, (
+                    contract.WatchdogRestartV1(T0 - timedelta(days=3, minutes=15),
+                                               contract.RestartOutcome.FAILED, True, 1,
+                                               "restart command exited 113"),), 1, None),
+                contract.SleepV1(contract.SleepState.NOT_HELD, 0, None)), None),
+        # A server without the Mac's services, before any preflight record or status file.
+        "system-v1.server": contract.SystemV1(
+            T0, None, False,
+            contract.BrokerLinkV1(None, Decimal("30"), Decimal("90"), contract.LinkState.UNKNOWN,
+                                  None, "the bot has not written a status file"),
+            None, "no preflight recorded yet", None, "no training job is reporting",
+            None, "no machine services on this host ([api] system_services = none)"),
         # The Overview's journal card: the latest rows, oldest first; "line #731".
         "journal-v1": JournalV1(731, (
             JournalRowV1(728, T0 - timedelta(seconds=9), "order-intent", "ABCD"),
