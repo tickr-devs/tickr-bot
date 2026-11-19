@@ -236,7 +236,7 @@ How Tickr uses it now: only the manual `probe-replace-stop` command. Trading cod
 - Snapshot quotes after the close are minutes old even for active stocks (9-3400 s at 17:55-19:06 ET; SOFI 17 s, NIO 13 s at 19:06): the 5 s entry rule (`[risk] max_quote_age_seconds`) cannot be met there by that read. That read never sends `extend_hour_required` (SDK `get_snapshot`), so these ages may describe the read, not the market: probe Q1 below answers which read is fresh outside the regular session.
 - So outside the regular session there is no broker-side stop: protection is the bot's own (decisions.md 2026-11-16). Evidence: the owner's Mac, `data/probes/2026-11-16/extended-000643/`.
 
-## Q1 — which read is fresh outside the regular session (NOT probed yet)
+## Q1 — which read is fresh outside the regular session (post-market probed 2026-11-19; pre-market NOT probed yet)
 
 `tickr probe-quote-sources SYM...` (read only, sends no orders; docs/manual-trade.md) reads each
 symbol four ways and prints the age of every time field in each answer: the snapshot as the bot
@@ -247,6 +247,29 @@ reads it; the snapshot with `extend_hour_required=true` (adds `extend_hour_*` fi
 Answers to record: which reads Sandbox serves (depths and ticks may need a data permission);
 whether `quote_time`, bid and ask move with `extend_hour_required`; how old the freshest of them
 is in the pre-market and the post-market. The extended-hours entry rule is set from this.
+
+Post-market, 2026-11-19 18:29:57-18:30:01 ET, Sandbox, SOFI NIO AAPL SPY QQQ (evidence
+`data/probes/2026-11-19/quote-sources-232957/sources.jsonl` in release 27753e64 on the owner's
+Mac):
+- All four reads answered HTTP 200 for every symbol: Sandbox serves depths and ticks with no
+  extra data permission.
+- `quote_time` is the same value in the snapshot, the extended snapshot and the depths read
+  (the book's last change), and so are bid and ask. `extend_hour_required` does not change the
+  book; it adds `extend_hour_change`, `_change_ratio`, `_high`, `_last_price`,
+  `_last_trade_time`, `_low` and `_volume`, and turns `price` into the extended last
+  (SPY: 715.0816) instead of the 16:00 close. `trade_status` reads `ATH`.
+- `extend_hour_last_trade_time` equals the newest tick's `time` (SOFI, NIO, SPY, QQQ; AAPL's
+  newest tick printed after the snapshot read; the snapshot matches its second tick). One extended snapshot therefore gives the book
+  and the newest extended trade (time and price).
+- Book ages at the read: AAPL 1.0 s, SPY 1.3 s, QQQ 0.7 s, SOFI 23.8 s, NIO 178.3 s; newest
+  trade ages: SPY 0.9 s, AAPL 3.5 s, QQQ 4.4 s, SOFI 7.1 s, NIO 86.8 s. So the F7 ages were the
+  market (thin books that do not change), not the read: an old `quote_time` on a fresh answer
+  means an unchanged book.
+- SPY and QQQ traded every few seconds (5 ticks within 8 s and 11 s): candidates for the
+  liveness signal. Liveness still has to be proven per symbol for the watched stop (Fable on
+  #707): an answered extended snapshot read for the trade's own symbol at the watch check.
+- Ticks: `time` is a string of epoch ms (every other time is an integer), `side` N,
+  `trading_session` ATH.
 
 ## F8 — an entry with an attached stop (probed 2026-11-17, Sandbox, SOFI, RTH)
 
