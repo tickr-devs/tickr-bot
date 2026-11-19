@@ -554,6 +554,9 @@ def test_discovery_bars_reserve_must_leave_discovery_some_requests(tmp_path, res
     ("premarket_first_entry_minutes_after_open", "-1", "premarket: needs"),
     ("postmarket_max_quote_age_seconds", "0", "postmarket_max_quote_age_seconds"),
     ("premarket_max_spread_ratio", "1", "premarket_max_spread_ratio"),
+    ("extended_stop_confirm_checks", "0", "extended_stop_confirm_checks"),
+    ("extended_watch_max_gap_seconds", "0", "extended_watch_max_gap_seconds"),
+    ("extended_blind_seconds", "10", "extended_blind_seconds"),
 ])
 def test_extended_sessions_refused_at_load(tmp_path, key, value, match):
     text = re.sub(rf"(?m)^{key} = \S+", f"{key} = {value}", BOT.read_text("utf-8"))

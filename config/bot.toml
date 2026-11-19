@@ -152,6 +152,19 @@ postmarket_max_quote_age_seconds = 5
 premarket_max_spread_ratio = 0.02
 # Post-market: widest book an entry may meet, as above. Proposal awaiting the owner; read by safety.
 postmarket_max_spread_ratio = 0.02
+# Bot-watched stop outside the regular session (design v2.1 section 3): a breach is the bid at or under the stop on this
+# many watch checks with a usable book since the last usable book above the stop. Counts checks, not distinct quotes:
+# one unchanged book seen on two passes is two checks (a fallen thin stock whose book stops changing is still exited).
+# A broken book neither counts nor clears them. Proposal awaiting the owner; read by risk.watched_stop.
+extended_stop_confirm_checks = 2
+# Bot-watched stop: seconds between two completed watch checks of a trade above which the watch is blind (a hung read or
+# a stuck pass). Proposal awaiting the owner; read by risk.watched_stop.
+extended_watch_max_gap_seconds = 10
+# Bot-watched stop: seconds without a usable book above the stop (usable: both sides, not crossed, spread within the
+# window's max_spread_ratio, provider time not ahead by more than [risk] max_clock_skew_seconds, and fresh or the feed
+# proven alive) and without a confirmed breach, after which the watch is blind. Proposal awaiting the owner; read by
+# risk.watched_stop.
+extended_blind_seconds = 30
 
 [orders]
 # Prefix of bot client order ids; read by orders and reconciliation to recognise own orders.
