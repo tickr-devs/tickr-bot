@@ -22,8 +22,8 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 - The product (v5) comes before anything legal or commercial (v6), and v6 happens only if
   the owner still wants it after v5.
 - ticker.bot (owner, 2026-11-19) comes only after the main bot and app work (v1 to v4), in order.
-  Until then every item respects the design rules W9-W14, so the bot and the apps fit ticker.bot
-  later without being redone.
+  Until then every item respects the design rules W9-W14 (owner-approved 2026-11-19), so the bot
+  and the apps fit ticker.bot later without being redone.
 - Done items move to "Done" at the end with the pull request that did them.
 
 ## Overview
@@ -117,7 +117,7 @@ research runs and candidates: they go on in every later version and never gate a
 Exit: R1-R5 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
 while later versions are built.
 
-## Design rules for ticker.bot (apply from now on)
+## Design rules for ticker.bot (owner-approved 2026-11-19, apply from now on)
 
 ticker.bot is built after v4, but the bot and the apps are built now. These rules keep that work
 from being redone later. Each lists the items it applies to; a PR on those items says how it meets
