@@ -10,7 +10,7 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 - Every item has a stable id (`R3`, `T7`, ...). Ids are never reused or renumbered; a moved item keeps
   its id. Prefixes: `R` strategy research, `T` trading and safety, `S` settings, `M` real money,
   `P` standalone product, `F` legal and business, `X` later trading features, `Q` open owner question,
-  `V` v1 work, `A` apps, `O` owner's own setup tasks. Each item added from 2026-11-18 on carries a
+  `V` v1 work, `A` apps, `O` owner's own setup tasks, `W` ticker.bot (site and cloud). Each item added from 2026-11-18 on carries a
   status: decided, proposed (owner has not confirmed), in progress, in review (PR), done.
 - Versions are built in order, and development never waits for data (owner, 2026-11-16). A version
   is done when its items are merged, reviewed and released; the released version keeps running and
@@ -20,7 +20,8 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 - Every setting has exactly one source of truth (owner, 2026-11-15). No item may add a value that
   already lives somewhere else.
 - The standalone product (v5) comes before anything legal or commercial (v6), and v6 happens only if
-  the owner still wants it after v5.
+  the owner still wants it after v5. Exception (owner, 2026-11-19): ticker.bot (v1.2) starts right
+  after the model is trained and in the apps, before v2; strangers still wait for F2.
 - Done items move to "Done" at the end with the pull request that did them.
 
 ## Overview
@@ -29,6 +30,7 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
 | **v1.1** | Tools to find a strategy with an edge | R1-R5 merged | observer and replay results per candidate |
+| **v1.2** | ticker.bot: public coming-soon site, and the full user flow for the owner only | W1-W8 decided in a spec with the owner, then built | |
 | **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T14, X3, X4 merged and released | unattended Sandbox days |
 | **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S7, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
@@ -108,9 +110,34 @@ research runs and candidates: they go on in every later version and never gate a
   (`quotes.jsonl`) misses none, then judge the variant by quote-level replay and as an observer.
 - **R13** Model research order (decided 2026-11-18): train the remaining 6 questions of the wide
   model overnight, then the entry model, then the exit model. Status: in progress.
+- **R14** Integrate the trained model into the macOS and iOS apps (owner 2026-11-19: comes before
+  ticker.bot). Status: decided, after R13.
 
 Exit: R1-R5 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
 while later versions are built.
+
+## v1.2: ticker.bot (owner 2026-11-19, after R13 and R14)
+
+Goal: the product's own site and cloud. Rough notes and the open questions:
+`docs/ticker-bot-draft.md`. The spec is written later with the owner; nothing is built before it.
+
+- **W1** Spec for ticker.bot, written with the owner from the draft. Status: not started.
+- **W2** Public "coming soon" landing page on ticker.bot: clear product description, iOS / macOS /
+  Android "coming soon", made to look good. Status: decided, waits for W1.
+- **W3** Hidden full flow that only the owner can use on the public site: sign up, log in (email;
+  maybe Google, Apple), what a user sees after sign-up, free tier or trial, paid subscription.
+  Status: decided, details in W1.
+- **W4** One account for the site, the Mac app, the iOS app and the user's bot. Status: decided.
+- **W5** Site features: settings, model training, maybe statistics; the dashboard stays in the apps.
+  Status: decided, scope in W1.
+- **W6** One bot per user in the cloud on a rented server (AWS or similar), with a limited set of
+  settings and a model trained on them; no Tailscale, the apps connect to the server. Status:
+  decided, design in W1.
+- **W7** Broker token security for live accounts, designed before any server work: who holds the
+  credentials, how they are stored, used and revoked, what happens on a leak. Status: decided as a
+  must, design in W1.
+- **W8** Deployment: server, domain, TLS, how the owner (with Claude) deploys and updates it.
+  Status: not started.
 
 ## v2: Unattended Sandbox
 
