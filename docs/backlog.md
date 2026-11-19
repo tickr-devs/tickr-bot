@@ -33,7 +33,7 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
 | **v1.1** | Tools to find an edge, and the model path | R1, R4, R5, R15, R16 and T12 merged | observer, replay and model results |
-| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T11, T13, T14, X3, X4 merged and released | unattended Sandbox days |
+| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T11, T13-T15, X3, X4 merged and released | unattended Sandbox days |
 | **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S7, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
 | **v5** | The product: ticker.bot (site, accounts, one cloud bot per user) and the apps signed in to it; standalone Mac scope settled in W1 | W1 spec agreed with the owner, W2-W8 and W15-W17 built | |
@@ -236,6 +236,17 @@ Platform checks (old group B):
 - **T13** Profit target and time exit as strategy rules.
 - **T14** (W11) Notification settings in the apps (`docs/api-planned.md` section 4).
 
+The owner's own bot in the cloud (owner 2026-11-19, pulled forward from W6; plan:
+https://claude.ai/artifact/QhzoePqMNyeqFeYwUga59C):
+- **T15** (W9-W13) The owner's bot runs on one AWS server (Sandbox only) instead of the Mac; the apps
+  reach it over HTTPS with a per-device token, no Tailscale. Parts, each its own small PR: an alert
+  channel that works off the Mac (unblocks `alert-channel-missing`), several device tokens in the API,
+  the Mac app paired by address and token like the iPhone, `render-systemd` and a server deploy that
+  refuses unless flat, an off-server heartbeat alarm, and the infrastructure as code. Cut over on a
+  weekend while flat, not before V2; the Mac stays the fallback for two weeks, then Tailscale goes.
+  Trading-critical and auth parts: Fable review. Status: decided (order); alert channel, domain and
+  AWS account wait for the owner.
+
 Trading outside the regular session (owner 2026-11-16, ids kept):
 - **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
   LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from
@@ -247,7 +258,7 @@ Trading outside the regular session (owner 2026-11-16, ids kept):
   outside the regular session. Old-tracker answer, reconfirm: limit orders only in PRE/POST, smaller
   size, no entries on stream or broker loss (old Q118, #020-12).
 
-Exit: T1-T11, T13, T14, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
+Exit: T1-T11, T13-T15, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
 PRE/POST stop probe for X4), the
 duplicate-key test green, v2 released and running unattended in the Sandbox.
 
@@ -335,7 +346,7 @@ The product's own site and cloud, after v1 to v4. Rough notes and the open quest
   Status: decided, scope in W1.
 - **W6** One bot per user in the cloud on a rented server (AWS or similar), with a limited set of
   settings and a model trained on them; no Tailscale, the apps connect to the server. Status:
-  decided, design in W1.
+  decided, design in W1. The owner's own Sandbox bot moves earlier, in v2 (T15).
 - **W7** Broker token security for live accounts, designed before any server work: who holds the
   credentials, how they are stored, used and revoked, what happens on a leak. Status: decided as a
   must, design in W1.
