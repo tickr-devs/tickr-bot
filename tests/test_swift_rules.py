@@ -826,3 +826,14 @@ def test_scroll_indicators_are_hidden_once_per_scene(tmp_path):
 
 def test_the_scrollbar_rule_is_an_app_rule():
     assert "scrollbars" in load().APP_RULES
+
+
+def test_breath_rule_rejects_a_shimmer_anywhere(tmp_path):
+    source = (
+        "struct ShimmerBand {}\n"
+        "let width = Tokens.Loading.shimmerWidth\n"
+        "// the old shimmer, in a comment\n"
+        "Skeleton(nil) { SkeletonBlock(.line) }\n"
+    )
+    found = load().breath_violations(write(tmp_path, source))
+    assert [line for line, _ in found] == [1, 2]
