@@ -241,6 +241,17 @@ class SessionCalendar:
         )
 
 
+def market_quiet(calendar: SessionCalendar, instant: datetime) -> bool:
+    """True when no session of any kind runs at `instant`: outside [pre-market open, extended
+    close) of its New York day, or on a weekend or holiday. A day the calendar cannot answer
+    (outside its coverage, an invalid file) is never quiet."""
+    try:
+        day = calendar.day_at(instant)
+    except CalendarRefused as refused:
+        return refused.cause in (CalendarCause.WEEKEND, CalendarCause.HOLIDAY)
+    return not day.premarket_open <= instant < day.extended_close
+
+
 def ny_date_of(instant: datetime) -> date:
     """New York calendar date of an aware instant."""
     _require_aware(instant)

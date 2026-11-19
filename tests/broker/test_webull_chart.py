@@ -26,7 +26,7 @@ from tickr.broker.webull import (
     market_data_from_config,
     read_history_bars,
 )
-from tickr.calendar import SessionCalendar, ny_date_of
+from tickr.calendar import NEW_YORK, SessionCalendar, ny_date_of
 from tickr.data.base import BarSpan, DelayedData
 
 from .test_webull_market_data import Scripted, bar_row, ok, recorded, recorded_meta
@@ -45,7 +45,7 @@ def enabled(cfg: config.Config | None = None, **chart: Any) -> config.Config:
 
 def chart_adapter(cfg: config.Config, *responses):
     transport = Scripted(*responses)
-    budget = chart_budget_from_config(cfg, clock=lambda: 0.0)
+    budget = chart_budget_from_config(cfg, clock=lambda: 0.0, utc_now=lambda: END)
     return chart_market_data_from_config(cfg, transport, budget), transport, budget
 
 
@@ -102,7 +102,7 @@ def test_chart_reads_refuse_unknown_sessions_delay_and_other_symbols():
 def test_chart_budget_is_refused_when_spent_and_the_bot_budget_is_untouched():
     cfg = enabled()
     slice_ = cfg.chart.requests_per_minute
-    bot_budget = budget_from_config(cfg, clock=lambda: 0.0)
+    bot_budget = budget_from_config(cfg, clock=lambda: 0.0, utc_now=lambda: END)
     bot_transport = Scripted(ok({"result": [{"symbol": "AAA", "delay_minutes": "0",
                                              "result": [bar_row(0)]}]}))
     bot_md = market_data_from_config(cfg, bot_transport, bot_budget)
@@ -152,11 +152,10 @@ def test_chart_slice_is_carved_from_a_route_specific_bars_limit():
     env = cfg.environment
     per_minute = replace(cfg, environments={**cfg.environments, cfg.environment_name: replace(
         env, route_limits={**env.route_limits, BARS_PATH: (50, 60)})})
-    assert budget_from_config(enabled(per_minute)).limit_for(BARS_PATH).max_requests == (
-        50 - cfg.chart.requests_per_minute)
+    budget = budget_from_config(enabled(per_minute), utc_now=lambda: END)
+    assert budget.limit_for(BARS_PATH).max_requests == 50 - cfg.chart.requests_per_minute
     # Other routes keep their limits.
-    assert budget_from_config(enabled(per_minute)).limit_for(Route.SNAPSHOT.path).max_requests \
-        == env.requests_per_route_per_minute
+    assert budget.limit_for(Route.SNAPSHOT.path).max_requests == env.requests_per_route_per_minute
 
 
 def test_http_429_pauses_only_the_chart_budget():
@@ -183,3 +182,70 @@ def test_only_the_api_chart_reads_chart_bars():
     callers = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "src").rglob("*.py")
                      if ".history_bars(" in p.read_text("utf-8"))
     assert callers == ["src/tickr/api/chart.py", "src/tickr/probes.py"]
+
+
+# New York times around Friday 2026-11-13 (a full session: pre-market 04:00, extended close 20:00),
+# the weekend after it and Monday 2026-11-16.
+def ny(day: int, hour: int, minute: int = 0, second: int = 0) -> datetime:
+    return datetime(2026, 11, day, hour, minute, second, tzinfo=NEW_YORK).astimezone(UTC)
+
+
+@pytest.mark.parametrize("at, chart_quiet, bot_quiet", [
+    (ny(13, 16), False, False),          # regular session
+    (ny(13, 19, 59, 59), False, False),  # last second of after-hours
+    (ny(13, 20), False, True),           # the session is over: the bot gives the slice up now,
+    (ny(13, 20, 0, 59), False, True),    # the chart takes it a window later
+    (ny(13, 20, 1), True, True),
+    (ny(13, 23, 18), True, True),        # the owner's iPhone chart, 2026-11-19 23:18 ET
+    (ny(14, 12), True, True),            # Saturday
+    (ny(16, 3, 58, 59), True, True),     # Monday before the pre-market: the chart gives it back
+    (ny(16, 3, 59, 1), False, True),     # a window before the session starts,
+    (ny(16, 4), False, False),           # the bot takes it back when the session starts
+])
+def test_quiet_hours_split_the_bars_route_without_overlap(at, chart_quiet, bot_quiet):
+    """While no session runs the chart's bars slice is [chart] quiet_requests_per_minute and the
+    bot side's limit is that much lower; the chart's quiet span sits a whole window inside the
+    bot's, so requests taken under one split have left the window before the other side grows."""
+    cfg = enabled()
+    chart, quiet = cfg.chart.requests_per_minute, cfg.chart.quiet_requests_per_minute
+    route = cfg.environment.requests_per_route_per_minute
+    chart_limit = chart_budget_from_config(cfg, utc_now=lambda: at).limit_for(BARS_PATH)
+    bot_limit = budget_from_config(cfg, utc_now=lambda: at).limit_for(BARS_PATH)
+    assert chart_limit.max_requests == (quiet if chart_quiet else chart)
+    assert bot_limit.max_requests == route - (quiet if bot_quiet else chart)
+    assert chart_limit.max_requests + bot_limit.max_requests <= route
+    # Other routes and the probe's view of the route never change with the hour.
+    assert budget_from_config(cfg, utc_now=lambda: at).limit_for(Route.SNAPSHOT.path) \
+        .max_requests == route
+    assert budget_from_config(cfg, utc_now=lambda: at, quiet_split=False) \
+        .limit_for(BARS_PATH).max_requests == route - chart
+
+
+def test_quiet_slice_counts_requests_already_taken():
+    """At the end of quiet hours the chart's limit drops back while its requests still count:
+    it refuses until they leave the window, never adding the daytime slice on top."""
+    cfg = enabled()
+    now = [ny(16, 3, 58)]
+    clock = [0.0]
+    budget = chart_budget_from_config(cfg, clock=lambda: clock[0], utc_now=lambda: now[0])
+    for _ in range(cfg.chart.quiet_requests_per_minute):
+        budget.take(BARS_PATH)
+    with pytest.raises(BudgetExhausted):
+        budget.take(BARS_PATH)
+    now[0], clock[0] = ny(16, 3, 59, 30), 30.0
+    assert budget.usage(BARS_PATH).remaining == 0
+    with pytest.raises(BudgetExhausted):
+        budget.take(BARS_PATH)
+    now[0], clock[0] = ny(16, 4, 0, 1), 60.0  # all of them have left the window
+    budget.take(BARS_PATH)
+    assert budget.usage(BARS_PATH).used == 1
+
+
+def test_without_a_calendar_the_daytime_split_stays(tmp_path):
+    cfg = enabled()
+    cfg = replace(cfg, root=tmp_path)  # no calendar files under this root
+    assert chart_budget_from_config(cfg, utc_now=lambda: ny(14, 12)).limit_for(BARS_PATH) \
+        .max_requests == cfg.chart.requests_per_minute
+    bot = budget_from_config(cfg, utc_now=lambda: ny(14, 12)).limit_for(BARS_PATH)
+    assert bot.max_requests == cfg.environment.requests_per_route_per_minute \
+        - cfg.chart.requests_per_minute

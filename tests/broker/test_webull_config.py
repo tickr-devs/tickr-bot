@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,9 @@ def test_settings_come_from_the_environment(tmp_path, name):
 def test_budget_uses_default_and_route_limits(tmp_path, name):
     cfg = load_env(tmp_path, name)
     env = cfg.environment
-    budget = budget_from_config(cfg, clock=lambda: 0.0)
+    # A weekday afternoon in New York: the daytime split (quiet hours: test_webull_chart.py).
+    budget = budget_from_config(cfg, clock=lambda: 0.0,
+                                utc_now=lambda: datetime(2026, 11, 13, 21, 0, tzinfo=UTC))
     for route in Route:
         limit = budget.limit_for(route.path)
         # With charts on, the bot's bars route gives the chart its slice (docs/webull-facts.md C).

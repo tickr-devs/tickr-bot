@@ -471,11 +471,21 @@ def test_chart_slice_is_checked_when_the_config_loads(tmp_path):
     assert loaded.chart.webull_enabled
     smallest = min(e.requests_per_route_per_minute for e in loaded.environments.values())
     too_big = f"requests_per_minute = {smallest}"
-    text = BOT.read_text("utf-8").replace("requests_per_minute = 4", too_big, 1)
+    text = BOT.read_text("utf-8").replace("\nrequests_per_minute = 4", "\n" + too_big, 1)
+    text = text.replace("quiet_requests_per_minute = 12", f"quiet_{too_big}", 1)
     off = config.load(_copy_in(tmp_path, "off", _chart_off(text)))
-    assert off.chart.requests_per_minute == smallest
+    assert off.chart.requests_per_minute == off.chart.quiet_requests_per_minute == smallest
     with pytest.raises(config.ConfigError, match="must be below the bars route limit"):
         config.load(_copy_in(tmp_path, "big", _chart_on(text)))
+    # The quiet-hours slice alone may not empty the bot's bars limit either.
+    quiet = BOT.read_text("utf-8").replace("quiet_requests_per_minute = 12", f"quiet_{too_big}", 1)
+    with pytest.raises(config.ConfigError, match="must be below the bars route limit"):
+        config.load(_copy_in(tmp_path, "quiet-big", _chart_on(quiet)))
+    # ...and is never smaller than the daytime one.
+    smaller = BOT.read_text("utf-8").replace("quiet_requests_per_minute = 12",
+                                             "quiet_requests_per_minute = 3", 1)
+    with pytest.raises(config.ConfigError, match="at least requests_per_minute"):
+        config.load(_copy_in(tmp_path, "quiet-small", smaller))
     window = BOT.read_text("utf-8").replace(
         SANDBOX_ROUTE_LIMITS, f'route_limits = {{ "{config.BARS_ROUTE}" = [50, 30] }}', 1)
     window_off = config.load(_copy_in(tmp_path, "window-off", _chart_off(window)))

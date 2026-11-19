@@ -56,7 +56,7 @@ from tickr.broker.base import (
 )
 from tickr.broker.budget import RequestBudget, RouteLimit
 from tickr.broker.status import map_status
-from tickr.calendar import NEW_YORK, ny_date_of
+from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar, market_quiet, ny_date_of
 from tickr.config import BARS_ROUTE, Config, GateResult, check_chart_slice, trading_gate
 from tickr.data.base import (
     BarSpan,
@@ -2633,15 +2633,46 @@ def settings_from_config(config: Config) -> WebullSettings:
     )
 
 
+UtcNow = Callable[[], datetime]
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def quiet_hours(config: Config, margin_seconds: float, utc_now: UtcNow) -> Callable[[], bool]:
+    """Says whether the market is quiet (no pre-market, regular or after-hours session, by the
+    session calendar) from `margin_seconds` before now to `margin_seconds` after it. Sessions and
+    the gaps between them last hours, so checking both ends and now covers the span. A calendar
+    that cannot be loaded is never quiet: every budget keeps its daytime split."""
+    try:
+        calendar = SessionCalendar.load((config.root / config.session.calendar_file).parent)
+    except CalendarRefused:
+        return lambda: False
+    margin = timedelta(seconds=margin_seconds)
+
+    def quiet() -> bool:
+        now = utc_now()
+        return all(market_quiet(calendar, at) for at in (now - margin, now, now + margin))
+
+    return quiet
+
+
 def budget_from_config(
-    config: Config, clock: Callable[[], float] = time.monotonic
+    config: Config, clock: Callable[[], float] = time.monotonic, utc_now: UtcNow = _now_utc,
+    quiet_split: bool = True,
 ) -> RequestBudget:
     """The bot's (and every bot-side tool's) request budget. With `[chart] webull_enabled` the
-    bars route keeps `[chart] requests_per_minute` fewer requests per 60 s: that slice belongs to
-    the API's chart budget (`chart_budget_from_config`), so both processes together never pass
-    the route limit even if Webull counts it per App Key. The slice's window and size are refused
-    when the config is loaded (`config.check_chart_slice`); checked again here for a config built
-    another way."""
+    bars route keeps `[chart] requests_per_minute` fewer requests per 60 s, and
+    `[chart] quiet_requests_per_minute` fewer while the market is quiet (no session runs): that
+    slice belongs to the API's chart budget (`chart_budget_from_config`), so both processes
+    together never pass the route limit even if Webull counts it per App Key (C2). The quiet
+    split starts the moment the session ends and stops the moment the next one starts; the
+    chart takes its larger quiet slice only a window later and gives it back a window earlier,
+    so the requests either side took under the other split have left the window. The slice's
+    window and size are refused when the config is loaded (`config.check_chart_slice`); checked
+    again here for a config built another way. `quiet_split=False` keeps the daytime split at
+    any hour (the chart-limit probe measures the route limit itself)."""
     env = config.environment
     pause = float(env.rate_limit_cooldown_seconds)
     default = RouteLimit(env.requests_per_route_per_minute, SECONDS_PER_MINUTE, pause)
@@ -2650,22 +2681,33 @@ def budget_from_config(
         for route, (count, window) in env.route_limits.items()
     }
     chart = config.chart
-    if chart.webull_enabled:
-        check_chart_slice(chart, config.environment_name, env)
-        bars = limits.get(Route.BARS.path, default)
-        limits[Route.BARS.path] = RouteLimit(bars.max_requests - chart.requests_per_minute,
-                                             SECONDS_PER_MINUTE, pause)
-    return RequestBudget(default, limits, clock=clock)
+    if not chart.webull_enabled:
+        return RequestBudget(default, limits, clock=clock)
+    check_chart_slice(chart, config.environment_name, env)
+    bars = limits.get(Route.BARS.path, default)
+    limits[Route.BARS.path] = RouteLimit(bars.max_requests - chart.requests_per_minute,
+                                         SECONDS_PER_MINUTE, pause)
+    if not quiet_split:
+        return RequestBudget(default, limits, clock=clock)
+    quiet = {Route.BARS.path: RouteLimit(bars.max_requests - chart.quiet_requests_per_minute,
+                                         SECONDS_PER_MINUTE, pause)}
+    return RequestBudget(default, limits, clock=clock, quiet_limits=quiet,
+                         quiet=quiet_hours(config, 0, utc_now))
 
 
 def chart_budget_from_config(
-    config: Config, clock: Callable[[], float] = time.monotonic
+    config: Config, clock: Callable[[], float] = time.monotonic, utc_now: UtcNow = _now_utc,
 ) -> RequestBudget:
     """The API's chart budget: `[chart] requests_per_minute` per 60 s on every route (only the
-    bars route is ever used), its own instance, never shared with the bot's."""
-    limit = RouteLimit(config.chart.requests_per_minute, SECONDS_PER_MINUTE,
-                       float(config.environment.rate_limit_cooldown_seconds))
-    return RequestBudget(limit, clock=clock)
+    bars route is ever used), its own instance, never shared with the bot's; while the market is
+    quiet from a window before now to a window after it, `[chart] quiet_requests_per_minute` on
+    the bars route (see `budget_from_config`)."""
+    pause = float(config.environment.rate_limit_cooldown_seconds)
+    limit = RouteLimit(config.chart.requests_per_minute, SECONDS_PER_MINUTE, pause)
+    quiet = {Route.BARS.path: RouteLimit(config.chart.quiet_requests_per_minute,
+                                         SECONDS_PER_MINUTE, pause)}
+    return RequestBudget(limit, clock=clock, quiet_limits=quiet,
+                         quiet=quiet_hours(config, SECONDS_PER_MINUTE, utc_now))
 
 
 def stream_settings_from_config(config: Config) -> StreamSettings:

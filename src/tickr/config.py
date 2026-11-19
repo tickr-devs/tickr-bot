@@ -311,6 +311,7 @@ class MarketDataConfig:
 class ChartConfig:
     webull_enabled: bool
     requests_per_minute: int
+    quiet_requests_per_minute: int
     bars_per_request: int
     live_ttl_seconds: Decimal
     closed_day_settle_seconds: Decimal
@@ -716,6 +717,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     chart: ChartConfig = built["chart"]
     if chart.requests_per_minute < 1 or chart.bars_per_request < 1:
         raise ConfigError("[chart] requests_per_minute and bars_per_request must be at least 1")
+    if chart.quiet_requests_per_minute < chart.requests_per_minute:
+        raise ConfigError("[chart] quiet_requests_per_minute must be at least requests_per_minute")
     if chart.closed_day_settle_seconds < 0:
         raise ConfigError("[chart] closed_day_settle_seconds must not be negative")
     if chart.live_ttl_seconds <= 0 or chart.session_lookback_days < 1:
@@ -734,6 +737,7 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     for name, env in environments.items():
         count, _ = env.route_limits.get(BARS_ROUTE,
                                         (env.requests_per_route_per_minute, SECONDS_PER_MINUTE))
+        # Discovery reads only while a session runs, so against the bot's daytime slice.
         bot_count = count - (chart.requests_per_minute if chart.webull_enabled else 0)
         if not 0 <= reserve < bot_count:
             raise ConfigError(f"[market_data] discovery_bars_reserve_requests must be at least 0 "
@@ -791,15 +795,17 @@ def check_history_share(orders: OrdersConfig, name: str, env: EnvironmentConfig)
 
 def check_chart_slice(chart: ChartConfig, name: str, env: EnvironmentConfig) -> None:
     """With the chart on, the bot's bars limit in `env` loses `[chart] requests_per_minute` per
-    60 s to the API: refuse a bars limit over another window or one the slice would empty."""
+    60 s to the API (`quiet_requests_per_minute` while no session runs): refuse a bars limit over
+    another window or one either slice would empty."""
     count, window = env.route_limits.get(BARS_ROUTE,
                                          (env.requests_per_route_per_minute, SECONDS_PER_MINUTE))
     if window != SECONDS_PER_MINUTE:
         raise ConfigError(f"[chart] needs the bars route limit of [environments.{name}] per "
                           f"{SECONDS_PER_MINUTE} s to carve its slice from, not per {window} s")
-    if chart.requests_per_minute >= count:
-        raise ConfigError(f"[chart] requests_per_minute must be below the bars route limit of "
-                          f"[environments.{name}] ({count} per {SECONDS_PER_MINUTE} s)")
+    if max(chart.requests_per_minute, chart.quiet_requests_per_minute) >= count:
+        raise ConfigError(f"[chart] requests_per_minute and quiet_requests_per_minute must be "
+                          f"below the bars route limit of [environments.{name}] ({count} per "
+                          f"{SECONDS_PER_MINUTE} s)")
 
 
 _KEY_LINE = re.compile(r"^\s*([A-Za-z0-9_\-\"\.]+)\s*=")

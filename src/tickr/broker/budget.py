@@ -12,6 +12,11 @@ The rolling-window log used here never admits more than `max_requests` inside an
 After the broker itself answers 429, the route is paused for a configured time: every
 request on that route is refused until the pause ends, whatever the local count says.
 
+A route may have a second limit for quiet hours (`quiet_limits`, used while `quiet()` says so):
+the bars route is split between the bot and the API's chart differently while no session runs.
+Both limits of a route count over the same window, so the requests already taken keep counting
+when the limit changes; a smaller limit refuses until enough of them leave the window.
+
 All numbers come from configuration through `RouteLimit`; this module holds none.
 """
 
@@ -76,6 +81,8 @@ class RequestBudget:
     """Rolling-window request budget, one window per route.
 
     `limits` maps route keys to their limits. A route without an entry uses `default`.
+    `quiet_limits` maps route keys to the limits they have while `quiet()` is true (a route
+    without an entry keeps its limit); each must count over the same window as the route's own.
     Thread safe: the bot loop and the local API may both read usage.
     """
 
@@ -88,19 +95,35 @@ class RequestBudget:
         default: RouteLimit,
         limits: Mapping[str, RouteLimit] | None = None,
         clock: Clock = time.monotonic,
+        quiet_limits: Mapping[str, RouteLimit] | None = None,
+        quiet: Callable[[], bool] | None = None,
     ) -> None:
         self._default = default
         self._limits = dict(limits or {})
+        self._quiet_limits = dict(quiet_limits or {})
+        if self._quiet_limits and quiet is None:
+            raise ValueError("quiet_limits need a quiet() that says when they apply")
+        for route, limit in self._quiet_limits.items():
+            if limit.window_seconds != self._own_limit(route).window_seconds:
+                raise ValueError(f"the quiet limit of {route} must count over the route's window")
+        self._quiet = quiet
         self._clock = clock
         self._taken: dict[str, deque[float]] = {}
         self._paused_until: dict[str, float] = {}
         self._lock = threading.Lock()
 
-    def limit_for(self, route: str) -> RouteLimit:
+    def _own_limit(self, route: str) -> RouteLimit:
         return self._limits.get(route, self._default)
 
+    def limit_for(self, route: str) -> RouteLimit:
+        """The limit of `route` now: its quiet-hours limit while `quiet()` says so."""
+        quiet = self._quiet_limits.get(route)
+        if quiet is not None and self._quiet is not None and self._quiet():
+            return quiet
+        return self._own_limit(route)
+
     def _expire(self, route: str, now: float) -> deque[float]:
-        window = self.limit_for(route).window_seconds
+        window = self._own_limit(route).window_seconds
         taken = self._taken.setdefault(route, deque())
         while taken and taken[0] <= now - window:
             taken.popleft()

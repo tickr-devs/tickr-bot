@@ -824,6 +824,13 @@ webull_enabled = true
 # counts per App Key); with webull_enabled it must be below the bars route limit of every environment, which must be
 # counted per 60 s (checked when the config is loaded); read by the request budget and the api server.
 requests_per_minute = 4
+# Webull bars requests the API may send per 60 s for charts while no session runs (from a minute after the extended close
+# to a minute before the next pre-market open, and all of weekends and holidays, by the session calendar), count: the
+# chart's larger slice then, so a cold chart rarely waits (owner 2026-11-19). The bot-side processes (the bot, the
+# nightly fetch) lose this many bars requests per 60 s from the moment the session ends to the moment the next one
+# starts, so together they stay within one route limit (C2: Webull counts it per App Key); at least requests_per_minute
+# and below the bars route limit of every environment; read by the request budget and the api server.
+quiet_requests_per_minute = 12
 # Most bars asked per chart bars request, count (SDK maximum 1200; one day with pre- and post-market is at most 960
 # minutes, so one request covers a day); read by the api server.
 bars_per_request = 1200

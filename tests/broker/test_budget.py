@@ -105,3 +105,20 @@ def test_reserve_keeps_requests_for_other_callers():
     with pytest.raises(BudgetExhausted) as err:
         budget.take("/r", reserve=1)
     assert err.value.cause == RequestBudget.CAUSE_WINDOW_FULL
+
+
+def test_quiet_limits_apply_only_while_quiet_and_need_the_same_window():
+    quiet = [False]
+    budget = RequestBudget(RouteLimit(10, 60, 0), {"bars": RouteLimit(8, 60, 0)},
+                           clock=lambda: 0.0, quiet_limits={"bars": RouteLimit(3, 60, 0)},
+                           quiet=lambda: quiet[0])
+    assert budget.limit_for("bars").max_requests == 8
+    assert budget.limit_for("other").max_requests == 10
+    quiet[0] = True
+    assert budget.limit_for("bars").max_requests == 3
+    assert budget.limit_for("other").max_requests == 10
+    with pytest.raises(ValueError, match="quiet"):
+        RequestBudget(RouteLimit(10, 60, 0), quiet_limits={"bars": RouteLimit(3, 60, 0)})
+    with pytest.raises(ValueError, match="window"):
+        RequestBudget(RouteLimit(10, 60, 0), quiet_limits={"bars": RouteLimit(3, 30, 0)},
+                      quiet=lambda: True)

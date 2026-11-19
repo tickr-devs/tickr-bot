@@ -228,7 +228,7 @@ def chart_limit(cfg: Config, config_path: Path, symbol: str, *, now: Clock,
                            "sends more than one process may and has no place in its budget")
     _refuse_in_regular_session(cfg, now())
     probe = cfg.probe
-    limit = budget_from_config(cfg).limit_for(Route.BARS.path)
+    limit = budget_from_config(cfg, quiet_split=False).limit_for(Route.BARS.path)
     if probe.chart_limit_requests > limit.max_requests:
         raise ProbeRefused(f"[probe] chart_limit_requests {probe.chart_limit_requests} is above "
                            f"the bars route limit {limit.max_requests}")
@@ -645,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = config_module.load(args.config)
         if args.command == "chart-limit-worker":
-            limit = budget_from_config(cfg).limit_for(Route.BARS.path)
+            limit = budget_from_config(cfg, quiet_split=False).limit_for(Route.BARS.path)
             run_limit_worker(LIMIT_MARKET(cfg), args.symbol, cfg.probe.chart_limit_requests,
                              limit.window_seconds, args.start_at, args.out,
                              now=NOW, sleep=SLEEP)

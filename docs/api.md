@@ -913,7 +913,9 @@ from the bot's capture). Code: `src/tickr/api/chart.py`; settings: `[chart]` in 
   at most); `tickr maintain --apply` deletes day files older than `[chart] cache_max_age_days`
   (docs/operations.md). A pruned day is read from Webull again when charted.
 - Budget: the chart has its own request budget, `[chart] requests_per_minute` per 60 s, never the
-  bot's. A 1d/5d range costs at most one request per uncached session, a daily range one, so a
+  bot's; while no session runs (from a minute after the extended close to a minute before the next
+  pre-market, weekends and holidays) it is `[chart] quiet_requests_per_minute`, and the bot side
+  gives that much up meanwhile, so the two together stay within one bars route limit. A 1d/5d range costs at most one request per uncached session, a daily range one, so a
   cold 5d can need more than one window. When the budget refuses a read, reading stops: the answer
   is `200` with what was read so far and `pending` (above); for 1d/5d that is the newest sessions
   up to the refused one, one contiguous run (an older session behind it is not added even when it
