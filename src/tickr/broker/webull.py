@@ -77,6 +77,7 @@ from tickr.data.base import (
 from tickr.types import (
     Bar,
     ComboRole,
+    ExtendedQuote,
     OrderDetail,
     OrderRequest,
     OrderType,
@@ -1286,6 +1287,32 @@ def read_snapshot(body: Any, receipt_time: datetime) -> list[Quote]:
     return quotes
 
 
+def read_extended_snapshot(body: Any, receipt_time: datetime) -> list[ExtendedQuote]:
+    """Snapshot body read with `extend_hour_required` -> each row's book (as `read_snapshot`)
+    and its newest extended-session trade (`extend_hour_last_price` at
+    `extend_hour_last_trade_time`, probe Q1). A row with only one of the two, or a malformed
+    value, raises MalformedResponse; a row with neither had no extended trade yet."""
+    books = {q.symbol: q for q in read_snapshot(body, receipt_time)}
+    found: list[ExtendedQuote] = []
+    for index, item in enumerate(_unwrap_list(body, "snapshot")):
+        where = f"snapshot[{index}]"
+        quote = books.get(str(item["symbol"]))
+        if quote is None:
+            continue
+        price = _optional(item, "extend_hour_last_price")
+        at = _optional(item, "extend_hour_last_trade_time")
+        if (price is None) != (at is None):
+            raise MalformedResponse(f"{where}: extend_hour_last_price and "
+                                    f"extend_hour_last_trade_time come together")
+        if price is None:
+            found.append(ExtendedQuote(quote, None, None))
+            continue
+        found.append(ExtendedQuote(
+            quote, _decimal_field(item, "extend_hour_last_price", where),
+            epoch_ms_to_utc(at, f"{where}.extend_hour_last_trade_time")))
+    return found
+
+
 def read_bars(body: Any) -> list[Bar]:
     """Bars body `{result: [{delay_minutes, instrument_id, symbol, result: [bar...]}]}` -> bars,
     oldest first per symbol (the wire order is newest first, probe M2). Any series with
@@ -1495,6 +1522,18 @@ class WebullMarketData:
         if stray:
             raise MalformedResponse(f"snapshot: symbols not requested: {', '.join(stray)}")
         return quotes
+
+    def extended_snapshot(self, symbols: Sequence[str]) -> list[ExtendedQuote]:
+        """The snapshot with `extend_hour_required` (probe Q1, docs/webull-facts.md): the same
+        book as `snapshot` plus each symbol's newest pre-market or post-market trade."""
+        body = self._read(Route.SNAPSHOT, {
+            "symbols": ",".join(symbols), "category": self._category,
+            SNAPSHOT_EXTENDED_PARAM: SNAPSHOT_EXTENDED_VALUE})
+        found = read_extended_snapshot(body, self._utc_now())
+        stray = sorted({e.quote.symbol for e in found} - set(symbols))
+        if stray:
+            raise MalformedResponse(f"snapshot: symbols not requested: {', '.join(stray)}")
+        return found
 
     def quote_sources(self, symbol: str) -> list[SourceRead]:
         """Probe Q1, read only: the four reads that could price an order outside the regular

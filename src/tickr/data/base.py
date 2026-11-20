@@ -19,10 +19,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from tickr.broker.base import RateLimited
-from tickr.types import Bar, Quote
+from tickr.types import Bar, ExtendedQuote, Quote
 
 
 class ScreenerKind(StrEnum):
@@ -254,6 +254,16 @@ class MarketData(Protocol):
         ...
 
 
+@runtime_checkable
+class ExtendedQuotes(Protocol):
+    """Market data that reads quotes with the pre-market and post-market included."""
+
+    def extended_snapshot(self, symbols: Sequence[str]) -> list[ExtendedQuote]:
+        """One read for `symbols`: each one's book and newest extended-session trade. A symbol
+        without a full book gets no entry (the caller treats it as no quote)."""
+        ...
+
+
 class FakeMarketData:
     """In-memory `MarketData` for tests: scripted rows, bars and quotes; a call budget per method.
 
@@ -267,6 +277,7 @@ class FakeMarketData:
         self._bars: dict[str, list[Bar]] = {}
         self._history: dict[tuple[str, BarSpan], list[SessionBar]] = {}
         self._quotes: dict[str, Quote] = {}
+        self._last_trades: dict[str, tuple[Decimal, datetime]] = {}
         self._profiles: dict[str, list[InstrumentProfile]] = {}
         self._limits: dict[str, int] = {}
         self._bars_delay: Decimal | None = None
@@ -359,6 +370,14 @@ class FakeMarketData:
     def snapshot(self, symbols: Sequence[str]) -> list[Quote]:
         self._call("snapshot", symbols)
         return [self._quotes[s] for s in symbols if s in self._quotes]
+
+    def extended_snapshot(self, symbols: Sequence[str]) -> list[ExtendedQuote]:
+        self._call("extended_snapshot", symbols)
+        return [ExtendedQuote(self._quotes[s], *self._last_trades.get(s, (None, None)))
+                for s in symbols if s in self._quotes]
+
+    def set_last_trade(self, symbol: str, price: Decimal, at: datetime) -> None:
+        self._last_trades[symbol] = (price, at)
 
     def subscribe(self, symbols: Iterable[str], listener: QuoteListener) -> None:
         self._listener = listener

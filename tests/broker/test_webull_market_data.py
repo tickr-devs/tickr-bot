@@ -510,3 +510,48 @@ def test_quote_sources_out_of_budget_is_recorded_not_sent():
     reads = md.quote_sources("AAA")
     assert [r for r, _ in transport.sent] == [Route.SNAPSHOT, Route.DEPTHS, Route.TICKS]
     assert (reads[1].status, reads[1].error_code) == (None, "BudgetExhausted")
+
+
+# --- extended snapshot (probe Q1) -------------------------------------------------------------
+
+def recorded_extended() -> dict[str, Any]:
+    return json.loads((FIXTURES / "snapshot_extended_spy_2026-11-19_ath.json").read_text("utf-8"))
+
+
+def test_extended_snapshot_reads_the_book_and_the_newest_extended_trade() -> None:
+    from tickr.broker.webull import read_extended_snapshot
+
+    recorded = recorded_extended()
+    received = datetime.fromisoformat(recorded["received"])
+    (spy,) = read_extended_snapshot(recorded["body"], received)
+    assert (spy.quote.symbol, spy.quote.bid, spy.quote.ask) == ("SPY", D("714.9600"), D("715.0900"))
+    assert spy.quote.provider_time == datetime(2026, 11, 19, 23, 29, 59, 18000, tzinfo=UTC)
+    assert spy.last_price == D("715.0816")
+    assert spy.last_trade_time == datetime(2026, 11, 19, 23, 29, 59, 397000, tzinfo=UTC)
+    # The plain read of the same body gives the same book.
+    assert read_snapshot(recorded["body"], received) == [spy.quote]
+
+
+def test_extended_snapshot_without_an_extended_trade_and_half_a_trade() -> None:
+    from tickr.broker.webull import read_extended_snapshot
+
+    (row,) = read_extended_snapshot([snapshot_row("ABC")], NOW)
+    assert (row.last_price, row.last_trade_time) == (None, None)
+    with pytest.raises(MalformedResponse, match="come together"):
+        read_extended_snapshot([snapshot_row("ABC", extend_hour_last_price="10.01")], NOW)
+    assert read_extended_snapshot([snapshot_row("ABC", bid="")], NOW) == []
+
+
+def test_extended_snapshot_request_sends_the_extended_flag_and_refuses_strays() -> None:
+    from tickr.data.base import ExtendedQuotes
+
+    md, transport = adapter(ok([snapshot_row("AAA", extend_hour_last_price="10.01",
+                                             extend_hour_last_trade_time=QUOTE_MS)]),
+                            ok([snapshot_row("AAA"), snapshot_row("ZZZ")]))
+    assert isinstance(md, ExtendedQuotes)
+    (aaa,) = md.extended_snapshot(["AAA"])
+    assert aaa.last_price == D("10.01") and aaa.quote.receipt_time == NOW
+    assert transport.sent[0] == (Route.SNAPSHOT, {"symbols": "AAA", "category": "US_STOCK",
+                                                  "extend_hour_required": "true"})
+    with pytest.raises(MalformedResponse, match="ZZZ"):
+        md.extended_snapshot(["AAA"])

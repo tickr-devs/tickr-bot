@@ -1,0 +1,5 @@
+{
+  "source": "probe Q1 (tickr probe-quote-sources), owner's Mac, Sandbox, 2026-11-19 18:30:00 ET (post-market), read snapshot-extended: GET snapshot with extend_hour_required=true; body as received (docs/webull-facts.md Q1)",
+  "received": "2026-11-19T23:30:00.306468+00:00",
+  "body": [{"ask":"715.0900","ask_size":"125","bid":"714.9600","bid_size":"125","bps":"0","change":"-14.330000","change_ratio":"-0.019625","close":"715.8700","eps":"0","eps_ttm":"0.0000","extend_hour_change":"-0.7884","extend_hour_change_ratio":"-0.001101","extend_hour_high":"716.4900","extend_hour_last_price":"715.0816","extend_hour_last_trade_time":1795130999397,"extend_hour_low":"713.2846","extend_hour_volume":"6845626","fifty_two_wk_high":"781.620000","fifty_two_wk_low":"626.10877","high":"739.8999","instrument_id":"913243251","last_trade_time":1795122000201,"list_status":"LISTED","lot_size":"1","low":"715.6500","open":"737.4600","pe_ratio":"0.0000","pre_close":"730.200000","price":"715.0816","quote_time":1795130999018,"symbol":"SPY","trade_status":"ATH","volume":"76499342","yield":"0.010592"}]
+}

@@ -37,6 +37,17 @@ class Quote:
     receipt_time: datetime
 
 
+@dataclass(frozen=True)
+class ExtendedQuote:
+    """A quote read with the pre-market and post-market included (Webull snapshot with
+    `extend_hour_required`, probe Q1): the book plus the newest extended-session trade, or None
+    for both when the session has had none."""
+
+    quote: Quote
+    last_price: Decimal | None
+    last_trade_time: datetime | None
+
+
 class Side(StrEnum):
     BUY = "BUY"
     SELL = "SELL"
