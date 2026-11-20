@@ -159,6 +159,19 @@ project files):
 - **R27** Pre- and post-market. Status: decided, after R26 and X4.
 - **R28** Cleanup of the old hand-written strategies, right after R26 once the models trade the
   regular session; it does not wait for R27 (owner, 2026-11-19). Status: decided, after R26.
+- **R29** Calibration check "70 means 70" (owner, 2026-11-20): for every probability the first and
+  second layers output, a reliability table by tenths on months the model never saw (the layer-1
+  training report already prints it as its CAL line). Rerun after every retraining. A hard
+  precondition for R30. Status: decided.
+- **R30** Size by model confidence (owner, 2026-11-20): a bot setting "size by confidence: off / on,
+  from X to Y USD" that scales a position's size with the model's probability. Needs no retraining.
+  Both bounds sit inside the platform's position cap (one source of truth for the cap); the setting
+  never loosens platform risk, and loosening it needs Face ID like any protection setting (S5).
+  Before it can be switched on: R29 passes, and a backtest on stored model answers shows earned,
+  lost and net with and without it, on both money lines. Earlier evidence: the legs model
+  (2026-11-17) did better sized by filter rank than flat in all three periods; liquidity of larger
+  bets in thin stocks was not checked. A config setting now, in the settings schema (S1) later.
+  Status: decided, after R29.
 - **T12** (moved from v2, 2026-11-19) Simulations obey platform rules: observers, replay and "what if"
   run through the same admission rules (position limit, pause after a loss, daily ceiling) from one
   shared code path, and the apps label each result with the rules it was computed under. R25 needs
