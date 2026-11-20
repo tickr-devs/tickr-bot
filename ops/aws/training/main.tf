@@ -199,10 +199,27 @@ data "aws_ssm_parameter" "ubuntu" {
   name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
 }
 
+# Two templates, identical except the market: "tickr-training" rents spot (cheap, can be taken
+# back), "tickr-training-ondemand" rents at the regular price and is never taken back. A
+# template's spot setting cannot be dropped at launch, hence two. On-demand is limited to
+# ondemand_instance_types (the research user's policy below).
+locals {
+  templates = {
+    spot     = { name = "tickr-training", spot = true, instance_type = var.instance_type }
+    ondemand = { name = "tickr-training-ondemand", spot = false, instance_type = var.ondemand_instance_types[0] }
+  }
+}
+
+moved {
+  from = aws_launch_template.training
+  to   = aws_launch_template.training["spot"]
+}
+
 resource "aws_launch_template" "training" {
-  name                                 = "tickr-training"
+  for_each                             = local.templates
+  name                                 = each.value.name
   image_id                             = data.aws_ssm_parameter.ubuntu.value
-  instance_type                        = var.instance_type
+  instance_type                        = each.value.instance_type
   instance_initiated_shutdown_behavior = "terminate"
   update_default_version               = true
 
@@ -210,11 +227,14 @@ resource "aws_launch_template" "training" {
     arn = aws_iam_instance_profile.machine.arn
   }
 
-  instance_market_options {
-    market_type = "spot"
-    spot_options {
-      spot_instance_type             = "one-time"
-      instance_interruption_behavior = "terminate"
+  dynamic "instance_market_options" {
+    for_each = each.value.spot ? [1] : []
+    content {
+      market_type = "spot"
+      spot_options {
+        spot_instance_type             = "one-time"
+        instance_interruption_behavior = "terminate"
+      }
     }
   }
 
@@ -300,13 +320,13 @@ data "aws_iam_policy_document" "research" {
   }
 
   statement {
-    sid       = "RunFromTemplateOnly"
+    sid       = "RunFromSpotTemplateOnly"
     actions   = ["ec2:RunInstances"]
     resources = ["*"]
     condition {
       test     = "ArnLike"
       variable = "ec2:LaunchTemplate"
-      values   = [aws_launch_template.training.arn]
+      values   = [aws_launch_template.training["spot"].arn]
     }
     condition {
       test     = "Bool"
@@ -318,6 +338,27 @@ data "aws_iam_policy_document" "research" {
       test     = "StringEqualsIfExists"
       variable = "ec2:InstanceType"
       values   = var.allowed_instance_types
+    }
+  }
+
+  statement {
+    sid       = "RunFromOnDemandTemplateOnly"
+    actions   = ["ec2:RunInstances"]
+    resources = ["*"]
+    condition {
+      test     = "ArnLike"
+      variable = "ec2:LaunchTemplate"
+      values   = [aws_launch_template.training["ondemand"].arn]
+    }
+    condition {
+      test     = "Bool"
+      variable = "ec2:IsLaunchTemplateResource"
+      values   = ["true"]
+    }
+    condition {
+      test     = "StringEqualsIfExists"
+      variable = "ec2:InstanceType"
+      values   = var.ondemand_instance_types
     }
   }
 

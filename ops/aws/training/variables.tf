@@ -20,6 +20,16 @@ variable "allowed_instance_types" {
   default     = ["c7a.16xlarge", "m7a.16xlarge", "c7a.2xlarge"]
 }
 
+variable "ondemand_instance_types" {
+  description = "Machine types the research user may rent at the regular (on-demand) price, from the tickr-training-ondemand template; the first is that template's default. Small only: on-demand costs 3-4 times spot."
+  type        = list(string)
+  default     = ["c7a.2xlarge"]
+  validation {
+    condition     = length(var.ondemand_instance_types) > 0
+    error_message = "ondemand_instance_types must name at least one type."
+  }
+}
+
 variable "subnet_id" {
   description = "Subnet for the training machine; null = the first default subnet of the default VPC."
   type        = string

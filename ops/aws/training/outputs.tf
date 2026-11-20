@@ -4,8 +4,13 @@ output "bucket" {
 }
 
 output "launch_template_id" {
-  description = "The only template the research user may start a machine from."
-  value       = aws_launch_template.training.id
+  description = "Spot template tickr-training (cheap, can be taken back)."
+  value       = aws_launch_template.training["spot"].id
+}
+
+output "ondemand_launch_template_id" {
+  description = "On-demand template tickr-training-ondemand (regular price, ondemand_instance_types only)."
+  value       = aws_launch_template.training["ondemand"].id
 }
 
 output "research_user" {

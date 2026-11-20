@@ -60,15 +60,20 @@ Every machine start still needs the owner's yes on a named sum.
 
 ## Limits IAM cannot hold
 
+A second template, `tickr-training-ondemand`, is the same machine at the regular price (never
+taken back mid-run, about 3-4 times the spot price); the research user may start only
+`ondemand_instance_types` (default c7a.2xlarge) from it. On-demand needs the account quota
+"Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances" to cover 8 vCPU beside the bot.
+
 `allowed_instance_types` also holds c7a.2xlarge (8 vCPU, 16 GB) for downloads and small runs
 that fit the 8 vCPU spot quota of a new account.
 
-The research user may start only `allowed_instance_types` from this template, but IAM cannot
-limit how many machines, their user data (so the 24-hour power-off can be dropped) or spot versus
-on-demand. Those rest on:
+The research user may start only `allowed_instance_types` (spot) and `ondemand_instance_types`
+(on-demand) from these templates, but IAM cannot limit how many machines or their user data (so
+the 24-hour power-off can be dropped). Those rest on:
 - the account's EC2 vCPU quotas, set to what one machine needs: in Service Quotas, "All Standard
   (A, C, D, H, I, M, R, T, Z) Spot Instance Requests" = 64 and the on-demand standard quota no
-  higher than the bot needs. A new account may start lower than 64: request the spot increase
+  higher than the bot plus one small machine (8 vCPU) needs. A new account may start lower than 64: request the spot increase
   right after the account is created, it can take a day;
 - deleting the research key when the training round ends;
 - the budget mail.
