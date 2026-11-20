@@ -15,9 +15,9 @@ variable "instance_type" {
 }
 
 variable "allowed_instance_types" {
-  description = "The only machine types the research user may start (IAM condition): no GPU, no larger sizes."
+  description = "The only machine types the research user may start (IAM condition): no GPU, no larger sizes. c7a.2xlarge (8 vCPU, 16 GB) is the small machine for downloads and runs that fit the 8 vCPU spot quota."
   type        = list(string)
-  default     = ["c7a.16xlarge", "m7a.16xlarge"]
+  default     = ["c7a.16xlarge", "m7a.16xlarge", "c7a.2xlarge"]
 }
 
 variable "subnet_id" {

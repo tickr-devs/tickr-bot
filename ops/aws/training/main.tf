@@ -1,7 +1,8 @@
 # Training stack for the owner's model research (docs/backlog.md T15, training spec stage 4).
 # Isolated from the bot: the research user below can only run the training machine from this
 # launch template, open SSM sessions to it and use the training bucket. It has no access to
-# Secrets Manager, the bot server, IAM or billing. Market data derived from the owner's personal
+# Secrets Manager, the bot server, IAM or billing. The machine may read one secret: the owner's
+# Massive flat-file key (below), and nothing else. Market data derived from the owner's personal
 # Massive plan stays in this private bucket and on this private machine (licence: personal use;
 # delete within 30 days after the subscription ends).
 
@@ -122,11 +123,31 @@ data "aws_iam_policy_document" "machine_agent" {
     resources = ["*"]
   }
   statement {
-    sid       = "NoAccountSecrets"
+    sid       = "NoAccountParameters"
     effect    = "Deny"
-    actions   = ["ssm:GetParameter*", "ssm:DescribeParameters", "secretsmanager:*"]
+    actions   = ["ssm:GetParameter*", "ssm:DescribeParameters"]
     resources = ["*"]
   }
+  statement {
+    sid           = "NoOtherSecrets"
+    effect        = "Deny"
+    actions       = ["secretsmanager:*"]
+    not_resources = [aws_secretsmanager_secret.massive.arn]
+  }
+  statement {
+    sid       = "ReadMassiveFlatFilesKey"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.massive.arn]
+  }
+}
+
+# The owner's Massive flat-file key, so a training or download machine can fetch market data
+# straight from Massive. Terraform creates only the empty secret; the owner puts the value in by
+# hand (README), so it never enters the state, the template or user data. Only the machine role
+# may read it; the research user may not (but can reach it through a shell on the machine).
+resource "aws_secretsmanager_secret" "massive" {
+  name        = "tickr-research/massive-flatfiles"
+  description = "Massive flat-file S3 key pair (JSON: MASSIVE_S3_ACCESS_KEY_ID, MASSIVE_S3_SECRET_ACCESS_KEY). Filled by the owner."
 }
 
 resource "aws_iam_role_policy" "machine_agent" {
@@ -246,6 +267,13 @@ resource "aws_launch_template" "training" {
 # state or in this repository.
 
 data "aws_iam_policy_document" "research" {
+  statement {
+    sid       = "NoSecretsDirectly"
+    effect    = "Deny"
+    actions   = ["secretsmanager:*", "ssm:GetParameter*"]
+    resources = ["*"]
+  }
+
   statement {
     sid = "ReadOnlyDescribe"
     # No ec2:DescribeInstanceAttribute: it returns the user data of every instance, the bot's too.
