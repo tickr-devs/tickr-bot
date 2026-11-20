@@ -72,9 +72,10 @@ Goal, scope and stages: `docs/spec-v1.md`. What is left:
 Owner's own setup tasks (outside the repository):
 - **O1** Merge-queue timeout 30 to 60 minutes in the GitHub repository settings (decided
   2026-11-18). Status: owner to change.
-- **O2** Ask Massive (Polygon) in writing whether training models on their data is allowed: on the
-  personal plan now, on the business plan later. Needed before training stage 6 (R21) and before
-  the closed beta. Status: decided (2026-11-19), owner to ask.
+- **O2** Ask Massive (Polygon) in writing: is training models on their data allowed (personal plan
+  now, business plan later), may we keep derived per-minute numbers after the subscription ends,
+  and what Benzinga news allows (R31). Needed before R19 and before the closed beta. Status: email
+  drafted (2026-11-20), owner to send.
 - **O3** Ask Webull now (F2, moved from v6 because the answer decides v5): may a product for other
   people use the Trading API, or only the Connect API (OAuth, by application); plus three key-security
   questions for W7: can a key be limited to trading without withdrawals, can it be bound to a
@@ -139,13 +140,28 @@ losses go down, on both validation periods.
   and R3. Status: decided.
 - **R17** Stage 2: the second (entry) layer trained on money, not on hit rate. Status: decided.
 - **R18** Stage 3: market context as input to the second layer. Status: decided.
-- **R19** Stage 4: a new first layer: new features, volatility targets, a bigger model, row weights,
-  monthly retraining. Runs on a rented server from here (about 120-200 USD). Status: decided.
-- **R20** Stage 5: rebuild the second layer, then one exam on the sealed period 2026-07-01 to
-  2026-08-14, used once. Status: decided.
-- **R21** Stage 6: tick-data trial on 2 months; needs O2's answer and Massive Advanced (199 USD).
+- **R19** Stage 4: ONE final first-layer training. The plan lives only in the first section of the
+  training spec, "Итоговый план первого слоя (20 ноября 2026)" (link above); this line only points
+  at it. In short: the whole history 2021-11-16 to 2026-11-19 (all rows, top-500 lists), trade and
+  quote features inside the same models, 22 targets (barrier targets as probabilities, max rise,
+  market-relative), settings searched on three early folds then frozen, uniqueness weights, a
+  monthly walk-forward step. Before it: a full minute-data server run as rehearsal and as the
+  "without ticks" control. Runs on a rented server. Status: decided in principle (owner,
+  2026-11-20); start waits for the Mac checks, the measured server cost and the owner's yes on the
+  sum.
+- **R20** Stage 5: rebuild the second layer, then ONE exam on the sealed data (2026-07-01 to
+  2026-08-14 and every day from 2026-11-20), then a production refit on the whole span as the
+  average of 3-5 seeds. The first layer is judged by measures that need no trading settings;
+  dollars only for the whole chain, under several setting sets, corrected for the number of trials.
   Status: decided.
-- **R22** Stage 7: neural networks, only if R21 pays off. Status: decided.
+- **R21** Stage 6: tick data. The 5-year tick download on Massive Advanced is running (59 numbers per
+  stock-minute; ticks of sealed days go to a closed prefix) and feeds R19. Massive's terms: raw
+  files are deleted 30 days after the subscription ends. Status: in progress.
+- **R22** Stage 7: neural networks, only if ticks pay off in R19 against its "without ticks"
+  control. Status: decided.
+- **R31** Benzinga News add-on on Massive for one month (99 USD) as a news feature. Status: proposed
+  (recommended by the training thread, 2026-11-20), owner has not decided.
+- **R32** Free float history from SEC filings as a feature. Status: in progress.
 
 Model path, plan v1.5 phases (approved 2026-11-19; source: `model-migration/plan-v1.5.md` in
 project files):
