@@ -1,7 +1,7 @@
-# Auto-restart groups: one Auto Scaling group per research job that keeps at most one spot
-# machine alive, so a machine AWS takes back (or the 24-hour power-off) is replaced within
-# minutes and the job resumes from its checkpoints in S3. Desired capacity is 0 by default:
-# a group runs only after someone sets it to 1 AND a deadline file exists for the job
+# Auto-restart groups: one Auto Scaling group per research job that keeps at most `machines` spot
+# machines alive (1 unless the job script shares its work between machines), so a machine AWS
+# takes back (or the 24-hour power-off) is replaced within minutes and the job resumes from its
+# checkpoints in S3. Desired capacity is 0 by default: a group runs only after someone sets it AND a deadline file exists for the job
 # (jobs/<job>/until in the bucket, written after the owner's yes on a named sum). The boot
 # wrapper in user-data.sh enforces both and sets the group back to 0 when the job is done or the
 # deadline has passed, so a finished job is never relaunched. The backstop that needs no machine:
@@ -36,6 +36,7 @@ resource "aws_launch_template" "job" {
     ebs {
       volume_size           = each.value.disk_gb
       volume_type           = "gp3"
+      throughput            = each.value.disk_mbps
       encrypted             = true
       delete_on_termination = true
     }
@@ -77,10 +78,11 @@ resource "aws_autoscaling_group" "job" {
   for_each            = var.jobs
   name                = local.job_groups[each.key]
   min_size            = 0
-  max_size            = 1
+  max_size            = each.value.machines
   desired_capacity    = 0
   vpc_zone_identifier = data.aws_subnets.default.ids
-  # A second machine for the same job would write the same checkpoints: never more than one.
+  # No early replacement on a rebalance hint: the group never runs more than max_size machines,
+  # so a job never gets an extra machine writing the same checkpoints.
   capacity_rebalance = false
 
   mixed_instances_policy {
@@ -116,7 +118,7 @@ resource "aws_autoscaling_group" "job" {
 }
 
 # Lets a job machine set its group back to 0 when the job is done. It is the shared machine role,
-# so a training machine could also set a group to 1; same owner, same one-machine limit.
+# so a training machine could also start a group; same owner, same max_size limit.
 data "aws_iam_policy_document" "machine_groups" {
   statement {
     sid     = "StopOwnGroups"

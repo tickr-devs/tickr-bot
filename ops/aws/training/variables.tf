@@ -60,23 +60,33 @@ variable "budget_email" {
 }
 
 variable "jobs" {
-  description = "Research jobs run by an auto-restart group: script = boot script the job machine fetches from the bucket and runs; disk_gb = root disk in GB; instance_types = spot types the group may pick (first = template default)."
+  description = "Research jobs run by an auto-restart group: script = boot script the job machine fetches from the bucket and runs; disk_gb = root disk in GB; disk_mbps = gp3 throughput in MB/s (null = AWS default 125); machines = most machines the group may run at once (the job script shares the work between them); instance_types = spot types the group may pick (first = template default)."
   type = map(object({
     script         = string
     disk_gb        = number
+    disk_mbps      = optional(number)
+    machines       = optional(number, 1)
     instance_types = list(string)
   }))
   default = {
     download = {
-      script         = "scripts/tickboot.sh"
-      disk_gb        = 150
-      instance_types = ["c7a.2xlarge", "c6a.2xlarge", "m7a.2xlarge", "m6a.2xlarge", "c7i.2xlarge", "c6i.2xlarge", "m6i.2xlarge"]
+      script    = "scripts/tickboot.sh"
+      disk_gb   = 300
+      disk_mbps = 500
+      # 4 x 16 vCPU = the 64 vCPU spot quota.
+      machines       = 4
+      instance_types = ["c7a.4xlarge", "m7a.4xlarge", "c6a.4xlarge", "m6a.4xlarge", "c7i.4xlarge", "c6i.4xlarge", "m6i.4xlarge"]
     }
     train = {
       script         = "scripts/l1boot.sh"
       disk_gb        = 500
       instance_types = ["c7a.16xlarge", "m7a.16xlarge", "c6a.16xlarge", "m6a.16xlarge", "c7i.16xlarge", "m7i.16xlarge", "c6i.16xlarge", "m6i.16xlarge"]
     }
+  }
+
+  validation {
+    condition     = alltrue([for j in values(var.jobs) : j.machines >= 1])
+    error_message = "Every job needs machines >= 1."
   }
 }
 
