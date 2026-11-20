@@ -172,6 +172,13 @@ losses go down, on both validation periods.
   Ongoing cost: Massive Advanced 199 USD a month, plus 99 USD a month per Benzinga add-on kept; a
   paid group stays in the final model only if its measured gain clearly exceeds its monthly price.
   Status: decided (owner, 2026-11-20).
+- **R34** (part of R33) News feed lag monitor (owner, 2026-11-20): when the bot reads the Benzinga
+  news feed from Massive (REST polling), it records for every article the first-seen time minus the
+  published time. The System card (A2) shows the recent median and worst lag; an alert goes to
+  `alerts.jsonl` when the lag exceeds the news lag assumed in training. That lag is one config key
+  with a comment, read by both the feature code and the monitor (one source of truth); training uses
+  a conservative value until the monitor has measured the real one. The same first-seen log for the
+  earnings calendar builds a point-in-time history for later top-ups. Status: decided.
 
 Model path, plan v1.5 phases (approved 2026-11-19; source: `model-migration/plan-v1.5.md` in
 project files):
