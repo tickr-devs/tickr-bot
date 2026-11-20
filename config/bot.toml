@@ -739,6 +739,10 @@ backtest_excursion_edges_r = [0, 0.5, 1, 2, 3]
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails; read by runtime.preflight.
 min_free_disk_mb = 2048
+# Free disk space on the data_dir volume, megabytes, below which the watchdog alerts disk-low (once, and once more
+# below min_free_disk_mb) at any hour, long before a full disk stops the bot (2026-11-19 it crashed at 0 bytes free);
+# must be above min_free_disk_mb; read by runtime.watchdog.
+disk_warn_free_mb = 10240
 # Seconds between checks of the bot child process and the stop flag by the launchd supervisor; read by runtime.supervisor.
 supervisor_poll_seconds = 0.5
 # Seconds launchd waits after SIGTERM before SIGKILL of the bot job (time to cancel entries and close); read by runtime.launchd.
@@ -753,8 +757,10 @@ preflight_start_local = "03:30"
 bot_start_local = "04:00"
 # launchd weekdays for the preflight and bot jobs (1 = Monday ... 5 = Friday); the calendar still decides; read by runtime.launchd.
 launch_weekdays = [1, 2, 3, 4, 5]
-# Watchdog job start, Mac local time HH:MM, same weekdays; it then waits for its calendar-derived checks; read by runtime.launchd.
-watchdog_start_local = "09:05"
+# Watchdog job start, Mac local time HH:MM, same weekdays, at or before bot_start_local. It then runs at every hour, also
+# nights and weekends (launchd starts it at load and again if it ends), and waits for its calendar-derived broker checks;
+# read by runtime.launchd.
+watchdog_start_local = "03:30"
 # Nightly backtest-data refresh job start (`python -m tickr.backtest nightly`), Mac local time HH:MM, same weekdays: after the
 # close. Until 20:00 ET it overlaps the bot's post-market screener recording: the screener routes are the bot's alone, but
 # both use the instrument-profile route (the bot only for instruments new that day; a read refused there is a
@@ -781,6 +787,16 @@ watchdog_bot_check_seconds = 60
 watchdog_status_stale_seconds = 60
 # Watchdog journal (JSON lines: checks and alerts), relative to data_dir; never the bot's database; read by runtime.watchdog.
 watchdog_journal_file = "watchdog.jsonl"
+# Watchdog alert state (which crash, disk level and calendar refusal it already alerted), relative to data_dir, so a
+# relaunched watchdog never alerts the same finding twice; read by runtime.watchdog.
+watchdog_state_file = "watchdog-state.json"
+# Seconds after the bot process took its lock (the lock file's time) during which a live bot without a fresh status, or
+# still "starting", counts as starting, not hung: covers the token wait (token_check_duration_seconds of every
+# environment, which it must be above) and the startup reconcile; read by runtime.watchdog.
+watchdog_start_grace_seconds = 600
+# Least seconds between two launchd starts of the watchdog job (ThrottleInterval): a watchdog that keeps failing
+# restarts at most this often; read by runtime.launchd when rendering plists.
+watchdog_relaunch_seconds = 300
 # From this many seconds before the flatten time (15:40 ET on a normal day) the watchdog starts the bot job once a day
 # when the bot is not running and its database shows an open trade, so the bot's own flatten closes it; must be positive
 # and below the last-entry-to-flatten time so the restarted bot can never open a trade (the earlier restart for a resting entry starts a run fenced
@@ -841,6 +857,10 @@ mac_app = "/Applications/Tickr.app"
 # Seconds to wait for the Tickr app to hand the notification over before osascript shows it instead (the alert is sent
 # on a background thread, so the bot's loop does not wait for it); read by runtime.alerts.
 mac_app_timeout_seconds = 2
+# Alerts feed: one JSON line per alert ({at, title, text}) appended by every process that alerts (bot, supervisor,
+# preflight, watchdog, API), relative to [run] data_dir; a Claude session on the Mac waits on it so the project learns
+# of an alert within seconds, not only the owner's phone (docs/operations.md "Alerts"); read by runtime.alerts.
+feed_file = "alerts.jsonl"
 
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API

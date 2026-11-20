@@ -203,7 +203,7 @@ def _watchdog(path: Path, rows: int) -> api.WatchdogV1:
                 continue
             record = json.loads(line)
             kind = record["record"]
-            if kind == watchdog.START:
+            if kind == watchdog.START and "no_session" not in record:
                 started = date.fromisoformat(record["day"])
             elif kind == watchdog.CHECK:
                 check = record

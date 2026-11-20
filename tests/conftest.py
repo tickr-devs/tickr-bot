@@ -16,8 +16,18 @@ def no_real_alert_channels(monkeypatch):
     the owner's recipient variable is set in the shell) and journal its delivery, which the
     tests, written for CI (no channel), do not expect. Every test runs as on CI: no channel.
     A test that needs channels builds them itself (tests/runtime/test_alerts.py)."""
-    monkeypatch.setattr(cli, "NOTIFIER", lambda alerts: None)
+    monkeypatch.setattr(cli, "NOTIFIER", lambda cfg: None)
     monkeypatch.setattr(runtime_main, "default_notifier", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
+def watchdog_runs_one_day(monkeypatch):
+    """`python -m tickr.runtime watchdog` runs until stopped; in tests it returns after one
+    New York day (and does not wait after an invalid config), and the disk it watches always
+    has room (a test that checks the disk alert sets its own)."""
+    monkeypatch.setattr(runtime_main, "WATCHDOG_DAYS", 1)
+    monkeypatch.setattr(runtime_main, "WATCHDOG_HOLD", lambda: None)
+    monkeypatch.setattr(runtime_main, "WATCHDOG_DISK_FREE", lambda path: 1 << 50)
 
 
 # The code version a test bot run records (tickr/version.py): tests run the code as if from a

@@ -156,13 +156,14 @@ RUN_ADAPTERS: Callable[[config_module.Config, Callable[[str, Exception], None],
                         Callable[[], None]], RunAdapters] = _webull_run_adapters
 
 
-def _default_notifier(alerts: config_module.AlertsConfig) -> Any:
-    from tickr.runtime.alerts import default_notifier
-    return default_notifier(alerts)
+def _default_notifier(cfg: config_module.Config) -> Any:
+    from tickr.runtime.alerts import default_notifier, feed_path
+    return default_notifier(cfg.alerts,
+                            feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
 
 
 # Replaced in tests: the notifier `tickr run` alerts through (None = journal only).
-NOTIFIER: Callable[[config_module.AlertsConfig], Any] = _default_notifier
+NOTIFIER: Callable[[config_module.Config], Any] = _default_notifier
 # Replaced in tests with a FakeBroker factory.
 BROKER_FACTORY: Callable[[config_module.Config], Broker] = _webull_broker
 NOW: Callable[[], datetime] = lambda: datetime.now(UTC)  # noqa: E731
@@ -694,7 +695,7 @@ def _run(path: Path) -> int:
         quote_file: QuoteFile | None = None
         try:
             alerter = Alerter(cfg.alerts, f"Tickr {cfg.environment_name}",
-                              NOTIFIER(cfg.alerts), clock=NOW)
+                              NOTIFIER(cfg), clock=NOW)
 
             def token_pending() -> None:  # before the SDK waits for the owner (no engine yet)
                 outcome = alerter.alert(AlertKind.TOKEN_NEEDS_CONFIRMATION, token_pending_text(

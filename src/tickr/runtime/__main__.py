@@ -43,6 +43,7 @@ from tickr.runtime.alerts import (
     Alerter,
     AlertKind,
     default_notifier,
+    feed_path,
     recipient_missing,
     token_pending_text,
 )
@@ -77,6 +78,17 @@ def _alerts_config(config_path: Path) -> config_module.AlertsConfig | None:
         return None
 
 
+def _feed(config_path: Path, alerts: config_module.AlertsConfig) -> Path | None:
+    """The alerts feed file even when the rest of the config is invalid; None when [run]
+    itself is not readable (the Mac notification and iMessage still go out)."""
+    try:
+        data = tomllib.loads(config_path.read_text("utf-8"))
+        run = config_module.build_section("run", data.get("run"), config_module.RunConfig)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, config_module.ConfigError):
+        return None
+    return feed_path(config_path.resolve().parent.parent, run.data_dir, alerts)
+
+
 def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: str) -> None:
     alerts = _alerts_config(config_path)
     if alerts is None:
@@ -84,7 +96,7 @@ def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: st
                         "error": None, "at": datetime.now(UTC).isoformat()})
         return
     title = f"{TITLE} {environment}" if environment else TITLE
-    alerter = Alerter(alerts, title, default_notifier(alerts))
+    alerter = Alerter(alerts, title, default_notifier(alerts, feed=_feed(config_path, alerts)))
     _emit("alert", alerter.alert(kind, text).journal_body())
     for outcome in alerter.flush():  # background channels (iMessage) before this process exits
         _emit("alert", outcome.journal_body())
@@ -196,6 +208,19 @@ WATCHDOG_BROKER: Callable[[config_module.Config, Callable[[], None]], Broker] = 
 WATCHDOG_NOW: Callable[[], datetime] = _utc_now
 WATCHDOG_SLEEP: Callable[[float], None] = time.sleep
 WATCHDOG_RUNNER: watchdog.Runner = watchdog.run_command
+WATCHDOG_DISK_FREE: watchdog.DiskFree = watchdog.disk_free
+
+
+def _hold_forever() -> None:
+    while True:
+        time.sleep(SECONDS_PER_HOUR)
+
+
+SECONDS_PER_HOUR = 3600  # unit factor
+# What the watchdog does after alerting an invalid config, instead of ending (replaced in tests).
+WATCHDOG_HOLD: Callable[[], None] = _hold_forever
+# New York days the watchdog runs before it returns; None (the job) = until it is stopped.
+WATCHDOG_DAYS: int | None = None
 
 
 def _watchdog(config_path: Path) -> int:
@@ -205,7 +230,8 @@ def _watchdog(config_path: Path) -> int:
     launchd.check_timings(cfg)
     database, lock_path = data_paths(cfg)
     journal = watchdog.Journal(cfg.root / cfg.run.data_dir / cfg.runtime.watchdog_journal_file)
-    notifier = default_notifier(cfg.alerts)
+    notifier = default_notifier(cfg.alerts,
+                                feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
     alerter = Alerter(cfg.alerts, f"{TITLE} {cfg.environment_name}", notifier,
                       clock=WATCHDOG_NOW)
     if notifier is None:
@@ -222,31 +248,52 @@ def _watchdog(config_path: Path) -> int:
                                                  "variable": missing})
 
     def token_pending() -> None:
-        guard.alert(AlertKind.TOKEN_NEEDS_CONFIRMATION,
+        sentinel.alert(AlertKind.TOKEN_NEEDS_CONFIRMATION,
                     token_pending_text(cfg.environment.token_check_duration_seconds))
 
+    status_path = cfg.root / cfg.run.data_dir / cfg.api.status_file
+    sentinel = watchdog.Sentinel(cfg, alerter=alerter, journal=journal, lock_path=lock_path,
+                                 status_path=status_path, data_dir=cfg.root / cfg.run.data_dir,
+                                 free=WATCHDOG_DISK_FREE)
+    code = int(ExitCode.READY)
+    days = 0
+    while WATCHDOG_DAYS is None or days < WATCHDOG_DAYS:
+        days += 1
+        code = _watchdog_day(cfg, sentinel, alerter, journal, database, lock_path,
+                             status_path, token_pending)
+    if notifier is None and code == ExitCode.READY:
+        return int(ExitCode.FAILED)
+    return code
+
+
+def _watchdog_day(cfg: config_module.Config, sentinel: watchdog.Sentinel, alerter: Alerter,
+                  journal: watchdog.Journal, database: Path, lock_path: Path, status_path: Path,
+                  token_pending: Callable[[], None]) -> int:
+    """One New York day of the watchdog: its broker checks on a session day and the sentinel's
+    checks until the day ends (on a day without a session, the sentinel's only)."""
+    now = WATCHDOG_NOW()
+    until = watchdog.next_ny_midnight(now)
     try:
-        day = watchdog.market_day(cfg, WATCHDOG_NOW())
+        day = watchdog.market_day(cfg, now)
         guard = watchdog.Watchdog(
             cfg, day, alerter=alerter, journal=journal, clock=WATCHDOG_NOW,
             sleep=WATCHDOG_SLEEP, lock_path=lock_path, database=database,
-            status_path=cfg.root / cfg.run.data_dir / cfg.api.status_file,
-            runner=WATCHDOG_RUNNER,
+            status_path=status_path, runner=WATCHDOG_RUNNER, sentinel=sentinel,
             connect=lambda: watchdog.ReadOnlyBroker(WATCHDOG_BROKER(cfg, token_pending)))
     except CalendarRefused as exc:
         if exc.cause in watchdog.CLOSED_CAUSES:
             journal.write(watchdog.START, {"no_session": exc.cause.value})
-            return int(ExitCode.NO_SESSION)
-        outcome = alerter.alert(AlertKind.WATCHDOG_CANNOT_CHECK,
+            code = int(ExitCode.NO_SESSION)
+        else:
+            sentinel.alert_once("calendar_refused",
+                                f"{watchdog.ny_day(now).isoformat()} {exc.cause.value}",
+                                AlertKind.WATCHDOG_CANNOT_CHECK,
                                 f"calendar refused today ({exc.cause.value}): check the "
                                 "Webull app yourself after the flatten time")
-        for done in (outcome, *alerter.flush()):
-            journal.write(watchdog.ALERT, done.journal_body())
-        return int(ExitCode.FAILED)
-    code = guard.run()
-    if notifier is None and code == ExitCode.READY:
-        return int(ExitCode.FAILED)
-    return code
+            code = int(ExitCode.FAILED)
+        watchdog.watch_until(sentinel, until, clock=WATCHDOG_NOW, sleep=WATCHDOG_SLEEP)
+        return code
+    return guard.run(until)
 
 
 def _render(args: argparse.Namespace) -> int:
@@ -370,7 +417,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         if args.command == "watchdog":
             _alert(args.config, None, AlertKind.WATCHDOG_CANNOT_CHECK,
-                   f"watchdog not running: config invalid ({exc})")
+                   f"watchdog not running: config invalid ({exc}); fix the config, then "
+                   "restart the watchdog job")
+            # launchd starts a watchdog that ends again (KeepAlive): wait instead, so a
+            # config that stays invalid alerts once, not on every relaunch.
+            WATCHDOG_HOLD()
         return int(ExitCode.CONFIG_INVALID)
     return int(ExitCode.CONFIG_INVALID)  # pragma: no cover
 

@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Tickr watchdog: started on configured weekdays, independent of the bot job. It never
+<!-- Tickr watchdog: independent of the bot job, running at every hour: launchd starts it at
+     load, at the configured weekday time, and again whenever it ends (at most once per
+     ThrottleInterval, [runtime] watchdog_relaunch_seconds). It never
      takes the bot's lock and never sends a trading request: it reads positions and open orders
-     at calendar-derived times after the flatten time and alerts if anything is left, and during
-     the session alerts if the bot is not running while the database shows an open trade.
+     at calendar-derived times after the flatten time and alerts if anything is left, during
+     the session alerts if the bot is not running while the database shows an open trade, and
+     at any hour alerts when the bot stopped without a clean stop or the data disk runs low.
      Near the flatten time it may start the bot job once a day (launchctl kickstart, no -k)
      so the bot itself flattens a trade it left open.
      Its record is data_dir/[runtime] watchdog_journal_file and this job's log.
@@ -30,9 +33,11 @@
   <key>StartCalendarInterval</key>
   {{WATCHDOG_CALENDAR}}
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
   <key>KeepAlive</key>
-  <false/>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>{{WATCHDOG_THROTTLE}}</integer>
   <key>StandardOutPath</key>
   <string>{{LOG_DIR}}/watchdog.log</string>
   <key>StandardErrorPath</key>

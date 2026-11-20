@@ -337,7 +337,7 @@ def test_no_credential_value_reaches_output_logs_files_or_the_database(
     wire = install_fake_webull(monkeypatch, account)
     monkeypatch.chdir(tmp_path)  # anything written to the working folder is scanned too
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
-    monkeypatch.setattr(cli, "NOTIFIER", lambda alerts: None)
+    monkeypatch.setattr(cli, "NOTIFIER", lambda cfg: None)
 
     assert cli.main(["--config", str(bot_toml), "check-config"]) == 0
     (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True, mode=0o700)
@@ -456,7 +456,7 @@ def test_without_a_valid_authorization_no_path_sends_a_trading_request(
     wire = install_fake_webull(monkeypatch, canaries[cfg.environment.account_variable])
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
-    monkeypatch.setattr(cli, "NOTIFIER", lambda alerts: None)
+    monkeypatch.setattr(cli, "NOTIFIER", lambda cfg: None)
 
     # The manual trade command: refused before anything is sent.
     assert cli.main(["--config", str(bot_toml), "trade", "ABC", "--limit", "10.00"]) == 3

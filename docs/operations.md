@@ -10,7 +10,7 @@ renders the job files, reads them, and loads them. Manual trades and the Sandbox
 |---|---|---|---|
 | preflight | `local.tickr.preflight` | `[runtime] preflight_start_local` on `launch_weekdays` | never |
 | bot | `local.tickr.bot` | `[runtime] bot_start_local` on `launch_weekdays` | never (a crash raises an alert) |
-| watchdog | `local.tickr.watchdog` | `[runtime] watchdog_start_local` on `launch_weekdays`; runs until its last check | never |
+| watchdog | `local.tickr.watchdog` | at load and `[runtime] watchdog_start_local` on `launch_weekdays`; then runs at every hour, nights and weekends too | launchd keeps it alive |
 
 The bot job has one starter besides its schedule: near the flatten time the watchdog may start it once a day (see "Watchdog", `watchdog-restarted-bot`).
 | test-alert | `local.tickr.test-alert` | only on `launchctl kickstart` (grants the Messages permission, see below) | never |
@@ -510,6 +510,9 @@ straight to the supervisor. Limits:
   keyboard and mouse: clamshell mode). Do not close the lid on a trading day.
 - A low battery, a forced shutdown, or choosing Sleep in the Apple menu still sleep the Mac.
 - `pmset -g assertions` shows `caffeinate` holding `PreventUserIdleSystemSleep` while a job runs.
+- The watchdog job runs at every hour and starts `caffeinate` beside itself like the bot job, so
+  on the power adapter the Mac stays awake around the clock, weekends too: it must be awake to
+  notice a crash or a full disk (check with `pmset -g assertions` after installing).
 
 ## Alerts
 
@@ -518,16 +521,38 @@ straight to the supervisor. Limits:
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
 `exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`,
-`flatten-after-close`, from the API `api-credentials-unexpected` (Mac notification only, see
+`flatten-after-close`, from the API `api-credentials-unexpected` (Mac notification and feed only, see
 "The API job and the Webull keys"), and from
 the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
-`watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`. Every alert goes to
-the Mac notification and to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4).
+`watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`, `bot-down`,
+`disk-low`. Every alert goes to
+the Mac notification, to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4) and to
+the alerts feed below.
 The iMessage is sent on a background thread, so the bot's loop never waits for Messages.app; its
 result is journaled as its own `alert` record (`"channel": "imessage"`) once known. An alert
 counts as shown, for repeat suppression, when either channel delivered it.
 The same kind and text inside `[alerts] dedupe_window_seconds` is shown once; every occurrence is
 still recorded (in the bot's journal, the watchdog's journal, or the job log for these commands).
+
+### The alerts feed: Claude learns of an alert too
+
+Every process that alerts (bot, supervisor, preflight, watchdog, API) also appends one JSON line
+per alert, `{"at", "title", "text"}`, to `data/alerts.jsonl` (`[alerts] feed_file` under
+`[run] data_dir`; the title holds the kind, as in the notification). A Claude session on the Mac
+(the live-bot monitor) waits on that file in the background and wakes at the first new line, so
+the project chat hears of a crash within seconds, not only the owner's phone:
+
+```sh
+f=~/Development/Tickr-releases/live/data/alerts.jsonl
+n=$(wc -l < "$f" 2>/dev/null || echo 0)
+until [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt "$n" ]; do sleep 5; done
+tail -n +"$((n + 1))" "$f"
+```
+
+It reads only that file (no credentials, no environment). After each wake it reports the new
+lines and starts waiting again. The feed works only while that session runs; the Mac notification
+and iMessage do not depend on it. A feed line that cannot be written (a full disk) is recorded as
+a failed `feed` channel like any other.
 
 ### `broker-reads-failing`
 
@@ -702,9 +727,13 @@ never relaunches a crashed bot, so after a crash nothing would flatten at 15:45 
 position would go overnight without a broker-side stop. The watchdog job (`python -m tickr.runtime watchdog`)
 is a separate process that covers this:
 
-- It starts at `[runtime] watchdog_start_local` on `launch_weekdays` and exits after its last
-  check. Weekends and market closures: exit 3, no alert. Half days: it runs (a position after
-  the flatten time is wrong on any day).
+- It runs at every hour: launchd starts it at load (login, install), at
+  `[runtime] watchdog_start_local` (at or before the bot's start) and again whenever it ends
+  (`KeepAlive`). Each New York day it takes the day's checks from the calendar; weekends and
+  market closures have no broker checks and no alert for that. Half days: it checks (a position
+  after the flatten time is wrong on any day).
+- At every hour, also nights and weekends, every `watchdog_bot_check_seconds`: `bot-down` and
+  `disk-low` (below).
 - It never takes the bot's lock, opens the bot's database read-only, and only ever reads
   positions and open orders: it cannot place, cancel or replace an order.
 - Its times come from the calendar, not the clock: `watchdog_after_flatten_seconds` after the
@@ -717,13 +746,52 @@ is a separate process that covers this:
   open trade, the watchdog starts the bot job once. It still sends nothing itself.
 - Every check and alert is one JSON line in `data/watchdog.jsonl` (`[runtime]
   watchdog_journal_file`) and in `~/Library/Logs/Tickr/watchdog.log`.
-- Exit 0: all checks clear; 1: something alerted; 2: config invalid (alert sent); 3: no session.
+- It does not exit on its own; when it ends (a crash, a release stopping it) launchd starts it
+  again.
 - On a machine with no alert channel (not macOS) it writes a `watchdog-alert-channel-refused`
   line (`alert-channel-missing`), still runs and journals, and never exits 0, so the scheduler
   shows a failed job.
 - If the iMessage recipient variable is not set, the watchdog writes a
   `watchdog-alert-channel-refused` line (`alert-recipient-missing`) and still runs, alerting on
   the Mac only; every iMessage attempt records the same cause.
+
+### `bot-down`
+
+At any hour the bot is not running (no live pid in its lock file, or a status file older than
+`[runtime] watchdog_status_stale_seconds`: a hung bot counts) while its last status is not
+`stopped`: it crashed, was killed, the Mac rebooted, or it hangs. A clean stop (a release, the
+operator's stop, launchd's SIGTERM) writes `stopped` and stays quiet, and so does `stopping` until
+`[runtime] bot_exit_timeout_seconds` (the supervisor alerts `bot-did-not-stop` meanwhile). One alert
+per crash (per last status); a bot that starts and crashes again alerts again. A finding must be
+seen by two checks in a row (a stale status right after the Mac wakes is not a crash), so the
+alert comes 1 to 3 minutes after the crash. The supervisor's `bot-crashed` usually comes first;
+this one also covers a kill, a reboot and a hang, which leave no supervisor to tell. A crash
+before the run's first status write (the status still says `stopped`) is not seen here: only
+`bot-crashed` covers it. During the session a down bot with an open trade also gets
+`bot-down-with-open-trade`: two alerts of different kinds.
+
+A live bot process (a pid in its lock file) whose status is `starting`, or older than the
+process (token wait, startup reconcile), counts as starting for
+`[runtime] watchdog_start_grace_seconds` after it took its lock; after that, or with a stale
+`running` status, the alert says the bot is hung: stop the job
+(`launchctl kill TERM gui/$(id -u)/local.tickr.bot`) before starting it again, since a kickstart
+does nothing while it runs.
+
+What was alerted is kept in `data/watchdog-state.json` (`[runtime] watchdog_state_file`), so a
+relaunched watchdog does not alert the same crash or disk level again; launchd relaunches it at
+most once per `[runtime] watchdog_relaunch_seconds` (`ThrottleInterval`). With an invalid config
+it alerts `watchdog-cannot-check` once and then waits instead of ending.
+
+What to do: read `~/Library/Logs/Tickr/bot.log` for the cause, fix it (a full disk: free space),
+then start the bot when it is safe: `launchctl kickstart gui/$(id -u)/local.tickr.bot`.
+
+### `disk-low`
+
+Free space on the data disk fell below `[runtime] disk_warn_free_mb` (10 GB), checked at any hour.
+It alerts once, and once more below `[runtime] min_free_disk_mb` (2 GB), where preflight refuses
+to start the bot; a disk that runs full stops the bot (2026-11-19 it crashed writing its status
+file at 0 bytes free). Back above the warning level re-arms it. Free space now: research data,
+model files and caches belong on the external disk.
 
 ### `watchdog-not-flat`
 

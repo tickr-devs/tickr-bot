@@ -196,12 +196,14 @@ def test_close_order_cutoff_must_leave_the_flatten_its_close(config_path, value)
         launchd.check_timings(cfg)
 
 
-def test_watchdog_job_scheduled_and_both_long_jobs_keep_the_mac_awake(config_path, repo,
-                                                                      tmp_path):
+def test_watchdog_job_always_running_and_both_long_jobs_keep_the_mac_awake(config_path, repo,
+                                                                           tmp_path):
     cfg = config_module.load(config_path)
     jobs = _render(config_path, repo, tmp_path / "out")
     dog = jobs["local.tickr.watchdog.plist"]
-    assert dog["KeepAlive"] is False and dog["RunAtLoad"] is False
+    # Every hour: started at load, at its weekday time and again whenever it ends.
+    assert dog["KeepAlive"] is True and dog["RunAtLoad"] is True
+    assert dog["ThrottleInterval"] == cfg.runtime.watchdog_relaunch_seconds
     hour, minute = map(int, cfg.runtime.watchdog_start_local.split(":"))
     assert dog["StartCalendarInterval"] == [
         {"Weekday": d, "Hour": hour, "Minute": minute} for d in cfg.runtime.launch_weekdays]
@@ -242,6 +244,18 @@ def test_bad_watchdog_start_refused(config_path):
                   config_path.read_text("utf-8"))
     config_path.write_text(text, "utf-8")
     with pytest.raises(config_module.ConfigError, match="watchdog_start_local"):
+        launchd.schedule(config_module.load(config_path).runtime)
+
+
+@pytest.mark.parametrize(("key", "value", "match"), [
+    ("watchdog_start_local", '"04:01"', "watchdog_start_local must be at or before"),
+    ("disk_warn_free_mb", "2048", "disk_warn_free_mb must be above min_free_disk_mb"),
+    ("watchdog_relaunch_seconds", "0", "watchdog_relaunch_seconds must be positive")])
+def test_watchdog_after_the_bot_or_a_warning_below_the_floor_refused(config_path, key, value,
+                                                                     match):
+    text = re.sub(rf"(?m)^{key} = .*$", f"{key} = {value}", config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    with pytest.raises(config_module.ConfigError, match=match):
         launchd.schedule(config_module.load(config_path).runtime)
 
 
@@ -377,3 +391,11 @@ def test_bot_job_sources_its_own_env_file(config_path, repo, tmp_path):
     cfg = config_module.load(config_path)
     assert list(cfg.api.start_bot_command[:2]) == ["/bin/launchctl", "kickstart"]
     assert cfg.api.start_bot_command[-1].endswith(f"/{bot['Label']}")
+
+
+def test_start_grace_must_cover_the_token_wait(config_path):
+    text = re.sub(r"(?m)^watchdog_start_grace_seconds = .*$", "watchdog_start_grace_seconds = 300",
+                  config_path.read_text("utf-8"))
+    config_path.write_text(text, "utf-8")
+    with pytest.raises(config_module.ConfigError, match="watchdog_start_grace_seconds"):
+        launchd.check_timings(config_module.load(config_path))

@@ -1,4 +1,5 @@
-"""Owner alerts (spec section 11): a macOS notification and an iMessage to the owner's phone.
+"""Owner alerts (spec section 11): a macOS notification, an iMessage to the owner's phone and a
+line in the alerts feed file (`[alerts] feed_file`), which a Claude session on the Mac waits on.
 
 The Mac notification is shown by the Tickr app (`[alerts] mac_app`), so it carries the app's
 icon; when the app is missing, not allowed to notify or fails, osascript shows it instead.
@@ -16,6 +17,7 @@ AppleScript reads the value itself (`system attribute`), so it is never in Pytho
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import queue
@@ -28,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Protocol
 
 from tickr.config import AlertsConfig
@@ -63,6 +66,7 @@ APP_EXECUTABLE_KEY = "CFBundleExecutable"
 DARWIN = "darwin"
 MACOS = "macos"
 IMESSAGE = "imessage"
+FEED = "feed"
 NOTIFIER = "notifier"  # name of a single channel given to Alerter
 
 
@@ -95,6 +99,10 @@ class AlertKind(StrEnum):
     WATCHDOG_CANNOT_CHECK = "watchdog-cannot-check"
     # during the session the bot process is not running while the database shows an open trade.
     BOT_DOWN_WITH_OPEN_TRADE = "bot-down-with-open-trade"
+    # at any hour the bot is not running (or hung) although its last status was not a clean stop;
+    BOT_DOWN = "bot-down"
+    # at any hour the bot's data disk has less free space than [runtime] disk_warn_free_mb;
+    DISK_LOW = "disk-low"
     # near the flatten time the watchdog started the bot job (once a day) so it flattens;
     WATCHDOG_RESTARTED_BOT = "watchdog-restarted-bot"
     # it would have, but may not (stop marker present, restart record unreadable, day unknown);
@@ -261,6 +269,31 @@ class IMessageNotifier:
                    [self._config.imessage_recipient_variable, f"{title}\n{text}"])
 
 
+class FeedNotifier:
+    """Appends one JSON line per alert ({at, title, text}) to the alerts feed file, so whatever
+    waits on that file (a Claude session on the Mac) learns of the alert at once. Every process
+    that alerts appends to the same file; one short `write` in append mode per line. Raises
+    NotifyError when the file cannot be written (a full disk, a missing folder)."""
+
+    def __init__(self, path: Path, clock: Callable[[], datetime] | None = None) -> None:
+        self._path = path
+        self._clock = clock or _utc_now
+
+    def notify(self, title: str, text: str) -> None:
+        line = json.dumps({"at": self._clock().isoformat(), "title": title, "text": text},
+                          sort_keys=True) + "\n"
+        try:
+            with self._path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError as exc:
+            raise NotifyError(f"feed not written: {type(exc).__name__}") from exc
+
+
+def feed_path(root: Path, data_dir: str, config: AlertsConfig) -> Path:
+    """The alerts feed file: `[alerts] feed_file` under `[run] data_dir`."""
+    return root / data_dir / config.feed_file
+
+
 Done = Callable[[str, "str | None"], None]
 
 
@@ -338,13 +371,17 @@ def _once(channel: Notifier, name: str, title: str, text: str, done: Done) -> Ca
 
 
 def default_notifier(config: AlertsConfig, platform: str = sys.platform,
-                     environ: Mapping[str, str] = os.environ) -> Notifier | None:
-    """The channels for this machine (Mac notification and iMessage, both in the background:
-    the Tickr app and osascript can each take seconds, and the bot's loop must not wait for
-    them), or None where there are none (CI, Linux)."""
+                     environ: Mapping[str, str] = os.environ,
+                     feed: Path | None = None) -> Notifier | None:
+    """The channels for this machine (Mac notification, iMessage and, given its path, the
+    alerts feed file, all in the background: the Tickr app and osascript can each take
+    seconds, and the bot's loop must not wait for them), or None where there are none (CI,
+    Linux)."""
     if platform == DARWIN:
+        feeds: tuple[tuple[str, Notifier], ...] = (
+            () if feed is None else ((FEED, FeedNotifier(feed)),))
         return Channels((), ((MACOS, mac_notifier(config)),
-                             (IMESSAGE, IMessageNotifier(config, environ))))
+                             (IMESSAGE, IMessageNotifier(config, environ)), *feeds))
     return None
 
 

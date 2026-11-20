@@ -77,6 +77,8 @@ def schedule(runtime: RuntimeConfig) -> Schedule:
     nightly = _local_time("nightly_fetch_start_local", runtime.nightly_fetch_start_local)
     if (preflight.hour, preflight.minute) >= (bot.hour, bot.minute):
         raise ConfigError("[runtime] preflight_start_local must be before bot_start_local")
+    if (watchdog.hour, watchdog.minute) > (bot.hour, bot.minute):
+        raise ConfigError("[runtime] watchdog_start_local must be at or before bot_start_local")
     days = runtime.launch_weekdays
     if not days or len(set(days)) != len(days) or any(d < 0 or d > _WEEKDAY_MAX for d in days):
         raise ConfigError(
@@ -90,6 +92,10 @@ def schedule(runtime: RuntimeConfig) -> Schedule:
         raise ConfigError("[runtime] supervisor_poll_seconds must be positive")
     if runtime.min_free_disk_mb <= 0:
         raise ConfigError("[runtime] min_free_disk_mb must be positive")
+    if runtime.disk_warn_free_mb <= runtime.min_free_disk_mb:
+        raise ConfigError("[runtime] disk_warn_free_mb must be above min_free_disk_mb")
+    if runtime.watchdog_relaunch_seconds <= 0:
+        raise ConfigError("[runtime] watchdog_relaunch_seconds must be positive")
     if runtime.watchdog_bot_check_seconds <= 0:
         raise ConfigError("[runtime] watchdog_bot_check_seconds must be positive")
     for key in ("nightly_fetch_out", "nightly_fetch_seed"):
@@ -149,6 +155,12 @@ def check_timings(config: Config) -> None:
             f"[orders] reconcile_interval_seconds ({config.orders.reconcile_interval_seconds})")
     runtime = config.runtime
     stale = runtime.watchdog_status_stale_seconds
+    token_wait = max(e.token_check_duration_seconds for e in config.environments.values())
+    if not runtime.watchdog_start_grace_seconds > max(stale, token_wait):
+        raise ConfigError(
+            f"[runtime] watchdog_start_grace_seconds ({runtime.watchdog_start_grace_seconds}) "
+            f"must be above watchdog_status_stale_seconds ({stale}) and every environment's "
+            f"token_check_duration_seconds ({token_wait})")
     floor = max(config.orders.detail_poll_seconds, config.orders.reconcile_interval_seconds)
     if not stale > floor:
         raise ConfigError(
@@ -329,6 +341,7 @@ def values(runtime: RuntimeConfig, paths: Paths,
         "NIGHTLY_OUT": escape(runtime.nightly_fetch_out),
         "NIGHTLY_SEED": escape(runtime.nightly_fetch_seed),
         "BOT_EXIT_TIMEOUT": str(runtime.bot_exit_timeout_seconds),
+        "WATCHDOG_THROTTLE": str(runtime.watchdog_relaunch_seconds),
     }
 
 

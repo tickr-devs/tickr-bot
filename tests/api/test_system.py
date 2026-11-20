@@ -203,6 +203,15 @@ def test_watchdog_journal_gives_start_check_and_restarts_newest_first(cfg):
         (contract.RestartOutcome.STARTED, False, 1)]
 
 
+def test_watchdog_day_without_a_session_keeps_the_last_session_day(cfg):
+    # The watchdog runs at every hour, so weekends and holidays write a start line too.
+    _journal(cfg,
+             {"record": "watchdog-start", "day": "2026-11-16", "checks": []},
+             {"record": "watchdog-start", "no_session": "weekend"})
+    dog = _doc(cfg).host.watchdog
+    assert dog.started_day == T0.date() and dog.cause is None
+
+
 def test_restart_rows_are_capped_by_config(cfg):
     restart = {"record": "watchdog-restart", "at": "2026-11-16T15:01:00+00:00", "started": False,
                "cause": "x"}

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import json
 import plistlib
 import subprocess
 import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from tickr.config import AlertsConfig
 from tickr.runtime.alerts import (
     APP_ALERT_FLAG,
+    FEED,
     IMESSAGE,
     MACOS,
     OSASCRIPT,
@@ -20,11 +23,13 @@ from tickr.runtime.alerts import (
     AppNotifier,
     Channels,
     Delivery,
+    FeedNotifier,
     FirstOf,
     IMessageNotifier,
     MacNotifier,
     NotifyError,
     default_notifier,
+    feed_path,
     mac_notifier,
     recipient_missing,
 )
@@ -32,7 +37,7 @@ from tickr.runtime.alerts import (
 CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_seconds=Decimal(5),
                       fence_alert_after_seconds=Decimal(30),
                       imessage_recipient_variable="TICKR_TEST_TO", mac_app="",
-                      mac_app_timeout_seconds=Decimal(2))
+                      mac_app_timeout_seconds=Decimal(2), feed_file="alerts.jsonl")
 T0 = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
 
 
@@ -65,6 +70,7 @@ def test_kinds_cover_spec_section_11():
         "bot-down-with-open-trade", "exit-not-filled", "flatten-after-close",
         "fees-unknown", "fees-corrected", "api-credentials-unexpected",
         "watchdog-restarted-bot", "watchdog-restart-refused", "watchdog-restart-failed",
+        "bot-down", "disk-low",
     }
 
 
@@ -167,6 +173,27 @@ def test_default_notifier_by_platform():
     # Neither channel runs in the caller's thread: the bot's loop waits for no alert.
     assert channels.background == (MACOS, IMESSAGE)
     assert default_notifier(CONFIG, "linux") is None
+    with_feed = default_notifier(CONFIG, "darwin", {}, feed=Path("alerts.jsonl"))
+    assert isinstance(with_feed, Channels)
+    assert with_feed.background == (MACOS, IMESSAGE, FEED)
+
+
+def test_feed_appends_one_json_line_per_alert(tmp_path):
+    path = feed_path(tmp_path, "data", CONFIG)
+    path.parent.mkdir()
+    feed = FeedNotifier(path, Clock())
+    feed.notify("Tickr Sandbox: bot-crashed", "bot exited with code 1")
+    feed.notify("Tickr Sandbox: disk-low", "line two")
+    rows = [json.loads(x) for x in path.read_text("utf-8").splitlines()]
+    assert rows == [
+        {"at": T0.isoformat(), "title": "Tickr Sandbox: bot-crashed",
+         "text": "bot exited with code 1"},
+        {"at": T0.isoformat(), "title": "Tickr Sandbox: disk-low", "text": "line two"}]
+
+
+def test_feed_failure_is_a_channel_failure(tmp_path):
+    with pytest.raises(NotifyError, match="feed not written: FileNotFoundError"):
+        FeedNotifier(tmp_path / "missing" / "alerts.jsonl").notify("t", "x")
 
 
 class Blocking:

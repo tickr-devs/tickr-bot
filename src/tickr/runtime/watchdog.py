@@ -45,6 +45,18 @@ On an open market day (half days too: a position after the flatten time is wrong
   fence, which only the operator clears (runtime/service.py), so a bot started unattended
   still never opens a trade on its own. After an early restart, a later not-flat check alerts
   `watchdog-not-flat` (the "after a restart" rule above reads the flatten restart record only).
+At every hour, every day (the `Sentinel`, every `watchdog_bot_check_seconds`; the job runs
+continuously: launchd starts it at load, at `watchdog_start_local` and again whenever it ends):
+- the bot stopped without a clean stop: not running (as above) while its last status is not
+  `stopped` (a crash, a kill, a reboot or a hang leaves `starting`/`running`, or `stopping` older
+  than `bot_exit_timeout_seconds`) alerts `bot-down` once per such status, when two checks in a
+  row see it. A clean stop (a release, the operator, launchd's SIGTERM) writes `stopped` and
+  stays quiet; a data folder where the bot never wrote a status stays quiet; an unreadable
+  status file alerts. A live bot process whose status is `starting` or older than the process
+  is starting, quiet for `watchdog_start_grace_seconds` after it took its lock, then hung.
+- free space on the data disk below `[runtime] disk_warn_free_mb` alerts `disk-low` once, and
+  once more below `min_free_disk_mb` (where preflight refuses to start the bot); back above the
+  warning level re-arms it.
 Every broker check, every "bot down" finding and every alert is one JSON line on stdout (the
 job log) and in `<data_dir>/<watchdog_journal_file>`.
 """
@@ -53,10 +65,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -67,7 +80,7 @@ from tickr.config import Config
 from tickr.engine.core import Leg, SendState, TradeState
 from tickr.lock import recorded_holder
 from tickr.runtime import stopmarker
-from tickr.runtime.alerts import Alerter, AlertKind
+from tickr.runtime.alerts import Alerter, AlertKind, AlertOutcome
 from tickr.store import Store
 from tickr.types import OrderDetail, OrderState, Position
 
@@ -79,12 +92,31 @@ RESTART = "watchdog-restart"
 UID_PLACEHOLDER = "{uid}"
 JOURNAL_FAILED = "watchdog-journal-failed"
 CHANNEL_REFUSED = "watchdog-alert-channel-refused"
+DISK = "watchdog-disk"
+STATE_FAILED = "watchdog-state-failed"
+BYTES_PER_MB = 1024 * 1024  # unit factor
 # Calendar answers that mean "no session today" (exit without an alert, like preflight).
 CLOSED_CAUSES = frozenset({CalendarCause.WEEKEND, CalendarCause.HOLIDAY})
 
 
 # Runs a command with a timeout in seconds and returns its exit code; replaced in tests.
 Runner = Callable[[Sequence[str], float], int]
+# Free bytes on the volume holding a folder; replaced in tests.
+DiskFree = Callable[[Path], int]
+
+
+def disk_free(path: Path) -> int:
+    return shutil.disk_usage(path).free
+
+
+def ny_day(now: datetime) -> date:
+    return now.astimezone(NEW_YORK).date()
+
+
+def next_ny_midnight(now: datetime) -> datetime:
+    """The start of the next New York date after `now`, in UTC: a day's run ends there."""
+    day = now.astimezone(NEW_YORK).date() + timedelta(days=1)
+    return datetime.combine(day, time(), NEW_YORK).astimezone(UTC)
 
 
 def run_command(command: Sequence[str], timeout: float) -> int:
@@ -195,6 +227,28 @@ def resting_entries(database: Path) -> int:
     return int(rows[0]["n"])
 
 
+def not_running(config: Config, lock_path: Path, status_path: Path,
+                now: datetime) -> str | None:
+    """Why the bot does not count as running, or None when it does."""
+    if recorded_holder(lock_path) is None:
+        return "no live pid in its lock file"
+    try:
+        status = contract.read_status(status_path)
+    except FileNotFoundError:
+        return "no status file"
+    except (contract.ContractError, OSError):
+        return "status file unreadable"
+    age = contract.seconds_between(status.written_at, now)
+    stale = config.runtime.watchdog_status_stale_seconds
+    # `now` is read before the file, so a write landing in between looks slightly ahead:
+    # allow [risk] max_clock_skew_seconds of lead before calling it "future".
+    if age < -config.risk.max_clock_skew_seconds:
+        return "status file dated in the future"
+    if age > stale:
+        return f"status file older than {stale} s"
+    return None
+
+
 class Journal:
     """JSON lines to stdout and to the watchdog's own file (never the bot's database)."""
 
@@ -222,12 +276,189 @@ def _cause(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}" if isinstance(exc, BrokerError) else type(exc).__name__
 
 
+class Sentinel:
+    """The checks that run at every hour, also on days without a session: did the bot stop
+    without a clean stop (or hang), is the data disk running low. Each finding alerts once
+    while it lasts. What was alerted is kept in `<data_dir>/<watchdog_state_file>`, so a
+    relaunched watchdog (launchd `KeepAlive`) never alerts the same finding again; when that
+    file cannot be written the finding is still alerted and the process keeps running, so
+    only a relaunch (at most once per `watchdog_relaunch_seconds`) could repeat it."""
+
+    def __init__(self, config: Config, *, alerter: Alerter, journal: Journal,
+                 lock_path: Path, status_path: Path, data_dir: Path,
+                 free: DiskFree = disk_free) -> None:
+        self.config = config
+        self._alerter = alerter
+        self.journal = journal
+        self._lock_path = lock_path
+        self._status_path = status_path
+        self._data_dir = data_dir
+        self._free = free
+        self._state_path = data_dir / config.runtime.watchdog_state_file
+        self._state = self._load_state()
+        self._candidate: str | None = None  # a bot finding seen once, alerted if seen again
+        self.alerted = False
+
+    # --- the alert state that survives a relaunch -----------------------------------------
+
+    def _load_state(self) -> dict[str, Any]:
+        try:
+            state = json.loads(self._state_path.read_text("utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError("not an object")
+            return state
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            # Unknown: start empty (a finding may alert once more), and say so.
+            self.journal.write(STATE_FAILED, {"read": type(exc).__name__})
+            return {}
+
+    def _remember(self, key: str, value: Any) -> None:
+        if self._state.get(key) == value:
+            return
+        self._state[key] = value
+        try:
+            contract.write_atomic(self._state_path, json.dumps(self._state, sort_keys=True))
+        except OSError as exc:
+            self.journal.write(STATE_FAILED, {"write": type(exc).__name__})
+
+    def alert(self, kind: AlertKind, text: str) -> None:
+        self.alerted = True
+        self.journal.write(ALERT, self._alerter.alert(kind, text).journal_body())
+
+    def alert_once(self, field: str, key: str, kind: AlertKind, text: str) -> None:
+        """Alert unless this finding (`key`) was already alerted, by this process or by an
+        earlier one."""
+        if self._state.get(field) == key:
+            return
+        self._remember(field, key)
+        self.alert(kind, text)
+
+    def completed(self, flush: bool = False) -> list[AlertOutcome]:
+        """Finished background sends (iMessage); with `flush`, after waiting for them."""
+        return self._alerter.flush() if flush else self._alerter.completed()
+
+    def check(self, now: datetime) -> None:
+        self.bot(now)
+        self.disk(now)
+
+    # --- the bot ---------------------------------------------------------------------------
+
+    def _started_at(self) -> datetime | None:
+        """When the live bot process took its lock (it writes its pid then), or None."""
+        if recorded_holder(self._lock_path) is None:
+            return None
+        try:
+            return datetime.fromtimestamp(self._lock_path.stat().st_mtime, UTC)
+        except OSError:
+            return None
+
+    def _finding(self, now: datetime) -> tuple[str, str] | None:
+        """(key, alert text) when the bot is down or hung, None when it runs, starts or
+        stopped cleanly."""
+        why = not_running(self.config, self._lock_path, self._status_path, now)
+        if why is None:
+            return None
+        runtime = self.config.runtime
+        try:
+            status = contract.read_status(self._status_path)
+        except FileNotFoundError:
+            return None  # the bot never ran on this data folder: nothing stopped
+        except (contract.ContractError, OSError) as exc:
+            status, last = None, "an unreadable status file"
+            key = f"unreadable {type(exc).__name__}"
+        else:
+            if status.bot_state is contract.BotState.STOPPED:
+                return None  # a clean stop (release, operator, launchd): nothing to say
+            if (status.bot_state is contract.BotState.STOPPING
+                    and contract.seconds_between(status.written_at, now)
+                    <= runtime.bot_exit_timeout_seconds):
+                return None  # still stopping: the supervisor alerts bot-did-not-stop
+            key = status.written_at.isoformat()
+            last = f"its last status ({status.bot_state.value}) at {_ny(status.written_at)}"
+        started = self._started_at()
+        if started is not None:
+            # A live bot process: starting while its status is "starting" or older than the
+            # process; quiet for the start grace, then hung. Never "start the bot job": a
+            # kickstart does nothing while it holds the job.
+            starting = status is not None and (
+                status.bot_state is contract.BotState.STARTING or status.written_at < started)
+            age = contract.seconds_between(started, now)
+            if starting and age <= runtime.watchdog_start_grace_seconds:
+                return None
+            what = (f"still starting {age:.0f} s after it started" if starting
+                    else f"not answering ({why})")
+            return (f"hung {started.isoformat()} {key}",
+                    f"the bot process is alive but {what}: {last}. It is hung: nothing trades "
+                    "and nothing watches the stops. Read bot.log, then stop the bot job "
+                    "(launchctl kill TERM) and start it again when it is safe")
+        return (key, f"the bot is not running ({why}) and did not stop cleanly: {last}. "
+                     "Nothing trades and nothing watches the stops until it runs again. Read "
+                     "bot.log for the cause, then start the bot job when it is safe")
+
+    def bot(self, now: datetime) -> None:
+        """A finding alerts when two checks in a row see it (one stale status right after the
+        Mac wakes is not a crash), once per finding."""
+        found = self._finding(now)
+        if found is None:
+            self._candidate = None
+            self._remember("bot_down", None)
+            return
+        key, text = found
+        if self._candidate != key:
+            self._candidate = key
+            return
+        if self._state.get("bot_down") == key:
+            return
+        self.journal.write(BOT_DOWN, {"at": now.isoformat(), "finding": key})
+        self.alert_once("bot_down", key, AlertKind.BOT_DOWN, text)
+
+    # --- the disk --------------------------------------------------------------------------
+
+    def disk(self, now: datetime) -> None:
+        runtime = self.config.runtime
+        try:
+            free_mb = self._free(self._data_dir) // BYTES_PER_MB
+        except OSError as exc:
+            self.journal.write(DISK, {"at": now.isoformat(), "error": type(exc).__name__})
+            return
+        if free_mb >= runtime.disk_warn_free_mb:
+            self._remember("disk_level", None)
+            return
+        level = (runtime.min_free_disk_mb if free_mb < runtime.min_free_disk_mb
+                 else runtime.disk_warn_free_mb)
+        alerted = self._state.get("disk_level")
+        if isinstance(alerted, int) and alerted <= level:
+            return  # already alerted at this level or a lower one
+        self.journal.write(DISK, {"at": now.isoformat(), "free_mb": free_mb, "below_mb": level})
+        self._remember("disk_level", level)
+        self.alert(AlertKind.DISK_LOW,
+                   f"{free_mb} MB free on the bot's data disk, below {level} MB. Below "
+                   f"{runtime.min_free_disk_mb} MB the bot does not start, and a full disk stops "
+                   "it: free space now (research data, caches)")
+
+
+def watch_until(sentinel: Sentinel, until: datetime, *, clock: Callable[[], datetime],
+                sleep: Callable[[float], None]) -> None:
+    """The sentinel's checks alone until `until` (a day without a session or a calendar)."""
+    interval = float(sentinel.config.runtime.watchdog_bot_check_seconds)
+    while (now := clock()) < until:
+        for outcome in sentinel.completed():
+            sentinel.journal.write(ALERT, outcome.journal_body())
+        sentinel.check(now)
+        sleep(min(interval, (until - now).total_seconds()))
+    for outcome in sentinel.completed(flush=True):
+        sentinel.journal.write(ALERT, outcome.journal_body())
+
+
 class Watchdog:
     def __init__(self, config: Config, day: MarketDay, *, connect: Callable[[], Reads],
                  alerter: Alerter, journal: Journal, clock: Callable[[], datetime],
                  sleep: Callable[[float], None], lock_path: Path, database: Path,
-                 status_path: Path, runner: Runner) -> None:
+                 status_path: Path, runner: Runner, sentinel: Sentinel | None = None) -> None:
         self.config = config
+        self.sentinel = sentinel
         self.day = day
         self.times = check_times(config, day)
         flatten = day.before_close(config.session.flatten_minutes_before_close).astimezone(UTC)
@@ -237,8 +468,6 @@ class Watchdog:
         self._entry_restart_file = entry_restart_file(config)
         self._runner = runner
         self.interval = float(config.runtime.watchdog_bot_check_seconds)
-        self.stale_seconds = config.runtime.watchdog_status_stale_seconds
-        self.max_lead_seconds = config.risk.max_clock_skew_seconds
         self._status_path = status_path
         self._connect = connect
         self._reads: Reads | None = None
@@ -259,23 +488,32 @@ class Watchdog:
         for outcome in self._alerter.flush() if flush else self._alerter.completed():
             self.journal.write(ALERT, outcome.journal_body())
 
-    def run(self) -> int:
-        """Until the last broker check; 1 if anything alerted, else 0."""
+    def run(self, until: datetime | None = None) -> int:
+        """Until the last broker check, or until `until` when it is later (the sentinel's
+        checks go on to it); 1 if anything alerted, else 0."""
         self.journal.write(START, {"day": self.day.ny_date.isoformat(),
                                    "checks": [t.isoformat() for t in self.times]})
         pending = list(self.times)
-        while pending:
+        while True:
             self._background_outcomes()
             now = self._clock()
-            if now >= pending[0]:
+            if pending and now >= pending[0]:
                 pending = [t for t in pending if t > now]
                 self.broker_check(now)
                 continue
+            if pending:
+                wake = pending[0]
+            elif until is not None and now < until:
+                wake = until
+            else:
+                break
+            if self.sentinel is not None:
+                self.sentinel.check(now)
             if self.day.in_regular_session(now):
                 self.bot_check(now)
-            self._sleep(min(self.interval, (pending[0] - now).total_seconds()))
+            self._sleep(min(self.interval, (wake - now).total_seconds()))
         self._background_outcomes(flush=True)
-        return 1 if self.alerted else 0
+        return 1 if self.alerted or (self.sentinel is not None and self.sentinel.alerted) else 0
 
     def broker_check(self, now: datetime) -> None:
         try:
@@ -306,22 +544,7 @@ class Watchdog:
 
     def not_running(self, now: datetime) -> str | None:
         """Why the bot does not count as running, or None when it does."""
-        if recorded_holder(self._lock_path) is None:
-            return "no live pid in its lock file"
-        try:
-            status = contract.read_status(self._status_path)
-        except FileNotFoundError:
-            return "no status file"
-        except (contract.ContractError, OSError):
-            return "status file unreadable"
-        age = contract.seconds_between(status.written_at, now)
-        # `now` is read before the file, so a write landing in between looks slightly ahead:
-        # allow [risk] max_clock_skew_seconds of lead before calling it "future".
-        if age < -self.max_lead_seconds:
-            return "status file dated in the future"
-        if age > self.stale_seconds:
-            return f"status file older than {self.stale_seconds} s"
-        return None
+        return not_running(self.config, self._lock_path, self._status_path, now)
 
     def down_with_open_trades(self, now: datetime) -> tuple[str, int] | None:
         """(why not running, open trades) when the bot is down while the database shows an
