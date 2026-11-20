@@ -797,17 +797,18 @@ def test_cause_rule_flags_a_coded_cause_shown_in_the_bots_words(tmp_path):
 def test_scroll_indicators_are_hidden_once_per_scene(tmp_path):
     module = load()
     own = write(tmp_path, (
-        "ScrollView(.horizontal, showsIndicators: false) { row }\n"
+        "Marquee(showsIndicators: false) { row }\n"
         "list.scrollIndicators(.hidden)\n"
         "// .scrollIndicators(.never) in a comment\n"
-        "ScrollView(.horizontal) { row }\n"
+        "ScrollView(.horizontal) { row }.withoutScrollIndicators()\n"
+        "ScrollView(.horizontal) { row }.withoutScrollIndicators()\n"
     ))
     assert [line for line, _ in module.scrollbar_violations(own)] == [1, 2]
     source = (
         "ScrollView { rows }\n"
         "ScrollView(.vertical) { rows }\n"
         "Form { rows }\n"
-        "ScrollView(.horizontal) { chips }\n"
+        "ScrollView(.horizontal) { chips }.withoutScrollIndicators()\n"
         "  .scrollEdgeHints()\n"
     )
     assert [line for line, _ in module.scrollbar_violations(write(tmp_path, source))] == [1, 2, 3]
@@ -834,6 +835,19 @@ def test_scroll_indicators_are_hidden_once_per_scene(tmp_path):
     fixed = app.replace(
         "      SettingsView()\n", "      SettingsView()\n        .withoutScrollIndicators()\n")
     assert module.scrollbar_violations(write(tmp_path, fixed)) == []
+
+
+def test_sideways_scrolls_and_tables_hide_their_own_indicators(tmp_path):
+    module = load()
+    source = (
+        "ScrollView(.horizontal) { chips }\n"
+        "Table(rows, selection: $selection) { columns }\n"
+        "Chart { marks }.chartScrollableAxes(.horizontal)\n"
+        "SymbolsTable(rows: rows)\n"
+    )
+    assert [line for line, _ in module.scrollbar_violations(write(tmp_path, source))] == [1, 2]
+    hidden = source + "  .withoutScrollIndicators()\n" * 2
+    assert module.scrollbar_violations(write(tmp_path, hidden)) == []
 
 
 def test_the_scrollbar_rule_is_an_app_rule():
