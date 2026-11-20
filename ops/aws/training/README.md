@@ -58,6 +58,59 @@ inside the download script only; never echo or log it.
 
 Every machine start still needs the owner's yes on a named sum.
 
+## Auto-restart groups (no idle time on spot)
+
+`autorestart.tf` adds one Auto Scaling group per job in `var.jobs`: `tickr-download` (8 vCPU
+types, 150 GB disk, runs `scripts/tickboot.sh`) and `tickr-train` (64 vCPU types, 500 GB disk,
+runs `scripts/l1boot.sh`). Each keeps at most one spot machine, picks among several instance
+types in every zone (`capacity-optimized`, the least interrupted pools) and replaces a machine
+AWS takes back within minutes. A group is created with desired capacity 0, and an apply never
+changes it afterwards; nothing runs until someone sets it to 1.
+
+Start a job (research user, only after the owner's yes on a named sum):
+
+```sh
+# deadline = how long the approved sum lasts
+UNTIL=$(date -u -d '+30 hours' +%s)
+echo "$UNTIL" | aws s3 cp - s3://tickr-research-<account>/jobs/download/until
+aws s3 rm s3://tickr-research-<account>/jobs/download/done       # only when re-running
+aws s3 rm s3://tickr-research-<account>/jobs/download/failures   # only when re-running
+# backstop AWS enforces even if no machine boots: desired 0 at the deadline
+aws autoscaling put-scheduled-update-group-action --auto-scaling-group-name tickr-download \
+  --scheduled-action-name deadline --start-time "$(date -u -d @"$UNTIL" +%Y-%m-%dT%H:%M:%SZ)" \
+  --desired-capacity 0
+aws autoscaling set-desired-capacity --auto-scaling-group-name tickr-download --desired-capacity 1
+```
+
+Always create the scheduled action before setting 1; never start a group without it.
+
+Check once after the first apply, as the research user: a scheduled action that tries to lift the
+size must be refused (`put-scheduled-update-group-action ... --max-size 2` returns AccessDenied),
+and a test start with a deadline ten minutes ahead must end with the group back at 0.
+
+Stop it early: `set-desired-capacity ... 0` (the machine gets SIGTERM and saves), or write a past
+time into `until`.
+
+The boot wrapper (`user-data.sh`) runs the job script and:
+- watches the spot interruption notice every 5 s; on it, creates `/work/STOP` and sends SIGTERM
+  so the job saves within the 2-minute warning;
+- checks `jobs/<job>/until` every minute and stops the job and the group when it has passed;
+- on exit 0 writes `jobs/<job>/done` and sets the group to 0, so a finished job never restarts;
+- on SIGTERM gives the job 90 s to save, then SIGKILL;
+- on any other exit counts it in `jobs/<job>/failures`, powers off, and the group starts a fresh
+  machine; after `job_max_failures` (3) failed runs it sets the group to 0;
+- if the machine setup itself fails (packages, AWS CLI), it tries to set the group to 0 and powers
+  off at once instead of idling 24 hours. The scheduled "desired 0" covers every case where the
+  machine cannot stop the group itself.
+
+The 24-hour power-off stays: the group simply replaces that machine and the job resumes.
+
+The deadline is a working rule, not a security barrier: the research user and the job machine
+may write the bucket, so they could move it. The budget mail is the hard backstop.
+
+The spot quota is shared: download (8) and train (64) together need 72 vCPU, more than the 64
+approved, so they run one after the other unless the spot quota is raised.
+
 ## Limits IAM cannot hold
 
 A second template, `tickr-training-ondemand`, is the same machine at the regular price (never

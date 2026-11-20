@@ -58,3 +58,30 @@ variable "budget_email" {
   description = "Address the budget alerts go to. Personal data: pass it at apply time (-var or an untracked tfvars file), never commit it."
   type        = string
 }
+
+variable "jobs" {
+  description = "Research jobs run by an auto-restart group: script = boot script the job machine fetches from the bucket and runs; disk_gb = root disk in GB; instance_types = spot types the group may pick (first = template default)."
+  type = map(object({
+    script         = string
+    disk_gb        = number
+    instance_types = list(string)
+  }))
+  default = {
+    download = {
+      script         = "scripts/tickboot.sh"
+      disk_gb        = 150
+      instance_types = ["c7a.2xlarge", "c6a.2xlarge", "m7a.2xlarge", "m6a.2xlarge", "c7i.2xlarge", "c6i.2xlarge", "m6i.2xlarge"]
+    }
+    train = {
+      script         = "scripts/l1boot.sh"
+      disk_gb        = 500
+      instance_types = ["c7a.16xlarge", "m7a.16xlarge", "c6a.16xlarge", "m6a.16xlarge", "c7i.16xlarge", "m7i.16xlarge", "c6i.16xlarge", "m6i.16xlarge"]
+    }
+  }
+}
+
+variable "job_max_failures" {
+  description = "Failed runs of a job script (non-zero exit) after which its auto-restart group stops itself; read by the boot wrapper."
+  type        = number
+  default     = 3
+}

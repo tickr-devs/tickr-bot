@@ -264,6 +264,11 @@ resource "aws_launch_template" "training" {
   user_data = base64encode(templatefile("${path.module}/user-data.sh", {
     max_runtime_minutes = var.max_runtime_hours * 60
     bucket              = aws_s3_bucket.research.id
+    region              = var.region
+    job                 = ""
+    job_script          = ""
+    group               = ""
+    max_failures        = 0
   }))
 
   tag_specifications {
@@ -424,6 +429,38 @@ data "aws_iam_policy_document" "research" {
       "arn:${local.partition}:ssm:${var.region}::document/AWS-RunShellScript",
       "arn:${local.partition}:ssm:${var.region}:${local.account}:document/SSM-SessionManagerRunShell",
     ]
+  }
+
+  statement {
+    sid       = "ReadGroups"
+    actions   = ["autoscaling:DescribeAutoScalingGroups", "autoscaling:DescribeScalingActivities", "autoscaling:DescribeScheduledActions"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "StartStopJobGroups"
+    actions = ["autoscaling:SetDesiredCapacity", "autoscaling:DeleteScheduledAction"]
+    resources = [for name in values(local.job_groups) :
+    "arn:${local.partition}:autoscaling:${var.region}:${local.account}:autoScalingGroup:*:autoScalingGroupName/${name}"]
+  }
+
+  # The deadline backstop. A scheduled action could also lift the group's size limits; never
+  # above one machine (two machines on one job would write the same checkpoints).
+  statement {
+    sid     = "ScheduleDeadline"
+    actions = ["autoscaling:PutScheduledUpdateGroupAction"]
+    resources = [for name in values(local.job_groups) :
+    "arn:${local.partition}:autoscaling:${var.region}:${local.account}:autoScalingGroup:*:autoScalingGroupName/${name}"]
+    condition {
+      test     = "NumericLessThanEqualsIfExists"
+      variable = "autoscaling:MaxSize"
+      values   = ["1"]
+    }
+    condition {
+      test     = "NumericLessThanEqualsIfExists"
+      variable = "autoscaling:MinSize"
+      values   = ["1"]
+    }
   }
 
   statement {
