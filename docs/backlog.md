@@ -162,10 +162,20 @@ losses go down, on both validation periods.
 - **R31** Benzinga News add-on on Massive for one month (99 USD) as a news feature. Status: proposed
   (recommended by the training thread, 2026-11-20), owner has not decided.
 - **R32** Free float history from SEC filings as a feature. Status: in progress.
+- **R33** Live feature parity, a hard condition before the model is switched on live (before the R23
+  gate): every first-layer input is fed live from the same source as training (Massive) and computed
+  by the shared feature code. Covers: top-500 lists built from the live Massive full-market stream
+  (not Webull screener lists); SPY and QQQ; 20-day history loaded before the open from Massive
+  grouped daily bars (today the bot keeps only `[market_data] history_sessions` = 5 for its own
+  candidates, from Webull); live trades and quotes for the 59 tick numbers; Benzinga news and
+  earnings if those groups stay; SEC shares and float. Webull stays for orders and positions only.
+  Ongoing cost: Massive Advanced 199 USD a month, plus 99 USD a month per Benzinga add-on kept; a
+  paid group stays in the final model only if its measured gain clearly exceeds its monthly price.
+  Status: decided (owner, 2026-11-20).
 
 Model path, plan v1.5 phases (approved 2026-11-19; source: `model-migration/plan-v1.5.md` in
 project files):
-- **R23** Step 0 gate: plus after costs on the sealed period, plus in 2 of 3 months, plus without
+- **R23** Step 0 gate (needs R33 first): plus after costs on the sealed period, plus in 2 of 3 months, plus without
   the best 1% of trades, every feature available live, stop and decision frequency chosen. Status:
   decided, not passed.
 - **R24** Live data for the model's features. Status: decided, after R23.
