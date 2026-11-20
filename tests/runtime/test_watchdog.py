@@ -794,10 +794,13 @@ def test_invalid_config_alerts_once_then_waits_instead_of_ending(config_path, mo
     text = re.sub(r"(?m)^watchdog_bot_check_seconds = .*$", "watchdog_bot_check_seconds = 0",
                   config_path.read_text("utf-8"))
     config_path.write_text(text, "utf-8")
-    held = []
-    monkeypatch.setattr(runtime_main, "WATCHDOG_HOLD", lambda: held.append(True))
+    days = 2
+    monkeypatch.setattr(runtime_main, "WATCHDOG_HOLD",
+                        lambda again: [again() for _ in range(days)])
     assert runtime_main.main(["--config", str(config_path), "watchdog"]) == 2
     out = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
-    (alert,) = [x for x in out if x["record"] == "alert"]
-    assert alert["kind"] == "watchdog-cannot-check" and "config invalid" in alert["text"]
-    assert held == [True]  # a relaunch loop under KeepAlive would alert on every start
+    alerts = [x for x in out if x["record"] == "alert"]
+    # Once at the start, then once per New York day while it waits; never per relaunch.
+    assert len(alerts) == 1 + days
+    assert all(a["kind"] == "watchdog-cannot-check" and "config invalid" in a["text"]
+               for a in alerts)

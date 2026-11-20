@@ -148,6 +148,11 @@ _FENCE = {
         ("watchdog_record_unreadable", r"the watchdog's early restart record is unreadable "
          r"\((?P<error>\w+)\): no new entry until the operator clears this \(tickr "
          r"clear-fence watchdog-started\)")),
+    "disk-low": _shapes(
+        ("disk_low", r"less than (?P<mb>[0-9]+) MB free on the data disk: no new entry until "
+         r"there is room"),
+        ("disk_unknown", r"free space on the data disk unreadable \((?P<error>\w+)\): no new "
+         r"entry until it reads")),
     "market-closed": _shapes(
         ("close_not_sent", r"(?P<quantity>" + _NUM + r") of (?P<expected>" + _NUM + r") "
          r"(?P<symbol>\S+) not sent: " + _CLOSE_REFUSAL + r"; the stop stays\. Close the "

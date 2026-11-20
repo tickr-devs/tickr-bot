@@ -54,6 +54,7 @@ FENCE_ALERTS: dict[str, AlertKind] = {
     Fence.FOREIGN_ORDER: AlertKind.FOREIGN_EXPOSURE,
     Fence.BROKER_READ: AlertKind.BROKER_READS_FAILING,
     Fence.DETAIL_UNREADABLE: AlertKind.UNKNOWN_ORDER_STATUS,
+    Fence.DISK_LOW: AlertKind.DISK_LOW,
 }
 # Fences that alert at once although they clear themselves: the engine sets them only after
 # their own wait (`[orders] detail_unreadable_seconds`), and a stop may be gone meanwhile.

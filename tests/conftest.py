@@ -26,8 +26,9 @@ def watchdog_runs_one_day(monkeypatch):
     New York day (and does not wait after an invalid config), and the disk it watches always
     has room (a test that checks the disk alert sets its own)."""
     monkeypatch.setattr(runtime_main, "WATCHDOG_DAYS", 1)
-    monkeypatch.setattr(runtime_main, "WATCHDOG_HOLD", lambda: None)
+    monkeypatch.setattr(runtime_main, "WATCHDOG_HOLD", lambda again: None)
     monkeypatch.setattr(runtime_main, "WATCHDOG_DISK_FREE", lambda path: 1 << 50)
+    monkeypatch.setattr(cli, "DISK_FREE", lambda path: 1 << 50)  # `tickr run` too
 
 
 # The code version a test bot run records (tickr/version.py): tests run the code as if from a

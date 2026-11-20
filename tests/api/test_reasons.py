@@ -90,6 +90,10 @@ def test_every_fixed_fence_text_the_engine_writes_is_recognized():
      "close_not_sent", {"quantity": "100", "expected": "100", "symbol": "ABCD",
                         "cutoff": "15:59:30", "cutoff_seconds": "30", "close": "16:00",
                         "day": "2026-11-16"}),
+    ("disk-low", "less than 2048 MB free on the data disk: no new entry until there is room",
+     "disk_low", {"mb": "2048"}),
+    ("disk-low", "free space on the data disk unreadable (PermissionError): no new entry until "
+     "it reads", "disk_unknown", {"error": "PermissionError"}),
 ])
 def test_fence_shapes(name, text, code, params):
     assert reasons.fence_reason(name, text) == reasons.Reason(code, params)

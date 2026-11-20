@@ -211,14 +211,17 @@ WATCHDOG_RUNNER: watchdog.Runner = watchdog.run_command
 WATCHDOG_DISK_FREE: watchdog.DiskFree = watchdog.disk_free
 
 
-def _hold_forever() -> None:
+def _hold_daily(again: Callable[[], None]) -> None:
+    """Never ends: `again` at the start of every New York day."""
     while True:
-        time.sleep(SECONDS_PER_HOUR)
+        now = datetime.now(UTC)
+        time.sleep((watchdog.next_ny_midnight(now) - now).total_seconds())
+        again()
 
 
-SECONDS_PER_HOUR = 3600  # unit factor
-# What the watchdog does after alerting an invalid config, instead of ending (replaced in tests).
-WATCHDOG_HOLD: Callable[[], None] = _hold_forever
+# What the watchdog does after alerting an invalid config, instead of ending: the alert again
+# once per New York day (replaced in tests).
+WATCHDOG_HOLD: Callable[[Callable[[], None]], None] = _hold_daily
 # New York days the watchdog runs before it returns; None (the job) = until it is stopped.
 WATCHDOG_DAYS: int | None = None
 
@@ -416,12 +419,16 @@ def main(argv: list[str] | None = None) -> int:
     except config_module.ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         if args.command == "watchdog":
-            _alert(args.config, None, AlertKind.WATCHDOG_CANNOT_CHECK,
-                   f"watchdog not running: config invalid ({exc}); fix the config, then "
-                   "restart the watchdog job")
+            text = (f"watchdog not running: config invalid ({exc}); fix the config, then "
+                    "restart the watchdog job")
+
+            def again() -> None:
+                _alert(args.config, None, AlertKind.WATCHDOG_CANNOT_CHECK, text)
+
+            again()
             # launchd starts a watchdog that ends again (KeepAlive): wait instead, so a
-            # config that stays invalid alerts once, not on every relaunch.
-            WATCHDOG_HOLD()
+            # config that stays invalid alerts once a day, not on every relaunch.
+            WATCHDOG_HOLD(again)
         return int(ExitCode.CONFIG_INVALID)
     return int(ExitCode.CONFIG_INVALID)  # pragma: no cover
 

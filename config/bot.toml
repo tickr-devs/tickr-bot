@@ -737,7 +737,8 @@ backtest_stop_distance_edges_percent = [1, 2, 4, 8]
 backtest_excursion_edges_r = [0, 0.5, 1, 2, 3]
 
 [runtime]
-# Minimum free disk space on the data_dir volume, megabytes; below it preflight fails; read by runtime.preflight.
+# Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new
+# entry (fence disk-low, cleared when there is room again); read by runtime.preflight and runtime.service.
 min_free_disk_mb = 2048
 # Free disk space on the data_dir volume, megabytes, below which the watchdog alerts disk-low (once, and once more
 # below min_free_disk_mb) at any hour, long before a full disk stops the bot (2026-11-19 it crashed at 0 bytes free);

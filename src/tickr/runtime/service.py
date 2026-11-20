@@ -55,7 +55,7 @@ from tickr.runtime.account import (
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.dayend import DayEnd
 from tickr.runtime.protection import LatencyLog, busy
-from tickr.runtime.watchdog import entry_restart_file
+from tickr.runtime.watchdog import BYTES_PER_MB, DiskFree, disk_free, entry_restart_file
 
 if TYPE_CHECKING:
     from tickr.observers.runner import ObserverSet
@@ -103,6 +103,8 @@ class ServicePaths:
     account: Path | None = None  # None: no account file is written (tools, some tests)
     # The watchdog's early-restart record; None: never read (tools, some tests).
     watchdog_entry_restart: Path | None = None
+    # The data folder whose free disk space each loop pass checks; None: not checked.
+    data: Path | None = None
 
     @classmethod
     def from_config(cls, config: Config) -> ServicePaths:
@@ -110,7 +112,7 @@ class ServicePaths:
         commands = data / config.api.commands_dir
         return cls(data / config.api.status_file, commands / api.INBOX,
                    commands / api.PROCESSED, data / config.api.account_file,
-                   entry_restart_file(config))
+                   entry_restart_file(config), data)
 
 
 def _no_quote(symbol: str) -> Quote | None:  # noqa: ARG001 - no market: no quote for any
@@ -158,8 +160,10 @@ class Service:
                  observers: ObserverSet | None = None,
                  watch: Watch | None = None,
                  account_reads: AccountReads | None = None,
-                 quote_file: QuoteFile | None = None) -> None:
+                 quote_file: QuoteFile | None = None,
+                 disk_free: DiskFree = disk_free) -> None:
         self.engine = engine
+        self._disk_free = disk_free
         self.market = market
         self.evaluator = evaluator
         self.entries_off = entries_off  # why there is no evaluator (status says so)
@@ -831,6 +835,24 @@ class Service:
             fees_today_usd=fees, result_today_net_usd=total_net(closed),
             result_today_broker_usd=self._broker_result_today(closed))
 
+    def check_disk(self) -> None:
+        """Each loop pass: below [runtime] min_free_disk_mb free on the data disk (or unknown),
+        the disk-low fence stops new entries before a full disk stops the bot (2026-11-19 it
+        crashed at 0 bytes free); protection, exits and the flatten go on."""
+        folder = self.paths.data
+        if folder is None:
+            return
+        floor = self.config.runtime.min_free_disk_mb
+        try:
+            free_mb = self._disk_free(folder) // BYTES_PER_MB
+        except OSError as exc:
+            self.engine.disk_room(f"free space on the data disk unreadable "
+                                  f"({type(exc).__name__}): no new entry until it reads")
+            return
+        self.engine.disk_room(None if free_mb >= floor else
+                              f"less than {floor} MB free on the data disk: no new entry until "
+                              "there is room")
+
     def write_status(self) -> None:
         api.write_status(self.paths.status, self.status())
         if self.quote_file is not None:
@@ -945,6 +967,7 @@ class Service:
             self.process_commands()
             if self.stopped_by is not None:
                 break  # an operator stop-bot: nothing more this run, straight to the drain
+            self.check_disk()
             self.flatten_due()
             self.write_status()
             if self.watch is not None:

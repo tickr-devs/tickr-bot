@@ -780,7 +780,8 @@ does nothing while it runs.
 What was alerted is kept in `data/watchdog-state.json` (`[runtime] watchdog_state_file`), so a
 relaunched watchdog does not alert the same crash or disk level again; launchd relaunches it at
 most once per `[runtime] watchdog_relaunch_seconds` (`ThrottleInterval`). With an invalid config
-it alerts `watchdog-cannot-check` once and then waits instead of ending.
+it alerts `watchdog-cannot-check` and then waits instead of ending, repeating the alert at the
+start of every New York day until the config is fixed and the job restarted.
 
 What to do: read `~/Library/Logs/Tickr/bot.log` for the cause, fix it (a full disk: free space),
 then start the bot when it is safe: `launchctl kickstart gui/$(id -u)/local.tickr.bot`.
@@ -790,7 +791,10 @@ then start the bot when it is safe: `launchctl kickstart gui/$(id -u)/local.tick
 Free space on the data disk fell below `[runtime] disk_warn_free_mb` (10 GB), checked at any hour.
 It alerts once, and once more below `[runtime] min_free_disk_mb` (2 GB), where preflight refuses
 to start the bot; a disk that runs full stops the bot (2026-11-19 it crashed writing its status
-file at 0 bytes free). Back above the warning level re-arms it. Free space now: research data,
+file at 0 bytes free). Back above the warning level re-arms it. Below `min_free_disk_mb` the running
+bot also sets the `disk-low` fence (checked every loop pass): no new entry, while protection, exits
+and the flatten go on; it clears itself once there is room again (an unreadable free space keeps
+it set). Free space now: research data,
 model files and caches belong on the external disk.
 
 ### `watchdog-not-flat`

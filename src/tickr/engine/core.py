@@ -119,6 +119,10 @@ class Fence(StrEnum):
     # The watchdog started this run early for a resting entry (runtime/watchdog.py): the run
     # protects, cancels and flattens, but takes no new entry until the operator clears it.
     WATCHDOG_STARTED = "watchdog-started"
+    # The data disk has less than [runtime] min_free_disk_mb free (or its free space is
+    # unknown): the bot could not record its orders durably much longer, so no new entry until
+    # there is room. Clears itself; protection, exits and the flatten go on.
+    DISK_LOW = "disk-low"
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
@@ -498,6 +502,15 @@ class Engine:
                 self.store.append("fence-cleared", {"by": "operator"}, key=name,
                                   run_id=self.run_id)
         return bool(removed)
+
+    def disk_room(self, cause: str | None) -> None:
+        """The runtime's disk check each loop pass: `cause` sets the disk-low fence (once),
+        None clears it."""
+        if cause is None:
+            if self._has_fence(Fence.DISK_LOW):
+                self._clear_fence(Fence.DISK_LOW)
+        elif not self._has_fence(Fence.DISK_LOW):
+            self._set_fence(Fence.DISK_LOW, "", cause)
 
     def watchdog_started_fence(self, cause: str) -> None:
         """Block new entries after an early watchdog start; only the operator clears it."""

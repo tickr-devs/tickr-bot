@@ -162,6 +162,13 @@ def _default_notifier(cfg: config_module.Config) -> Any:
                             feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
 
 
+def _disk_free(path: Path) -> int:
+    from tickr.runtime.watchdog import disk_free
+    return disk_free(path)
+
+
+# Replaced in tests: free bytes on the data disk, which `tickr run` checks every loop pass.
+DISK_FREE: Callable[[Path], int] = _disk_free
 # Replaced in tests: the notifier `tickr run` alerts through (None = journal only).
 NOTIFIER: Callable[[config_module.Config], Any] = _default_notifier
 # Replaced in tests with a FakeBroker factory.
@@ -760,7 +767,8 @@ def _run(path: Path) -> int:
                                   paths=service.ServicePaths.from_config(cfg), market=market,
                                   evaluator=evaluator, entries_off=entries_off,
                                   observers=observers, watch=watch,
-                                  account_reads=account_reads, quote_file=quote_file)
+                                  account_reads=account_reads, quote_file=quote_file,
+                                  disk_free=DISK_FREE)
             market.bind()
             adapters.start_stream()
             quote_file.start()

@@ -21,6 +21,7 @@ from tickr.config import GateResult
 from tickr.data.base import FakeMarketData
 from tickr.engine.core import Engine, Fence, TradeState
 from tickr.runtime import service, stopmarker
+from tickr.runtime.watchdog import BYTES_PER_MB
 from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1235,3 +1236,43 @@ def test_an_unreadable_early_restart_record_fences_too(tmp_path):
     bot = _early(tmp_path, "{not json")
     bot.run(0)
     assert "unreadable" in bot.engine.fences()[str(Fence.WATCHDOG_STARTED)]
+
+
+def test_a_nearly_full_disk_fences_entries_until_there_is_room(tmp_path):
+    bot = Bot(tmp_path)
+    floor = CFG.runtime.min_free_disk_mb
+    free = {"mb": floor - 1}
+
+    def disk_free(path: Path) -> int:
+        assert path == tmp_path
+        if free["mb"] is None:
+            raise PermissionError("no")
+        return free["mb"] * BYTES_PER_MB
+
+    bot.service = service.Service(
+        bot.engine, now=lambda: bot.now, calendar=CALENDAR, strategy=service.strategy_id(CFG),
+        paths=replace(bot.paths, data=tmp_path), disk_free=disk_free)
+    bot.service.check_disk()
+    fences = bot.engine.fences()
+    assert fences[str(Fence.DISK_LOW)] == (
+        f"less than {floor} MB free on the data disk: no new entry until there is room")
+    bot.service.check_disk()  # set once, not again every pass
+    assert len(bot.store.journal("fence-set", key=str(Fence.DISK_LOW))) == 1
+    free["mb"] = floor
+    bot.service.check_disk()
+    assert str(Fence.DISK_LOW) not in bot.engine.fences()
+    free["mb"] = None  # unknown is never "enough"
+    bot.service.check_disk()
+    assert "unreadable (PermissionError)" in bot.engine.fences()[str(Fence.DISK_LOW)]
+
+
+def test_the_loop_checks_the_disk_every_pass(tmp_path):
+    bot = Bot(tmp_path)
+    seen = []
+    bot.service = service.Service(
+        bot.engine, now=lambda: bot.now, calendar=CALENDAR, strategy=service.strategy_id(CFG),
+        paths=replace(bot.paths, data=tmp_path),
+        disk_free=lambda path: seen.append(path) or 0)
+    assert bot.run(2)
+    assert len(seen) == 2
+    assert bot.store.journal("fence-set", key=str(Fence.DISK_LOW))

@@ -186,7 +186,7 @@ def test_invalid_config(config_path):
 
 
 def test_uncommented_key_is_invalid_config(config_path):
-    text = re.sub(r"(?m)^# Minimum free disk.*\n", "", config_path.read_text("utf-8"))
+    text = re.sub(r"(?m)^# Minimum free disk.*\n(?:#.*\n)*", "", config_path.read_text("utf-8"))
     config_path.write_text(text, "utf-8")
     assert _run(config_path, {}).cause is PreflightCause.CONFIG_INVALID
 
