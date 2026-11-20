@@ -838,20 +838,23 @@ class Service:
     def check_disk(self) -> None:
         """Each loop pass: below [runtime] min_free_disk_mb free on the data disk (or unknown),
         the disk-low fence stops new entries before a full disk stops the bot (2026-11-19 it
-        crashed at 0 bytes free); protection, exits and the flatten go on."""
+        crashed at 0 bytes free); protection, exits and the flatten go on. A set fence (low or
+        unreadable) clears only at [runtime] disk_clear_free_mb, no flapping at the floor."""
         folder = self.paths.data
         if folder is None:
             return
-        floor = self.config.runtime.min_free_disk_mb
+        runtime = self.config.runtime
         try:
             free_mb = self._disk_free(folder) // BYTES_PER_MB
         except OSError as exc:
             self.engine.disk_room(f"free space on the data disk unreadable "
                                   f"({type(exc).__name__}): no new entry until it reads")
             return
-        self.engine.disk_room(None if free_mb >= floor else
-                              f"less than {floor} MB free on the data disk: no new entry until "
-                              "there is room")
+        if free_mb < runtime.min_free_disk_mb:
+            self.engine.disk_room(f"less than {runtime.min_free_disk_mb} MB free on the data "
+                                  "disk: no new entry until there is room")
+        elif free_mb >= runtime.disk_clear_free_mb:
+            self.engine.disk_room(None)
 
     def write_status(self) -> None:
         api.write_status(self.paths.status, self.status())

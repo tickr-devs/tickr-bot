@@ -250,6 +250,7 @@ def test_bad_watchdog_start_refused(config_path):
 @pytest.mark.parametrize(("key", "value", "match"), [
     ("watchdog_start_local", '"04:01"', "watchdog_start_local must be at or before"),
     ("disk_warn_free_mb", "2048", "disk_warn_free_mb must be above min_free_disk_mb"),
+    ("disk_clear_free_mb", "2048", "disk_clear_free_mb must be above min_free_disk_mb"),
     ("watchdog_relaunch_seconds", "0", "watchdog_relaunch_seconds must be positive")])
 def test_watchdog_after_the_bot_or_a_warning_below_the_floor_refused(config_path, key, value,
                                                                      match):

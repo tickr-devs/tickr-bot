@@ -94,6 +94,8 @@ def schedule(runtime: RuntimeConfig) -> Schedule:
         raise ConfigError("[runtime] min_free_disk_mb must be positive")
     if runtime.disk_warn_free_mb <= runtime.min_free_disk_mb:
         raise ConfigError("[runtime] disk_warn_free_mb must be above min_free_disk_mb")
+    if runtime.disk_clear_free_mb <= runtime.min_free_disk_mb:
+        raise ConfigError("[runtime] disk_clear_free_mb must be above min_free_disk_mb")
     if runtime.watchdog_relaunch_seconds <= 0:
         raise ConfigError("[runtime] watchdog_relaunch_seconds must be positive")
     if runtime.watchdog_bot_check_seconds <= 0:

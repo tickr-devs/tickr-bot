@@ -1258,7 +1258,16 @@ def test_a_nearly_full_disk_fences_entries_until_there_is_room(tmp_path):
         f"less than {floor} MB free on the data disk: no new entry until there is room")
     bot.service.check_disk()  # set once, not again every pass
     assert len(bot.store.journal("fence-set", key=str(Fence.DISK_LOW))) == 1
-    free["mb"] = floor
+    free["mb"] = floor  # back at the floor: kept until the clear level, no flapping
+    bot.service.check_disk()
+    assert str(Fence.DISK_LOW) in bot.engine.fences()
+    free["mb"] = CFG.runtime.disk_clear_free_mb - 1
+    bot.service.check_disk()
+    assert str(Fence.DISK_LOW) in bot.engine.fences()
+    free["mb"] = CFG.runtime.disk_clear_free_mb
+    bot.service.check_disk()
+    assert str(Fence.DISK_LOW) not in bot.engine.fences()
+    free["mb"] = floor  # at the floor with no fence set: no fence
     bot.service.check_disk()
     assert str(Fence.DISK_LOW) not in bot.engine.fences()
     free["mb"] = None  # unknown is never "enough"

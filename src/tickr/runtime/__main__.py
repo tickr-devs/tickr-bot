@@ -29,7 +29,7 @@ import sys
 import time
 import tomllib
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -211,16 +211,20 @@ WATCHDOG_RUNNER: watchdog.Runner = watchdog.run_command
 WATCHDOG_DISK_FREE: watchdog.DiskFree = watchdog.disk_free
 
 
+ONE_DAY = timedelta(days=1)
+
+
 def _hold_daily(again: Callable[[], None]) -> None:
-    """Never ends: `again` at the start of every New York day."""
+    """Never ends: `again` once a day, at the hour of the first alert. That hour is when the
+    owner deployed the config, so the repeat comes while the owner is awake, never at midnight; an
+    invalid config has no time setting to trust."""
     while True:
-        now = datetime.now(UTC)
-        time.sleep((watchdog.next_ny_midnight(now) - now).total_seconds())
+        time.sleep(ONE_DAY.total_seconds())
         again()
 
 
 # What the watchdog does after alerting an invalid config, instead of ending: the alert again
-# once per New York day (replaced in tests).
+# once a day (replaced in tests).
 WATCHDOG_HOLD: Callable[[Callable[[], None]], None] = _hold_daily
 # New York days the watchdog runs before it returns; None (the job) = until it is stopped.
 WATCHDOG_DAYS: int | None = None

@@ -367,6 +367,7 @@ class AdvisorConfig:
 @dataclass(frozen=True)
 class RuntimeConfig:
     min_free_disk_mb: int
+    disk_clear_free_mb: int
     disk_warn_free_mb: int
     supervisor_poll_seconds: Decimal
     bot_exit_timeout_seconds: int

@@ -800,7 +800,25 @@ def test_invalid_config_alerts_once_then_waits_instead_of_ending(config_path, mo
     assert runtime_main.main(["--config", str(config_path), "watchdog"]) == 2
     out = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     alerts = [x for x in out if x["record"] == "alert"]
-    # Once at the start, then once per New York day while it waits; never per relaunch.
+    # Once at the start, then once a day while it waits; never per relaunch.
     assert len(alerts) == 1 + days
     assert all(a["kind"] == "watchdog-cannot-check" and "config invalid" in a["text"]
                for a in alerts)
+
+
+def test_invalid_config_repeats_a_day_after_the_first_alert_not_at_midnight(monkeypatch):
+    slept, calls = [], []
+
+    class Stop(Exception):
+        pass
+
+    def sleep(seconds):
+        if len(slept) == 2:
+            raise Stop
+        slept.append(seconds)
+
+    monkeypatch.setattr(runtime_main.time, "sleep", sleep)
+    with pytest.raises(Stop):
+        runtime_main._hold_daily(lambda: calls.append(1))
+    assert slept == [runtime_main.ONE_DAY.total_seconds()] * 2
+    assert len(calls) == 2
