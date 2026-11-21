@@ -9,6 +9,9 @@
 #   duckdb     the engine version the Mac converts with (same version here, or the machine refuses)
 #   runner.md5 the md5 of the reviewed tickrun.py (a different file in the bucket: the machine refuses)
 #   machines   how many machines the group gets after a PASS (one digit, default 4; the group's own maximum still holds)
+#   pass       REQUIRED: which part of the history the machines work on. "open" = 2021-11-16 .. 2026-11-19 under the bucket's root;
+#              "older" = 2019-11-01 .. 2021-11-15 under older/ (the two closed years, kept apart), with its own claims and its own type list.
+#              Anything else, or an object that cannot be read: the machine refuses (a guessed pass could mark the wrong job as finished).
 #   conv       converters per machine: 1 unless this object says 2 (see "Converters per machine" below)
 #   crosscheck2-<threads>-<mem> written HERE: the result of the two-converter comparison for these settings (two Mac days converted at the same time)
 #   crosscheck written HERE: the result of the Mac-against-cloud comparison of one day. The group starts with ONE machine; it compares first.
@@ -22,6 +25,8 @@ CMP_MD5=b4870fbe830c1fdc0e43d279ae638d11           # cmpday.py (the adopted comp
 TYPES_MD5=fd1b9f017178a8edb6d2daf6234016fc         # types-5y.csv, the Mac's list
 XDAY=2026-11-16                                    # the day compared with the Mac's files
 XDAY2=2026-11-17                                   # the second day of the two-converter comparison (converted at the same time as XDAY)
+OLDER_TYPES_KEY=reference/types-2019-11-01_2021-11-15.csv   # the older pass's own type list: same rule as types-5y.csv (build_types.py), delisted from 2019-11-01
+OLDER_TYPES_MD5=f0252a5219836974438f1ac3944217e9
 TP=/Users/valentynd/Development/Trading/.scratch/massive-tools/research/types-5y.csv   # the SAME path string as on the Mac: the converter's skip test compares option TICK_TYPES literally
 IID=$(T=$(curl -s -m 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60'); curl -s -m 2 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id); IID=${IID:-unknown-$$}
 LOG=$D/boot-$IID.log; say() { echo "$(date -u +%FT%TZ) $IID $*" >> $LOG; aws s3 cp $LOG $J/logs/boot-$IID.log --only-show-errors; }
@@ -30,6 +35,14 @@ trap ':' TERM   # the runner gets the same signal (process group) and ends by it
 
 DV=$(aws s3 cp $J/duckdb - 2>/dev/null | tr -dc '0-9.'); [ -n "$DV" ] || { say "REFUSED: no engine version in jobs/download/duckdb"; exit 1; }
 RUN_MD5_WANT=$(aws s3 cp $J/runner.md5 - 2>/dev/null | tr -dc '0-9a-f' | head -c 32); [ ${#RUN_MD5_WANT} -eq 32 ] || { say "REFUSED: no runner md5 in jobs/download/runner.md5"; exit 1; }
+# The pass decides dates, output root, claim set and type list of the run at the end of this script. The comparisons with the Mac below always
+# use the Mac's own list (TP) and the open prefixes: they compare 2026 days.
+PASSV=$(aws s3 cp $J/pass - 2>/dev/null | tr -dc 'a-z' | head -c 8)
+case "$PASSV" in
+  open)  FIRST=2021-11-16; LAST=2026-11-19; ROOT=$B; CLAIMS=ticks; RTP=$TP ;;
+  older) FIRST=2019-11-01; LAST=2021-11-15; ROOT=$B/older; CLAIMS=ticks-older; RTP=$(dirname $TP)/$(basename $OLDER_TYPES_KEY) ;;   # beside TP: the path string is a manifest option, and the Mac must be able to give the same one
+  *)     say "REFUSED: jobs/download/pass must say open or older (read: '$PASSV')"; exit 1 ;;
+esac
 [ -x $D/v/bin/python ] || { uv venv $D/v --python 3.12 && uv pip install --python $D/v/bin/python boto3 "duckdb==$DV"; } >/dev/null 2>&1 || { say "REFUSED: python environment failed"; exit 1; }
 PY=$D/v/bin/python
 [ "$($PY -c 'import duckdb; print(duckdb.__version__)')" = "$DV" ] || { say "REFUSED: the engine version is not $DV"; exit 1; }
@@ -37,6 +50,9 @@ aws s3 cp $B/scripts/mac-split/cand-wm2tick11c4d.py $D/wm2tick-v11.py --only-sho
 mkdir -p "$(dirname $TP)"; aws s3 cp $B/reference/types-5y.csv $TP --only-show-errors || { say "REFUSED: type list could not be fetched"; exit 1; }
 m() { md5sum "$1" | cut -c1-32; }
 say "type $(curl -s -m 2 -H "X-aws-ec2-metadata-token: $(curl -s -m 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/instance-type) cores $(nproc) mem $(free -g | awk 'NR==2{print $2}') GB disk free $(df -h $D | awk 'NR==2{print $4}') converter $(m $D/wm2tick-v11.py) runner $(m $D/tickrun.py) cmpday $(m $D/cmpday.py) types $(m $TP) duckdb $($PY -c 'import duckdb; print(duckdb.__version__)') python $($PY -V 2>&1)"
+if [ "$PASSV" = older ]; then
+  aws s3 cp $B/$OLDER_TYPES_KEY $RTP --only-show-errors && [ "$(m $RTP)" = "$OLDER_TYPES_MD5" ] || { say "REFUSED: the older pass's type list is missing or not the pinned one"; exit 1; }
+fi
 [ "$(m $D/wm2tick-v11.py)" = "$CONV_MD5" ] && [ "$(m $D/tickrun.py)" = "$RUN_MD5_WANT" ] && [ "$(m $D/cmpday.py)" = "$CMP_MD5" ] && [ "$(m $TP)" = "$TYPES_MD5" ] || { say "REFUSED: a file is not the frozen one"; exit 1; }
 export TICK_SECRET=tickr-research/massive-flatfiles TICK_TYPES=$TP
 
@@ -97,7 +113,7 @@ done
 # --- the run. Two days are fetched ahead of the converter(s). Oldest day first (the Mac goes newest first; whoever meets a finished day skips it).
 RAWSET=$(aws s3 cp $J/raw - 2>/dev/null | tr -dc 'a-z' | head -c 3)
 [ "$RAWSET" = on ] && export RUN_RAW=$B/raw
-say "runner starts, raw archive: ${RUN_RAW:-off}"
+say "runner starts, pass $PASSV: $FIRST .. $LAST into $ROOT, claims $CLAIMS, types $(basename $RTP), raw archive: ${RUN_RAW:-off}"
 # Converters per machine: 1 unless jobs/download/conv says 2 (the switch is read once, at the start of a machine; writing 1 there puts
 # every later machine back). With 2 each converter gets half of the cores, and a memory limit by the machine's size: 20GB each on a
 # machine of 56 GB or more, 10GB each below that (the Mac runs the same converter with 10GB on the largest days). Limits and threads
@@ -146,8 +162,8 @@ if [ "$NCONV" = 2 ]; then
   fi
   if [ "$R2" = FAIL ]; then NCONV=1; CTHR=$(nproc); CMEM=20GB; say "two-converter comparison failed: this machine works with ONE converter, threads $CTHR mem $CMEM"; fi
 fi
-TICK_PX=$B/px TICK_THREADS=$CTHR TICK_MEM=$CMEM RUN_MD5=$CONV_MD5 RUN_FETCH=2 RUN_CONV=$NCONV RUN_AHEAD=2 RUN_FLOOR_GB=40 RUN_CLAIM_MIN=20 RUN_CLOSED=$D/closed-days.txt RUN_SKIPTEST=1 STOP_FILE=/work/STOP RUN_LOG=$J/logs/tickrun-$IID.log \
-  $PY -W ignore $D/tickrun.py $D/wm2tick-v11.py 2021-11-16 2026-11-19 0/1 $D/run $B/tk61 > $D/tickrun.out 2>&1
+TICK_TYPES=$RTP TICK_PX=$ROOT/px TICK_THREADS=$CTHR TICK_MEM=$CMEM RUN_CLAIMS=$CLAIMS RUN_MD5=$CONV_MD5 RUN_FETCH=2 RUN_CONV=$NCONV RUN_AHEAD=2 RUN_FLOOR_GB=40 RUN_CLAIM_MIN=20 RUN_CLOSED=$D/closed-days.txt RUN_SKIPTEST=1 STOP_FILE=/work/STOP RUN_LOG=$J/logs/tickrun-$IID.log \
+  $PY -W ignore $D/tickrun.py $D/wm2tick-v11.py $FIRST $LAST 0/1 $D/run $ROOT/tk61 > $D/tickrun.out 2>&1
 RC=$?
 # A comparison that failed while this machine worked: its exit must not mark the job as finished.
 [ "$(aws s3 cp $J/crosscheck - 2>/dev/null | head -c 4)" = FAIL ] && { say "runner ended rc=$RC, but the comparison failed: not finished"; exit 1; }

@@ -1,10 +1,28 @@
-# Weekdays on which US stock exchanges were fully closed, 2021-11-16 .. 2026-11-19 (the range of
-# the tick history). Read by tickrun.py (RUN_CLOSED): a day without source files is a holiday
+# Weekdays on which US stock exchanges were fully closed, 2019-11-01 .. 2026-11-19 (the range of
+# the tick history: the older pass 2019-11-01 .. 2021-11-15 and the open pass after it). Read by tickrun.py (RUN_CLOSED): a day without source files is a holiday
 # only when it stands here; any other missing file is a failed day.
 # Source: NYSE holiday calendars (https://www.nyse.com/trade/hours-calendars); 2025-01-09 is the
 # national day of mourning. The 2026 lines must equal the CLOSED days of
 # config/calendar/us-equity-2026.json up to the last date (tests/ops/test_tickrun.py checks it).
 # Early-close days (13:00) are sessions and are not listed.
+2019-11-28
+2019-12-25
+2020-01-01
+2020-01-20
+2020-02-17
+2020-04-10
+2020-05-25
+2020-07-03
+2020-09-07
+2020-11-26
+2020-12-25
+2021-01-01
+2021-01-18
+2021-02-15
+2021-04-02
+2021-05-31
+2021-07-05
+2021-09-06
 2021-11-25
 2021-12-24
 2022-01-17

@@ -306,3 +306,142 @@ def test_small_machine_gets_swap_before_two_converters_or_falls_back():
     assert swap < check < run
     block = "\n".join(text[swap : swap + 4])
     assert "NCONV=1; CTHR=$(nproc); CMEM=20GB" in block
+
+
+def _pass_settings(tmp_path, value):
+    """Runs the job script's pass lines with aws replaced; returns (exit code, output)."""
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "ops/aws/training/jobs/tickboot.sh").read_text().split("\n")
+    a = next(i for i, x in enumerate(text) if x.startswith("PASSV="))
+    b = next(i for i, x in enumerate(text) if x.startswith("esac"))
+    key = next(x for x in text if x.startswith("OLDER_TYPES_KEY="))
+    stubs = tmp_path / "bin"
+    stubs.mkdir(parents=True)
+    f = stubs / "aws"
+    f.write_text(
+        "#!/bin/sh\n" + (f'printf "%s" "{value}"' if value is not None else "exit 1") + "\n"
+    )
+    f.chmod(0o755)
+    script = (
+        'say() { echo "$*"; }\nJ=x; B=s3://b; D=/data; TP=/mac/types-5y.csv\n'
+        + key
+        + "\n"
+        + "\n".join(text[a : b + 1])
+        + '\necho "$FIRST $LAST $ROOT $CLAIMS $RTP"\n'
+    )
+    env = {"PATH": f"{stubs}:{os.environ['PATH']}"}
+    r = subprocess.run(["sh", "-c", script], env=env, capture_output=True, text=True)
+    return r.returncode, r.stdout.strip()
+
+
+def test_pass_switch_sets_dates_root_claims_and_type_list(tmp_path):
+    assert _pass_settings(tmp_path / "a", "open\n") == (
+        0,
+        "2021-11-16 2026-11-19 s3://b ticks /mac/types-5y.csv",
+    )
+    assert _pass_settings(tmp_path / "b", "older\n") == (
+        0,
+        "2019-11-01 2021-11-15 s3://b/older ticks-older /mac/types-2019-11-01_2021-11-15.csv",
+    )
+
+
+def test_pass_switch_refuses_a_missing_or_unknown_value(tmp_path):
+    for i, v in enumerate((None, "", "old", "olderx", "2")):
+        rc, out = _pass_settings(tmp_path / str(i), v)
+        assert rc == 1 and out.startswith("REFUSED: jobs/download/pass")
+
+
+def test_runner_line_takes_everything_from_the_pass():
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "ops/aws/training/jobs/tickboot.sh").read_text().split("\n")
+    i = next(i for i, x in enumerate(text) if "tickrun.py $D/wm2tick-v11.py" in x)
+    line = text[i - 1] + text[i]
+    for part in (
+        "TICK_TYPES=$RTP ",
+        "TICK_PX=$ROOT/px ",
+        "RUN_CLAIMS=$CLAIMS ",
+        "$FIRST $LAST 0/1 $D/run $ROOT/tk61 ",
+    ):
+        assert part in line
+    # the older list is fetched and checked against its pinned md5 before the runner
+    j = next(i for i, x in enumerate(text) if "$OLDER_TYPES_KEY $RTP" in x)
+    assert j < i and '"$OLDER_TYPES_MD5"' in text[j]
+
+
+def test_closed_days_cover_the_older_range():
+    import datetime
+
+    root = Path(__file__).resolve().parents[2]
+    listed = {
+        x.strip()
+        for x in (root / "ops/aws/training/jobs/us-equity-closed-days.txt").read_text().split("\n")
+        if x.strip() and not x.startswith("#")
+    }
+    d, end, weekdays = datetime.date(2019, 11, 1), datetime.date(2021, 11, 15), []
+    while d <= end:
+        if d.weekday() < 5:
+            weekdays.append(d.isoformat())
+        d += datetime.timedelta(days=1)
+    closed = [x for x in weekdays if x in listed]
+    # the source lists 514 day files in this range (Massive listing, 2026-11-21)
+    assert (len(weekdays), len(closed)) == (532, 18)
+    assert all(datetime.date.fromisoformat(x).weekday() < 5 for x in listed)
+
+
+def test_type_list_builder_keeps_active_and_delisted_in_range(tmp_path):
+    import json
+
+    root = Path(__file__).resolve().parents[2]
+    act = [{"ticker": "AA", "type": "CS", "active": True}, {"ticker": "EE", "type": "ETF"}]
+    ina = [
+        {"ticker": "OLD", "type": "CS", "delisted_utc": "2019-10-31T00:00:00Z"},
+        {"ticker": "MID", "type": "ADRC", "delisted_utc": "2020-10-05T00:00:00Z"},
+        {"ticker": "NOTYPE", "delisted_utc": "2021-01-08T00:00:00Z"},
+        {"ticker": "W", "type": "WARRANT", "delisted_utc": "2021-01-08T00:00:00Z"},
+    ]
+    (tmp_path / "a.jsonl").write_text("\n".join(json.dumps(x) for x in act))
+    (tmp_path / "i.jsonl").write_text("\n".join(json.dumps(x) for x in ina))
+    subprocess.run(
+        [
+            sys.executable,
+            str(root / "ops/aws/training/jobs/build_types.py"),
+            str(tmp_path / "a.jsonl"),
+            str(tmp_path / "i.jsonl"),
+            "2019-11-01",
+            str(tmp_path / "o.csv"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    assert (tmp_path / "o.csv").read_bytes() == b"ticker,type\r\nAA,CS\r\nMID,ADRC\r\n"
+
+
+REF_MD5 = {  # the bucket's reference snapshots of 2026-11-20 the two lists were built from
+    "tickers-active.jsonl": "824c4aeb7e730eea3d4aebfb7af30ed4",
+    "tickers-inactive.jsonl": "bd3ceda56781ebe61d9b177ffa2e9b13",
+}
+
+
+def test_builder_gives_the_five_year_list_byte_for_byte(tmp_path):
+    """Needs the two snapshot files (11 MB, not in the repo): TICK_REF_DIR names their folder."""
+    import hashlib
+
+    import pytest
+
+    ref = os.environ.get("TICK_REF_DIR")
+    if not ref:
+        pytest.skip("TICK_REF_DIR is not set (reference snapshots live in the research bucket)")
+    root = Path(__file__).resolve().parents[2]
+    md5 = lambda f: hashlib.md5(Path(f).read_bytes()).hexdigest()  # noqa: E731
+    files = [str(Path(ref) / x) for x in REF_MD5]
+    assert [md5(x) for x in files] == list(REF_MD5.values())
+    builder = str(root / "ops/aws/training/jobs/build_types.py")
+    for first, want in (
+        ("2021-11-16", "fd1b9f017178a8edb6d2daf6234016fc"),
+        ("2019-11-01", "f0252a5219836974438f1ac3944217e9"),
+    ):
+        out = str(tmp_path / first)
+        subprocess.run(
+            [sys.executable, builder, *files, first, out], check=True, capture_output=True
+        )
+        assert md5(out) == want
