@@ -106,6 +106,15 @@ NCONV=$(aws s3 cp $J/conv - 2>/dev/null | tr -dc 0-9 | head -c 1); [ "$NCONV" = 
 MEMG=$(free -g | awk 'NR==2{print $2}'); CTHR=$(nproc); CMEM=20GB
 if [ "$NCONV" = 2 ]; then CTHR=$(( $(nproc) / 2 )); [ "$CTHR" -ge 1 ] || CTHR=1; [ "$MEMG" -ge 56 ] || CMEM=10GB; fi
 say "converters $NCONV, each threads $CTHR mem $CMEM (machine $MEMG GB)"
+# Two converters on a machine under 56 GB: two large days together can need more memory than the machine has (two days of 13.6 and
+# 16.4 GB raw peaked at 26.5 of 30 GB; days of 26 GB exist). A swap file on the work disk makes that slower instead of a killed
+# converter and a failed day. It changes no output. Without it this machine does not run two converters.
+if [ "$NCONV" = 2 ] && [ "$MEMG" -lt 56 ]; then
+  SW=$D/swapfile
+  { swapon --show=NAME --noheadings | grep -qx "$SW"; } || { rm -f $SW; fallocate -l 32G $SW && chmod 600 $SW && mkswap $SW >/dev/null && swapon $SW; }
+  if swapon --show=NAME --noheadings | grep -qx "$SW"; then say "swap file on: $(free -g | awk 'NR==3{print $2}') GB"
+  else NCONV=1; CTHR=$(nproc); CMEM=20GB; say "swap file could NOT be made: this machine works with ONE converter, threads $CTHR mem $CMEM"; fi
+fi
 # The first comparison was made with one converter, every core and 20GB. Two converters work with other threads and another limit, so
 # before any day is made with them a machine converts $XDAY and $XDAY2 AT THE SAME TIME with exactly these settings into its own
 # fleet-test2/<machine>/ and compares both with the Mac's files. The result is one object PER SETTING, jobs/download/crosscheck2-<threads>-<mem>:

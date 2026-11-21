@@ -149,6 +149,8 @@ starts; the research thread copies both to the bucket (`scripts/tickboot.sh`,
 - One converter per machine unless `jobs/download/conv` says `2`. Then each converter gets half
   of the cores and a memory limit by the machine's size (20GB each from 56 GB of memory, 10GB
   each below). A machine reads the switch once, at its start; writing `1` puts later machines back.
+  A machine under 56 GB first makes a 32 GB swap file on its work disk (two large days together
+  can need more memory than it has); if that fails it works with one converter.
   Before any day is made that way, a machine converts two of the Mac's days at the same time with
   those settings into `fleet-test2/` and compares both with the Mac's files
   (`jobs/download/crosscheck2-<threads>-<mem>`, one result per setting: a machine with other

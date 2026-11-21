@@ -294,3 +294,15 @@ def test_two_converter_result_is_kept_per_setting():
     code = [x for x in text.split("\n") if "crosscheck2" in x and not x.startswith("#")]
     assert code and all("$J/crosscheck2-$CTHR-$CMEM" in x for x in code)
     assert _conv_settings_one_core() == ["2", "1", "10GB"]
+
+
+def test_small_machine_gets_swap_before_two_converters_or_falls_back():
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "ops/aws/training/jobs/tickboot.sh").read_text().split("\n")
+    swap = next(i for i, x in enumerate(text) if "swapon $SW" in x)
+    check = next(i for i, x in enumerate(text) if "X2=$J/crosscheck2" in x)
+    run = next(i for i, x in enumerate(text) if "tickrun.py $D/wm2tick-v11.py" in x)
+    # the swap file (or the fall-back to one converter) comes before any use of two converters
+    assert swap < check < run
+    block = "\n".join(text[swap : swap + 4])
+    assert "NCONV=1; CTHR=$(nproc); CMEM=20GB" in block
