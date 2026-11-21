@@ -146,6 +146,13 @@ starts; the research thread copies both to the bucket (`scripts/tickboot.sh`,
   takes it over) and waiting for it has a 90-minute limit.
 - A day without source files is a holiday only when `jobs/us-equity-closed-days.txt` lists it
   as closed. A session with a file missing, or files on a listed day, is a failed day.
+- One converter per machine unless `jobs/download/conv` says `2`. Then each converter gets half
+  of the cores and a memory limit by the machine's size (20GB each from 56 GB of memory, 10GB
+  each below). A machine reads the switch once, at its start; writing `1` puts later machines back.
+  Before any day is made that way, a machine converts two of the Mac's days at the same time with
+  those settings into `fleet-test2/` and compares both with the Mac's files
+  (`jobs/download/crosscheck2-<threads>-<mem>`, one result per setting: a machine with other
+  settings compares for itself); a FAIL writes the switch back to `1`.
 - The raw archive is off unless `jobs/download/raw` says `on`. The owner's recorded decision is
   not to keep raw files; the research thread writes `on` only after he chooses the archive
   option on the launch card.

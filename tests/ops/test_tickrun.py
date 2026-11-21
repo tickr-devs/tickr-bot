@@ -46,8 +46,8 @@ def setup(tmp_path, days=DAYS, closed=()):
 
 
 def start(tmp_path, stub, name, **env):
-    e = dict(os.environ)
-    e.update(
+    e = dict(  # named variables only (rule 10): the whole environment is never passed on
+        PATH=os.environ["PATH"],
         RUN_FAKE=str(tmp_path / "fake"),
         RUN_FETCH="2",
         RUN_CONV="2",
@@ -245,3 +245,52 @@ def test_two_failures_in_a_row_end_the_run_with_exit_one(tmp_path):
     # the good day finishes AFTER the two failures: it must not un-pause the run
     assert p.wait(WAIT) == 1
     assert ledger(tmp_path) == DAYS[:1]
+
+
+def _conv_settings(tmp_path, switch, mem_gb, cores=16):
+    """Runs the job script's converter-settings lines with aws, free and nproc replaced."""
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "ops/aws/training/jobs/tickboot.sh").read_text().split("\n")
+    a = next(i for i, x in enumerate(text) if x.startswith("NCONV="))
+    b = next(i for i, x in enumerate(text) if x.startswith('say "converters'))
+    stubs = tmp_path / "bin"
+    stubs.mkdir(parents=True)
+    for name, body in (
+        ("aws", f'printf "%s" "{switch}"' if switch is not None else "exit 1"),
+        ("free", f'echo header; echo "Mem: {mem_gb} 1 1 1 1 1"'),
+        ("nproc", f"echo {cores}"),
+    ):
+        f = stubs / name
+        f.write_text("#!/bin/sh\n" + body + "\n")
+        f.chmod(0o755)
+    script = "J=x\n" + "\n".join(text[a:b]) + '\necho "$NCONV $CTHR $CMEM"\n'
+    env = {"PATH": f"{stubs}:{os.environ['PATH']}"}
+    return subprocess.run(
+        ["sh", "-c", script], env=env, capture_output=True, text=True, check=True
+    ).stdout.split()
+
+
+def _conv_settings_one_core():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        return _conv_settings(Path(d) / "x", "2", 30, cores=1)
+
+
+def test_job_script_runs_one_converter_unless_the_switch_says_two(tmp_path):
+    assert _conv_settings(tmp_path / "a", None, 30) == ["1", "16", "20GB"]
+    assert _conv_settings(tmp_path / "b", "1\n", 61) == ["1", "16", "20GB"]
+    assert _conv_settings(tmp_path / "c", "on", 61) == ["1", "16", "20GB"]
+
+
+def test_two_converters_share_cores_and_memory_by_machine_size(tmp_path):
+    assert _conv_settings(tmp_path / "a", "2\n", 30) == ["2", "8", "10GB"]
+    assert _conv_settings(tmp_path / "b", "2", 61) == ["2", "8", "20GB"]
+
+
+def test_two_converter_result_is_kept_per_setting():
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "ops/aws/training/jobs/tickboot.sh").read_text()
+    code = [x for x in text.split("\n") if "crosscheck2" in x and not x.startswith("#")]
+    assert code and all("$J/crosscheck2-$CTHR-$CMEM" in x for x in code)
+    assert _conv_settings_one_core() == ["2", "1", "10GB"]

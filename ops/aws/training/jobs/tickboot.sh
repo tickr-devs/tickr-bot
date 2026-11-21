@@ -9,6 +9,8 @@
 #   duckdb     the engine version the Mac converts with (same version here, or the machine refuses)
 #   runner.md5 the md5 of the reviewed tickrun.py (a different file in the bucket: the machine refuses)
 #   machines   how many machines the group gets after a PASS (one digit, default 4; the group's own maximum still holds)
+#   conv       converters per machine: 1 unless this object says 2 (see "Converters per machine" below)
+#   crosscheck2-<threads>-<mem> written HERE: the result of the two-converter comparison for these settings (two Mac days converted at the same time)
 #   crosscheck written HERE: the result of the Mac-against-cloud comparison of one day. The group starts with ONE machine; it compares first.
 #              "PASS ..." raises the group and lets every machine work; "FAIL ..." stops everything (until := 0, desired := 0).
 # Nothing here reads, prints or stores a credential: the Massive keys are read by the converter and the runner from the secret named in TICK_SECRET through the machine's role.
@@ -19,6 +21,7 @@ CONV_MD5=c1c1ead1751ba765f494af79235bddd7          # frozen converter (cand-wm2t
 CMP_MD5=b4870fbe830c1fdc0e43d279ae638d11           # cmpday.py (the adopted comparison rule)
 TYPES_MD5=fd1b9f017178a8edb6d2daf6234016fc         # types-5y.csv, the Mac's list
 XDAY=2026-11-16                                    # the day compared with the Mac's files
+XDAY2=2026-11-17                                   # the second day of the two-converter comparison (converted at the same time as XDAY)
 TP=/Users/valentynd/Development/Trading/.scratch/massive-tools/research/types-5y.csv   # the SAME path string as on the Mac: the converter's skip test compares option TICK_TYPES literally
 IID=$(T=$(curl -s -m 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60'); curl -s -m 2 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id); IID=${IID:-unknown-$$}
 LOG=$D/boot-$IID.log; say() { echo "$(date -u +%FT%TZ) $IID $*" >> $LOG; aws s3 cp $LOG $J/logs/boot-$IID.log --only-show-errors; }
@@ -91,11 +94,50 @@ while :; do
   fi
 done
 
-# --- the run. One converter with every core; two days are fetched ahead of it. Oldest day first (the Mac goes newest first; whoever meets a finished day skips it).
+# --- the run. Two days are fetched ahead of the converter(s). Oldest day first (the Mac goes newest first; whoever meets a finished day skips it).
 RAWSET=$(aws s3 cp $J/raw - 2>/dev/null | tr -dc 'a-z' | head -c 3)
 [ "$RAWSET" = on ] && export RUN_RAW=$B/raw
 say "runner starts, raw archive: ${RUN_RAW:-off}"
-TICK_PX=$B/px TICK_THREADS=$(nproc) TICK_MEM=20GB RUN_MD5=$CONV_MD5 RUN_FETCH=2 RUN_CONV=1 RUN_AHEAD=2 RUN_FLOOR_GB=40 RUN_CLAIM_MIN=20 RUN_CLOSED=$D/closed-days.txt RUN_SKIPTEST=1 STOP_FILE=/work/STOP RUN_LOG=$J/logs/tickrun-$IID.log \
+# Converters per machine: 1 unless jobs/download/conv says 2 (the switch is read once, at the start of a machine; writing 1 there puts
+# every later machine back). With 2 each converter gets half of the cores, and a memory limit by the machine's size: 20GB each on a
+# machine of 56 GB or more, 10GB each below that (the Mac runs the same converter with 10GB on the largest days). Limits and threads
+# are not in the manifest options, so finished days stay finished.
+NCONV=$(aws s3 cp $J/conv - 2>/dev/null | tr -dc 0-9 | head -c 1); [ "$NCONV" = 2 ] || NCONV=1
+MEMG=$(free -g | awk 'NR==2{print $2}'); CTHR=$(nproc); CMEM=20GB
+if [ "$NCONV" = 2 ]; then CTHR=$(( $(nproc) / 2 )); [ "$CTHR" -ge 1 ] || CTHR=1; [ "$MEMG" -ge 56 ] || CMEM=10GB; fi
+say "converters $NCONV, each threads $CTHR mem $CMEM (machine $MEMG GB)"
+# The first comparison was made with one converter, every core and 20GB. Two converters work with other threads and another limit, so
+# before any day is made with them a machine converts $XDAY and $XDAY2 AT THE SAME TIME with exactly these settings into its own
+# fleet-test2/<machine>/ and compares both with the Mac's files. The result is one object PER SETTING, jobs/download/crosscheck2-<threads>-<mem>:
+# a PASS made with 20GB says nothing about 10GB, so a machine with other settings compares for itself. PASS: two converters.
+# FAIL (a difference, a converter that could not finish): the switch is written back to 1 and this machine works with one converter.
+if [ "$NCONV" = 2 ]; then
+  X2=$J/crosscheck2-$CTHR-$CMEM; R2=$(aws s3 cp $X2 - 2>/dev/null | head -c 4)
+  if [ "$R2" != PASS ] && [ "$R2" != FAIL ]; then
+    P=$B/fleet-test2/$IID; T0=$(date +%s); OK=1; TM=; [ -x /usr/bin/time ] && TM="/usr/bin/time -v"
+    say "two-converter comparison of $XDAY and $XDAY2 with the Mac: started here"
+    for d in $XDAY $XDAY2; do
+      rm -rf $D/wx-$d $D/cmp-$d; mkdir -p $D/wx-$d $D/cmp-$d/mac $D/cmp-$d/aws
+      ( TICK_PX=$P/px TICK_THREADS=$CTHR TICK_MEM=$CMEM $TM $PY -W ignore $D/wm2tick-v11.py $d $d $D/wx-$d $P/tk61 > $D/cross-$d.out 2>&1; echo $? > $D/rc-$d ) &
+    done
+    wait
+    [ -e /work/STOP ] && { say "two-converter comparison interrupted by a stop"; exit 3; }
+    for d in $XDAY $XDAY2; do
+      RC=$(cat $D/rc-$d 2>/dev/null); RC=${RC:-1}
+      say "$d converted rc=$RC in $(( $(date +%s) - T0 )) s, free disk $(df -h $D | awk 'NR==2{print $4}'), peak kB $(grep -h 'Maximum resident' $D/cross-$d.out | tr -dc 0-9): $(grep -h '^day \|^redo \|^skip \|FAILED\|REFUSED' $D/cross-$d.out | tr '\n' ' ' | cut -c1-300)"
+      [ "$RC" = 0 ] || OK=0
+      for f in tk61:tk px:px s10:s10; do aws s3 cp $B/${f%%:*}/2026/$d.parquet $D/cmp-$d/mac/${f##*:}.parquet --only-show-errors && aws s3 cp $P/${f%%:*}/2026/$d.parquet $D/cmp-$d/aws/${f##*:}.parquet --only-show-errors || OK=0; done
+      [ $OK -eq 1 ] && $PY $D/cmpday.py $D/cmp-$d/mac $D/cmp-$d/aws > $D/cmp-$d.out 2>&1 || OK=0
+      cat $D/cmp-$d.out >> $LOG 2>/dev/null
+      rm -rf $D/wx-$d $D/cmp-$d
+    done
+    if [ $OK -eq 1 ]; then R2=PASS; else R2=FAIL; echo 1 | aws s3 cp - $J/conv --only-show-errors; fi
+    echo "$R2 $IID $(date -u +%FT%TZ) threads $CTHR mem $CMEM" | aws s3 cp - $X2 --only-show-errors
+    say "two-converter comparison $R2"
+  fi
+  if [ "$R2" = FAIL ]; then NCONV=1; CTHR=$(nproc); CMEM=20GB; say "two-converter comparison failed: this machine works with ONE converter, threads $CTHR mem $CMEM"; fi
+fi
+TICK_PX=$B/px TICK_THREADS=$CTHR TICK_MEM=$CMEM RUN_MD5=$CONV_MD5 RUN_FETCH=2 RUN_CONV=$NCONV RUN_AHEAD=2 RUN_FLOOR_GB=40 RUN_CLAIM_MIN=20 RUN_CLOSED=$D/closed-days.txt RUN_SKIPTEST=1 STOP_FILE=/work/STOP RUN_LOG=$J/logs/tickrun-$IID.log \
   $PY -W ignore $D/tickrun.py $D/wm2tick-v11.py 2021-11-16 2026-11-19 0/1 $D/run $B/tk61 > $D/tickrun.out 2>&1
 RC=$?
 # A comparison that failed while this machine worked: its exit must not mark the job as finished.
