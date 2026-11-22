@@ -854,6 +854,17 @@ def test_the_scrollbar_rule_is_an_app_rule():
     assert "scrollbars" in load().APP_RULES
 
 
+def test_sheets_fit_their_content_instead_of_a_detent_of_their_own(tmp_path):
+    module = load()
+    source = (
+        "sheet.presentationDetents([.medium, .large])\n"
+        "// .presentationDetents([.large]) in a comment\n"
+        "sheet.sheetFitsContent()\n"
+    )
+    assert [line for line, _ in module.sheet_violations(write(tmp_path, source))] == [1]
+    assert "sheets" in module.APP_RULES
+
+
 def test_breath_rule_rejects_a_shimmer_anywhere(tmp_path):
     source = (
         "struct ShimmerBand {}\n"
