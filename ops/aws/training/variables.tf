@@ -82,6 +82,15 @@ variable "jobs" {
       disk_gb        = 500
       instance_types = ["c7a.16xlarge", "m7a.16xlarge", "c6a.16xlarge", "m6a.16xlarge", "c7i.16xlarge", "m7i.16xlarge", "c6i.16xlarge", "m6i.16xlarge"]
     }
+    # Label tables and the tick content check: one process per core, about 6 GB each, so the
+    # memory-rich .16xlarge types (64 vCPU, 512 GB) let every core work. One machine = the
+    # 64 vCPU spot quota, so it runs only while tickr-download and tickr-train are at 0.
+    labels = {
+      script         = "scripts/labelboot.sh"
+      disk_gb        = 500
+      disk_mbps      = 500
+      instance_types = ["r7a.16xlarge", "r6a.16xlarge", "r6i.16xlarge", "r7i.16xlarge", "r5a.16xlarge", "r5.16xlarge"]
+    }
   }
 
   validation {

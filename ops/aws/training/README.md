@@ -64,6 +64,10 @@ Every machine start still needs the owner's yes on a named sum.
 - `tickr-download`: up to 4 machines of 16 vCPU (.4xlarge), 300 GB gp3 disk at 500 MB/s, runs
   `scripts/tickboot.sh`; the job script shares the days between the machines.
 - `tickr-train`: one machine of 64 vCPU (.16xlarge), 500 GB disk, runs `scripts/l1boot.sh`.
+- `tickr-labels`: one memory-rich machine of 64 vCPU and 512 GB (r-type .16xlarge), 500 GB gp3
+  disk at 500 MB/s, runs `scripts/labelboot.sh` (label tables and the tick content check: one
+  process per core, about 6 GB each, so every core works). The job script and its runner are
+  research files in the bucket (`scripts/l1/job/`), pinned by md5 inside the job script.
 
 Each group keeps at most `machines` spot machines, picks among several instance types in every
 zone (`capacity-optimized`, the least interrupted pools) and replaces a machine AWS takes back,
@@ -118,8 +122,8 @@ The 24-hour power-off stays: the group simply replaces that machine and the job 
 The deadline is a working rule, not a security barrier: the research user and the job machine
 may write the bucket, so they could move it. The budget mail is the hard backstop.
 
-The spot quota is shared: download (4 x 16 = 64) and train (64) together need 128 vCPU, more
-than the 64 approved, so they run one after the other unless the spot quota is raised.
+The spot quota is shared: download (4 x 16 = 64), train (64) and labels (64) each need the whole
+64 vCPU approved, so they run one after the other unless the spot quota is raised.
 
 ### The download job (`jobs/`)
 
