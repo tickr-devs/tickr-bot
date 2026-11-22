@@ -273,6 +273,9 @@ class ApiConfig:
     sleep_check_timeout_seconds: Decimal
     system_restart_rows: int
     training_progress_file: str
+    settled_cache_dir: str
+    settled_memory_days: int
+    settled_disk_days: int
 
 
 @dataclass(frozen=True)

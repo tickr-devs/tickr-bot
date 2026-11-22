@@ -147,19 +147,19 @@ class ObserverResults:
         self._value: dict[Identity, ObserverResult] = {}
 
     def results(self, day: date, today: date, records: Sequence[DecisionRecord],
-                decision_file: Path) -> dict[Identity, ObserverResult]:
-        """The result of every identity in `records` (observer records of `day`, read from
-        `decision_file`). Remembered until any input file changes; an answer with a transient
-        failure is never remembered."""
+                decision_file: Path) -> tuple[dict[Identity, ObserverResult], bool]:
+        """(the result of every identity in `records` (observer records of `day`, read from
+        `decision_file`), whether it may be kept). Remembered until any input file changes; an
+        answer with a transient failure is never remembered, and says so (False)."""
         key = inputs_key(self.paths, day, today, decision_file)
         with self._lock:
             if key == self._key:
-                return self._value
+                return self._value, True
         value, transient = self._compute(day, today, records)
         if not transient:
             with self._lock:
                 self._key, self._value = key, value
-        return value
+        return value, not transient
 
     def _compute(self, day: date, today: date, records: Sequence[DecisionRecord],
                  ) -> tuple[dict[Identity, ObserverResult], bool]:

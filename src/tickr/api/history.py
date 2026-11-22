@@ -23,6 +23,7 @@ from tickr.api import contract as api
 from tickr.api.after import AfterSettings, Closes, trade_after
 from tickr.api.cleanday import clean_days
 from tickr.api.performance import performance
+from tickr.api.settled import DayBarsIndex
 from tickr.archive import existing
 from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.config import Config
@@ -391,9 +392,12 @@ class History:
     bars file read. Without `after`, day-v1 trades carry no prices after and no overshoot."""
 
     def __init__(self, paths: HistoryPaths, after: AfterSettings | None = None,
-                 bars: CapturedBarsDays | None = None) -> None:
+                 bars: CapturedBarsDays | None = None,
+                 bars_index: DayBarsIndex | None = None) -> None:
         self.paths = paths
         self.captured_bars = bars or CapturedBarsDays()  # the server's shared reader
+        # A past day's bars by symbol on disk (api/settled.py); None = always the bars file.
+        self.bars_index = bars_index
         self.after = after
         self.closes = None if after is None else Closes(after.calendar)
         self._lock = threading.Lock()
@@ -541,9 +545,36 @@ class History:
                 on_day[symbol] = bars[low:high]
         return on_day
 
+    def _bars_v1_on(self, day: date, today: date) -> dict[str, list[api.BarV1]]:
+        return {symbol: [api.BarV1(b.start, b.open, b.high, b.low, b.close, b.volume)
+                         for b in bars] for symbol, bars in self._bars_on(day, today).items()}
+
+    def _indexed(self, day: date, today: date) -> Path | None:
+        """The bars file of past `day` when its bars are read through the index; None for
+        today (still written), without an index, or without a bars file."""
+        if self.bars_index is None or day >= today:
+            return None
+        return existing(self._bars_file(day))
+
+    def _symbols_on(self, day: date, today: date) -> tuple[str, ...]:
+        """The symbols with captured bars that start on `day`, sorted."""
+        path = self._indexed(day, today)
+        if path is None or self.bars_index is None:
+            return tuple(sorted(self._bars_on(day, today)))
+        try:
+            return self.bars_index.symbols(day, path, lambda: self._bars_v1_on(day, today))
+        except (OSError, ValueError) as exc:
+            raise HistoryUnavailable(f"bars index unreadable: {exc}") from exc
+
     def _bars_of(self, symbol: str, day: date, today: date) -> list[api.BarV1]:
-        return [api.BarV1(bar.start, bar.open, bar.high, bar.low, bar.close, bar.volume)
-                for bar in self._bars_on(day, today).get(symbol, ())]
+        path = self._indexed(day, today)
+        if path is None or self.bars_index is None:
+            return [api.BarV1(bar.start, bar.open, bar.high, bar.low, bar.close, bar.volume)
+                    for bar in self._bars_on(day, today).get(symbol, ())]
+        try:
+            return self.bars_index.bars(day, path, lambda: self._bars_v1_on(day, today), symbol)
+        except (OSError, ValueError) as exc:
+            raise HistoryUnavailable(f"bars index unreadable: {exc}") from exc
 
     # ------------------------------------------------------------ answers
 
@@ -597,7 +628,7 @@ class History:
     def day(self, day: date, today: date) -> api.DayV1:
         trades, _ = self._read_db((day, today))
         of_day = self._of_day(trades, day)
-        symbols = tuple(sorted(self._bars_on(day, today)))
+        symbols = self._symbols_on(day, today)
         return api.DayV1(environment=self.paths.environment, day=day, trades=tuple(of_day),
                          result_gross_usd=sum((t.result_gross_usd for t in of_day), ZERO),
                          bar_symbols=symbols, result_net_usd=total_net(of_day))

@@ -43,7 +43,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import contract, flow, symbols, trade_whatif
+from tickr.api import contract, flow, settled, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
@@ -78,7 +78,7 @@ from tickr.data.capture import CapturedBarsDays, CaptureError
 from tickr.data.discovery import DiscoverySettings
 from tickr.data.history import SYMBOL_PATTERN as TICKER_PATTERN
 from tickr.observers.errors import ObserverError
-from tickr.observers.loader import read_identity, read_values
+from tickr.observers.loader import STRATEGIES_DIR, read_identity, read_values
 from tickr.observers.log import DecisionLog
 from tickr.research.errors import RecordFileError
 from tickr.research.records import DecisionRecord
@@ -166,6 +166,9 @@ class ApiSettings:
     config_file: Path | None  # the bot.toml this API loaded, shown at GET /config
     config_root: Path  # GET /config shows the file's path relative to this
     config_digest: str  # sha256 of the file when this API loaded it
+    settled_dir: Path  # <data_dir>/<[api] settled_cache_dir>/<environment>: past days' answers
+    settled_memory_days: int  # [api] settled_memory_days
+    settled_disk_days: int  # [api] settled_disk_days
 
 
 def read_remote_hosts(path: Path) -> tuple[str, ...]:
@@ -240,7 +243,9 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         raise ConfigError("[api] lab_replay_sessions must be positive")
     if not 0 <= api.lab_replay_niceness <= MAX_NICENESS:
         raise ConfigError(f"[api] lab_replay_niceness must be 0-{MAX_NICENESS}")
-    for key in ("lab_replay_data_dir", "lab_replay_results_dir"):
+    if min(api.settled_memory_days, api.settled_disk_days) < 1:
+        raise ConfigError("[api] settled_memory_days and settled_disk_days must be at least 1")
+    for key in ("lab_replay_data_dir", "lab_replay_results_dir", "settled_cache_dir"):
         parts = PurePosixPath(getattr(api, key)).parts
         if not parts or parts[0] == "/" or any(p in (".", "..") for p in parts) \
                 or "\\" in getattr(api, key):
@@ -300,6 +305,9 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         config_file=config_path,
         config_root=cfg.root,
         config_digest=cfg.digest,
+        settled_dir=data / api.settled_cache_dir / cfg.environment_name,
+        settled_memory_days=api.settled_memory_days,
+        settled_disk_days=api.settled_disk_days,
     )
 
 
@@ -346,6 +354,8 @@ class ApiServer(ThreadingHTTPServer):
     discovery_day: symbols.DiscoveryDay
     skipped: SkippedAfter
     warmer: PastDayWarmer
+    settled: settled.SettledAnswers
+    code_key: str  # api/settled.py code_key: the running code, part of every settled key
 
     def __init__(self, settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
                  remote: bool = False, inbox_lock: threading.Lock | None = None,
@@ -376,13 +386,18 @@ class ApiServer(ThreadingHTTPServer):
             self.discovery_day = shared.discovery_day
             self.skipped = shared.skipped
             self.warmer = shared.warmer
+            self.settled = shared.settled
+            self.code_key = shared.code_key
             # One chart source and one request budget for both listeners: the source is
             # attached to the local listener (python -m tickr.api), and the phone reads it too.
             self.chart = shared.chart
         else:
             # Captured bars by symbol, read on as the bot appends; shared by every reader below.
             self.captured_bars = CapturedBarsDays()
-            self.history = History(settings.history, settings.after, self.captured_bars)
+            self.code_key = settled.code_key()
+            # A past day's bars by symbol (GET /days/<date>, /bars) indexed on disk once.
+            self.history = History(settings.history, settings.after, self.captured_bars,
+                                   settled.DayBarsIndex(settings.settled_dir, self.code_key))
             # Decision records: today's read on as the bot appends, the last past day's kept.
             self.decisions = DecisionCache(DecisionLog(settings.decisions))
             self.observer_results = ObserverResults(
@@ -395,6 +410,9 @@ class ApiServer(ThreadingHTTPServer):
             # The latest past day's files, read once per New York date (api/warm.py).
             self.warmer = PastDayWarmer(self.history.latest_past_day, self._warm_past_day,
                                         WARM_ERRORS)
+            # Past days' answers built once and kept (api/settled.py).
+            self.settled = settled.SettledAnswers(
+                settings.settled_dir, settings.settled_memory_days, settings.settled_disk_days)
             # No source until one is attached (python -m tickr.api, or the demo's world).
             self.chart = Chart(settings.chart)
         self.start_runner = run_command  # runs [api] start_bot_command; replaced in tests
@@ -402,12 +420,14 @@ class ApiServer(ThreadingHTTPServer):
         super().__init__((settings.host, port), Handler)
 
     def _warm_past_day(self, day: date, today: date) -> None:
-        """Reads what a pick of past day `day` reads first: its decision records, its trades
-        (which read its captured bars) and its screener file (GET /flow)."""
-        self.decisions.records(day, today)
+        """Builds what a pick of past day `day` reads: its trades (GET /days/<date>, which
+        indexes its captured bars by symbol on disk) and every answer of `settled.ROUTES`, kept
+        on disk too (api/settled.py). Once kept, a later warming (after a restart) only stamps
+        the day's files. A route's failure is left to its own request, which answers the cause."""
+        for route in settled.ROUTES:
+            with contextlib.suppress(*WARM_ERRORS):
+                self.settled_body(route, day, today)
         self.history.day(day, today)
-        self.screener_chips.chips(flow.screener_path(self.settings.history.capture, day),
-                                  open_tail=False)
 
     @property
     def allowed_host_headers(self) -> frozenset[str]:
@@ -478,6 +498,167 @@ class ApiServer(ThreadingHTTPServer):
                                  self.start_runner)
             except StartRefused as exc:
                 return ErrorV1(exc.error, exc.cause)
+
+    # ------------------------------------------------------------ one day's recorded decisions
+
+    def day_document(self, path: str, day: date, today: date,
+                     records: Callable[[Role], tuple[DecisionRecord, ...]]) -> tuple[Any, bool]:
+        """(the answer of `path`, one of `settled.ROUTES`, for `day`, built from `records` (the
+        day's records of one role), whether it may be kept: False when a transient failure
+        decided it). Raises what its reads raise: ObserverError, CaptureError,
+        HistoryUnavailable, RecordFileError, OSError."""
+        settings = self.settings
+        decision_file = self.decisions.log.path(day)
+        if path == "/observers":
+            identities = tuple(read_identity(settings.strategies_root, folder)
+                               for folder in settings.shown.observers)
+            observed = records(Role.OBSERVER)
+            configured = {name for name, _ in identities}
+            results, kept = self.observer_results.results(
+                day, today, [r for r in observed if r.decision.strategy in configured],
+                decision_file)
+            return contract.observers_document(day, identities, observed, results,
+                                               self._observer_differences()), kept
+        if path == "/skipped":
+            return self.skipped.document(day, today, records(Role.ACTIVE), decision_file)
+        active = records(Role.ACTIVE)
+        if path == "/watching":
+            return contract.watching_document(day, active, settings.closeness_places,
+                                              settings.check_places), True
+        if path == "/flow":
+            return self._flow(day, today, active), True
+        if path == "/symbols":
+            return self._symbols(day, today, active), True
+        if path == "/movers":
+            return self._movers(day, today, active), True
+        raise ValueError(f"{path} is not a route of one day's recorded decisions")
+
+    def settled_key(self, day: date, today: date) -> str | None:
+        """The key of a past day's answers (api/settled.py): None for today or a later day, and
+        when the inputs cannot be stamped (the answer is then built as for today, not kept)."""
+        if day >= today:
+            return None
+        settings = self.settings
+        named = day.isoformat()
+        try:
+            folders = tuple(settled.folder_stamps(settings.strategies_root / STRATEGIES_DIR / f)
+                            for f in (settings.shown.active_strategy, *settings.shown.observers))
+            return settled.day_key((
+                self.code_key, settings.config_digest, named,
+                settled.folder_stamps(settings.decisions / named),
+                settled.folder_stamps(settings.history.capture / named),
+                settled.file_stamp(settings.simulation.replay_settings),
+                settled.folder_stamps(settings.simulation.calendar), folders,
+                self.history.entries(day, today)))
+        except (HistoryUnavailable, OSError):
+            return None
+
+    def settled_body(self, path: str, day: date, today: date) -> bytes | None:
+        """The encoded answer of `path` (one of `settled.ROUTES`) for a past `day`: kept, or
+        built now together with the day's other routes and kept. None when `day` is not past
+        or its inputs cannot be stamped: the caller then builds it as for today. Raises what
+        `day_document` raises for `path`."""
+        key = self.settled_key(day, today)
+        if key is None:
+            return None
+        found = self.settled.get(day, key, path)
+        if found is not None:
+            return found
+        with self.settled.day_lock(day):
+            found = self.settled.get(day, key, path)  # built while this request waited
+            if found is not None:
+                return found
+            return self._settle(path, day, today, key)
+
+    def _settle(self, path: str, day: date, today: date, key: str) -> bytes:
+        """Build every route of `day` from one read of its records per role, keep the answers
+        that may be kept and return `path`'s. Another route's failure is not this request's:
+        it is not kept, and that route's own request builds it again and answers its cause."""
+        read: dict[Role, tuple[DecisionRecord, ...] | Exception] = {}
+
+        def records(role: Role) -> tuple[DecisionRecord, ...]:
+            if role not in read:
+                try:
+                    read[role] = self.decisions.records(day, today, role=role)
+                except (RecordFileError, OSError) as exc:
+                    read[role] = exc
+            found = read[role]
+            if isinstance(found, Exception):
+                raise found
+            return found
+
+        kept: dict[str, bytes] = {}
+        answer: bytes | None = None
+        failure: Exception | None = None
+        for route in settled.ROUTES:
+            try:
+                document, keep = self.day_document(route, day, today, records)
+            except (ObserverError, CaptureError, HistoryUnavailable, RecordFileError,
+                    OSError) as exc:
+                if route == path:
+                    failure = exc
+                continue
+            body = contract.dumps(document).encode("utf-8")
+            if keep:
+                kept[route] = body
+            if route == path:
+                answer = body
+        try:
+            self.settled.put(day, key, kept)
+        except OSError as exc:  # memory holds them; the disk copy is only for the next start
+            sys.stderr.write(f"settled answers of {day.isoformat()} not written: {exc}\n")
+        if failure is not None:
+            raise failure
+        if answer is None:
+            raise ValueError(f"{path} is not a route of one day's recorded decisions")
+        return answer
+
+    def _flow(self, day: date, today: date,
+              records: tuple[DecisionRecord, ...]) -> contract.FlowV1:
+        settings = self.settings
+        path = flow.screener_path(settings.history.capture, day)
+        return flow.flow_document(
+            settings.history.environment, day,
+            self.screener_chips.chips(path, open_tail=day == today), records,
+            self.history.entries(day, today),
+            flow.reconcile(day, today, settings.status_path, settings.account_path))
+
+    def _discovery(self, day: date, today: date) -> symbols.DiscoveryFolded:
+        return self.discovery_day.read(
+            symbols.discovery_path(self.settings.history.capture, day), day == today)
+
+    def _symbols(self, day: date, today: date,
+                 records: tuple[DecisionRecord, ...]) -> contract.SymbolsV1:
+        settings = self.settings
+        chips = self.screener_chips.chips(
+            flow.screener_path(settings.history.capture, day), open_tail=day == today)
+        return symbols.symbols_document(day, self._discovery(day, today), chips, records,
+                                        self.history.entries(day, today),
+                                        settings.check_places)
+
+    def _observer_differences(self) -> dict[tuple[str, str], tuple[contract.SettingDifferenceV1,
+                                                                    ...]]:
+        """Display only: each configured observer folder of the active strategy's name, by the
+        (name, version) its file declares now, with the settings where its file differs from
+        the active strategy's file. Nothing is imported or built; ObserverError when a file is
+        unreadable."""
+        settings = self.settings
+        root, active_folder = settings.strategies_root, settings.shown.active_strategy
+        active_name, _ = read_identity(root, active_folder)
+        active = read_values(root, active_folder)
+        found: dict[tuple[str, str], tuple[contract.SettingDifferenceV1, ...]] = {}
+        for folder in settings.shown.observers:
+            identity = read_identity(root, folder)
+            if identity[0] == active_name:
+                found[identity] = contract.settings_differences(read_values(root, folder), active)
+        return found
+
+    def _movers(self, day: date, today: date,
+                records: tuple[DecisionRecord, ...]) -> contract.MoversV1:
+        settings = self.settings
+        toml = read_values(settings.strategies_root, settings.shown.active_strategy)
+        return symbols.movers_document(day, self._discovery(day, today),
+                                       symbols.mover_rules(toml), records)
 
     def enqueue(self, kind: CommandKind, symbol: str | None = None,
                 key: str | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
@@ -1129,7 +1310,8 @@ class Handler(BaseHTTPRequestHandler):
         """GET /observers?date=, /skipped?date=, /watching?date=, /flow?date= and
         /decisions?symbol=&date=: decisions already recorded in the decision file of one New
         York date (plain or archived). Never reads the broker; /observers adds each observer's
-        simulated day result, /flow the captured screeners and the database."""
+        simulated day result, /flow the captured screeners and the database. A past day's
+        answers of `settled.ROUTES` are built once and kept (api/settled.py)."""
         settings = self.server.settings
         query = urlsplit(self.path).query
         today = ny_date_of(self.server.clock())
@@ -1145,36 +1327,18 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request", str(exc))
             return
         cache = self.server.decisions
-        log = cache.log
         try:
-            if path == "/observers":
-                identities = tuple(read_identity(settings.strategies_root, folder)
-                                   for folder in settings.shown.observers)
-                records = cache.records(day, today, role=Role.OBSERVER)
-                configured = {name for name, _ in identities}
-                results = self.server.observer_results.results(
-                    day, today, [r for r in records if r.decision.strategy in configured],
-                    log.path(day))
-                document: Any = contract.observers_document(day, identities, records, results,
-                                                            self._observer_differences())
-            elif path == "/skipped":
-                document = self.server.skipped.document(
-                    day, today, cache.records(day, today, role=Role.ACTIVE), log.path(day))
-            elif path == "/watching":
-                document = contract.watching_document(
-                    day, cache.records(day, today, role=Role.ACTIVE), settings.closeness_places,
-                    settings.check_places)
-            elif path == "/flow":
-                document = self._flow(day, today, cache.records(day, today, role=Role.ACTIVE))
-            elif path == "/symbols":
-                document = self._symbols(day, today, cache.records(day, today, role=Role.ACTIVE))
-            elif path == "/movers":
-                document = self._movers(day, today, cache.records(day, today, role=Role.ACTIVE))
-            else:
+            if path == "/decisions":
                 symbol = params["symbol"]
-                document = contract.decisions_document(symbol, day,
-                                                       cache.records(day, today, symbol=symbol),
-                                                       settings.check_places)
+                document: Any = contract.decisions_document(
+                    symbol, day, cache.records(day, today, symbol=symbol), settings.check_places)
+            else:
+                body = self.server.settled_body(path, day, today)
+                if body is not None:
+                    self._send(200, body, f"{JSON_TYPE}; charset=utf-8", {})
+                    return
+                document, _ = self.server.day_document(
+                    path, day, today, lambda role: cache.records(day, today, role=role))
         except ObserverError as exc:
             self._error("unavailable", f"observer strategy unreadable: {exc}")
             return
@@ -1188,53 +1352,6 @@ class Handler(BaseHTTPRequestHandler):
             self._error("unavailable", f"decision file unreadable: {exc}")
             return
         self._json(200, document)
-
-    def _flow(self, day: date, today: date,
-              records: tuple[DecisionRecord, ...]) -> contract.FlowV1:
-        settings = self.server.settings
-        path = flow.screener_path(settings.history.capture, day)
-        return flow.flow_document(
-            settings.history.environment, day,
-            self.server.screener_chips.chips(path, open_tail=day == today), records,
-            self.server.history.entries(day, today),
-            flow.reconcile(day, today, settings.status_path, settings.account_path))
-
-    def _discovery(self, day: date, today: date) -> symbols.DiscoveryFolded:
-        return self.server.discovery_day.read(
-            symbols.discovery_path(self.server.settings.history.capture, day), day == today)
-
-    def _symbols(self, day: date, today: date,
-                 records: tuple[DecisionRecord, ...]) -> contract.SymbolsV1:
-        settings = self.server.settings
-        chips = self.server.screener_chips.chips(
-            flow.screener_path(settings.history.capture, day), open_tail=day == today)
-        return symbols.symbols_document(day, self._discovery(day, today), chips, records,
-                                        self.server.history.entries(day, today),
-                                        settings.check_places)
-
-    def _observer_differences(self) -> dict[tuple[str, str], tuple[contract.SettingDifferenceV1,
-                                                                    ...]]:
-        """Display only: each configured observer folder of the active strategy's name, by the
-        (name, version) its file declares now, with the settings where its file differs from
-        the active strategy's file. Nothing is imported or built; ObserverError when a file is
-        unreadable."""
-        settings = self.server.settings
-        root, active_folder = settings.strategies_root, settings.shown.active_strategy
-        active_name, _ = read_identity(root, active_folder)
-        active = read_values(root, active_folder)
-        found: dict[tuple[str, str], tuple[contract.SettingDifferenceV1, ...]] = {}
-        for folder in settings.shown.observers:
-            identity = read_identity(root, folder)
-            if identity[0] == active_name:
-                found[identity] = contract.settings_differences(read_values(root, folder), active)
-        return found
-
-    def _movers(self, day: date, today: date,
-                records: tuple[DecisionRecord, ...]) -> contract.MoversV1:
-        settings = self.server.settings
-        toml = read_values(settings.strategies_root, settings.shown.active_strategy)
-        return symbols.movers_document(day, self._discovery(day, today),
-                                       symbols.mover_rules(toml), records)
 
     def _read_json_body(self) -> dict[str, Any] | None:
         media = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()

@@ -6,10 +6,13 @@ busy day), its decision file and its screener file: tens of seconds of CPU, whic
 as a day that would not open. Those files never change once the day is over, and the readers
 keep the last past day they read, so the API reads the latest past day once, in a background
 thread, the first time it answers on a new New York date (its start, or the first request after
-midnight). Later past days are still read when asked for.
+midnight): it builds and keeps that day's answers and bars index on disk (api/settled.py), so a
+later start only stamps its files. Older past days are built the first time they are asked for,
+and kept too.
 
-Display only: warming never writes, never reads the broker, and a failure only means the first
-request for that day reads the files itself and answers with its own cause.
+Display only: warming writes only the API's own cache of past days (api/settled.py), never
+reads the broker, and a failure only means the first request for that day reads the files
+itself and answers with its own cause.
 """
 
 from __future__ import annotations

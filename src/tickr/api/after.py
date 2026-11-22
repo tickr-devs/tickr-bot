@@ -233,11 +233,12 @@ class SkippedAfter:
         self._value: api.SkippedV1 | None = None
 
     def document(self, day: date, today: date, records: tuple[DecisionRecord, ...],
-                 decision_file: Path) -> api.SkippedV1:
+                 decision_file: Path) -> tuple[api.SkippedV1, bool]:
+        """(the document, whether it may be kept: False when a transient failure decided it)."""
         key = inputs_key(self.paths, day, today, decision_file)
         with self._lock:
             if key == self._key and self._value is not None:
-                return self._value
+                return self._value, True
         base = api.skipped_document(day, records, self.check_places)
         transient = False
         bars: Mapping[str, tuple[Bar, ...]] | str = {}
@@ -260,4 +261,4 @@ class SkippedAfter:
         if not transient:
             with self._lock:
                 self._key, self._value = key, value
-        return value
+        return value, not transient

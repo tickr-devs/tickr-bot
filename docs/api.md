@@ -1068,6 +1068,26 @@ parsed); a missing, repeated, extra or non-ticker parameter is
 `400 bad_request`. The command line has the same read: `tickr explain SYMBOL` (exit 0 found,
 1 none or unreadable).
 
+### Past days: answers built once (`/days/<date>`, `/bars`, `/flow`, `/watching`, `/symbols`, `/movers`, `/observers`, `/skipped`)
+
+For a date before today (New York) these answers are built once and kept on disk under
+`[api] settled_cache_dir` (`api/settled.py`), so a picked past day shows at once, also after a
+restart or a release:
+
+- `/flow`, `/watching`, `/symbols`, `/movers`, `/observers` and `/skipped`: the first request for a
+  day builds all six (the others wait for it) and keeps their encoded answers. The key covers
+  the code, the config file's digest, every file of the day's decision and capture folders
+  (size and modification time), the replay settings, the session calendar, the shown
+  strategies' files and the day's trades in the database: any change builds the day again. An
+  answer a transient failure decided, or a refused read, is never kept.
+- `/days/<date>` and `/bars?symbol=&date=`: the trades are read from the database every time
+  (fees and net results can be proven days later); only the day's captured bars are indexed by
+  symbol once per bars file, so the bars file (hundreds of MB) is not parsed again.
+
+Today is always built live. The API builds the latest past day ahead (`api/warm.py`), so the
+first pick of yesterday is instant. Memory keeps `[api] settled_memory_days` days of answers,
+the disk the `[api] settled_disk_days` newest days (about 17 MB a busy day).
+
 ### GET /observers, GET /decisions and GET /skipped (read-only)
 
 All three serve decisions already in the decision file of one New York date (the same file as

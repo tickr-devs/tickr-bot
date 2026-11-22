@@ -183,7 +183,8 @@ def test_skipped_rows_carry_prices_after_and_the_whatif_simulation(cfg):  # noqa
     path = _capture(cfg)
     skipped = SkippedAfter(SimulationPaths.from_config(cfg), (1, 5, 60), 4)
     records = log.records(DAY, role=Role.ACTIVE)
-    document = skipped.document(DAY, DAY + timedelta(days=1), records, log.path(DAY))
+    document, kept = skipped.document(DAY, DAY + timedelta(days=1), records, log.path(DAY))
+    assert kept
     (signal,) = document.signals
     # The decision bar (10:05 New York) closes at 12.00; minute 1 after trades at 12.05 and the
     # price falls through the stop to 11.75 from minute 5.
@@ -202,7 +203,7 @@ def test_skipped_rows_carry_prices_after_and_the_whatif_simulation(cfg):  # noqa
     body = contract.to_jsonable(document)
     assert errors(contract.json_schema(contract.SkippedV1), body) == []
     # Same files: the memo answers without simulating again.
-    assert skipped.document(DAY, DAY + timedelta(days=1), records, log.path(DAY)) is document
+    assert skipped.document(DAY, DAY + timedelta(days=1), records, log.path(DAY))[0] is document
 
 
 def test_a_signal_that_cannot_be_simulated_says_why(cfg):  # noqa: F811
@@ -212,7 +213,7 @@ def test_a_signal_that_cannot_be_simulated_says_why(cfg):  # noqa: F811
     _capture(cfg)
     skipped = SkippedAfter(SimulationPaths.from_config(cfg), (1,), 4)
     (signal,) = skipped.document(DAY, DAY + timedelta(days=1), log.records(DAY, role=Role.ACTIVE),
-                                 log.path(DAY)).signals
+                                 log.path(DAY))[0].signals
     assert signal.what_if == contract.WhatIfV1(
         None, None, None, "not_simulated: no quantity: none recorded and none given")
     assert signal.prices_after[0].price == Decimal("12.05")
@@ -226,11 +227,12 @@ def test_an_unreadable_calendar_is_a_cause_and_not_remembered(cfg):  # noqa: F81
     paths = SimulationPaths.from_config(cfg)
     skipped = SkippedAfter(replace(paths, calendar=paths.calendar.parent / "missing"), (1,), 4)
     records = log.records(DAY, role=Role.ACTIVE)
-    first = skipped.document(DAY, DAY, records, log.path(DAY))
+    first, kept = skipped.document(DAY, DAY, records, log.path(DAY))
+    assert not kept  # a transient failure decided it: never kept, here or as a settled answer
     (signal,) = first.signals
     assert signal.prices_after[0].cause.startswith("session calendar unreadable")
     assert signal.what_if.cause.startswith("session calendar unreadable")
-    assert skipped.document(DAY, DAY, records, log.path(DAY)) is not first
+    assert skipped.document(DAY, DAY, records, log.path(DAY))[0] is not first
 
 
 # ---------------------------------------------------------------- config

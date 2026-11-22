@@ -372,11 +372,11 @@ def test_observer_result_is_recomputed_only_when_its_files_change(cfg):
     _write(log, _enter())
     results = ObserverResults(SimulationPaths.from_config(cfg), cfg.api.observer_trades_max_rows)
     records = log.records(DAY, role=Role.OBSERVER)
-    first = results.results(DAY, DAY, records, log.path(DAY))
+    first = results.results(DAY, DAY, records, log.path(DAY))[0]
     assert first[OBSERVER].gross_usd is None  # no capture file yet
-    assert results.results(DAY, DAY, records, log.path(DAY)) is first  # same files: memo
+    assert results.results(DAY, DAY, records, log.path(DAY))[0] is first  # same files: memo
     _capture(cfg)
-    second = results.results(DAY, DAY, records, log.path(DAY))
+    second = results.results(DAY, DAY, records, log.path(DAY))[0]
     assert second[OBSERVER].gross_usd is not None and second[OBSERVER].cause is None
 
 
@@ -386,14 +386,14 @@ def test_changed_replay_settings_trigger_a_recompute(cfg):
     _capture(cfg)
     results = ObserverResults(SimulationPaths.from_config(cfg), cfg.api.observer_trades_max_rows)
     records = log.records(DAY, role=Role.OBSERVER)
-    first = results.results(DAY, DAY, records, log.path(DAY))
-    assert results.results(DAY, DAY, records, log.path(DAY)) is first
+    first = results.results(DAY, DAY, records, log.path(DAY))[0]
+    assert results.results(DAY, DAY, records, log.path(DAY))[0] is first
     settings = cfg.root / cfg.api.replay_settings_file
     text = settings.read_text("utf-8")
     assert text.count("slippage_min_usd = 0.01\n") == 1
     settings.write_text(text.replace("slippage_min_usd = 0.01\n", "slippage_min_usd = 0.05\n"),
                         "utf-8")
-    second = results.results(DAY, DAY, records, log.path(DAY))
+    second = results.results(DAY, DAY, records, log.path(DAY))[0]
     assert second is not first
     assert second[OBSERVER].gross_usd < first[OBSERVER].gross_usd  # more slippage, a worse result
     # the same day seen as a past day is a different key too
@@ -407,10 +407,11 @@ def test_transient_failure_is_not_remembered(cfg):
     paths = SimulationPaths.from_config(cfg)
     results = ObserverResults(replace(paths, calendar=paths.calendar.parent / "missing"), 10)
     records = log.records(DAY, role=Role.OBSERVER)
-    failed = results.results(DAY, DAY, records, log.path(DAY))
+    failed, kept = results.results(DAY, DAY, records, log.path(DAY))
+    assert not kept  # never kept here, nor as a settled day's answer
     assert failed[OBSERVER].cause.startswith("session calendar unreadable: ")
     results.paths = paths  # the calendar is back, no data file changed
-    assert results.results(DAY, DAY, records, log.path(DAY))[OBSERVER].cause is None
+    assert results.results(DAY, DAY, records, log.path(DAY))[0][OBSERVER].cause is None
 
 
 def test_a_recorded_observer_without_result_is_refused():
@@ -485,7 +486,7 @@ def test_observer_trades_are_capped_oldest_first(cfg):
     _write(log, _enter(minute=7, symbol="WXYZ"), _enter(), _enter(minute=6, symbol="EFGH"))
     _capture(cfg)
     results = ObserverResults(SimulationPaths.from_config(cfg), 2)
-    got = results.results(DAY, DAY, log.records(DAY, role=Role.OBSERVER), log.path(DAY))
+    got = results.results(DAY, DAY, log.records(DAY, role=Role.OBSERVER), log.path(DAY))[0]
     result = got[OBSERVER]
     assert result.trades_truncated and result.trades_cause is None
     assert [(t.symbol, t.cause) for t in result.trades] == [
