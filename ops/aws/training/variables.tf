@@ -77,10 +77,14 @@ variable "jobs" {
       machines       = 4
       instance_types = ["c7a.4xlarge", "m7a.4xlarge", "c6a.4xlarge", "m6a.4xlarge", "c7i.4xlarge", "c6i.4xlarge", "m6i.4xlarge"]
     }
+    # Layer 1 settings search: several LightGBM fits side by side over the development package,
+    # so only the 256 GB types (m-type .16xlarge). On a 128 GB c-type the job script refuses and
+    # stops the job, which would make a start depend on which pool AWS picks.
     train = {
       script         = "scripts/l1boot.sh"
       disk_gb        = 500
-      instance_types = ["c7a.16xlarge", "m7a.16xlarge", "c6a.16xlarge", "m6a.16xlarge", "c7i.16xlarge", "m7i.16xlarge", "c6i.16xlarge", "m6i.16xlarge"]
+      disk_mbps      = 500
+      instance_types = ["m7i.16xlarge", "m7a.16xlarge", "m6i.16xlarge", "m6a.16xlarge"]
     }
     # Label tables and the tick content check: one process per core, about 6 GB each, so the
     # memory-rich .16xlarge types (64 vCPU, 512 GB) let every core work. One machine = the

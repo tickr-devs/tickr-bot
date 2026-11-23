@@ -63,7 +63,8 @@ Every machine start still needs the owner's yes on a named sum.
 `autorestart.tf` adds one Auto Scaling group per job in `var.jobs`:
 - `tickr-download`: up to 4 machines of 16 vCPU (.4xlarge), 300 GB gp3 disk at 500 MB/s, runs
   `scripts/tickboot.sh`; the job script shares the days between the machines.
-- `tickr-train`: one machine of 64 vCPU (.16xlarge), 500 GB disk, runs `scripts/l1boot.sh`.
+- `tickr-train`: one machine of 64 vCPU and 256 GB (m-type .16xlarge), 500 GB gp3 disk at
+  500 MB/s, runs `scripts/l1boot.sh` (layer 1 settings search: several fits side by side).
 - `tickr-labels`: one memory-rich machine of 64 vCPU and 512 GB (r-type .16xlarge), 500 GB gp3
   disk at 500 MB/s, runs `scripts/labelboot.sh` (label tables and the tick content check: one
   process per core, about 6 GB each, so every core works). The job script and its runner are
