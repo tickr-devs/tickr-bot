@@ -32,8 +32,8 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 | Version | Goal | Done when (built, not waited for) | Keeps running to collect |
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
-| **v1.1** | Tools to find an edge, and the model path | R1, R4, R5, R15, R16 and T12 merged | observer, replay and model results |
-| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T11, T13-T15, X3, X4 merged and released | unattended Sandbox days |
+| **v1.1** | Tools to find an edge, and the model path | R1, R4, R5, R15, R16, R35 and T12 merged | observer, replay and model results |
+| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T11, T13-T18, X3, X4 merged and released | unattended Sandbox days |
 | **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S7, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
 | **v5** | The product: ticker.bot (site, accounts, one cloud bot per user) and the apps signed in to it; standalone Mac scope settled in W1 | W1 spec agreed with the owner, W2-W8 and W15-W17 built | |
@@ -68,6 +68,23 @@ Goal, scope and stages: `docs/spec-v1.md`. What is left:
   zoom on iOS. Status: Mac done (#663); iOS in review (#664 hold, #667 pinch).
 - **A2** (W9, W11) "System" card in both apps: watchdog, supervisor restarts, Webull link freshness, the 03:30
   preflight result, caffeinate, model training progress. Status: proposed, owner not confirmed.
+
+From the external code review of 2026-11-24 (Codex, `tickr/entry-exit-research/training-spec/codex-mailbox/attachments/tickr-review-2026-11-24/Tickr-review-full.md`
+in project files; its three P1 engine defects have their own fix thread):
+- **A3** Operator commands are idempotent end to end (review section 4, P2): iOS and macOS keep one
+  idempotency key per command until its outcome is known; a lost response shows "outcome unknown"
+  and is settled by reading the server's command record, never by a new key. Today a retry after a
+  network error creates a second command. Status: decided.
+- **A4** A command is sent only on a fresh, same-server check (review section 4, P2): on iOS, Resume
+  and Close after Face ID need a successful status read from that address, not an older cached one;
+  on macOS every async result is applied only if it belongs to the current connection, so a late
+  answer from server A never replaces status after a switch to B. Status: decided.
+- **A5** Phone pairing stores its token with one confirmed Keychain update instead of delete then
+  add, so a failed second write cannot show success and lose access after a restart (review
+  section 4, P2). Status: decided.
+- **A6** Small app fixes from the same review (P3 and low): VoiceOver says "no data" instead of zeros
+  before statistics arrive; a stop code unknown to the app (older server) shows a local-language
+  text and keeps the original code in diagnostics. Status: decided.
 
 Owner's own setup tasks (outside the repository):
 - **O1** Merge-queue timeout 30 to 60 minutes in the GitHub repository settings (decided
@@ -210,7 +227,20 @@ project files):
   shared code path, and the apps label each result with the rules it was computed under. R25 needs
   it.
 
-Exit: R1, R4, R5, R15, R16 and T12 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
+- **R35** Backtest calendar correctness (review 2026-11-24 section 5, P2): a warm-up or target
+  session marked incomplete (for example PAGE_LIMIT) refuses the symbol with a typed cause instead of
+  feeding truncated history; the hold-out boundary is computed from the full calendar of completed
+  sessions, including sessions without candidates, before symbols are chosen, and the same dates
+  apply to every compared setting; the nightly download keeps the last completed session apart from
+  the last candidate date, so a day without candidates is not downloaded twice and each date has one
+  result row. Status: decided.
+- **R36** Training stack safety on AWS (review 2026-11-24 section 8, P2): releasing an S3 job lock
+  deletes only the version it holds (conditional delete), and a mismatch is a refusal; a failed
+  download of the job script counts toward the restart limit, so a permanent error cannot keep the
+  Auto Scaling group relaunching machines; the AWS CLI and uv installers are pinned and checked by
+  checksum or signature before they run as root. Status: decided.
+
+Exit: R1, R4, R5, R15, R16, R35 and T12 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
 while later versions are built.
 
 ## Design rules for ticker.bot (owner-approved 2026-11-19, apply from now on)
@@ -294,6 +324,24 @@ https://claude.ai/artifact/QhzoePqMNyeqFeYwUga59C):
   Trading-critical and auth parts: Fable review. Status: decided (order, Telegram alerts); domain and AWS
   account wait for the owner.
 
+Long unattended runs (review 2026-11-24, P2):
+- **T16** Discovery stamps candle completeness per request (review section 6): a bar counts as
+  closed relative to the time its own sub-request was sent, and the same stamp goes to selection,
+  archive and cache; a test puts a fast and a delayed sub-request on both sides of one minute
+  boundary. Today a two-second late answer turns a partial candle into a closed one and admits a
+  symbol below the turnover threshold. Also: under a lasting request-budget deficit, discovery
+  continues from the symbol it skipped (by priority) and shows the age of each symbol's last check,
+  so the tail of the list is not starved. Status: decided.
+- **T17** Reads scale with today's work, not with history (review section 7): `Engine.step()` reads
+  the whole `orders` table three times per step (756 ms at 30,000 closed orders, on top of the 3 s
+  loop); the one-day history query reads orders for every old trade; the clean-days list decodes the
+  whole reconciliation log. Acceptance: grow closed history with fixed active orders and today's
+  trades, and measure rows read, SQL queries and step latency; late-fill reconciliation still
+  reaches the historical orders it needs. Trading-critical: independent review. Status: decided.
+- **T18** Daily backup retries after a failure (review section 8): the success date is written only
+  after the copy is published and checked, and a failed attempt is retried with a delay the same day
+  instead of the next. Status: decided.
+
 Trading outside the regular session (owner 2026-11-16, ids kept):
 - **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
   LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from
@@ -305,7 +353,7 @@ Trading outside the regular session (owner 2026-11-16, ids kept):
   outside the regular session. Old-tracker answer, reconfirm: limit orders only in PRE/POST, smaller
   size, no entries on stream or broker loss (old Q118, #020-12).
 
-Exit: T1-T11, T13-T15, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
+Exit: T1-T11, T13-T18, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
 PRE/POST stop probe for X4), the
 duplicate-key test green, v2 released and running unattended in the Sandbox.
 
