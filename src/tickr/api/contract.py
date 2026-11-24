@@ -2411,6 +2411,14 @@ class SymbolState(StrEnum):
     NOT_REACHED = "not_reached"  # the latest pass stopped before deciding it (bars budget)
 
 
+class NotReachedCause(StrEnum):
+    """Why the latest pass stopped before deciding a symbol (`SymbolRowV1.cause` of a
+    `not_reached` row): a code the apps translate, never the broker route's own text."""
+
+    REQUEST_BUDGET = "REQUEST_BUDGET"  # a market-data route's request budget was used up
+    DELAYED_DATA = "DELAYED_DATA"  # the data provider answered with delayed data
+
+
 @dataclass(frozen=True)
 class SymbolReachV1:
     """When a symbol first got to `stage` that day: the end of the discovery pass, the time of
@@ -2429,8 +2437,9 @@ class SymbolRowV1:
     it stands now, from the newer of its latest discovery pass and its latest active decision
     (trades win: a filled entry is at `order` or `stop`).
     `cause`: the code of why it was dropped or not reached (a discovery cause such as
-    `QUOTE_STALE` or `STRATEGY_LIQUIDITY`, the verdict `IGNORE`, or the admission `refused`),
-    null otherwise. `check`: the failed check (a strategy rule, rounded like every shown check);
+    `QUOTE_STALE` or `STRATEGY_LIQUIDITY`, the verdict `IGNORE`, the admission `refused`, or
+    for `not_reached` a `NotReachedCause`), null otherwise; never the broker's text.
+    `check`: the failed check (a strategy rule, rounded like every shown check);
     `detail`: the measured value against the threshold of a platform cause, or the admission's
     refusal text. `at`: the time of the current state. `first_seen`: the start of the first
     pass that listed it; null for a symbol only known from decisions or trades."""

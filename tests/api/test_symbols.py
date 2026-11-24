@@ -110,7 +110,8 @@ def test_every_symbol_with_its_furthest_stage_and_where_it_stands_now(api, cfg):
     # Reached the strategy (and risk refused it) earlier; the newer pass dropped it at bars.
     assert where("THIN") == ("strategy", "bars", "dropped", "STRATEGY_LIQUIDITY")
     assert rows["THIN"]["check"]["measured"] == "812345.1234"  # rounded like every check
-    assert where("SLOW") == ("bars", "bars", "not_reached", "bars budget")
+    assert where("SLOW") == ("bars", "bars", "not_reached", "REQUEST_BUDGET")
+    assert rows["SLOW"]["detail"] is None  # the route's own text never reaches a screen
     assert where("LATE") == ("quote", "quote", "dropped", "QUOTE_STALE")
     # An age to a tenth of a second, the signs as signs.
     assert rows["LATE"]["detail"] == "7.2 s (needs \u2264 5.0 s)"
@@ -236,6 +237,14 @@ def test_a_malformed_mover_is_a_clean_refusal(api, cfg):
         body = doc(payload)
         assert resp.status == 503 and body["error"] == "unavailable"
         assert "capture file unreadable" in body["cause"] and "move_atr" in body["cause"]
+
+
+def test_an_unknown_stop_cause_is_a_clean_refusal(api, cfg):
+    _discovery(cfg, _pass(0, not_reached=("SLOW",),
+                          stopped={"stage": "bars", "cause": "tired", "detail": "x"}))
+    resp, payload = request(api, "GET", "/symbols")
+    body = doc(payload)
+    assert resp.status == 503 and "unknown stop cause" in body["cause"]
 
 
 def test_a_read_hands_out_a_snapshot_a_later_fold_leaves_alone(cfg):

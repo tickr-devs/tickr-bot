@@ -29,6 +29,7 @@ from tickr.api import contract as api
 from tickr.api.reasons import TENTH_EXPONENT
 from tickr.archive import GZ_SUFFIX, existing, open_text
 from tickr.data.capture import DISCOVERY_FILE, CaptureError
+from tickr.data.discovery import StopCause
 from tickr.observers.errors import ObserverError
 from tickr.research.records import Admission, DecisionRecord
 from tickr.strategy.base import Check, Verdict
@@ -91,6 +92,19 @@ def _readable(text: str) -> str:
 def _detail(measured: Any, threshold: Any) -> str:
     """"10.0 s (needs \u2264 5.0 s)": what a discovery pass measured against what it needs."""
     return f"{_readable(str(measured))} (needs {_readable(str(threshold))})"
+
+
+# Why a pass stopped before deciding a symbol (`data.discovery.StopCause`), as the code a row's
+# `cause` carries; the stage is the row's own.
+_STOP_CAUSES = {StopCause.BUDGET.value: api.NotReachedCause.REQUEST_BUDGET,
+                StopCause.DELAYED_DATA.value: api.NotReachedCause.DELAYED_DATA}
+
+
+def _stop_cause(raw: Any) -> api.NotReachedCause:
+    try:
+        return _STOP_CAUSES[raw]
+    except (KeyError, TypeError):
+        raise ValueError(f"unknown stop cause {raw!r}") from None
 
 
 def _check(raw: Any) -> Check | None:
@@ -179,12 +193,13 @@ class DiscoveryFolded:
             reach(symbol, S.STRATEGY)
             self.latest[symbol] = _Outcome(S.STRATEGY, api.SymbolState.WAITING, finished)
         stopped = raw["stopped"]
+        cause = None if stopped is None else _stop_cause(stopped["cause"])
         for symbol in raw["not_reached"]:
             stage = S.BARS if stopped is not None and stopped["stage"] == "bars" else S.QUOTE
             reach(symbol, stage)
-            cause = None if stopped is None else f"{stopped['stage']} {stopped['cause']}"
-            self.latest[symbol] = _Outcome(stage, api.SymbolState.NOT_REACHED, finished, cause,
-                                           None if stopped is None else stopped["detail"])
+            # The code only: the pass's own text (the broker route and its wait) stays in
+            # discovery.jsonl and never reaches a screen (owner: no raw API text in the apps).
+            self.latest[symbol] = _Outcome(stage, api.SymbolState.NOT_REACHED, finished, cause)
         for m in raw["movers"]:
             if not isinstance(m["symbol"], str):
                 raise ValueError("a mover's symbol is not text")

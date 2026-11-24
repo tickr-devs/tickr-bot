@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from tickr.api import reasons
-from tickr.api.contract import OWN_TRADE_OPEN, BotState
+from tickr.api.contract import OWN_TRADE_OPEN, BotState, NotReachedCause
 from tickr.data.discovery import Cause
 from tickr.engine.core import Fence
 from tickr.risk.causes import AdmissionCause
@@ -66,6 +66,10 @@ def test_every_discovery_cause_and_spike_rule_is_translated():
     source = (ROOT / "src" / "tickr" / "strategy" / "price_action_v3.py").read_text("utf-8")
     rules = set(re.findall(r'"(spike_[a-z_]+)"', source))
     assert rules and rules <= module.codes("CheckRule")
+
+
+def test_every_not_reached_cause_is_translated():
+    assert load().codes("NotReachedCause") == {c.value for c in NotReachedCause}
 
 
 def test_every_entry_block_cause_is_translated():

@@ -710,8 +710,8 @@ def documents() -> dict[str, object]:
                         None, None, T0.replace(microsecond=0)),
             SymbolRowV1("SLOW", (SymbolSourceV1(ScreenerKind.LOSERS, 30),), Decimal("-4.00"),
                         T0.replace(microsecond=0) - timedelta(minutes=2), SymbolStage.BARS,
-                        SymbolStage.BARS, SymbolState.NOT_REACHED, "bars budget", None,
-                        "bars route window full", None, None, T0.replace(microsecond=0)))),
+                        SymbolStage.BARS, SymbolState.NOT_REACHED, "REQUEST_BUDGET", None,
+                        None, None, None, T0.replace(microsecond=0)))),
         "symbols-v1.empty": SymbolsV1(DAY - timedelta(days=3), None,
                                       "no discovery pass recorded for this day", tuple(
                                           SymbolStageCountV1(stage, 0)
