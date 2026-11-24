@@ -655,12 +655,14 @@ class MarketRuntime:
         capture = self.capture if tee is None else tee
         refused, today_bars, clock, monotonic = (self._refused_symbols, self.today_bars,
                                                  self.now, self.monotonic)
+        # A wait for the budget ends at once when the run stops; the next read then refuses.
+        wait = self._worker.stopping.wait
 
         def job() -> DiscoveryOutcome:
             begun = monotonic()
             try:
                 result = discover(source, settings, screen, session_open, clock, capture,
-                                  refused, today_bars)
+                                  refused, today_bars, wait)
             except Exception as exc:  # noqa: BLE001 - collected and journaled by the loop
                 return DiscoveryOutcome(now, clock(), monotonic() - begun, None, exc)
             failed: Exception | None = None

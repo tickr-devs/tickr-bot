@@ -9,6 +9,7 @@ import pytest
 from md_helpers import NOW, OPEN, Screen, bars, quote, row, settings
 
 from tickr import config
+from tickr.broker.budget import BudgetExhausted, RequestBudget
 from tickr.data.base import FakeMarketData, ScreenerKind, SymbolsRefused
 from tickr.data.discovery import (
     Cause,
@@ -66,6 +67,7 @@ def test_settings_from_bot_config():
     assert "NSQ" in s.allowed_exchanges and s.max_quote_age == timedelta(seconds=5)
     assert s.max_clock_skew == timedelta(seconds=float(cfg.risk.max_clock_skew_seconds))
     assert s.bars_symbols_per_request == 20
+    assert s.budget_wait == timedelta(seconds=float(cfg.market_data.discovery_budget_wait_seconds))
 
 
 def test_merge_by_instrument_id_keeps_kinds_and_order():
@@ -199,6 +201,80 @@ def test_bars_budget_is_visible_never_silent():
     assert result.stopped is not None
     assert (result.stopped.stage, result.stopped.cause) == (Stage.BARS, StopCause.BUDGET)
     assert result.summary() == "evaluated 2 of 5: bars budget"
+
+
+class Budgeted(FakeMarketData):
+    """Our own budget refuses the next reads of a route (nothing sent), each with its wait."""
+
+    def __init__(self, refusals: dict[str, list[tuple[str, float]]]) -> None:
+        super().__init__()
+        self.refusals = refusals
+
+    def _refuse(self, route: str) -> None:
+        if self.refusals.get(route):
+            cause, seconds = self.refusals[route].pop(0)
+            raise BudgetExhausted(route, cause, seconds)
+
+    def snapshot(self, symbols):
+        self._refuse("snapshot")
+        return super().snapshot(symbols)
+
+    def bars(self, symbols, count, *, budget_reserve=0):
+        self._refuse("bars")
+        return super().bars(symbols, count, budget_reserve=budget_reserve)
+
+
+def budgeted(refusals) -> tuple[Budgeted, list[str]]:
+    md = Budgeted(refusals)
+    symbols = [f"S{i:02d}" for i in range(5)]
+    md.set_screener(G, [row(G, i, s) for i, s in enumerate(symbols, 1)])
+    for s in symbols:
+        liquid(md, s)
+    return md, symbols
+
+
+def test_a_pass_waits_out_its_own_budget_and_reads_everything():
+    """2026-11-23: back-to-back passes met the previous pass's reads in the 60 s window and
+    stopped although a request came free about a second later."""
+    R, W = RequestBudget.CAUSE_RESERVED, RequestBudget.CAUSE_WINDOW_FULL
+    md, _ = budgeted({"bars": [(R, 1.3), (W, 2.0)]})
+    waits: list[float] = []
+    result = discover(md, settings(bars_symbols_per_request=2, budget_wait=timedelta(seconds=5)),
+                      Screen(), OPEN, lambda: NOW, None, wait=waits.append)
+    assert result.stopped is None and len(result.candidates) == 5
+    assert waits == [1.3, 2.0]
+    # A refused read sent nothing: each chunk reached the provider once.
+    assert [len(a) for m, a in md.calls if m == "bars"] == [2, 2, 1]
+
+
+def test_a_snapshot_refusal_never_waits_the_entry_guard_shares_that_route():
+    md, _ = budgeted({"snapshot": [(RequestBudget.CAUSE_WINDOW_FULL, 0.5)]})
+    waits: list[float] = []
+    result = discover(md, settings(budget_wait=timedelta(seconds=5)), Screen(), OPEN,
+                      lambda: NOW, None, wait=waits.append)
+    assert waits == [] and result.summary() == "evaluated 0 of 5: snapshot budget"
+
+
+def test_a_wait_beyond_what_is_left_stops_the_pass_visibly():
+    R = RequestBudget.CAUSE_RESERVED
+    md, _ = budgeted({"bars": [(R, 3.0), (R, 3.0)]})
+    waits: list[float] = []
+    result = discover(md, settings(bars_symbols_per_request=2, budget_wait=timedelta(seconds=5)),
+                      Screen(), OPEN, lambda: NOW, None, wait=waits.append)
+    assert waits == [3.0]  # the second needs 3 s, only 2 s are left
+    assert result.summary() == "evaluated 0 of 5: bars budget"
+
+
+def test_a_pause_after_429_and_no_wait_function_never_wait():
+    md, _ = budgeted({"bars": [(RequestBudget.CAUSE_PAUSED_AFTER_429, 0.1)]})
+    waits: list[float] = []
+    result = discover(md, settings(budget_wait=timedelta(seconds=5)), Screen(), OPEN,
+                      lambda: NOW, None, wait=waits.append)
+    assert waits == [] and result.summary() == "evaluated 0 of 5: bars budget"
+    md, _ = budgeted({"bars": [(RequestBudget.CAUSE_RESERVED, 0.1)]})
+    result = discover(md, settings(budget_wait=timedelta(seconds=5)), Screen(), OPEN,
+                      lambda: NOW, None)
+    assert result.summary() == "evaluated 0 of 5: bars budget"
 
 
 def test_snapshot_budget_stops_pass():

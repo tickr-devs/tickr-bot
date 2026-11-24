@@ -295,6 +295,7 @@ class MarketDataConfig:
     bars_symbols_per_request: int
     bars_per_symbol: int
     discovery_bars_reserve_requests: int
+    discovery_budget_wait_seconds: Decimal
     history_bars_per_request: int
     history_max_pages_per_symbol: int
     history_max_lookback_days: int
@@ -645,6 +646,9 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                           "profile_refresh_gainer_move_percent must be above 0, "
                           "profile_max_requests_per_round at least 1 and "
                           "profile_reserve_requests at least 0")
+    if not 0 <= md.discovery_budget_wait_seconds < md.discovery_interval_seconds:
+        raise ConfigError("[market_data] discovery_budget_wait_seconds must be at least 0 and "
+                          "below discovery_interval_seconds")
     if md.refused_symbol_recheck_seconds <= 0:
         raise ConfigError("[market_data] refused_symbol_recheck_seconds must be above 0")
     if md.failure_detail_max_chars < 1:
