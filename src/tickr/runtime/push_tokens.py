@@ -2,8 +2,8 @@
 
 The kind (`PushTokenKind`) says what the token is for: `alert` (the device token the alert
 sender pushes to), `activity_start` (a Live Activity push-to-start token) or `activity_update`
-(one Live Activity's update token). Only `alert` tokens are pushed to today; the activity kinds
-are stored for the planned Live Activity sender.
+(one Live Activity's update token). The alert sender pushes to `alert` tokens, the Live Activity
+publisher (`runtime/live_activity.py`) to the activity kinds.
 
 The store is one JSON file under data_dir (`[alerts] push_tokens_file`, 0600, written atomically):
 `{"schema_version": 1, "devices": {"<device key>": {"<kind>": {"token", "environment",
