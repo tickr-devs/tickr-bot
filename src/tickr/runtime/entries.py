@@ -243,6 +243,10 @@ def _closed_today_orders(engine: Engine, now: datetime,
 
 
 def _prices_known(orders: list[OrderRow]) -> bool:
+    """Every fill's price is recorded, and no order was resolved by the operator (its
+    broker rows never agreed with it, so what it filled is not known)."""
+    if any(o.operator_resolved_at is not None for o in orders):
+        return False
     return all(o.fill_price is not None for o in orders if o.filled_quantity > 0)
 
 

@@ -353,6 +353,8 @@ the shared database the first time its bot opens it, after a verified backup
   work): one way as well.
 - Migration v9 (2026-11-16) adds the trade's scale-out columns (`scale_out_quantity`,
   `reduce_quantity`, `reduce_cause`, `reduce_state`): one way as well.
+- Migration v11 (2026-11-25) adds `orders.operator_resolved_at` (an order the operator resolved
+  with `tickr resolve-order`): one way as well.
 
 ### Emergency: the owner switches back by hand
 
@@ -574,6 +576,30 @@ When the account holds more of the bot's symbol than its orders explain (shares 
 an exit or the flatten sells only the bot's own shares; the trade then stays `exiting` until the
 foreign shares are gone, so entries stay blocked, `stop-bot` is refused and the protection busy
 cause says "exit in progress": sell or explain the extra shares in the Webull app.
+
+### An `order-conflict`, `order-missing` or `status-unknown` that never ends
+
+Some broker answers can never be settled by another read: a row that cannot be the bot's order
+(`order-conflict:<order>` saying for example "broker shows 20 filled of 2"), an acknowledged
+order that Detail says does not exist (`order-missing:<order>`), or a status the bot does not
+know (`status-unknown:<order>`). The bot records nothing from such a row, its trade cannot
+close, and entries stay blocked across restarts. To end it:
+
+1. Look at the symbol in the Webull app. Close any shares in it and cancel every open order in
+   it, so the account is flat in that symbol and the order is gone from the app's open orders.
+2. Stop the bot (`launchctl kill TERM gui/$(id -u)/local.tickr.bot`).
+3. `tickr resolve-order <order>`, with the order id the fence names (without `/listed`).
+4. Start the bot again (`launchctl kickstart gui/$(id -u)/local.tickr.bot`).
+
+The command does not reconcile or step first, so it sends no order. It reads the broker again
+and refuses (exit 1, the cause printed, nothing changed) unless Detail still cannot settle the
+order, every other live order of the trade is unsettled the same way or shown ended (recorded as
+shown), and the account holds no shares and no open order in the symbol. Then it marks those orders resolved (the evidence is in
+the journal as `order-resolved-by-operator`), clears the fences only a read could clear, and
+closes the trade as "resolved by the operator". What the trade made or lost is unknown, so the
+daily loss rule refuses new entries for the rest of that New York day; run it after the day's
+trading when you can. If the broker later shows the order working again, the bot takes it back
+as its own and fences `resurrected`.
 
 ### `refused: the database holds runs of environment ...`
 

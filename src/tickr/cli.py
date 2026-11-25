@@ -20,7 +20,7 @@ from tickr import config as config_module
 from tickr.broker.base import Broker
 from tickr.calendar import CalendarRefused, SessionCalendar, ny_date_of
 from tickr.data.base import MarketData
-from tickr.engine.core import Engine, EntryRefused
+from tickr.engine.core import ORDER_RESOLVED, Engine, EntryRefused
 from tickr.engine.manual import (
     CLOSE_WAITS,
     ManualRefused,
@@ -212,8 +212,10 @@ class _Interrupt:
 @contextmanager
 def _engine(path: Path, broker: Broker | None = None,
             precheck: Callable[[Engine], None] | None = None, *,
-            opens_trades: bool) -> Iterator[Engine]:
-    """Lock, open the store, recover. `precheck` runs on the records before recovery (which
+            opens_trades: bool, recover: bool = True) -> Iterator[Engine]:
+    """Lock, open the store, recover (not with `recover=False`: a command that must send
+    nothing, such as resolve-order, gets the engine before any reconcile or step; the next
+    bot start recovers as always). `precheck` runs on the records before recovery (which
     may already send cancels or orders). A command that can open a trade (`opens_trades`)
     refuses without a code version; one that only manages, exits or unfences existing trades
     (resume, exit-all, clear-fence) is never blocked by it: it records "-" (shown as null) and
@@ -245,7 +247,8 @@ def _engine(path: Path, broker: Broker | None = None,
                             close_refusal=lambda: close_refusal(cfg, calendar, NOW()))
             if precheck is not None:
                 precheck(engine)
-            engine.recover()
+            if recover:
+                engine.recover()
             yield engine
             cause = "finished"
         except KeyboardInterrupt:
@@ -598,6 +601,22 @@ def _clear_fence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_order(args: argparse.Namespace) -> int:
+    # No recovery first: its step would protect the shares the records still expect, sending
+    # a stop on a symbol the operator has just made flat.
+    with _engine(args.config, opens_trades=False, recover=False) as engine:
+        refused = engine.resolve_order(args.order_id)
+        if refused is not None:
+            print(f"refused: {refused}", file=sys.stderr)
+            return 1
+        trade_id = engine.order(args.order_id).trade_id
+        print(f"resolved {args.order_id}: trade {trade_id} closed as {ORDER_RESOLVED}; new "
+              "entries stay refused for the rest of this New York day (its money is unknown)")
+        for name, cause in sorted(engine.fences().items()):
+            print(f"fence {name}: {cause}")
+    return 0
+
+
 def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
                inbox: StreamInbox, calendar: SessionCalendar | None, today_bars: TodayBars,
                last_broker_read_at: Callable[[], datetime | None],
@@ -893,6 +912,11 @@ def main(argv: list[str] | None = None) -> int:
     maint.add_argument("--apply", action="store_true", help="act; without it only print")
     fence = sub.add_parser("clear-fence", help="clear an operator fence after looking at it")
     fence.add_argument("name")
+    resolve = sub.add_parser("resolve-order", help="with the bot stopped and the symbol flat "
+                             "with no open orders in the Webull app: end an order no broker "
+                             "read can settle and close its trade (docs/operations.md)")
+    resolve.add_argument("order_id", help="the client order id the order-conflict, "
+                         "order-missing or status-unknown fence names")
     sub.add_parser("clear-stop", help="allow starts again after an operator stop-bot command")
     demo_parser = sub.add_parser("demo", help="a made-up trading day in its own folder "
                                  "(config/demo.toml) served on [api] demo_port; never talks to "
@@ -935,6 +959,8 @@ def main(argv: list[str] | None = None) -> int:
             return _maintain(args)
         if args.command == "clear-fence":
             return _clear_fence(args)
+        if args.command == "resolve-order":
+            return _resolve_order(args)
         if args.command == "clear-stop":
             return _clear_stop(args.config)
         if args.command == "check-config":

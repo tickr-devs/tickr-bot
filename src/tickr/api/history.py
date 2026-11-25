@@ -81,7 +81,10 @@ def trade_net(orders: list[OrderRow], gross: Decimal) -> Decimal | None:
     """A closed trade's result after the broker's fees, as the daily loss counts it: the sum
     of its filled orders' settled cash amounts once every one is proven by the account's cash
     activity (the broker's own figure); before that, `gross` (fill prices, exact where
-    recorded) less the recorded fees; None while any filled order's fees are not recorded."""
+    recorded) less the recorded fees; None while any filled order's fees are not recorded, and
+    for a trade with an order the operator resolved (its broker rows never agreed with it)."""
+    if any(o.operator_resolved_at is not None for o in orders):
+        return None
     filled = [o for o in orders if o.filled_quantity > 0]
     if filled and all(o.net_cash_usd is not None for o in filled):
         return sum((o.net_cash_usd for o in filled if o.net_cash_usd is not None), ZERO)

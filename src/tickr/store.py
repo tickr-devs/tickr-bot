@@ -172,6 +172,13 @@ def _schema_v10(db: sqlite3.Connection) -> None:
     db.execute("ALTER TABLE trades ADD COLUMN reserved_usd TEXT")
 
 
+def _schema_v11(db: sqlite3.Connection) -> None:
+    # When the operator resolved an order no broker read can settle (`tickr resolve-order`,
+    # engine.core.Engine.resolve_order; backlog T19): UTC ISO, NULL for every other order. A
+    # resolved order is no longer live; a broker row of it working again revives it.
+    db.execute("ALTER TABLE orders ADD COLUMN operator_resolved_at TEXT")
+
+
 # Bound parameters one `IN (...)` query takes at most: SQLite's historic default limit
 # (protocol constant). Longer lists are read in parts of this size.
 IN_LIST_LIMIT = 999
@@ -199,7 +206,7 @@ INDEXES = (
 # Forward-only migrations. Never edit a released entry; append a new one.
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5, _schema_v6, _schema_v7,
-    _schema_v8, _schema_v9, _schema_v10)
+    _schema_v8, _schema_v9, _schema_v10, _schema_v11)
 
 
 def _json_default(value: Any) -> Any:

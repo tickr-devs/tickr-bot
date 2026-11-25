@@ -350,7 +350,7 @@ Long unattended runs (review 2026-11-24, P2):
   outcome every day; nothing in the bot ends that today. Add a documented recovery or an operator
   path to clear it once the operator has checked the Webull app, keeping "refuse, never guess" for
   recording. Must land before `max_open_positions` is raised above 6. Trading-critical: Fable review.
-  Status: decided.
+  Status: in review (`tickr resolve-order`, docs/operations.md).
 
 Trading outside the regular session (owner 2026-11-16, ids kept):
 - **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
