@@ -179,6 +179,41 @@ def test_sessions_skip_weekends():
     assert demo.sessions(calendar, SUNDAY, 2) == [date(2026, 11, 12), FRIDAY]
 
 
+def test_sessions_skip_half_days():
+    # Friday 2026-11-27 closes at 13:00 and Thursday is Thanksgiving: Wednesday is the demo day.
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+    assert calendar.day(date(2026, 11, 27)).half_day
+    assert demo.sessions(calendar, date(2026, 11, 30), 3) == [
+        date(2026, 11, 24), date(2026, 11, 25), date(2026, 11, 30)]
+
+
+def test_every_date_of_the_calendar_gives_sessions_the_scenario_fits():
+    """Every date the calendar files cover (after enough sessions to look back on) picks a demo
+    day and past sessions whose legs, `clock` and `live_until` lie inside their sessions: the
+    demo builds on any date, half days and holidays included."""
+    calendar = SessionCalendar.load(ROOT / "config" / "calendar")
+    scenario = load(ROOT / "config" / "demo.toml")
+    history = config.load(ROOT / "config" / "bot.toml").market_data.history_sessions
+    days_per_build = len(scenario.past) + 1 + history
+    first = date(2026, 2, 1)  # enough 2026 sessions before it; the calendar starts in 2026
+    last = date(2027, 12, 31)  # the last date the calendar files cover
+    checked: set[tuple[date, int]] = set()
+    day = first
+    while day <= last:
+        days = demo.sessions(calendar, day, days_per_build)
+        for n, plans in enumerate((*scenario.past, scenario.today)):
+            session = days[history + n]
+            if (session, n) in checked:
+                continue
+            checked.add((session, n))
+            market_day = calendar.day(session)
+            for plan in plans:  # raises if a leg leaves the session
+                day_bars(plan.symbol, market_day, plan.base, plan.volume, plan.legs, scenario.wick)
+            if n == len(scenario.past):
+                assert ny(session, scenario.live_until) <= market_day.regular_close, session
+        day += timedelta(days=1)
+
+
 def test_folder_is_separate_and_only_a_demo_folder_is_replaced(tmp_path):
     root = repo(tmp_path)
     scenario = load(root / "config" / "demo.toml")

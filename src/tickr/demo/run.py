@@ -11,8 +11,8 @@ Steps:
    position slots. Its
    data_dir lands inside that folder, never in the real one.
 2. Each past session runs from `bot_start` to `past_stop` on a fast clock.
-3. The demo day (today if it is a session, else the latest session before it) runs fast up to
-   `clock`, then in real time with the local API on bot.toml `[api] demo_port`, until
+3. The demo day (today if it is a full session, else the latest full session before it) runs
+   fast up to `clock`, then in real time with the local API on bot.toml `[api] demo_port`, until
    `live_until` (then it exits 0) or Ctrl-C.
 Steps 2 and 3 up to `clock` are replayed once per change of their inputs into the fixture
 (`demo-fixture/`, `build_fixture`); a start copies it and serves within seconds.
@@ -195,13 +195,15 @@ def _unreachable(text: str) -> str:
 
 
 def sessions(calendar: SessionCalendar, today: date, count: int) -> list[date]:
-    """The `count` latest trading sessions on or before `today`, oldest first."""
+    """The `count` latest full trading sessions on or before `today`, oldest first. Half days
+    (13:00 close) are skipped: the scenario's legs, `clock` and `live_until` are written for a
+    full session and would leave a short one."""
     found: list[date] = []
     day = today
     while len(found) < count:
         try:
-            calendar.day(day)
-            found.append(day)
+            if not calendar.day(day).half_day:
+                found.append(day)
         except CalendarRefused as exc:
             if exc.cause not in (exc.cause.WEEKEND, exc.cause.HOLIDAY):
                 raise DemoRefused(f"calendar: {exc}") from exc

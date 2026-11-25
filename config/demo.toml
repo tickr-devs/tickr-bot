@@ -80,7 +80,7 @@ chart_daily_gap = "0.008"
 chart_daily_wick = "0.015"
 
 [scenario]
-# Symbols of the demo day (today if it is a trading session, else the latest session before it).
+# Symbols of the demo day (today if it is a full trading session, else the latest full session before it).
 # Each: symbol; open price `base`; quiet `volume` per minute; `screener` list it appears on
 # (GAINERS, LOSERS or TOP_ACTIVES); `legs` = [from, to, price at the end, volume per minute] moves,
 # the price holds (wanders just below it, see texture) between them. The v1 bot holds one position

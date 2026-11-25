@@ -53,7 +53,9 @@ What it does:
 ## The fixture (`demo-fixture/`)
 
 `tickr demo --build-fixture` runs the past sessions in `config/demo.toml` fast, then the demo day
-(today if it is a session, otherwise the latest session before it) fast up to `[demo] clock`, with
+(today if it is a full session, otherwise the latest full session before it; half days are
+skipped for the demo day and the past sessions alike, since the scenario is written for a full
+session) fast up to `[demo] clock`, with
 the real bot on the simulated exchange, in its own folder `demo-build/` (so it can run while the
 demo serves from `demo/`). It stores the demo's data folder as `demo-fixture/<digest>.tar.xz`
 (about 0.8 MB; the prior-session bar cache and backups are left out, the bot rebuilds the first
