@@ -17,7 +17,9 @@ Groups served live today (65 of the 191 training features): `bars` 41, `lists` 3
 lists from the same full-market minute bars: a model input, never the bot's list of symbols to
 trade, which stays Webull's (owner, 2026-11-20). `company`, `tk`, `tk2`, `bz` and `fl` need the
 reference, tick and news feeds; a bundle that uses one of them is refused at load
-(`feature_not_live`, see `tickr.model.bundle`).
+(`feature_not_live`, see `tickr.model.bundle`). `tickr.model.features.full` computes all 191
+(COMPUTABLE_GROUPS) with the pinned feature builder from inputs in the training's file formats;
+no feed fills those inputs yet, so they stay out of LIVE_GROUPS.
 
 How a minute is computed (the training's prefix rule, `l1labels.prefix`): the whole day's bars
 up to and including minute m are handed to the pinned `day2` as the day's bar file would be, and
