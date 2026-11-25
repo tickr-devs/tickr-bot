@@ -24,8 +24,10 @@ def body(token=TOKEN, environment="development", bundle_id="bot.tickr.ios", plat
             "platform": platform}
 
 
-def stored(settings):  # noqa: F811 - the fixture is passed in
-    return json.loads(settings.alerts.push_tokens.path.read_text("utf-8"))["devices"]
+def stored(settings, kind="alert"):  # noqa: F811 - the fixture is passed in
+    """The stored tokens of `kind`, by device key."""
+    devices = json.loads(settings.alerts.push_tokens.path.read_text("utf-8"))["devices"]
+    return {device: kinds[kind] for device, kinds in devices.items() if kind in kinds}
 
 
 def test_register_replace_and_delete_on_the_local_port(api, settings):  # noqa: F811
@@ -67,6 +69,8 @@ def test_register_replace_and_delete_on_the_local_port(api, settings):  # noqa: 
     ({"bundle_id": "com.example.other"}, "bundle_id"),
     ({"platform": "watchos"}, "platform"),
     ({"extra": True}, "body"),
+    ({"kind": "background"}, "kind"),
+    ({"kind": None}, "kind"),
 ])
 def test_a_bad_registration_is_400_and_stores_nothing(api, settings, change, names):  # noqa: F811
     server, _ = api
@@ -75,6 +79,39 @@ def test_a_bad_registration_is_400_and_stores_nothing(api, settings, change, nam
     assert doc(payload)["error"] == "bad_request"
     assert names in doc(payload)["cause"]
     assert not settings.alerts.push_tokens.path.exists()
+
+
+def test_each_kind_is_kept_and_replaced_on_its_own(api, settings):  # noqa: F811
+    server, _ = api
+    assert request(server, "POST", ROUTE, body())[0].status == 200  # kind left out: alert
+    resp, payload = request(server, "POST", ROUTE, body(OTHER) | {"kind": "activity_start"})
+    assert resp.status == 200
+    assert errors(schema("push-token-v1"), doc(payload)) == []
+    assert doc(payload)["kind"] == "activity_start"
+    request(server, "POST", ROUTE, body("c3" * 32) | {"kind": "activity_update"})
+    request(server, "POST", ROUTE, body("d4" * 32) | {"kind": "activity_start"})
+    assert stored(settings)[LOCAL]["token"] == TOKEN  # the alert token untouched
+    assert stored(settings, "activity_start")[LOCAL]["token"] == "d4" * 32
+    resp, payload = request(server, "DELETE", ROUTE + "?kind=activity_start")
+    assert resp.status == 200 and doc(payload) | {"api_version": 1} == {
+        "registered": False, "kind": "activity_start", "environment": None, "bundle_id": None,
+        "platform": None, "registered_at": None, "api_version": 1}
+    assert stored(settings, "activity_start") == {}
+    assert stored(settings)[LOCAL]["token"] == TOKEN
+    assert stored(settings, "activity_update")[LOCAL]["token"] == "c3" * 32
+    resp, payload = request(server, "DELETE", ROUTE)  # no kind: alert
+    assert resp.status == 200 and doc(payload)["kind"] == "alert"
+    assert stored(settings) == {} and stored(settings, "activity_update")
+
+
+@pytest.mark.parametrize("query", ["?kind=background", "?kind=", "?kind=alert&kind=alert",
+                                   "?other=1"])
+def test_delete_with_an_unknown_kind_is_400(api, settings, query):  # noqa: F811
+    server, _ = api
+    request(server, "POST", ROUTE, body())
+    resp, payload = request(server, "DELETE", ROUTE + query)
+    assert resp.status == 400 and doc(payload)["error"] == "bad_request"
+    assert stored(settings)[LOCAL]["token"] == TOKEN
 
 
 def test_get_is_405(api):  # noqa: F811

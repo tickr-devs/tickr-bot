@@ -1632,12 +1632,22 @@ class PushPlatform(StrEnum):
     MACOS = "macos"
 
 
+class PushTokenKind(StrEnum):
+    """What an APNs token is for (Apple's token types); one stored per device and kind."""
+
+    ALERT = "alert"  # the device token: alert pushes
+    ACTIVITY_START = "activity_start"  # a Live Activity push-to-start token (planned sender)
+    ACTIVITY_UPDATE = "activity_update"  # one Live Activity's update token (planned sender)
+
+
 @dataclass(frozen=True)
 class PushTokenV1:
-    """POST and DELETE /push-token: this device's push registration now. `registered` false
-    (after DELETE) has every other key null. The device token itself is never echoed."""
+    """POST and DELETE /push-token: this device's push registration of `kind` now.
+    `registered` false (after DELETE) has every key but `kind` null. The token itself is never
+    echoed."""
 
     registered: bool
+    kind: PushTokenKind
     environment: str | None  # the build's aps-environment: a key of [alerts] apns_hosts
     bundle_id: str | None
     platform: PushPlatform | None

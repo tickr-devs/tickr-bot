@@ -1,9 +1,14 @@
-"""The apps' APNs device tokens: one per paired device, registered at POST /push-token.
+"""The apps' APNs tokens: one per paired device and token kind, registered at POST /push-token.
+
+The kind (`PushTokenKind`) says what the token is for: `alert` (the device token the alert
+sender pushes to), `activity_start` (a Live Activity push-to-start token) or `activity_update`
+(one Live Activity's update token). Only `alert` tokens are pushed to today; the activity kinds
+are stored for the planned Live Activity sender.
 
 The store is one JSON file under data_dir (`[alerts] push_tokens_file`, 0600, written atomically):
-`{"schema_version": 1, "devices": {"<device key>": {"token", "environment", "bundle_id",
-"platform", "registered_at"}}}`. The API is its writer; the push sender reads it on each alert
-and removes a token APNs says is gone (410 or BadDeviceToken).
+`{"schema_version": 1, "devices": {"<device key>": {"<kind>": {"token", "environment",
+"bundle_id", "platform", "registered_at"}}}}`. The API is its writer; the push sender reads it on
+each alert and removes a token APNs says is gone (410 or BadDeviceToken).
 
 A device key says which paired device registered the token: the SHA-256 of the bearer token it
 presented on the remote port (the digest the API already keeps, and the one each device of
@@ -27,6 +32,7 @@ from typing import Any
 
 from tickr.api import contract
 from tickr.api.contract import PushPlatform as Platform
+from tickr.api.contract import PushTokenKind as Kind
 
 SCHEMA_VERSION = 1
 LOCAL = "local"  # the device key of the Mac's own app (the local port has no bearer token)
@@ -35,6 +41,9 @@ PRIVATE_MODE = 0o600  # owner read and write only (POSIX mode bits)
 # today), so any non-empty whole-byte hex up to the HTTP/2 path limit Apple allows is taken.
 DEVICE_TOKEN = re.compile(r"^(?:[0-9a-fA-F]{2}){1,100}$")
 SHORT_HASH_DIGITS = 8  # hex digits of a token's SHA-256 shown in a journal line
+_FIELDS = frozenset({"token", "environment", "bundle_id", "platform"})
+_ENTRY = frozenset({"token", "environment", "bundle_id", "platform", "registered_at"})
+Key = tuple[str, Kind]  # (device key, token kind): one token each
 
 
 class StoreError(Exception):
@@ -47,6 +56,7 @@ class BadRegistration(ValueError):
 
 @dataclass(frozen=True)
 class PushToken:
+    kind: Kind
     token: str  # lowercase hex; personal data, never logged
     environment: str  # the build's aps-environment, a key of [alerts] apns_hosts
     bundle_id: str  # the APNs topic, one of [alerts] apns_topics
@@ -61,10 +71,12 @@ def short_hash(token: str) -> str:
 
 def parse_registration(body: dict[str, Any], topics: tuple[str, ...],
                        environments: Collection[str], now: datetime) -> PushToken:
-    """The token a POST /push-token body registers, or BadRegistration naming the field."""
-    if set(body) != {"token", "environment", "bundle_id", "platform"}:
+    """The token a POST /push-token body registers, or BadRegistration naming the field.
+    `kind` is optional and `alert` when left out."""
+    if not _FIELDS <= set(body) <= _FIELDS | {"kind"}:
         raise BadRegistration('body must be exactly {"token", "environment", "bundle_id", '
-                              '"platform"}')
+                              '"platform"} and optionally "kind"')
+    kind = parse_kind(body.get("kind", Kind.ALERT.value))
     token, environment = body["token"], body["environment"]
     bundle_id, platform = body["bundle_id"], body["platform"]
     if not isinstance(token, str) or not DEVICE_TOKEN.match(token):
@@ -77,10 +89,17 @@ def parse_registration(body: dict[str, Any], topics: tuple[str, ...],
                               "apns_topics)")
     if not isinstance(platform, str) or platform not in set(Platform):
         raise BadRegistration('platform must be "ios" or "macos"')
-    return PushToken(token.lower(), environment, bundle_id, Platform(platform), now)
+    return PushToken(kind, token.lower(), environment, bundle_id, Platform(platform), now)
 
 
-def _parse(text: str) -> dict[str, PushToken]:
+def parse_kind(value: Any) -> Kind:
+    """A token kind from a body or query, or BadRegistration."""
+    if not isinstance(value, str) or value not in set(Kind):
+        raise BadRegistration("kind must be one of " + ", ".join(k.value for k in Kind))
+    return Kind(value)
+
+
+def _parse(text: str) -> dict[Key, PushToken]:
     body = json.loads(text)
     if not isinstance(body, dict) or set(body) != {"schema_version", "devices"}:
         raise ValueError("keys must be exactly schema_version and devices")
@@ -89,25 +108,32 @@ def _parse(text: str) -> dict[str, PushToken]:
     if not isinstance(body["devices"], dict):
         raise ValueError("devices must be an object")
     out = {}
-    for key, entry in body["devices"].items():
-        if not isinstance(entry, dict) or set(entry) != {"token", "environment", "bundle_id",
-                                                         "platform", "registered_at"}:
-            raise ValueError("a device entry is out of shape")
-        if not isinstance(entry["token"], str) or not DEVICE_TOKEN.match(entry["token"]):
-            raise ValueError("a device token is not hex")
-        if not isinstance(entry["bundle_id"], str) or not isinstance(entry["environment"], str):
-            raise ValueError("a bundle_id or environment is not text")
-        out[key] = PushToken(entry["token"], entry["environment"],
-                             entry["bundle_id"], Platform(entry["platform"]),
-                             contract.parse_time(entry["registered_at"]))
+    for device, kinds in body["devices"].items():
+        if not isinstance(kinds, dict):
+            raise ValueError("a device's tokens must be an object")
+        for kind_name, entry in kinds.items():
+            kind = Kind(kind_name)  # ValueError for an unknown kind
+            if not isinstance(entry, dict) or set(entry) != _ENTRY:
+                raise ValueError("a token entry is out of shape")
+            if not isinstance(entry["token"], str) or not DEVICE_TOKEN.match(entry["token"]):
+                raise ValueError("a device token is not hex")
+            if not (isinstance(entry["bundle_id"], str)
+                    and isinstance(entry["environment"], str)):
+                raise ValueError("a bundle_id or environment is not text")
+            out[(device, kind)] = PushToken(kind, entry["token"], entry["environment"],
+                                            entry["bundle_id"], Platform(entry["platform"]),
+                                            contract.parse_time(entry["registered_at"]))
     return out
 
 
-def _text(devices: dict[str, PushToken]) -> str:
-    return json.dumps({"schema_version": SCHEMA_VERSION, "devices": {
-        key: {"token": t.token, "environment": t.environment, "bundle_id": t.bundle_id,
-              "platform": t.platform.value, "registered_at": contract.format_time(t.registered_at)}
-        for key, t in sorted(devices.items())}}, indent=2, sort_keys=True) + "\n"
+def _text(tokens: dict[Key, PushToken]) -> str:
+    devices: dict[str, dict[str, Any]] = {}
+    for (device, kind), t in sorted(tokens.items()):
+        devices.setdefault(device, {})[kind.value] = {
+            "token": t.token, "environment": t.environment, "bundle_id": t.bundle_id,
+            "platform": t.platform.value, "registered_at": contract.format_time(t.registered_at)}
+    return json.dumps({"schema_version": SCHEMA_VERSION, "devices": devices},
+                      indent=2, sort_keys=True) + "\n"
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -136,8 +162,9 @@ class PushTokenStore:
         self.path = path
         self._lock = threading.Lock()
 
-    def read(self) -> dict[str, PushToken]:
-        """Every device's token; empty when the file is missing; StoreError when unreadable."""
+    def read(self) -> dict[Key, PushToken]:
+        """Every (device, kind)'s token; empty when the file is missing; StoreError when
+        unreadable."""
         try:
             text = self.path.read_text("utf-8")
         except FileNotFoundError:
@@ -151,21 +178,22 @@ class PushTokenStore:
             raise StoreError(f"{self.path.name} out of shape: {type(exc).__name__}") from None
 
     def register(self, device: str, token: PushToken) -> None:
-        """Store `token` for `device`, replacing its earlier one. The same device token under
-        another key (the device paired again, so its bearer token changed) is dropped: one
-        device is pushed once."""
+        """Store `token` for `device` and its kind, replacing only that kind's earlier one. The
+        same token of that kind under another device key (the device paired again, so its
+        bearer token changed) is dropped: one device is pushed once."""
         with self._lock:
-            devices = {k: t for k, t in self.read().items() if t.token != token.token}
-            devices[device] = token
-            _write_private(self.path, _text(devices))
+            tokens = {k: t for k, t in self.read().items()
+                      if not (t.kind is token.kind and t.token == token.token)}
+            tokens[(device, token.kind)] = token
+            _write_private(self.path, _text(tokens))
 
-    def remove(self, device: str) -> bool:
-        """Drop `device`'s token; whether there was one."""
+    def remove(self, device: str, kind: Kind = Kind.ALERT) -> bool:
+        """Drop `device`'s token of `kind`; whether there was one."""
         with self._lock:
-            devices = self.read()
-            if devices.pop(device, None) is None:
+            tokens = self.read()
+            if tokens.pop((device, kind), None) is None:
                 return False
-            _write_private(self.path, _text(devices))
+            _write_private(self.path, _text(tokens))
             return True
 
     def remove_token(self, token: str) -> bool:

@@ -7,6 +7,14 @@
     "registered": {
       "type": "boolean"
     },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "alert",
+        "activity_start",
+        "activity_update"
+      ]
+    },
     "environment": {
       "anyOf": [
         {
@@ -59,6 +67,7 @@
   },
   "required": [
     "registered",
+    "kind",
     "environment",
     "bundle_id",
     "platform",

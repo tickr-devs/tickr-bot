@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 from tickr import config as config_module
-from tickr.api.contract import PushPlatform
+from tickr.api.contract import PushPlatform, PushTokenKind
 from tickr.runtime.alert_routing import LOCKED
 from tickr.runtime.alerts import (
     APNS_PATH,
@@ -47,6 +47,7 @@ from .test_alerts import CONFIG
 
 BOT = Path(__file__).resolve().parents[2] / "config" / "bot.toml"
 IOS, MACOS = PushPlatform.IOS, PushPlatform.MACOS
+ALERT = PushTokenKind.ALERT
 
 APNS = replace(CONFIG, apns_key_id_variable="TICKR_TEST_APNS_KEY_ID",
                apns_team_id_variable="TICKR_TEST_APNS_TEAM_ID",
@@ -81,8 +82,10 @@ def environ(key):
 @pytest.fixture
 def store(tmp_path):
     store = PushTokenStore(tmp_path / "data" / APNS.push_tokens_file)
-    store.register("phone", PushToken(IOS_TOKEN, "development", "bot.tickr.ios", IOS, AT))
-    store.register("local", PushToken(MAC_TOKEN, "production", "bot.tickr.mac", MACOS, AT))
+    store.register("phone", PushToken(ALERT, IOS_TOKEN, "development", "bot.tickr.ios", IOS,
+                                      AT))
+    store.register("local", PushToken(ALERT, MAC_TOKEN, "production", "bot.tickr.mac", MACOS,
+                                      AT))
     return store
 
 
@@ -335,11 +338,30 @@ def test_default_notifier_adds_push_once_set_up_and_given_the_data_folder(tmp_pa
 
 def test_store_file_is_private_and_replaces_per_device(store):
     assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
-    store.register("phone", PushToken(MAC_TOKEN, "production", "bot.tickr.ios", IOS, AT))
+    store.register("phone", PushToken(ALERT, MAC_TOKEN, "production", "bot.tickr.ios", IOS, AT))
     # The same device token under another key is dropped: one device is pushed once.
-    assert list(store.read()) == ["phone"]
+    assert list(store.read()) == [("phone", ALERT)]
+    # Another kind is stored beside it and replaced on its own.
+    start = PushToken(PushTokenKind.ACTIVITY_START, "c3" * 32, "production", "bot.tickr.ios",
+                      IOS, AT)
+    store.register("phone", start)
+    store.register("phone", replace(start, token="d4" * 32))
+    assert {k: t.token for k, t in store.read().items()} == {
+        ("phone", ALERT): MAC_TOKEN, ("phone", PushTokenKind.ACTIVITY_START): "d4" * 32}
     assert store.remove("phone") is True and store.remove("phone") is False
+    assert list(store.read()) == [("phone", PushTokenKind.ACTIVITY_START)]
+    assert store.remove("phone", PushTokenKind.ACTIVITY_START) is True
     assert store.read() == {}
+
+
+def test_live_activity_tokens_are_stored_but_never_sent_alerts(store, environ):
+    for kind, token in ((PushTokenKind.ACTIVITY_START, "c3" * 32),
+                        (PushTokenKind.ACTIVITY_UPDATE, "d4" * 32)):
+        store.register("phone", PushToken(kind, token, "development", "bot.tickr.ios", IOS, AT))
+    wire = Wire()
+    notifier(store, environ, wire).notify_kind(NORMAL.value, "T", "x")
+    assert sorted(path for _, path, _, _ in wire.calls) == [APNS_PATH + IOS_TOKEN,
+                                                            APNS_PATH + MAC_TOKEN]
 
 
 # ---------------------------------------------------------------- HTTP/2 framing

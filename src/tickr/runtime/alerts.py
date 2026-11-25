@@ -58,6 +58,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
+from tickr.api.contract import PushTokenKind
 from tickr.config import AlertsConfig
 from tickr.runtime.push_tokens import (
     PushToken,
@@ -599,7 +600,8 @@ class ApnsNotifier:
             raise NotifyError("apns-missing: " + ", ".join(missing or apns_names(self._config))
                               + " not set")
         try:
-            devices = self._store.read()
+            devices = {key: token for key, token in self._store.read().items()
+                       if token.kind is PushTokenKind.ALERT}  # Live Activity tokens: not here
         except StoreError as exc:
             raise NotifyError(f"apns-store-unreadable: {exc}") from None
         if not devices:

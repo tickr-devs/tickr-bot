@@ -54,12 +54,13 @@ class AlertsSettings:
                    config.alerts.apns_topics, frozenset(config.alerts.apns_hosts))
 
 
-def push_token_document(token: PushToken | None) -> api.PushTokenV1:
-    """POST and DELETE /push-token: the device's registration, never its token."""
+def push_token_document(token: PushToken | None,
+                        kind: api.PushTokenKind) -> api.PushTokenV1:
+    """POST and DELETE /push-token: the device's registration of `kind`, never its token."""
     if token is None:
-        return api.PushTokenV1(False, None, None, None, None)
-    return api.PushTokenV1(True, token.environment, token.bundle_id, token.platform,
-                           token.registered_at)
+        return api.PushTokenV1(False, kind, None, None, None, None)
+    return api.PushTokenV1(True, token.kind, token.environment, token.bundle_id,
+                           token.platform, token.registered_at)
 
 
 def _channels(record: Path) -> tuple[api.AlertChannelV1, ...]:

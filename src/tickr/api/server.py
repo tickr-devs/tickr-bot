@@ -93,7 +93,13 @@ from tickr.observers.log import DecisionLog
 from tickr.research.errors import RecordFileError
 from tickr.research.records import DecisionRecord
 from tickr.runtime.alert_routing import RefusalCause, RoutingRefused
-from tickr.runtime.push_tokens import LOCAL, BadRegistration, StoreError, parse_registration
+from tickr.runtime.push_tokens import (
+    LOCAL,
+    BadRegistration,
+    StoreError,
+    parse_kind,
+    parse_registration,
+)
 from tickr.strategy.base import Role
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -1190,10 +1196,12 @@ class Handler(BaseHTTPRequestHandler):
         return hashlib.sha256(header[len(BEARER):].encode("utf-8")).hexdigest()
 
     def _register_push_token(self) -> None:
-        """POST /push-token with {"token", "environment", "bundle_id", "platform"}: store this
-        device's APNs token, replacing its earlier one; 200 push-token-v1. 400 for a token that
-        is not hex, an environment that is not a key of [alerts] apns_hosts, a bundle id
-        outside [alerts] apns_topics or another body. The token is never echoed or logged."""
+        """POST /push-token with {"token", "environment", "bundle_id", "platform"} and an
+        optional "kind" ("alert" when left out): store this device's APNs token of that kind,
+        replacing only that kind's earlier one; 200 push-token-v1. 400 for a token that is not
+        hex, an environment that is not a key of [alerts] apns_hosts, a bundle id outside
+        [alerts] apns_topics, an unknown kind or another body. The token is never echoed or
+        logged."""
         body = self._read_json_body()
         if body is None:
             return
@@ -1209,7 +1217,7 @@ class Handler(BaseHTTPRequestHandler):
         except StoreError as exc:
             self._error("unavailable", f"{exc}; delete the file to start over")
             return
-        self._json(200, push_token_document(token))
+        self._json(200, push_token_document(token, token.kind))
 
     def do_DELETE(self) -> None:  # noqa: N802 - stdlib naming
         if not self._guard():
@@ -1220,11 +1228,18 @@ class Handler(BaseHTTPRequestHandler):
                             {"Allow": "GET, POST"})
                 return
             try:
-                self.server.settings.alerts.push_tokens.remove(self._push_device())
+                query = _query(urlsplit(self.path).query, frozenset({"kind"}),
+                               frozenset({"kind"}))
+                kind = parse_kind(query.get("kind", contract.PushTokenKind.ALERT.value))
+            except (BadQuery, BadRegistration) as exc:
+                self._error("bad_request", str(exc))
+                return
+            try:
+                self.server.settings.alerts.push_tokens.remove(self._push_device(), kind)
             except StoreError as exc:
                 self._error("unavailable", f"{exc}; delete the file to start over")
                 return
-            self._json(200, push_token_document(None))
+            self._json(200, push_token_document(None, kind))
         except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
             self._error("internal", type(exc).__name__)
 
