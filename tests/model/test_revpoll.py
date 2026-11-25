@@ -103,9 +103,9 @@ def test_disabled_by_default_in_the_shipped_config(tmp_path):
 
 
 def test_every_changed_record_is_appended_with_receipt_and_previous_poll(cfg):
-    e1, e2 = rep("e1", "2026-11-25T13:31:00Z", actual_eps=None), rep("e1", "2026-11-25T13:40:00Z")
+    e1, e2 = rep("e1", "2026-11-25T15:01:00Z", actual_eps=None), rep("e1", "2026-11-25T15:03:00Z")
     a1 = art("a1", "2026-11-25T14:00:00Z", last_updated="2026-11-25T14:00:00Z")
-    wire = wire_for(cfg, [page([e1]), page([e1, rep("e2", "2026-11-25T13:41:00Z")]), page([e2])],
+    wire = wire_for(cfg, [page([e1]), page([e1, rep("e2", "2026-11-25T15:04:00Z")]), page([e2])],
                     [page([a1]), page([a1]), page([a1])])
     assert run(cfg, wire, Clock(), 3) == 0
     folder, er, news = stores(cfg)
@@ -120,29 +120,59 @@ def test_every_changed_record_is_appended_with_receipt_and_previous_poll(cfg):
     assert news.by_id["a1"][0].record["title"] == "kept"
 
 
-def test_the_query_is_last_updated_since_the_previous_success_and_pages_are_followed(cfg):
+def test_earnings_poll_by_last_updated_and_news_by_published_window(cfg):
     m = cfg.massive
     wire = wire_for(cfg, [page([]), page([])], [page([]), page([])])
-    clock = Clock()
-    run(cfg, wire, clock, 2)
-    first, _, second, _ = (urllib.parse.urlsplit(r.full_url) for r in wire.requests)
-    q = dict(urllib.parse.parse_qsl(first.query))
+    run(cfg, wire, Clock(), 2)
+    earn1, news1, earn2, news2 = (urllib.parse.urlsplit(r.full_url) for r in wire.requests)
     folder, _, _ = stores(cfg)
-    first_ok = rv.CoverageLog(folder, rv.EARNINGS).events[1]
-    sent = datetime.datetime.fromisoformat(first_ok["sent_utc"])
-    since = sent - datetime.timedelta(seconds=m.news_probe_news_lookback_seconds)
-    assert q == {"last_updated.gte": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                 "sort": "last_updated.asc", "limit": str(m.page_limit)}
-    q = dict(urllib.parse.parse_qsl(second.query))
-    want = sent - datetime.timedelta(seconds=m.revision_poll_overlap_seconds)
-    assert q["last_updated.gte"] == want.strftime("%Y-%m-%dT%H:%M:%SZ")
-    assert first.hostname == m.api_host and first.path == m.benzinga_earnings_path
+    events = rv.CoverageLog(folder, rv.EARNINGS).events
+    sent1 = datetime.datetime.fromisoformat(events[1]["sent_utc"])
+    nsent = [datetime.datetime.fromisoformat(e["sent_utc"])
+             for e in rv.CoverageLog(folder, rv.NEWS).events[1:]]
+    stamp = "%Y-%m-%dT%H:%M:%SZ"
+    lookback = datetime.timedelta(seconds=m.news_probe_news_lookback_seconds)
+    assert earn1.path == m.benzinga_earnings_path and news1.path == m.benzinga_news_path
+    assert dict(urllib.parse.parse_qsl(earn1.query)) == {
+        "last_updated.gte": (sent1 - lookback).strftime(stamp), "sort": "last_updated.asc",
+        "limit": str(m.page_limit)}
+    assert dict(urllib.parse.parse_qsl(earn2.query))["last_updated.gte"] == (
+        sent1 - datetime.timedelta(seconds=m.revision_poll_overlap_seconds)).strftime(stamp)
+    for q, sent in ((news1.query, nsent[0]), (news2.query, nsent[1])):  # the window, every poll
+        assert dict(urllib.parse.parse_qsl(q)) == {
+            "published.gte": (sent - lookback).strftime(stamp), "sort": "published.asc",
+            "limit": str(m.page_limit)}
+    assert "last_updated" not in news2.query
     for r in wire.requests:
         assert r.get_header("Authorization") == "Bearer " + KEY and KEY not in r.full_url
 
 
+def test_news_is_never_listed_by_last_updated():
+    with pytest.raises(ModelRefused) as exc:
+        revpoll.listing_query(rv.NEWS, T0, "last_updated")
+    assert exc.value.cause == "news_last_updated_unsupported"
+
+
+def test_a_server_that_ignores_the_bound_fails_the_poll_and_nothing_is_kept(cfg):
+    old = art("old", "2026-11-20T10:00:00Z", last_updated="2026-11-20T10:00:00Z")
+    fine = art("fine", "2026-11-25T14:00:00Z", last_updated="2026-11-25T14:00:00Z")
+    stale = rep("e0", "2026-11-01T00:00:00Z")
+    wire = wire_for(cfg, [page([stale]), page([rep("e1", "2026-11-25T15:01:00Z")])],
+                    [page([fine, old]), page([fine])])
+    run(cfg, wire, Clock(), 2)
+    folder, er, news = stores(cfg)
+    assert "old" not in news.by_id and "fine" in news.by_id  # poll 1 failed whole; poll 2 kept
+    assert "e0" not in er.by_id and "e1" in er.by_id
+    for kind in (rv.NEWS, rv.EARNINGS):
+        log = rv.CoverageLog(folder, kind)
+        assert [e["event"] for e in log.events] == ["start", "failed", "ok"]
+        assert log.events[1]["cause"] == "bound_ignored"
+        assert [g.cause for g in log.coverage().gaps] == []  # no ok before the failure
+    assert "before" in rv.CoverageLog(folder, rv.NEWS).events[1]["detail"]
+
+
 def test_an_error_poll_leaves_a_typed_gap_and_write_l1bz_refuses_that_range(cfg, tmp_path):
-    ok = page([rep("e1", "2026-11-25T13:31:00Z")])
+    ok = page([rep("e1", "2026-11-25T15:01:00Z")])
     # earnings answers: ok, 500, ok, ok; news is quiet throughout
     wire = wire_for(cfg, [ok, 500, ok, ok], [page([])] * 4)
     run(cfg, wire, Clock(), 4)
@@ -169,7 +199,7 @@ def test_an_error_poll_leaves_a_typed_gap_and_write_l1bz_refuses_that_range(cfg,
 
 
 def test_a_range_inside_an_uninterrupted_run_is_written(cfg, tmp_path):
-    wire = wire_for(cfg, [page([rep("e1", "2026-11-25T13:31:00Z")])] * 3, [page([])] * 3)
+    wire = wire_for(cfg, [page([rep("e1", "2026-11-25T15:01:00Z")])] * 3, [page([])] * 3)
     folder, _, _ = stores(cfg)
     run(cfg, wire, Clock(), 3)
     _, er, _ = stores(cfg)
@@ -188,8 +218,8 @@ def test_a_range_inside_an_uninterrupted_run_is_written(cfg, tmp_path):
 
 
 def test_a_row_without_an_id_is_stored_around_and_logged_as_a_gap(cfg):
-    wire = wire_for(cfg, [page([rep("e1", "2026-11-25T13:31:00Z")]),
-                          page([{"ticker": "AAA"}, rep("e1", "2026-11-25T13:32:00Z")]),
+    wire = wire_for(cfg, [page([rep("e1", "2026-11-25T15:01:00Z")]),
+                          page([{"ticker": "AAA"}, rep("e1", "2026-11-25T15:02:00Z")]),
                           page([])], [page([])] * 3)
     run(cfg, wire, Clock(), 3)
     folder, er, _ = stores(cfg)
@@ -202,12 +232,12 @@ def test_a_row_without_an_id_is_stored_around_and_logged_as_a_gap(cfg):
 
 
 def test_a_restart_resumes_from_the_stored_state_and_records_a_gap(cfg):
-    e1 = rep("e1", "2026-11-25T13:31:00Z", actual_eps=None)
+    e1 = rep("e1", "2026-11-25T15:01:00Z", actual_eps=None)
     wire = wire_for(cfg, [page([e1]), page([e1])], [page([]), page([])])
     clock = Clock()
     run(cfg, wire, clock, 2)
     # a new process: nothing in memory, the stores and logs are read back
-    e2 = rep("e1", "2026-11-25T13:50:00Z")
+    e2 = rep("e1", "2026-11-25T15:20:00Z")
     wire2 = wire_for(cfg, [page([e1, e2])], [page([])])
     clock.t += datetime.timedelta(minutes=30)
     run(cfg, wire2, clock, 1)

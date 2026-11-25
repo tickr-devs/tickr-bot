@@ -851,10 +851,11 @@ revision_poll_enabled = false
 # under <folder>/earnings and <folder>/news, and the poll coverage log under <folder>/coverage; read by
 # tickr.model.revpoll.
 revision_store_dir = "massive/revisions"
-# Seconds the last_updated.gte of a poll reaches back before the previous successful poll's send time. A tool setting
+# Seconds the last_updated.gte of an earnings poll reaches back before the previous successful poll's send time. A tool setting
 # (not a guard): the vendor stamps last_updated with its own clock, and a record listed twice is stored once, so a
 # margin costs only a longer answer; MEASURE it with `python -m tickr.model.revisions report` (receipt - last_updated
-# minimum and quantiles) before relying on it; read by tickr.model.revpoll. The poll pace is news_probe_poll_seconds.
+# minimum and quantiles) before relying on it; news polls re-list a published window instead
+# (news_probe_news_lookback_seconds); read by tickr.model.revpoll. The poll pace is news_probe_poll_seconds.
 revision_poll_overlap_seconds = 300
 # Path of Massive's general news listing on api_host, the training's own fetch of the nw_* news (owner's fetch_ref2.py
 # and reftopup.py: GET /v2/reference/news); read by tickr.model.newsprobe.

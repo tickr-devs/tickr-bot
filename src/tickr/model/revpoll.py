@@ -1,10 +1,17 @@
 """Poller that fills the Benzinga revision store (Codex codex-108 point 7): `tickr poll-revisions`.
 
-Every `[massive] news_probe_poll_seconds` (the probe's pacing key) it lists the Benzinga earnings
-and news records changed since the previous successful poll (`last_updated.gte`, reaching back
-`revision_poll_overlap_seconds` more; the endpoints and the key are the probe's) and appends every
-full record that differs from the latest stored version of its id to `tickr.model.revisions.
-RevisionStore`, with our receipt time and the send time of the previous successful poll. The
+Every `[massive] news_probe_poll_seconds` (the probe's pacing key) it lists Benzinga earnings
+changed since the previous successful poll (`last_updated.gte`, reaching back
+`revision_poll_overlap_seconds` more) and Benzinga news published in the last
+`news_probe_news_lookback_seconds` (`published.gte`, `sort=published.asc`, as the probe does; the
+endpoints and the key are the probe's). The news endpoint does not filter or sort by
+`last_updated` (measured 2026-11-25: HTTP 400 on the sort, the filter silently ignored), so a
+news revision after publication is seen only while the article is inside the re-polled window.
+`listing_query` refuses a news `last_updated` filter (`news_last_updated_unsupported`) and a poll
+whose rows fall below the bound it asked for is failed (`bound_ignored`) and stores nothing.
+Every full record that differs from the latest stored version of its id is appended to
+`tickr.model.revisions.RevisionStore`, with our receipt time and the send time of the previous
+successful poll. The
 first poll after the very first start is `baseline`: those records were there before we looked.
 
 COVERAGE. Each poll is logged (`CoverageLog`): `ok` after its records are stored, `failed` with
@@ -36,6 +43,36 @@ from tickr.model.revisions import EARNINGS, EPOCH, NEWS, Coverage, CoverageLog, 
 
 KINDS = (EARNINGS, NEWS)
 STOP_STATUSES = ("401 ", "403 ")  # http_status details of a key or plan the API refuses
+
+
+BOUND = {EARNINGS.name: "last_updated", NEWS.name: "published"}  # the filter each endpoint honours
+
+
+def listing_query(kind: Kind, since: datetime.datetime,
+                  field: str | None = None) -> dict[str, str]:
+    """The query of one poll: records of `kind` whose `field` is at or after `since`."""
+    field = field or BOUND[kind.name]
+    if field != BOUND[kind.name]:
+        raise ModelRefused("news_last_updated_unsupported" if kind is NEWS
+                           else "revision_poll_config", f"{kind.name} {field}.gte")
+    return {f"{field}.gte": since.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "sort": f"{field}.asc"}
+
+
+def below_bound(rows: list[Any], query: dict[str, str]) -> str | None:
+    """The first row whose `last_updated` or `published` lies before the requested bound (the
+    server ignored the filter), as a short detail; None when every readable stamp is inside."""
+    field = next(k for k in query if k.endswith(".gte"))
+    bound = datetime.datetime.fromisoformat(query[field])
+    for row in rows:
+        for name in ("last_updated", "published"):
+            try:
+                stamp = datetime.datetime.fromisoformat(str(row[name]))
+            except (KeyError, TypeError, ValueError):
+                continue  # absent or unreadable: the store's own checks refuse it later
+            if stamp.tzinfo is not None and stamp < bound:
+                return f"{name} {row[name]} before {query[field]} ({field})"
+    return None
 
 
 def _stamp(moment: datetime.datetime) -> str:
@@ -77,13 +114,12 @@ class Poller:
         log, store = self.logs[kind.name], self.stores[kind.name]
         before_ns = log.coverage().last_ok_ns
         sent = self.now()
-        if before_ns is None:
+        if before_ns is None or kind is NEWS:
             since = sent - datetime.timedelta(seconds=self.m.news_probe_news_lookback_seconds)
         else:
             since = _moment(before_ns) - datetime.timedelta(
                 seconds=self.m.revision_poll_overlap_seconds)
-        query = {"last_updated.gte": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                 "sort": "last_updated.asc"}
+        query = listing_query(kind, since)
         try:
             rows = self.reference.listing(self._path(kind), query)
         except ModelRefused as exc:
@@ -94,6 +130,11 @@ class Poller:
                 raise
             return {"failed": 1}
         received = self.now()
+        ignored = below_bound(rows, query)
+        if ignored:
+            log.add({"event": "failed", "sent_utc": _stamp(sent), "cause": "bound_ignored",
+                     "detail": ignored})
+            return {"failed": 1}
         counts: dict[str, Any] = store.append(
             rows, received, previous_poll=_moment(before_ns), baseline=before_ns is None)
         if counts["unreadable"]:
