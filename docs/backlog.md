@@ -33,7 +33,7 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
 | **v1.1** | Tools to find an edge, and the model path | R1, R4, R5, R15, R16, R35 and T12 merged | observer, replay and model results |
-| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T11, T13-T18, X3, X4 merged and released | unattended Sandbox days |
+| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T11, T13-T19, X3, X4 merged and released | unattended Sandbox days |
 | **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S7, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
 | **v5** | The product: ticker.bot (site, accounts, one cloud bot per user) and the apps signed in to it; standalone Mac scope settled in W1 | W1 spec agreed with the owner, W2-W8 and W15-W17 built | |
@@ -280,7 +280,9 @@ One source of truth (old group A):
 - **T1** **Trailing stop / stop tightening** by replace, once V1 proves Webull's replace mechanics;
   the platform rule "a stop only moves toward the price". Starting values (old #153-34, Q10,
   provisional): best price since entry minus 1.5 ATR, at least the fill price after +1.0 R. Planned
-  API: `docs/api-planned.md` section 2.
+  API: `docs/api-planned.md` section 2. The PR that brings stop replacement into the loop must handle
+  an operator clearing `replace-unresolved` while the broker already holds the new price (Fable
+  review of #742, 2026-11-25).
 - **T2** Planned loss per trade (50 USD) lives only in `config/bot.toml [risk]`; remove
   `[sizing] planned_loss_usd` from the strategies, which receive it with their input (owner
   2026-11-15).
@@ -342,6 +344,14 @@ Long unattended runs (review 2026-11-24, P2):
   after the copy is published and checked, and a failed attempt is retried with a delay the same day
   instead of the next. Status: decided.
 
+- **T19** A way out of a hard `order-conflict` (Fable review of #742, 2026-11-25): when a broker row
+  contradicts the order as sent forever (for example "filled 20 of 2"), the bot records nothing
+  from it and entries stay blocked across restarts, and the clean-day check counts an unknown
+  outcome every day; nothing in the bot ends that today. Add a documented recovery or an operator
+  path to clear it once the operator has checked the Webull app, keeping "refuse, never guess" for
+  recording. Must land before `max_open_positions` is raised above 6. Trading-critical: Fable review.
+  Status: decided.
+
 Trading outside the regular session (owner 2026-11-16, ids kept):
 - **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
   LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from
@@ -353,7 +363,7 @@ Trading outside the regular session (owner 2026-11-16, ids kept):
   outside the regular session. Old-tracker answer, reconfirm: limit orders only in PRE/POST, smaller
   size, no entries on stream or broker loss (old Q118, #020-12).
 
-Exit: T1-T11, T13-T18, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
+Exit: T1-T11, T13-T19, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
 PRE/POST stop probe for X4), the
 duplicate-key test green, v2 released and running unattended in the Sandbox.
 
