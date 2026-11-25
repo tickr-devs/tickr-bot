@@ -80,7 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        settings = load_settings(args.settings)
+        settings = load_settings(
+            args.settings, config.load(args.config).market_data.history_sessions
+        )
         clock_for = session_clock(args.config)
         factory = strategy_factory(args.strategy, args.values)
         bars = load_bars(args.bars)

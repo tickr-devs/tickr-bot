@@ -269,7 +269,7 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
   `run_without_report`, `version_never_started`, `run_file_unreadable` {file, error},
   `calendar_file_unreadable` {detail}, `no_bars_for_symbol_on` {symbol, day},
   `no_cached_history` {symbol, day}, `cached_history_refused` {detail}, `cached_history_empty`
-  {symbol}, `cached_history_overlaps`, `history_sessions_differ` {replay, bot},
+  {symbol}, `cached_history_overlaps`,
   `simulation_failed` {error, detail}, `strategy_without_module` {folder, strategy},
   `module_not_importable` {folder, module, detail}, `module_without_create` {folder, module},
   `values_refused` {folder, module, detail}, `identity_differs` {folder}, `no_history_need`
@@ -963,8 +963,7 @@ Code: `src/tickr/api/trade_whatif.py`.
   `result_gross_usd`: their sums; USD is null when a trade has no quantity. Gross: slippage in,
   commissions and fees out.
 - When it cannot be computed (unreadable or unknown folder, no module, a version that needs more
-  history than the bot caches, replay.toml `history_sessions` differing from
-  `[market_data] history_sessions`, no captured bars for the symbol that day, no or empty cached
+  history than the bot caches, no captured bars for the symbol that day, no or empty cached
   prior sessions, a refused simulation, a version that raises) `cause` says why, `signals` and the sums are null and `trades`
   is empty. Paths in a cause are relative to the repo.
 

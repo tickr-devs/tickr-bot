@@ -68,7 +68,7 @@ def build_evidence(
         if r.decision.verdict in (Verdict.IGNORE, Verdict.WATCH) and r.decision.decisive
     )
     refusals = Counter(r.refusal_cause for r in active if r.admission is Admission.REFUSED)
-    places = research.output_decimal_places
+    places = replay.output_decimal_places
     observed = summarize_outcomes(outcomes(active, bars_by_symbol, research, close_for))
     simulated = summarize_whatif(what_if(active, bars_by_symbol, replay, clock_for))
     versions = observer_report.report(records, bars_by_symbol, replay, clock_for)

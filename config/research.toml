@@ -10,5 +10,3 @@ horizons_minutes = [1, 5, 15, 30, 60]
 atr_period = 14
 # Exchange time zone (IANA name); a horizon that would leave the decision's session date is reported without numbers, and latency hours are labelled in it; read by research/outcomes.py and research/__main__.py (latency).
 session_timezone = "America/New_York"
-# Decimal places for prices, ATR, percent and USD in CSV and summary outputs; read by research/report.py.
-output_decimal_places = 4
