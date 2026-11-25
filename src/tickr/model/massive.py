@@ -104,18 +104,33 @@ def _get(opener: Opener, url: str, headers: Mapping[str, str], timeout: int) -> 
         raise ModelRefused("http_failed", type(exc).__name__) from exc
 
 
+def head(opener: Opener, url: str, headers: Mapping[str, str],
+         timeout: int) -> tuple[int, Mapping[str, str]]:
+    """(status, response headers) of a HEAD of `url` (the prev-day probe); an HTTP error
+    status is returned as the answer, a failed request refuses (`http_failed`)."""
+    request = urllib.request.Request(url, headers=dict(headers), method="HEAD")
+    try:
+        with opener(request, timeout) as response:
+            return response.status, response.headers
+    except urllib.error.HTTPError as exc:
+        return exc.code, {}
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ModelRefused("http_failed", type(exc).__name__) from exc
+
+
 def sigv4_headers(*, host: str, path: str, region: str, key_id: str, secret: str,
                   moment: datetime.datetime, extra: Mapping[str, str] | None = None,
-                  payload_sha256: str = EMPTY_SHA256) -> dict[str, str]:
-    """AWS Signature Version 4 headers of a GET of `path` (already URI-encoded) on an
-    S3-compatible `host` without a query. Massive's flat files are served this way."""
+                  payload_sha256: str = EMPTY_SHA256, method: str = "GET") -> dict[str, str]:
+    """AWS Signature Version 4 headers of a `method` (GET, or HEAD for the prev-day probe) of
+    `path` (already URI-encoded) on an S3-compatible `host` without a query. Massive's flat
+    files are served this way."""
     amz_date = moment.astimezone(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     scope_day = amz_date[:8]
     headers = {"host": host, "x-amz-content-sha256": payload_sha256, "x-amz-date": amz_date}
     headers.update({k.lower(): v for k, v in (extra or {}).items()})
     names = sorted(headers)
     canonical = "\n".join([
-        "GET", path, "",
+        method, path, "",
         "".join(f"{n}:{headers[n].strip()}\n" for n in names),
         ";".join(names), payload_sha256])
     scope = f"{scope_day}/{region}/s3/aws4_request"

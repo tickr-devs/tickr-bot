@@ -398,6 +398,19 @@ open_orders_paging_orders = 90
 # Probe H2d: least minutes left in the extended session when the probe starts (placing, reading and cancelling 90 orders
 # takes about 20 min); read by tickr.engine.paging_probe.
 open_orders_end_margin_minutes = 30
+# Probe prev-day (tickr probe-prev-day): start of the overnight window, New York time HH:MM, in which it records when the
+# previous session's Massive files and splits become available before the bot's 04:00 ET start; read by
+# tickr.model.prevday_probe.
+prev_day_window_start = "23:00"
+# Probe prev-day: end of that window, New York time HH:MM (an end at or before the start is on the next day); read by
+# tickr.model.prevday_probe.
+prev_day_window_end = "06:00"
+# Probe prev-day: seconds between two rounds of checks (one HEAD per day file, one splits listing); the measurement's
+# own pacing, not a guard: no decision of the bot depends on it; read by tickr.model.prevday_probe.
+prev_day_poll_seconds = 120
+# Probe prev-day: key prefixes of the trades and quotes day files in [massive] files_bucket (<prefix>/YYYY/MM/
+# YYYY-MM-DD.csv.gz, the training's tick sources), checked by HEAD only; read by tickr.model.prevday_probe.
+prev_day_tick_prefixes = ["us_stocks_sip/trades_v1", "us_stocks_sip/quotes_v1"]
 
 [api]
 # Local API bind address; loopback only; read by the api server.

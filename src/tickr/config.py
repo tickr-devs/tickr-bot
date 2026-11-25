@@ -210,6 +210,10 @@ class ProbeConfig:
     paging_send_interval_seconds: int
     open_orders_paging_orders: int
     open_orders_end_margin_minutes: int
+    prev_day_window_start: str
+    prev_day_window_end: str
+    prev_day_poll_seconds: int
+    prev_day_tick_prefixes: tuple[str, ...]
 
 
 # [api] system_services values: the machine services GET /system can report (docs/api.md).
@@ -775,6 +779,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                          ("tick_cap_steps", probe.tick_cap_steps)):
         if list(values) != sorted(set(values)):
             raise ConfigError(f"[probe] {name} must be ascending, without repeats")
+    if (probe.prev_day_poll_seconds < 1 or not probe.prev_day_tick_prefixes
+            or not all(re.fullmatch(r"\d{2}:\d{2}", w) for w in (
+                probe.prev_day_window_start, probe.prev_day_window_end))):
+        raise ConfigError("[probe] prev_day_window_start/end must be HH:MM, "
+                          "prev_day_poll_seconds at least 1, prev_day_tick_prefixes not empty")
     if not 1 <= risk.max_open_positions <= md.stream_reserved_symbols:
         raise ConfigError("[risk] max_open_positions must be at least 1 and at most "
                           "[market_data] stream_reserved_symbols (a stream slot per position)")
