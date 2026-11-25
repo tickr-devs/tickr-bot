@@ -45,6 +45,20 @@ def test_every_fixed_fence_text_the_engine_writes_is_recognized():
      "open_orders_read_failed", {"error": "BrokerError"}),
     ("unknown-order:c1", "crashed during send", "crashed_during_send", {}),
     ("status-unknown:c1", "unmapped status 'WEIRD'", "status_unmapped", {"status": "WEIRD"}),
+    ("order-conflict:c1", "broker shows 20 filled of 2 ABC BUY LIMIT, sent 2 ABC BUY LIMIT: "
+     "not recorded; shares may be held without a stop: check it in the Webull app",
+     "broker_fill_contradicts",
+     {"filled": "20", "quantity": "2", "sent": "2", "symbol": "ABC"}),
+    ("order-conflict:c1", "changed at the broker: 1 at stop 6.00, sent 2 at stop 9.80; not "
+     "counted until it agrees", "stop_changed_at_broker",
+     {"quantity": "1", "price": "6.00", "sent": "2", "sent_price": "9.80"}),
+    ("order-conflict:c1", "changed at the broker: 3 at limit 10.00, sent 2 at limit 10.00; not "
+     "counted until it agrees", "limit_changed_at_broker",
+     {"quantity": "3", "price": "10.00", "sent": "2", "sent_price": "10.00"}),
+    ("order-conflict:c1", "changed at the broker: 1 shares, sent 2; not counted until it agrees",
+     "quantity_changed_at_broker", {"quantity": "1", "sent": "2"}),
+    ("order-conflict:c1", "last seen working but not in the broker's open orders: proves "
+     "nothing until its Detail is read", "order_not_listed", {}),
     ("unprotected:t1", "verified stop covers 40 of 100", "stop_covers_part",
      {"verified": "40", "expected": "100"}),
     ("over-protected:t1", "stops cover 120, Detail holds 100", "stops_over_position",

@@ -196,6 +196,9 @@ clients show the text.
 - `fences[].code` / `params`, by kind: `startup_reconcile_pending`; `positions_read_failed` /
   `open_orders_read_failed` `{error}` (an exception type name); `detail_budget`;
   `send_outcome_unknown`, `crashed_during_send`; `order_missing`; `status_unmapped` `{status}`;
+  `broker_fill_contradicts` `{filled, quantity, sent, symbol}`; `stop_changed_at_broker` /
+  `limit_changed_at_broker` `{quantity, price, sent, sent_price}`; `quantity_changed_at_broker`
+  `{quantity, sent}`; `order_not_listed`;
   `detail_unreadable` / `stop_cancel_unconfirmed` `{seconds}`;
   `stop_covers_part` `{verified, expected}`; `stops_over_position` `{covered, held}`;
   `unprotected_exiting` / `unprotected_close_by_hand` / `unprotected_stop_unreadable`
@@ -513,8 +516,9 @@ configured environment, bucketed by the New York date of their journal time. Dis
     reconciliation that saw an unknown order outcome counts too: account-v1 calls that a
     mismatch), or a `fence-set` row that date of `foreign-position`, `foreign-order`,
     `quantity-mismatch`, `resurrected`, `order-missing` or `over-protected`;
-  - `unknown_order_outcome`: an `unknown-order`, `status-unknown`, `cancel-unknown` or
-    `replace-unresolved` fence set before the end of the date and not cleared by then (also
+  - `unknown_order_outcome`: an `unknown-order`, `status-unknown`, `cancel-unknown`,
+    `replace-unresolved`, `detail-unreadable` or `order-conflict` fence set before the end of
+    the date and not cleared by then (also
     when it was set on an earlier date); its `fence-set` row;
   - `unprotected_position`: a `fence-set` row of `unprotected-timeout` or `stop-rejected`, or an
     `unprotected-position` alert, that date (the short `unprotected` fence while a fresh fill's

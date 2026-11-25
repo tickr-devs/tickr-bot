@@ -24,7 +24,7 @@ from typing import Any
 
 from tickr.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, Refused
 from tickr.config import Config, GateResult
-from tickr.risk.ticks import tick
+from tickr.risk.ticks import CENT, tick
 from tickr.risk.timers import WindowKind
 from tickr.store import Store
 from tickr.types import (
@@ -123,6 +123,16 @@ class Fence(StrEnum):
     # unknown): the bot could not record its orders durably much longer, so no new entry until
     # there is room. Clears itself; protection, exits and the flatten go on.
     DISK_LOW = "disk-low"
+    # A broker row of one of our orders disagrees with the order as sent (`_read_conflict`):
+    # a fill above what we sent (nothing from that row is recorded), a quantity or price
+    # changed at the broker, or an order last seen working missing from the open-orders list.
+    # While set the order proves nothing: a stop is not protection and an entry or close does
+    # not excuse a quantity mismatch. One fence per source, so one read agreeing never clears
+    # what the other found: `order-conflict:<order>` from Detail (and the unlisted check, which
+    # only Detail can settle), cleared by an agreeing Detail read; `order-conflict:<order>/
+    # listed` from a listed open-orders row, cleared by an agreeing listed row. A Detail read
+    # showing the order ended clears both.
+    ORDER_CONFLICT = "order-conflict"
 
 
 # Fences that need the operator to look before entries resume; all others clear themselves
@@ -163,6 +173,14 @@ ORDER_CASH = "order-cash"
 # Recorded fees that the cash activity proved wrong, replaced by the proven ones (before,
 # after); runtime/watch.py alerts on each such row.
 ORDER_FEES_CORRECTED = "order-fees-corrected"
+# The broker row behind each new `order-conflict` fence cause, as read (the evidence; the
+# order's recorded state and fills are what the last agreeing read showed).
+ORDER_CONFLICT_ROW = "order-conflict"
+# The `order-conflict` cause of an order last seen working that open orders leave out.
+# Key suffix of the `order-conflict` fence a listed open-orders row raised.
+LISTED_KEY = "/listed"
+UNLISTED_CAUSE = ("last seen working but not in the broker's open orders: proves nothing "
+                  "until its Detail is read")
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
 _WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
 # Cancel states after which a later Detail read decides whether the cancel took.
@@ -483,10 +501,14 @@ class Engine:
             self._fence_row(fence, key, cause)
 
     def _clear_fence(self, fence: Fence, key: str = "") -> None:
-        name = f"{fence}:{key}" if key else str(fence)
         with self.store.transaction():
-            if self.store.execute("DELETE FROM fences WHERE name = ?", (name,)):
-                self.store.append("fence-cleared", {}, key=name, run_id=self.run_id)
+            self._unfence_row(fence, key)
+
+    def _unfence_row(self, fence: Fence, key: str = "") -> None:
+        """Clear a fence inside an already open transaction."""
+        name = f"{fence}:{key}" if key else str(fence)
+        if self.store.execute("DELETE FROM fences WHERE name = ?", (name,)):
+            self.store.append("fence-cleared", {}, key=name, run_id=self.run_id)
 
     def _has_fence(self, fence: Fence, key: str = "") -> bool:
         name = f"{fence}:{key}" if key else str(fence)
@@ -977,16 +999,111 @@ class Engine:
                               key=client_order_id, run_id=self.run_id)
         return True
 
+    def _read_conflict(self, row: OrderRow, detail: OrderDetail) -> tuple[bool, str] | None:
+        """How a broker row (Detail or a listed row) of this order disagrees with the order as
+        sent, or None. `(True, cause)`: the row cannot describe our order: another symbol,
+        side or type, or a filled quantity below zero or above what we sent or above its own
+        quantity (hard rule 7: nothing from it is recorded, so no stop or close is ever sized
+        on it). `(False, cause)`: the order was changed at the broker: another quantity, or a
+        stop or limit price a cent or more away from ours (Detail shows prices rounded to the
+        cent, docs/webull-facts.md) that is not the price an unresolved replace of ours asked
+        for. Its state and fills are recorded (they never exceed what we sent), but while it
+        works it proves nothing (`protects`). A price the row does not show is not compared."""
+        if (detail.symbol != row.symbol or detail.side is not row.side
+                or detail.order_type is not row.order_type or detail.filled_quantity < 0
+                or detail.filled_quantity > row.quantity
+                or detail.filled_quantity > detail.quantity):
+            return True, (f"broker shows {detail.filled_quantity} filled of {detail.quantity} "
+                          f"{detail.symbol} {detail.side} {detail.order_type}, sent "
+                          f"{row.quantity} {row.symbol} {row.side} {row.order_type}: not "
+                          "recorded; shares may be held without a stop: check it in the Webull "
+                          "app")
+        word, ours, shown = (("stop", row.stop_price, detail.stop_price)
+                             if row.stop_price is not None
+                             else ("limit", row.limit_price, detail.limit_price))
+        moved = (ours is not None and shown is not None and abs(shown - ours) >= CENT
+                 and shown != self._replace_target(row))
+        if not moved and detail.quantity == row.quantity:
+            return None
+        if ours is None:
+            return False, (f"changed at the broker: {detail.quantity} shares, sent "
+                           f"{row.quantity}; not counted until it agrees")
+        return False, (f"changed at the broker: {detail.quantity} at {word} "
+                       f"{shown if moved else ours}, sent {row.quantity} at {word} {ours}; "
+                       "not counted until it agrees")
+
+    def _replace_target(self, row: OrderRow) -> Decimal | None:
+        """The stop price an unresolved replace of this order asked for (`replace_intent`),
+        while its fence is set: Detail may show it before the replace is confirmed."""
+        if row.leg is not Leg.STOP or not self._has_fence(Fence.REPLACE_UNRESOLVED,
+                                                          row.client_order_id):
+            return None
+        rows = self.store.journal("replace-intent", row.client_order_id)
+        return None if not rows else _dec(rows[-1].body["to"])
+
+    def _note_conflict(self, row: OrderRow, detail: OrderDetail,
+                       conflict: tuple[bool, str] | None, *, listed: bool = False) -> None:
+        """Inside a transaction: set, change or clear this order's `order-conflict` fence of
+        this read's source (`listed`: an open-orders row; else Detail) after a read. Each new
+        cause journals the row it came from (the evidence). An agreeing read clears only its
+        own source's fence; a Detail row showing the order ended clears both, unless the row
+        itself cannot be ours."""
+        cid = row.client_order_id
+        key = cid + LISTED_KEY if listed else cid
+        if conflict is None or (not conflict[0] and detail.state.terminal):
+            self._unfence_row(Fence.ORDER_CONFLICT, key)
+            if not listed and detail.state.terminal:
+                # Ended: no listed row will ever show it again to clear its listed fence.
+                self._unfence_row(Fence.ORDER_CONFLICT, cid + LISTED_KEY)
+            return
+        cause = conflict[1]
+        name = f"{Fence.ORDER_CONFLICT}:{key}"
+        current = self.store.query("SELECT cause FROM fences WHERE name = ?", (name,))
+        if current and current[0]["cause"] == cause:
+            return
+        self._unfence_row(Fence.ORDER_CONFLICT, key)
+        self.store.append(ORDER_CONFLICT_ROW, {
+            "source": "open-orders" if listed else "detail",
+            "cause": cause, "state": detail.state, "raw_status": detail.raw_status,
+            "symbol": detail.symbol, "side": detail.side, "order_type": detail.order_type,
+            "quantity": detail.quantity, "filled_quantity": detail.filled_quantity,
+            "average_fill_price": detail.average_fill_price, "stop_price": detail.stop_price,
+            "limit_price": detail.limit_price}, key=cid, run_id=self.run_id)
+        self._fence_row(Fence.ORDER_CONFLICT, key, cause)
+
+    def _conflicted(self, row: OrderRow) -> bool:
+        """Either source's `order-conflict` fence is set for this order."""
+        cid = row.client_order_id
+        return (self._has_fence(Fence.ORDER_CONFLICT, cid)
+                or self._has_fence(Fence.ORDER_CONFLICT, cid + LISTED_KEY))
+
+    def _unproven(self, row: OrderRow) -> bool:
+        """This order's broker state is not known now: its Detail has been unreadable too
+        long, or its latest broker row disagreed with the order as sent."""
+        return self._detail_lost(row) or self._conflicted(row)
+
+    def protects(self, row: OrderRow) -> bool:
+        """A stop counts as broker-side protection: acknowledged, last seen working, and its
+        latest broker row readable and agreeing with the stop as sent. One answer for the
+        engine's protection fence, the loop's busy check and the operator's screen."""
+        return row.leg is Leg.STOP and row.verified and not self._unproven(row)
+
     def _apply_detail(self, row: OrderRow, detail: OrderDetail, *, resurrected: bool) -> None:
-        """Inside a transaction: record a Detail read."""
+        """Inside a transaction: record a Detail read (or a listed row read like one). A row
+        that cannot describe our order (`_read_conflict`) proves only that the order exists:
+        its state, fills and fees are not recorded."""
         cid = row.client_order_id
         if row.send_state is not SendState.ACKNOWLEDGED:
             self._set_send_state(cid, SendState.ACKNOWLEDGED,
                                  {"resolved_by": "resurrection" if resurrected else "detail"})
-        changed = (detail.state != row.broker_state
-                   or detail.filled_quantity != row.filled_quantity)
         self.store.execute("UPDATE orders SET last_detail_at = ?, absent_reads = 0 "
                            "WHERE client_order_id = ?", (self.clock(), cid))
+        conflict = self._read_conflict(row, detail)
+        self._note_conflict(row, detail, conflict)
+        if conflict is not None and conflict[0]:
+            return
+        changed = (detail.state != row.broker_state
+                   or detail.filled_quantity != row.filled_quantity)
         if changed:
             self.store.execute(
                 "UPDATE orders SET broker_state = ?, filled_quantity = ?, "
@@ -1000,7 +1117,7 @@ class Engine:
                 "average_fill_price": detail.average_fill_price}, key=cid, run_id=self.run_id)
             if detail.state is OrderState.REJECTED:
                 self._count_rejection(row)
-        elif self._held_proof_due(row, detail):
+        elif conflict is None and self._held_proof_due(row, detail):
             self.store.append(ORDER_HELD, {
                 "state": detail.state, "raw_status": detail.raw_status,
                 "filled_quantity": detail.filled_quantity}, key=cid, run_id=self.run_id)
@@ -1360,9 +1477,9 @@ class Engine:
     def _verify_listed(self) -> None:
         """Verify every new stop with one open-orders read (owner decision 2026-11-17), so
         fills arriving together do not wait for a Detail read per stop: a stop the list shows
-        working, as sent (symbol, side, type, quantity; prices are listed rounded, as in
-        Detail, which does not compare them either) and with no more filled than Detail
-        showed, counts as verified. Only acknowledged stops never seen
+        working, as sent (symbol, side, type, quantity, and the stop price to the cent the list
+        rounds it to: `_read_conflict`) and with no more filled than Detail showed, counts as
+        verified. Only acknowledged stops never seen
         working and not being cancelled; anything else in the list (a fill, a cancel, a
         different row) and any absence prove nothing and are left to Detail. A failed or
         budget-refused read leaves them to Detail too. The list is read every step while a new
@@ -1383,7 +1500,8 @@ class Engine:
             if (row is None or listed.state not in _WORKING or listed.symbol != row.symbol
                     or listed.side is not row.side or listed.order_type is not row.order_type
                     or listed.quantity != row.quantity
-                    or listed.filled_quantity != row.filled_quantity):
+                    or listed.filled_quantity != row.filled_quantity
+                    or self._read_conflict(row, listed) is not None):
                 continue
             with self.store.transaction():
                 self.store.execute(
@@ -1421,7 +1539,9 @@ class Engine:
         hold a fill without its stops: a live entry in a symbol whose broker position grew
         past what Detail says we hold, not read since that was first seen, or an entry whose
         cancel waits for Detail, not read since that cancel (its read shows its last fills);
-        and, while the open-orders list cannot be read, a stop never read
+        a live order a reconcile found missing from open orders, not read since (once each
+        per reconcile: its read decides whether its stop is still there, and entries stay
+        blocked until then); and, while the open-orders list cannot be read, a stop never read
         (entries filling in the same poll each get their stops verified before the next entry
         is read, so the first fills are not left waiting behind the last). At most `[risk]
         max_working_entries` entries work at once, so these reads are bounded and the
@@ -1444,6 +1564,8 @@ class Engine:
         bought = moved_unread and moved is not None and moved[0] > moved[1]
         if row.leg is Leg.ENTRY and (bought or awaits_cancel):
             return 1
+        if row.live and self._conflict_unread(row):
+            return 1
         if (row.leg is Leg.STOP and row.live and not row.verified and row.last_detail_at is None
                 and not self._list_answered):
             return 1
@@ -1452,6 +1574,14 @@ class Engine:
         if moved_unread:
             return 0 if row.leg is Leg.STOP and row.symbol in cancelling else 3
         return 4
+
+    def _conflict_unread(self, row: OrderRow) -> bool:
+        """This order's `order-conflict` fence was set after its latest Detail read (a
+        reconcile found it missing from open orders): that read decides whether its stop is
+        still there."""
+        rows = self.store.query("SELECT set_at_epoch FROM fences WHERE name = ?",
+                                (f"{Fence.ORDER_CONFLICT}:{row.client_order_id}",))
+        return bool(rows) and (row.last_detail_at or 0.0) < rows[0]["set_at_epoch"]
 
     @staticmethod
     def _awaits_cancel_read(row: OrderRow) -> bool:
@@ -1515,7 +1645,7 @@ class Engine:
 
         # Only entry and exit orders change the quantity on purpose; a resting stop does not.
         # One whose Detail cannot be read explains nothing: the mismatch is fenced, not excused.
-        in_flight = any(o.live and not self._detail_lost(o) for o in (entry, *exits))
+        in_flight = any(o.live and not self._unproven(o) for o in (entry, *exits))
         if held is None:
             pass
         elif held == expected or in_flight:
@@ -1841,8 +1971,7 @@ class Engine:
                           expected: Decimal) -> None:
         """Fence while the held quantity lacks a verified stop; exit if that lasts too long."""
         stops = [o for o in self.orders(trade.trade_id) if o.leg is Leg.STOP]
-        verified = sum((s.open_quantity for s in stops
-                        if s.verified and not self._detail_lost(s)), ZERO)
+        verified = sum((s.open_quantity for s in stops if self.protects(s)), ZERO)
         if expected <= 0 or verified >= expected:
             self._clear_fence(Fence.UNPROTECTED, trade.trade_id)
             return
@@ -1852,7 +1981,7 @@ class Engine:
         # they are not proof (the fences above alert), but closing for them would cancel a
         # likely working stop and end the day's entries over a read outage. No exit for them.
         unreadable = sum((s.open_quantity for s in stops if s.verified and not s.cancelling
-                          and self._detail_lost(s)), ZERO)
+                          and self._detail_lost(s) and not self._conflicted(s)), ZERO)
         if verified + unreadable >= expected:
             return
         age = self._fence_age(f"{Fence.UNPROTECTED}:{trade.trade_id}") or 0.0
@@ -2145,6 +2274,20 @@ class Engine:
                                     "crashed during cancel")
         self.reconcile()
 
+    def _mark_unlisted(self, listed: set[str]) -> None:
+        """An order of ours last seen working, with no cancel of ours, that open orders do
+        not list may have ended while nobody was reading (a stop cancelled or changed at the
+        broker during a restart, say): it proves nothing until its own Detail read agrees
+        (`order-conflict`; `_read_first` puts that read first). At startup and at every
+        reconcile, for every such order, so no entry is admitted on a stop that is gone."""
+        working = self.store.query(
+            "SELECT * FROM orders WHERE send_state = ? AND broker_state IN (?, ?)",
+            (SendState.ACKNOWLEDGED, *_WORKING))
+        for row in map(order_from_row, working):
+            if (not row.cancelling and row.client_order_id not in listed
+                    and not self._conflicted(row)):
+                self._set_fence(Fence.ORDER_CONFLICT, row.client_order_id, UNLISTED_CAUSE)
+
     def reconcile(self) -> bool:
         """Compare broker open orders with our records, then step. Returns False if a read
         failed. The startup fence clears on the first success, whenever that is."""
@@ -2174,10 +2317,18 @@ class Engine:
             elif not row.live:
                 # Ours, working at the broker, but we had given up on it.
                 self._resurrect(row, order, "working at the broker but not live in records")
+            elif row.send_state is SendState.ACKNOWLEDGED:
+                # Listed as sent, or changed at the broker (`_read_conflict`); Detail records
+                # its state and fills. Its own fence: an agreeing row never clears what Detail
+                # found, nor Detail what the list shows.
+                with self.store.transaction():
+                    self._note_conflict(row, order, self._read_conflict(row, order),
+                                        listed=True)
         for name in self.fences():
             fence, _, cid = name.partition(":")
             if fence == Fence.FOREIGN_ORDER and cid not in broker_ids:
                 self._clear_fence(Fence.FOREIGN_ORDER, cid)
+        self._mark_unlisted(broker_ids)
         self.step()
         if self._has_fence(Fence.BROKER_READ) or self._positions is None:
             return False

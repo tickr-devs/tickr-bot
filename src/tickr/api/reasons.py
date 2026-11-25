@@ -89,6 +89,21 @@ _FENCE = {
          r"(?P<seconds>[0-9]+) s: the stop may be gone and nothing is sold; check the position "
          r"in the Webull app")),
     "order-missing": _shapes(("order_missing", r"acknowledged order not found by Detail")),
+    "order-conflict": _shapes(
+        ("broker_fill_contradicts", r"broker shows (?P<filled>" + _NUM + r") filled of "
+         r"(?P<quantity>" + _NUM + r") \S+ \S+ \S+, sent (?P<sent>" + _NUM + r") "
+         r"(?P<symbol>\S+) \S+ \S+: not recorded; shares may be held without a stop: check "
+         r"it in the Webull app"),
+        ("stop_changed_at_broker", r"changed at the broker: (?P<quantity>" + _NUM + r") at stop "
+         r"(?P<price>" + _NUM + r"), sent (?P<sent>" + _NUM + r") at stop (?P<sent_price>"
+         + _NUM + r"); not counted until it agrees"),
+        ("limit_changed_at_broker", r"changed at the broker: (?P<quantity>" + _NUM + r") at "
+         r"limit (?P<price>" + _NUM + r"), sent (?P<sent>" + _NUM + r") at limit "
+         r"(?P<sent_price>" + _NUM + r"); not counted until it agrees"),
+        ("quantity_changed_at_broker", r"changed at the broker: (?P<quantity>" + _NUM + r") "
+         r"shares, sent (?P<sent>" + _NUM + r"); not counted until it agrees"),
+        ("order_not_listed", r"last seen working but not in the broker's open orders: proves "
+         r"nothing until its Detail is read")),
     "status-unknown": _shapes(("status_unmapped", r"unmapped status '(?P<status>[^']*)'")),
     "unprotected": _shapes(
         ("stop_covers_part", r"verified stop covers (?P<verified>" + _NUM + r") of (?P<expected>"

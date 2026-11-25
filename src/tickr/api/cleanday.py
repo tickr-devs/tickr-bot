@@ -44,7 +44,8 @@ MISMATCH = frozenset({Fence.FOREIGN_POSITION, Fence.FOREIGN_ORDER, Fence.QUANTIT
 # Fences of an order (or cancel, or replace) whose outcome is not known; a fault when still set
 # at the end of the date.
 UNKNOWN_OUTCOME = frozenset({Fence.UNKNOWN_ORDER, Fence.STATUS_UNKNOWN, Fence.CANCEL_UNKNOWN,
-                             Fence.REPLACE_UNRESOLVED, Fence.DETAIL_UNREADABLE})
+                             Fence.REPLACE_UNRESOLVED, Fence.DETAIL_UNREADABLE,
+                             Fence.ORDER_CONFLICT})
 UNPROTECTED = frozenset({Fence.UNPROTECTED_TIMEOUT, Fence.STOP_REJECTED})
 UNPROTECTED_ALERT = "unprotected-position"  # runtime.alerts.AlertKind.UNPROTECTED_POSITION
 # Exit causes the engine and runtime give when a safety fault forces the close

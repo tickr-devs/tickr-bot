@@ -679,11 +679,13 @@ class Service:
 
     def _stop(self, trade: TradeRow, stops: list[OrderRow]) -> api.Stop:
         live = [s for s in stops if s.live]
-        verified = [s for s in live if s.verified]
+        verified = [s for s in live if self.engine.protects(s)]
         if verified:
             return api.Stop(api.StopState.VERIFIED, trade.stop_price,
                             verified[0].client_order_id)
-        unknown = [s for s in live if s.send_state is SendState.UNKNOWN]
+        # A stop once seen working whose broker row now disagrees or cannot be read is not
+        # shown as verified: the engine does not count it either (`Engine.protects`).
+        unknown = [s for s in live if s.send_state is SendState.UNKNOWN or s.verified]
         if unknown:
             return api.Stop(api.StopState.UNKNOWN, trade.stop_price,
                             unknown[0].client_order_id)

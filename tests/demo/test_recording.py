@@ -197,7 +197,7 @@ def test_record_runs_the_real_bot_and_writes_what_the_apps_read(tmp_path):
     aaa = replace(scenario.today[0], legs=(("09:30", "09:45", D("24.50"), HOT),
                                            ("09:46", "09:48", D(21), HOT)))
     bbb = replace(scenario.today[1], legs=(("09:40", "10:00", D("34.50"), HOT),))
-    scenario = replace(scenario, past=(), today=(aaa, bbb), commands=(), clock="09:50",
+    scenario = replace(scenario, past=(), today=(aaa, bbb), commands=(), clock="09:48",
                        live_until="10:05", listed=(),
                        live=LiveLoop(5, 1, (), ()), recording=Recording(0, 30, 5))
     lines: list[str] = []
@@ -206,7 +206,7 @@ def test_record_runs_the_real_bot_and_writes_what_the_apps_read(tmp_path):
     index, pieces = read(out)
     assert index["demo_day"] == date(2026, 11, 13).isoformat()
     assert index["frames"] == 5 * 60 // index["frame_seconds"]
-    assert index["start"] == "2026-11-13T14:50:00Z"
+    assert index["start"] == "2026-11-13T14:48:00Z"
     assert index["inputs"] == demo.fixture_inputs(root, scenario)
     day = index["demo_day"]
     status, body = answer(index, pieces, "/status", 0)

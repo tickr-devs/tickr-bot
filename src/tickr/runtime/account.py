@@ -173,7 +173,8 @@ class AccountReads:
 # known; any of them means "does not match".
 MISMATCH_FENCES = frozenset({Fence.FOREIGN_POSITION, Fence.FOREIGN_ORDER,
                              Fence.QUANTITY_MISMATCH, Fence.RESURRECTED, Fence.UNKNOWN_ORDER,
-                             Fence.ORDER_MISSING, Fence.STATUS_UNKNOWN, Fence.OVER_PROTECTED})
+                             Fence.ORDER_MISSING, Fence.STATUS_UNKNOWN, Fence.OVER_PROTECTED,
+                             Fence.ORDER_CONFLICT})
 # Journal row after a successful reconciliation: `{matches_records, mismatch}` as in account-v1.
 # Written when the answer differs from the last such row, else at most once per
 # `[orders] reconcile_proof_seconds`; the durable record that the broker and the bot's records

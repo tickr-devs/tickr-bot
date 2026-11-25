@@ -46,7 +46,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from tickr import config as config_module
-from tickr.api.contract import ChartInterval, ChartRange, CommandKind
+from tickr.api.contract import ChartInterval, ChartRange, CommandKind, read_status
 from tickr.api.server import (
     ADVISOR_DECISION,
     COMMAND_ROUTES,
@@ -210,6 +210,12 @@ def record(repo: Path, scenario: Scenario, today: date,
             if code != 0:
                 raise DemoRefused(f"the bot ended the demo day up to its clock with exit code "
                                   f"{code}")
+            held = read_status(cfg.root / cfg.run.data_dir / cfg.api.status_file).positions
+            if held:
+                # The recorded runs start a fresh simulated exchange, as the fixture's live part
+                # does: a position held at the clock would be in the bot's records only.
+                raise DemoRefused(f"the demo day is not flat at {scenario.clock} "
+                                  f"({[p.symbol for p in held]})")
             tape, header = _record_cycle(repo, building, cfg, day, log)
         finally:
             shutil.rmtree(demo_root(repo, building), ignore_errors=True)

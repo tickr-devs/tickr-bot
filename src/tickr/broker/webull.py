@@ -367,7 +367,8 @@ def read_order(item: Any, is_own: IsOwnAccount, where: str) -> OrderDetail:
     an order whose fill we cannot read is one we cannot reason about. Status/quantity
     contradictions map to UNKNOWN (broker/status.py). `filled_price` is recorded on a
     filled row and absent on an unfilled one, so it stays optional; so do `limit_price`
-    (recorded on a LIMIT row; read on LIMIT rows only, display only), `stop_price`
+    (recorded on a LIMIT row; read on LIMIT rows only; an unreadable one is None; the
+    engine compares a shown one with the order as sent, `Engine._read_conflict`), `stop_price`
     (recorded on the working stop, 2026-11-16) and `order_id`."""
     _check_account(item, is_own, where)
     raw_status = str(_require(item, "status", where)).strip()

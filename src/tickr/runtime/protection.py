@@ -38,8 +38,7 @@ def busy(engine: Engine) -> str | None:
                 or any(o.leg is Leg.EXIT and o.live for o in orders)):
             return f"{trade.trade_id}: exit in progress"
         expected = engine.expected_quantity(orders)
-        verified = sum((o.open_quantity for o in orders if o.leg is Leg.STOP and o.verified),
-                       ZERO)
+        verified = sum((o.open_quantity for o in orders if engine.protects(o)), ZERO)
         if expected > 0 and verified < expected:
             return f"{trade.trade_id}: filled {expected}, verified stop covers {verified}"
     return None
