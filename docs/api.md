@@ -1404,6 +1404,10 @@ Each row:
     The `stop` stage's `at` row time is that confirmation too, or the fill while it waits.
   - `decided_at`, `strategy` (`name@version`) and `checks`: the active strategy's latest decision
     on it and every check of that decision, rounded like `check`.
+  - `checked_at`: when a discovery pass last decided it past the screeners this session (refused
+    at the quote or bars stage, or kept as a candidate); `null` when none has. Under a lasting
+    request-budget deficit each pass reads the least recently decided symbols first, so a
+    `not_reached` row's `checked_at` says how old its last check is.
 
 `as_of` is the end of the latest pass; `null` with `as_of_cause` when none is recorded for the
 day. A malformed capture line is `503 unavailable`.

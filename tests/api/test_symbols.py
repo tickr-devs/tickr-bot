@@ -257,3 +257,19 @@ def test_a_read_hands_out_a_snapshot_a_later_fold_leaves_alone(cfg):
     second = day.read(path, open_tail=True)
     assert first.latest["ABCD"].state is contract.SymbolState.WAITING and "EFGH" not in first.movers
     assert second.latest["ABCD"].state is contract.SymbolState.DROPPED and "EFGH" in second.movers
+
+
+def test_each_row_carries_the_time_of_its_last_check():
+    """Backlog T16: under a lasting budget deficit a `not_reached` row says how old its last
+    check is; a record written before the times were kept leaves the earlier ones."""
+    folded = symbols.DiscoveryFolded()
+    checked_at = BAR - timedelta(minutes=2)
+    first = _pass(0, candidates=("ABCD",), not_reached=("SPY",))
+    first["checked_symbols"] = [{"symbol": "ABCD", "checked_at": _iso(checked_at)},
+                                {"symbol": "SPY", "checked_at": _iso(checked_at)}]
+    folded.fold(first)
+    folded.fold(_pass(1, not_reached=("SPY",)))
+    rows = {r.symbol: r for r in symbols.symbols_document(DAY, folded, (), (), (), 4).rows}
+    assert rows["SPY"].state is contract.SymbolState.NOT_REACHED
+    assert rows["SPY"].checked_at == checked_at and rows["ABCD"].checked_at == checked_at
+    assert rows["THIN"].checked_at is None

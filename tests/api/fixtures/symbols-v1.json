@@ -116,7 +116,8 @@
           "note": "",
           "against_trigger": false
         }
-      ]
+      ],
+      "checked_at": null
     },
     {
       "symbol": "QRST",
@@ -180,7 +181,8 @@
           "note": "",
           "against_trigger": false
         }
-      ]
+      ],
+      "checked_at": null
     },
     {
       "symbol": "WXYZ",
@@ -213,7 +215,8 @@
       "reached": [],
       "decided_at": null,
       "strategy": null,
-      "checks": []
+      "checks": [],
+      "checked_at": null
     },
     {
       "symbol": "SPY",
@@ -238,7 +241,8 @@
       "reached": [],
       "decided_at": null,
       "strategy": null,
-      "checks": []
+      "checks": [],
+      "checked_at": null
     },
     {
       "symbol": "SLOW",
@@ -263,7 +267,8 @@
       "reached": [],
       "decided_at": null,
       "strategy": null,
-      "checks": []
+      "checks": [],
+      "checked_at": null
     }
   ],
   "api_version": 1

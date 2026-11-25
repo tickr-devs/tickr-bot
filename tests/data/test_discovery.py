@@ -12,7 +12,10 @@ from tickr import config
 from tickr.broker.budget import BudgetExhausted, RequestBudget
 from tickr.data.base import FakeMarketData, ScreenerKind, SymbolsRefused
 from tickr.data.discovery import (
+    BAR_LENGTH,
     Cause,
+    CheckedSymbol,
+    CheckedSymbols,
     DiscoverySettings,
     RefusedSymbol,
     RefusedSymbols,
@@ -20,6 +23,7 @@ from tickr.data.discovery import (
     StopCause,
     completed_session_bars,
     discover,
+    latest_checked,
     latest_refusals,
     merge,
     pass_record,
@@ -610,3 +614,98 @@ def test_latest_refusals_reads_the_newest_complete_record():
         latest_refusals(["{not json\n"], "f")
     with pytest.raises(ValueError, match="UTC offset"):
         latest_refusals([line(["A"], at="2026-11-13T15:00:00")], "f")
+
+
+# ---------------------------------------------------------------- T16: partial candle, coverage
+
+
+class Clock:
+    def __init__(self, at) -> None:
+        self.at = at
+
+    def __call__(self):
+        return self.at
+
+
+class SlowFor(FakeMarketData):
+    """A bars answer for `slow` symbols arrives `delay` after it was sent."""
+
+    def __init__(self, clock: Clock, slow: set[str], delay: timedelta) -> None:
+        super().__init__()
+        self.clock, self.slow, self.delay = clock, slow, delay
+
+    def bars(self, symbols, count, *, budget_reserve=0):
+        got = super().bars(symbols, count, budget_reserve=budget_reserve)
+        if self.slow & set(symbols):
+            self.clock.at += self.delay
+        return got
+
+
+def test_a_late_answer_never_turns_the_minute_in_progress_into_a_closed_one():
+    """Review 2026-11-24 section 6: 4.8 M USD in closed minutes and 0.4 M in the minute in
+    progress, threshold 5 M. A's read is sent a second before the minute ends and answered two
+    seconds later; B's is sent after the boundary. Each bar counts as closed relative to its
+    own request's send time, and the same time goes to selection, capture and the cache."""
+    progress = OPEN + timedelta(minutes=24)  # the minute in progress when A's read is sent
+    boundary = progress + BAR_LENGTH
+    clock = Clock(boundary - timedelta(seconds=1))
+    md = SlowFor(clock, {"AAA"}, timedelta(seconds=2))
+    md.set_screener(G, [row(G, 1, "AAA"), row(G, 2, "BBB")])
+    for symbol in ("AAA", "BBB"):
+        md.set_quote(quote(symbol, at=clock.at))
+        md.add_bars(bars(symbol, 24, volume="20000"))  # 24 closed minutes: 4.8 M USD
+        md.add_bars(bars(symbol, 1, volume="40000", start=progress))  # 0.4 M USD
+    sink, kept = Sink(), TodayBars()
+    result = discover(md, settings(bars_symbols_per_request=1), Screen(), OPEN, clock, sink,
+                      None, kept)
+    assert [c.instrument.symbol for c in result.candidates] == ["BBB"]
+    (refused,) = result.rejections
+    assert (refused.symbol, refused.cause) == ("AAA", Cause.STRATEGY_LIQUIDITY)
+    assert refused.check is not None and refused.check.measured == Decimal(4_800_000)
+    assert len(result.candidates[0].session_bars) == 25  # B's read was sent after the minute
+    archived = {(b.symbol, b.start) for b in sink.bars_seen}
+    assert ("AAA", progress) not in archived and ("BBB", progress) in archived
+    assert kept.complete(OPEN, "AAA", boundary) is None  # sent before the minute was over
+    assert len(kept.complete(OPEN, "BBB", boundary) or ()) == 25
+
+
+def test_a_lasting_budget_deficit_still_checks_every_symbol_in_turn():
+    """Review 2026-11-24 (5e5c1db0): five candidates, budget for two per pass. Each pass
+    continues with the symbols least recently decided, so all five are checked within three
+    passes, and the candidates stay in screener order."""
+    md = FakeMarketData()
+    symbols = five(md)
+    clock = Clock(NOW)
+    checked = CheckedSymbols()
+    reached: list[list[str]] = []
+    for _ in range(3):
+        md.calls.clear()
+        md.limit("bars", 2)
+        result = discover(md, settings(bars_symbols_per_request=1), Screen(), OPEN, clock,
+                          None, None, None, None, checked)
+        assert result.stopped is not None and result.stopped.stage is Stage.BARS
+        reached.append([c.instrument.symbol for c in result.candidates])
+        clock.at += timedelta(seconds=1)  # quotes stay fresh
+    assert reached == [["S00", "S01"], ["S02", "S03"], ["S00", "S04"]]
+    assert {c.symbol for c in checked.remembered()} == set(symbols)
+    record = pass_record(result, clock.at)
+    assert [c["symbol"] for c in record["checked_symbols"]] == symbols
+
+
+def test_check_times_are_kept_in_the_record_and_seed_a_restart():
+    md = FakeMarketData()
+    five(md)
+    md.limit("bars", 2)
+    first = discover(md, settings(bars_symbols_per_request=1), Screen(), OPEN, lambda: NOW)
+    lines = [json.dumps(pass_record(first, NOW)) + "\n"]
+    found = latest_checked(lines, "discovery.jsonl")
+    assert found == (OPEN, (CheckedSymbol("S00", NOW), CheckedSymbol("S01", NOW)))
+    restarted = CheckedSymbols()
+    restarted.seed(*found)
+    md.calls.clear()
+    second = discover(md, settings(bars_symbols_per_request=1), Screen(), OPEN, lambda: NOW,
+                      None, None, None, None, restarted)
+    assert [c.instrument.symbol for c in second.candidates] == ["S02", "S03"]
+    assert latest_checked([json.dumps({"old": "record"}) + "\n"], "x") is None
+    restarted.start(OPEN + timedelta(days=1))  # the next session starts from screener order
+    assert restarted.remembered() == ()

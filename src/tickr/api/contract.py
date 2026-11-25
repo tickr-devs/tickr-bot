@@ -2467,6 +2467,10 @@ class SymbolRowV1:
     """That decision's strategy and version, `name@version`."""
     checks: tuple[CheckV1, ...] = _added_later(())
     """That decision's checks, in the strategy's order, rounded like every shown check."""
+    checked_at: datetime | None = _added_later(None)
+    """When a discovery pass last decided it past the screeners (refused at the quote or bars
+    stage, or kept as a candidate) this session; null when none has. While the request budget
+    stops passes early its age shows how stale a `not_reached` row's last check is."""
 
 
 @dataclass(frozen=True)

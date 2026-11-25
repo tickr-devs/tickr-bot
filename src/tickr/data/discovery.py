@@ -53,7 +53,7 @@ same symbols again.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -171,6 +171,8 @@ class DiscoveryResult:
     """Every refusal the session memory still held when the pass ended (`RefusedSymbols`)."""
     screened: tuple[ScreenerRow, ...] = ()
     """Every screener row the pass read, in list order (the profile recorder's input)."""
+    checked_symbols: tuple[CheckedSymbol, ...] = ()
+    """When each symbol was last decided this session, after the pass (`CheckedSymbols`)."""
 
     def universe_symbols(self) -> set[str]:
         """The merged instruments that passed the universe rules (exchange, currency, type)."""
@@ -192,6 +194,9 @@ class DiscoveryResult:
             text += f": {self.stopped.stage} {self.stopped.cause}"
         return text
 
+
+# Stages whose refusal is a decision on the symbol's own data (`CheckedSymbols`).
+_CHECK_STAGES = frozenset({Stage.SNAPSHOT, Stage.BARS})
 
 _UNIVERSE_CAUSES = frozenset({
     Cause.CONFLICTING_ROWS, Cause.EXCHANGE_NOT_ALLOWED, Cause.CURRENCY_NOT_ALLOWED,
@@ -329,6 +334,50 @@ class RefusedSymbols:
         self._refused[symbol] = (stage, now)
 
 
+@dataclass(frozen=True)
+class CheckedSymbol:
+    """When a pass last decided one symbol past the screeners (refused at the snapshot or bars
+    stage, or kept as a candidate)."""
+
+    symbol: str
+    at: datetime
+
+
+class CheckedSymbols:
+    """The time each symbol was last decided this regular session (keyed by its open).
+
+    A pass reads the symbols least recently decided first (never decided first, in screener
+    order, then the oldest check), so when the request budget stops passes early again and
+    again the next pass continues where the last one stopped and the tail of the list is not
+    starved (review 2026-11-24, backlog T16). Every pass record carries these times
+    (`checked_symbols`), so a restarted bot seeds the memory from the day's latest record and
+    the screen can show the age of each symbol's last check."""
+
+    def __init__(self) -> None:
+        self._session: datetime | None = None
+        self._at: dict[str, datetime] = {}
+
+    def seed(self, session_open: datetime, checked: Sequence[CheckedSymbol]) -> None:
+        self._session = session_open
+        self._at = {c.symbol: c.at for c in checked}
+
+    def start(self, session_open: datetime) -> None:
+        """Forget every check of an earlier session."""
+        if self._session != session_open:
+            self._session, self._at = session_open, {}
+
+    def order(self, symbols: Sequence[str]) -> list[str]:
+        """`symbols` least recently decided first; ties keep their given (screener) order."""
+        return sorted(symbols, key=lambda s: (s in self._at, self._at.get(s, self._session)))
+
+    def mark(self, symbols: Iterable[str], at: datetime) -> None:
+        for symbol in symbols:
+            self._at[symbol] = at
+
+    def remembered(self) -> tuple[CheckedSymbol, ...]:
+        return tuple(CheckedSymbol(symbol, at) for symbol, at in sorted(self._at.items()))
+
+
 def merge(rows: Sequence[ScreenerRow]) -> tuple[list[Instrument], list[Rejection]]:
     """Merge screener rows by instrument_id. Conflicts are refused, never resolved."""
     order: list[str] = []
@@ -447,6 +496,7 @@ def discover(
     refused_symbols: RefusedSymbols | None = None,
     today_bars: TodayBars | None = None,
     wait: Callable[[float], object] | None = None,
+    checked_symbols: CheckedSymbols | None = None,
 ) -> DiscoveryResult:
     """Run one discovery pass with `screen` (the active strategy) as the liquidity rules.
     `clock` returns the aware current time. `refused_symbols` carries the symbols refused as
@@ -455,10 +505,19 @@ def discover(
     `wait(seconds)` sleeps (ending early when the run stops); with it, a bars read our budget
     refused is read again after the window frees it, within `settings.budget_wait` for the
     whole pass (`BudgetPacer`); without it, and always for a snapshot read (that route keeps no
-    reserve for the trading path), the pass stops at the first refusal."""
+    reserve for the trading path), the pass stops at the first refusal. `checked_symbols`
+    carries when each symbol was last decided (a fresh memory when None): the pass reads the
+    least recently decided first, and keeps its candidates in screener order.
+
+    A bar counts as complete only when its minute ended before the request that returned it
+    was sent (that request's own send time, taken after any wait for the budget), and the
+    same time goes to the candidate check, the capture and `today_bars`: an answer that
+    arrives late never turns the minute in progress into a closed one."""
     pacer = BudgetPacer(settings.budget_wait, wait)
     memory = refused_symbols if refused_symbols is not None else RefusedSymbols()
     refused = memory.active(session_open, clock(), settings.refused_symbol_recheck)
+    checks = checked_symbols if checked_symbols is not None else CheckedSymbols()
+    checks.start(session_open)
 
     def refuse(instrument: Instrument, stage: Stage, earlier: bool) -> Rejection:
         when = "earlier this session" if earlier else "this pass"
@@ -506,10 +565,15 @@ def discover(
     def result(candidates: list[Candidate], stop: Stopped | None) -> DiscoveryResult:
         decided = {r.symbol for r in rejections} | {c.instrument.symbol for c in candidates}
         not_reached = tuple(i.symbol for i in universe if i.symbol not in decided)
+        checks.mark(sorted({r.symbol for r in rejections if r.stage in _CHECK_STAGES}
+                           | {c.instrument.symbol for c in candidates}), clock())
+        rank = {i.symbol: n for n, i in enumerate(universe)}
+        ranked = sorted(candidates, key=lambda c: rank[c.instrument.symbol])
         return DiscoveryResult(started, tuple(read), merged, len(universe),
-                               tuple(candidates), tuple(rejections), stop, tuple(instruments),
+                               tuple(ranked), tuple(rejections), stop, tuple(instruments),
                                not_reached, tuple(movers), isinstance(screen, FastMovers),
-                               session_open, memory.remembered(), tuple(rows))
+                               session_open, memory.remembered(), tuple(rows),
+                               checks.remembered())
 
     if stopped is not None:
         return result([], stopped)
@@ -522,6 +586,7 @@ def discover(
             rejections.append(refuse(instrument, refused[instrument.symbol], earlier=True))
         else:
             asked.append(instrument.symbol)
+    asked = checks.order(asked)  # a pass the budget stops early continues here next time
     quote_ok: list[tuple[Instrument, Quote]] = []
     def refused_by(stage: Stage, unknown: list[str]) -> Callable[[str], None]:
         def found(symbol: str) -> None:  # remembered at once: survives a budget stop
@@ -558,13 +623,15 @@ def discover(
     entries = {i.symbol: (i, q) for i, q in quote_ok}
     for chunk in _chunks([i.symbol for i, _ in quote_ok], settings.bars_symbols_per_request):
         unknown = []
-        sends: list[datetime] = []
+        # Each symbol's own request: its send time (a split read sends several).
+        sent_at: dict[str, datetime] = {}
 
-        def read_bars(symbols: Sequence[str], sends: list[datetime] = sends) -> list[Bar]:
+        def read_bars(symbols: Sequence[str],
+                      sent_at: dict[str, datetime] = sent_at) -> list[Bar]:
             at = clock()  # right before the send, after any wait for the budget
             got = source.bars(symbols, settings.bars_per_symbol,
                               budget_reserve=settings.bars_budget_reserve)
-            sends.append(at)
+            sent_at.update(dict.fromkeys(symbols, at))
             return got
 
         try:
@@ -576,12 +643,12 @@ def discover(
             return result(candidates, Stopped(Stage.BARS, StopCause.DELAYED_DATA, str(exc)))
         chunk = [s for s in chunk if s not in unknown]
         if today_bars is not None:
-            # The earliest send of the chunk: a bar not finished by then is never complete.
-            today_bars.put(session_open, chunk, bars, min(sends, default=clock()))
-        now = clock()
-        completed = [b for b in bars if b.symbol in entries and b.start + BAR_LENGTH <= now]
+            for at in sorted(set(sent_at[s] for s in chunk)):
+                today_bars.put(session_open, [s for s in chunk if sent_at[s] == at], bars, at)
+        completed = [b for b in bars if b.symbol in entries and b.symbol in sent_at
+                     and b.start + BAR_LENGTH <= sent_at[b.symbol]]
         if capture is not None:
-            capture.bars(completed, provider, now)
+            capture.bars(completed, provider, clock())
         for symbol in chunk:
             instrument, quote = entries[symbol]
             own = [b for b in completed if b.symbol == symbol]
@@ -590,7 +657,7 @@ def discover(
                                             "0 bars", "at least one completed M1 bar",
                                             Stage.BARS))
                 continue
-            session = completed_session_bars(own, session_open, now)
+            session = completed_session_bars(own, session_open, sent_at[symbol])
             if not session:
                 rejections.append(Rejection(instrument.instrument_id, symbol, Cause.NO_BARS,
                                             "0 session bars",
@@ -656,6 +723,30 @@ def latest_refusals(lines: Sequence[str],
     return None
 
 
+def latest_checked(lines: Sequence[str],
+                   where: str) -> tuple[datetime, tuple[CheckedSymbol, ...]] | None:
+    """(session open, last check times) of the newest complete pass record among `lines` (a
+    day's discovery.jsonl, oldest first); None when it carries none (none yet, or a record
+    written before they were kept). Same reading rules as `latest_refusals`."""
+    for number in range(len(lines), 0, -1):
+        text = lines[number - 1]
+        if (number == len(lines) and not text.endswith("\n")) or not text.strip():
+            continue
+        try:
+            record = json.loads(text)
+            if "checked_symbols" not in record:
+                return None
+            session = datetime.fromisoformat(record["session_open"])
+            checked = tuple(CheckedSymbol(c["symbol"], datetime.fromisoformat(c["checked_at"]))
+                            for c in record["checked_symbols"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"{where}:{number}: {exc}") from exc
+        if session.tzinfo is None or any(c.at.tzinfo is None for c in checked):
+            raise ValueError(f"{where}:{number}: a time has no UTC offset")
+        return session, checked
+    return None
+
+
 def pass_record(result: DiscoveryResult, finished_at: datetime) -> dict[str, Any]:
     """One discovery pass as a JSON object (Decimal values as strings, times ISO-8601 UTC):
     the screeners read, where it stopped, every instrument's sources, every refusal with its
@@ -684,6 +775,8 @@ def pass_record(result: DiscoveryResult, finished_at: datetime) -> dict[str, Any
         "session_open": None if result.session_open is None else at(result.session_open),
         "refused_symbols": [{"symbol": r.symbol, "stage": r.stage.value, "refused_at": at(r.at)}
                             for r in result.refused_symbols],
+        "checked_symbols": [{"symbol": c.symbol, "checked_at": at(c.at)}
+                            for c in result.checked_symbols],
         "movers": [{"symbol": m.symbol, "bar_start": at(m.bar_start), "close": str(m.close),
                     "low": str(m.low), "bar_dollar_volume": str(m.bar_dollar_volume),
                     "volume_ratio": _signal(m.volume_ratio), "move_atr": _signal(m.move_atr),

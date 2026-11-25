@@ -164,6 +164,7 @@ class DiscoveryFolded:
     reached: dict[str, dict[S, datetime]] = field(default_factory=dict)  # first time per stage
     latest: dict[str, _Outcome] = field(default_factory=dict)
     movers: dict[str, _Mover] = field(default_factory=dict)
+    checked: dict[str, datetime] = field(default_factory=dict)  # of the latest pass record
     measured: bool | None = None  # of the latest pass
     as_of: datetime | None = None
 
@@ -204,6 +205,10 @@ class DiscoveryFolded:
             if not isinstance(m["symbol"], str):
                 raise ValueError("a mover's symbol is not text")
             self.movers[m["symbol"]] = _Mover.parse(m)
+        # Records written before the check times were kept carry none: the old ones stay.
+        if "checked_symbols" in raw:
+            self.checked = {c["symbol"]: _time(c["checked_at"], "checked_at")
+                            for c in raw["checked_symbols"]}
         if not isinstance(raw["movers_measured"], bool):
             raise ValueError("movers_measured is not true or false")
         self.measured = raw["movers_measured"]
@@ -213,7 +218,8 @@ class DiscoveryFolded:
         """A copy whose maps a later fold never changes (their values are never mutated)."""
         return DiscoveryFolded(dict(self.first_seen), dict(self.furthest),
                                {k: dict(v) for k, v in self.reached.items()}, dict(self.latest),
-                               dict(self.movers), self.measured, self.as_of)
+                               dict(self.movers), dict(self.checked), self.measured,
+                               self.as_of)
 
 
 class DiscoveryDay:
@@ -360,7 +366,8 @@ def symbols_document(day: date, folded: DiscoveryFolded, chips: Sequence[api.Flo
             strategy=None if record is None
             else f"{record.decision.strategy}@{record.decision.version}",
             checks=() if record is None
-            else tuple(api.shown_check(c, places) for c in record.decision.checks)))
+            else tuple(api.shown_check(c, places) for c in record.decision.checks),
+            checked_at=folded.checked.get(symbol)))
     counts = tuple(api.SymbolStageCountV1(
         stage, sum(1 for r in rows if ORDER.index(r.furthest) >= ORDER.index(stage)))
         for stage in ORDER)

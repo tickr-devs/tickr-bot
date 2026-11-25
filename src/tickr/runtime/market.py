@@ -41,11 +41,13 @@ from tickr.data.base import (
 from tickr.data.capture import DISCOVERY_FILE, CaptureError, CaptureWriter
 from tickr.data.discovery import (
     Candidate,
+    CheckedSymbols,
     DiscoveryResult,
     DiscoverySettings,
     NoStrategy,
     RefusedSymbols,
     discover,
+    latest_checked,
     latest_refusals,
     pass_record,
 )
@@ -337,6 +339,7 @@ class MarketRuntime:
         self.observer_watch: set[str] = set()
         self.discovery: DiscoveryState | None = None
         self._refused_symbols = RefusedSymbols()  # unknown to a route, kept for the session
+        self._checked_symbols = CheckedSymbols()  # last decided, read least recent first
         # The active strategy's liquidity rules, set by the caller once the strategy is loaded;
         # until then discovery still captures screeners and quotes but keeps no candidate.
         self.screen: Liquidity = NoStrategy()
@@ -355,9 +358,10 @@ class MarketRuntime:
         self._seed_refused_symbols()
 
     def _seed_refused_symbols(self) -> None:
-        """Start the refused-symbol memory from today's latest discovery pass record, so a
-        restart does not split the same refused chunks again on its first pass. Unreadable:
-        journaled once with the cause, and the memory starts empty (it only saves requests)."""
+        """Start the refused-symbol and checked-symbol memories from today's latest discovery
+        pass record, so a restart does not split the same refused chunks again on its first
+        pass, and continues the check order where the last pass stopped. Unreadable: journaled
+        once with the cause, and the memories start empty (they only save requests)."""
         if self.capture is None:
             return
         path = existing(self.capture.path(ny_date_of(self._started), DISCOVERY_FILE))
@@ -365,7 +369,9 @@ class MarketRuntime:
             return
         try:
             with open_text(path) as handle:
-                found = latest_refusals(handle.readlines(), str(path))
+                lines = handle.readlines()
+            found = latest_refusals(lines, str(path))
+            checked = latest_checked(lines, str(path))
         except Exception as exc:  # noqa: BLE001 - any unreadable record (a truncated .gz twin
             # raises EOFError) must never stop the bot from starting; it only costs requests
             with self.engine.store.transaction():
@@ -376,6 +382,8 @@ class MarketRuntime:
             return
         if found is not None:
             self._refused_symbols.seed(*found)
+        if checked is not None:
+            self._checked_symbols.seed(*checked)
 
     def bind(self) -> None:
         """Bind the stream listener before the stream starts, so the first connect is seen."""
@@ -652,8 +660,9 @@ class MarketRuntime:
         settings, screen, ignition = self.settings, self.screen, self.ignition
         tee = None if ignition is None else _Tee(self.capture, ignition)
         capture = self.capture if tee is None else tee
-        refused, today_bars, clock, monotonic = (self._refused_symbols, self.today_bars,
-                                                 self.now, self.monotonic)
+        refused, checked, today_bars, clock, monotonic = (
+            self._refused_symbols, self._checked_symbols, self.today_bars, self.now,
+            self.monotonic)
         # A wait for the budget ends at once when the run stops; the next read then refuses.
         wait = self._worker.stopping.wait
 
@@ -661,7 +670,7 @@ class MarketRuntime:
             begun = monotonic()
             try:
                 result = discover(source, settings, screen, session_open, clock, capture,
-                                  refused, today_bars, wait)
+                                  refused, today_bars, wait, checked)
             except Exception as exc:  # noqa: BLE001 - collected and journaled by the loop
                 return DiscoveryOutcome(now, clock(), monotonic() - begun, None, exc)
             failed: Exception | None = None
