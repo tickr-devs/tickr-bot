@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tickr.research.errors import ResearchSettingsError
 
-KEYS = frozenset({"horizons_minutes", "atr_period", "session_timezone"})
+KEYS = frozenset({"horizons_minutes", "atr_period", "session_timezone", "calibration_buckets"})
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,8 @@ class ResearchSettings:
     """Wilder ATR length in M1 bars used to express moves in ATR."""
     session_timezone: ZoneInfo
     """Exchange time zone: a horizon never crosses the decision's session date in it."""
+    calibration_buckets: int
+    """Equal-width probability buckets of the calibration table (10 = tenths)."""
 
 
 def _int(key: str, raw: Any, minimum: int) -> int:
@@ -65,6 +67,7 @@ def settings_from_mapping(data: dict[str, Any]) -> ResearchSettings:
         horizons_minutes=horizons,
         atr_period=_int("atr_period", table["atr_period"], 1),
         session_timezone=zone,
+        calibration_buckets=_int("calibration_buckets", table["calibration_buckets"], 1),
     )
 
 

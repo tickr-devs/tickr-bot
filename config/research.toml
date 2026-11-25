@@ -10,3 +10,5 @@ horizons_minutes = [1, 5, 15, 30, 60]
 atr_period = 14
 # Exchange time zone (IANA name); a horizon that would leave the decision's session date is reported without numbers, and latency hours are labelled in it; read by research/outcomes.py and research/__main__.py (latency).
 session_timezone = "America/New_York"
+# Equal-width probability buckets of the calibration table (10 = tenths, the owner's wording, R29); read by research/calibration.py.
+calibration_buckets = 10
