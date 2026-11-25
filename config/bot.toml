@@ -839,6 +839,29 @@ stream_reconnect_seconds = 5
 # Calendar days searched back from today for the history sessions (20 sessions span about 28 calendar days with weekends
 # and holidays; a search that finds fewer refuses); read by tickr.model.massive.
 calendar_lookback_days = 60
+# Path of Massive's general news listing on api_host, the training's own fetch of the nw_* news (owner's fetch_ref2.py
+# and reftopup.py: GET /v2/reference/news); read by tickr.model.newsprobe.
+massive_news_path = "/v2/reference/news"
+# Path of Massive's Benzinga news listing on api_host, the training's own fetch (bzfetch.py: GET /benzinga/v2/news);
+# read by tickr.model.newsprobe (`tickr probe-news-delay`).
+benzinga_news_path = "/benzinga/v2/news"
+# Path of Massive's Benzinga earnings listing on api_host, the training's own fetch (bzfetch.py: GET
+# /benzinga/v1/earnings); read by tickr.model.newsprobe.
+benzinga_earnings_path = "/benzinga/v1/earnings"
+# Seconds between the starts of two polls of `tickr probe-news-delay`: the probe's own pacing, not a feature lag; an
+# arrival is timed between the previous poll and the receipt, so this bounds the precision; read by
+# tickr.model.newsprobe.
+news_probe_poll_seconds = 15
+# Seconds back from now of the published window each news poll (Benzinga and general news) lists: an article that
+# first appears more than this after its published time is never seen by the probe (one day: about 1,000 Benzinga
+# articles, one or two pages); read by tickr.model.newsprobe.
+news_probe_news_lookback_seconds = 86400
+# Calendar days back from today (New York) of the report dates each Benzinga earnings poll lists; a revision of an older
+# report is not seen; read by tickr.model.newsprobe.
+news_probe_earnings_lookback_days = 7
+# Folder, relative to [run] data_dir, of the probe's records (one JSON-lines file per New York day); read by
+# tickr.model.newsprobe.
+news_probe_dir = "massive/news-probe"
 # Folder, relative to [run] data_dir, of the feed-arrival captures of `tickr probe-feed-arrival` (one sub-folder per New
 # York date, one gzip JSONL file per run): every Massive minute bar and the Webull lists with their receipt times, for
 # measurement only; read by tickr.model.arrival.

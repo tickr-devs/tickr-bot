@@ -401,6 +401,13 @@ class MassiveConfig:
     stream_max_message_bytes: int
     stream_reconnect_seconds: Decimal
     calendar_lookback_days: int
+    massive_news_path: str
+    benzinga_news_path: str
+    benzinga_earnings_path: str
+    news_probe_poll_seconds: int
+    news_probe_news_lookback_seconds: int
+    news_probe_earnings_lookback_days: int
+    news_probe_dir: str
     arrival_dir: str
     arrival_flush_seconds: Decimal
     arrival_loop_seconds: Decimal

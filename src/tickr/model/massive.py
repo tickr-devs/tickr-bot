@@ -270,6 +270,10 @@ class Reference:
             url = nxt
         raise ModelRefused("reference_incomplete", f"{path}: more than {self.m.max_pages} pages")
 
+    def listing(self, path: str, query: Mapping[str, str]) -> list[dict[str, Any]]:
+        """Every row of one REST listing on the API host, paged to the end, or a refusal."""
+        return self._pages(path, query)
+
     def splits(self, first: str, last: str) -> dict[str, list[tuple[str, float]]]:
         """Execution date -> [(ticker, split_from / split_to)] for first..last (the training's
         factor, l1labels.splits_parse)."""
