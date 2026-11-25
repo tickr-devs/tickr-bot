@@ -390,3 +390,27 @@ def test_telegram_check_exists_only_once_set_up_and_checks_presence_only(config_
     ok = _run(config_path, environ)
     assert ok.cause is None and CANARY not in ok.summary()
     assert _run(config_path, environ, platform=LINUX).cause is None  # the channel off the Mac
+
+
+def test_push_check_exists_only_once_set_up_and_refuses_a_half_setup(config_path, tmp_path):
+    cfg = config_module.load(config_path).alerts
+    environ = _ready(config_path)
+    names = {c.name.value for c in _run(config_path, environ).checks}
+    assert "alert-push" not in names  # off: no APNs variable set
+    environ[cfg.apns_key_id_variable] = CANARY
+    refused = _run(config_path, environ)
+    assert refused.cause is PreflightCause.ALERT_PUSH_MISSING
+    summary = refused.summary()
+    assert cfg.apns_team_id_variable in summary and cfg.apns_key_path_variable in summary
+    assert CANARY not in summary
+    environ[cfg.apns_team_id_variable] = CANARY
+    environ[cfg.apns_key_path_variable] = str(tmp_path / "no-such-key.p8")
+    missing_key = _run(config_path, environ)
+    assert missing_key.cause is PreflightCause.ALERT_PUSH_KEY_UNREADABLE
+    assert "no-such-key" not in missing_key.summary()  # the variable is named, not its value
+    key = tmp_path / "AuthKey.p8"
+    key.write_text("not read by preflight", "utf-8")
+    environ[cfg.apns_key_path_variable] = str(key)
+    ok = _run(config_path, environ)
+    assert ok.cause is None and CANARY not in ok.summary()
+    assert _run(config_path, environ, platform=LINUX).cause is None  # the channel off the Mac

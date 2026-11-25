@@ -45,7 +45,12 @@ CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_s
                       mac_app_timeout_seconds=Decimal(2), feed_file="alerts.jsonl",
                       routing_file="alert-routing.json",
                       bot_token_variable="", chat_id_variable="",
-                      telegram_host="api.telegram.org")
+                      telegram_host="api.telegram.org", push_tokens_file="push-tokens.json",
+                      apns_key_id_variable="", apns_team_id_variable="",
+                      apns_key_path_variable="",
+                      apns_hosts={"development": "dev.apns.test", "production": "apns.test"},
+                      apns_topics=("bot.tickr.ios", "bot.tickr.mac"),
+                      apns_token_lifetime_seconds=3000)
 T0 = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
 
 
@@ -292,7 +297,7 @@ def test_an_alert_whose_thread_cannot_start_is_reported_and_sent_again_next_time
 
 def test_a_send_that_raises_leaves_no_alert_marked_as_sending():
     class Broken(Channels):
-        def send(self, title, text, done, skip=frozenset()):
+        def send(self, title, text, done, skip=frozenset(), kind=None):
             raise RuntimeError("boom")
 
     alerter = Alerter(CONFIG, "Tickr", Broken((), ((MACOS, Recorder()),)), Clock())

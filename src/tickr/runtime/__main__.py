@@ -112,8 +112,9 @@ def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: st
                         "error": None, "at": datetime.now(UTC).isoformat()})
         return
     title = f"{TITLE} {environment}" if environment else TITLE
-    alerter = Alerter(alerts, title, default_notifier(alerts, feed=_feed(config_path, alerts)),
-                      routing=_routing(config_path, alerts))
+    notifier = default_notifier(alerts, feed=_feed(config_path, alerts),
+                                data_dir=_data_dir(config_path))
+    alerter = Alerter(alerts, title, notifier, routing=_routing(config_path, alerts))
     _emit("alert", alerter.alert(kind, text).journal_body())
     for outcome in alerter.flush():  # background channels (iMessage) before this process exits
         _emit("alert", outcome.journal_body())
@@ -255,7 +256,8 @@ def _watchdog(config_path: Path) -> int:
     database, lock_path = data_paths(cfg)
     journal = watchdog.Journal(cfg.root / cfg.run.data_dir / cfg.runtime.watchdog_journal_file)
     notifier = default_notifier(cfg.alerts,
-                                feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
+                                feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts),
+                                data_dir=cfg.root / cfg.run.data_dir)
     alerter = Alerter(cfg.alerts, f"{TITLE} {cfg.environment_name}", notifier,
                       clock=WATCHDOG_NOW, routing=skipped_by(routing_path(cfg)))
     if notifier is None:

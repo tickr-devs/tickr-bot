@@ -159,7 +159,8 @@ RUN_ADAPTERS: Callable[[config_module.Config, Callable[[str, Exception], None],
 def _default_notifier(cfg: config_module.Config) -> Any:
     from tickr.runtime.alerts import default_notifier, feed_path
     return default_notifier(cfg.alerts,
-                            feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
+                            feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts),
+                            data_dir=cfg.root / cfg.run.data_dir)
 
 
 def _disk_free(path: Path) -> int:

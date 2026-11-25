@@ -46,7 +46,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from tickr.api import contract, flow, settled, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
-from tickr.api.alerts import AlertsSettings, alerts_document
+from tickr.api.alerts import AlertsSettings, alerts_document, push_token_document
 from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from tickr.api.configview import config_document
@@ -93,6 +93,7 @@ from tickr.observers.log import DecisionLog
 from tickr.research.errors import RecordFileError
 from tickr.research.records import DecisionRecord
 from tickr.runtime.alert_routing import RefusalCause, RoutingRefused
+from tickr.runtime.push_tokens import LOCAL, BadRegistration, StoreError, parse_registration
 from tickr.strategy.base import Role
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -795,6 +796,7 @@ FOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 ADVISOR_DECISION = "/advisor/decision"  # POST only: the owner's note on a run, never a command
 SETTINGS_VALIDATE = "/settings/validate"  # POST only: checks a draft, writes nothing
 ALERT_ROUTING = "/alerts/routing"  # PUT only: one cell of the owner's alert routing
+PUSH_TOKEN = "/push-token"  # POST registers this device's APNs token, DELETE removes it
 DAY_PREFIX = "/days/"
 # Headers a proxy adds to a request it forwards (Go's ReverseProxy, which `tailscale serve` is,
 # adds X-Forwarded-For; Tailscale adds its identity headers). The remote port's loopback Host is
@@ -995,6 +997,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, alerts_document(self.server.settings.alerts))
             elif path == ALERT_ROUTING:
                 self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
+            elif path == PUSH_TOKEN:
+                self._error("method_not_allowed", "use POST or DELETE",
+                            {"Allow": "POST, DELETE"})
             elif path == "/journal":
                 self._json(200, journal_document(self.server.settings.jobs.database,
                                                  self.server.settings.journal_rows))
@@ -1048,6 +1053,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == ALERT_ROUTING:
                 self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
+                return
+            if path == PUSH_TOKEN:
+                self._register_push_token()
                 return
             if path == PAIR_ROUTE and self.server.remote:
                 self._redeem()
@@ -1171,6 +1179,54 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request" if bad else "conflict", str(exc))
             return
         self._json(200, alerts_document(settings, routing))
+
+    def _push_device(self) -> str:
+        """Which paired device is calling: the SHA-256 of the bearer token `_guard` accepted on
+        the remote port (each paired device has its own token, the digest #794's device
+        registry keeps), or `LOCAL` for the Mac's own app on the local port."""
+        if not self.server.remote:
+            return LOCAL
+        header = self.headers.get("Authorization") or ""
+        return hashlib.sha256(header[len(BEARER):].encode("utf-8")).hexdigest()
+
+    def _register_push_token(self) -> None:
+        """POST /push-token with {"token", "environment", "bundle_id", "platform"}: store this
+        device's APNs token, replacing its earlier one; 200 push-token-v1. 400 for a token that
+        is not hex, an environment that is not a key of [alerts] apns_hosts, a bundle id
+        outside [alerts] apns_topics or another body. The token is never echoed or logged."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        settings = self.server.settings.alerts
+        try:
+            token = parse_registration(body, settings.apns_topics, settings.apns_environments,
+                                       self.server.clock())
+        except BadRegistration as exc:
+            self._error("bad_request", str(exc))
+            return
+        try:
+            settings.push_tokens.register(self._push_device(), token)
+        except StoreError as exc:
+            self._error("unavailable", f"{exc}; delete the file to start over")
+            return
+        self._json(200, push_token_document(token))
+
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib naming
+        if not self._guard():
+            return
+        try:
+            if self._path() != PUSH_TOKEN:
+                self._error("method_not_allowed", "only GET and POST are supported",
+                            {"Allow": "GET, POST"})
+                return
+            try:
+                self.server.settings.alerts.push_tokens.remove(self._push_device())
+            except StoreError as exc:
+                self._error("unavailable", f"{exc}; delete the file to start over")
+                return
+            self._json(200, push_token_document(None))
+        except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
+            self._error("internal", type(exc).__name__)
 
     def _redeem(self) -> None:
         """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`
@@ -1511,7 +1567,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error("method_not_allowed", "only GET and POST are supported",
                         {"Allow": "GET, POST"})
 
-    do_HEAD = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
+    do_HEAD = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
 
 
 def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now, *,

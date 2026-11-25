@@ -18,7 +18,7 @@
     {
       "channel": "push",
       "configured": false,
-      "cause": "not-built"
+      "cause": "not-configured"
     }
   ],
   "kinds": [

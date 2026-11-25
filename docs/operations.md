@@ -148,6 +148,40 @@ All checks are reported; the first failure is the recorded cause.
    neither set = off). Preflight
    then fails with `alert-telegram-missing` if either is not set. Critical alerts always go to it;
    the rest follow the routing in the app (channel `telegram`).
+   Optional, push to the Tickr apps (APNs). In Apple Developer > Certificates, Identifiers &
+   Profiles > Keys, create a key with Apple Push Notifications service and download its
+   `AuthKey_<key id>.p8` (Apple lets you download it once). Keep it outside the repo, the file
+   mode 0600 in a folder of mode 0700:
+   ```sh
+   install -d -m 700 ~/.config/tickr/apns
+   mv ~/Downloads/AuthKey_<key id>.p8 ~/.config/tickr/apns/ && chmod 600 ~/.config/tickr/apns/*.p8
+   ```
+   Then add three lines to the env file (placeholders here; never put the real ids in the repo),
+   under the names in `[alerts] apns_key_id_variable`, `apns_team_id_variable` and
+   `apns_key_path_variable`:
+   ```sh
+   TICKR_APNS_KEY_ID=<key id>
+   TICKR_APNS_TEAM_ID=<team id>
+   TICKR_APNS_KEY_PATH=<path to AuthKey_<key id>.p8>
+   ```
+   None set = push is off. Preflight then fails with `alert-push-missing` if one of the three is
+   not set, and `alert-push-key-unreadable` if the path is not a readable file; the key is read
+   only to sign, never logged. Each app registers its device at `POST /push-token`; critical
+   alerts always go to every registered device as time-sensitive, the rest follow the routing in
+   the app (channel `push`). The API job never gets these variables (it does not push).
+   After editing the env file: the launchd jobs source it each time they start (their plists
+   name only its path), so no new render is needed unless the env file's path changed (then
+   `render-launchd` and reinstall as below). Restart the always-running watchdog with
+   `launchctl kickstart -k gui/$(id -u)/local.tickr.watchdog`; the bot and preflight read it at
+   their next start (to apply it today, outside market hours only: stop-bot, then start-bot
+   from the apps). Check with `launchctl kickstart gui/$(id -u)/local.tickr.test-alert`
+   once an app has registered. On a server (docs/deploy-server.md) the env file is
+   `/srv/tickr/etc/env`, read by the container entrypoint at each container start, and the key
+   must be inside the container: put it in the data volume (`/app/data/apns/`, folder 0700, file
+   0600, owned by the service account) and set `TICKR_APNS_KEY_PATH` to that path. Then recreate
+   the long-running job outside market hours:
+   `docker compose -f ops/docker/compose.yaml --profile jobs up -d --force-recreate watchdog`;
+   the systemd timers start the bot and preflight with the new file at their next run.
 3. Data and token folders: `mkdir -p data && mkdir -m 700 data/webull-token-sandbox`
    (`[environments.sandbox] token_dir`; `data/webull-token-production` before Production). A folder
    that already exists keeps its mode: `chmod 700 data/webull-token-sandbox` instead.

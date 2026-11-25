@@ -131,6 +131,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
 | GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
 | PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "mac"\|"imessage"\|"telegram"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
+| POST | `/push-token` | Body `{"token": "<hex>", "environment": "development"\|"production", "bundle_id": "<id>", "platform": "ios"\|"macos"}`. Stores this device's APNs token for push alerts, replacing its earlier one: `200` `push-token-v1` (see Push tokens below); `400 bad_request` for a token that is not hex, another environment, a bundle id not in `[alerts] apns_topics` or another body; `503` when the token file is unreadable. |
+| DELETE | `/push-token` | Removes this device's APNs token (none is fine): `200` `push-token-v1` with `registered` false; `503` as POST. |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
 | GET | `/advisor` | `200` `advisor-runs-v1`: the AI advisor's newest `[api] advisor_runs` runs with their proposals, ideas, hold-out verdicts and the owner's decision (read-only; see GET /advisor below). |
 | POST | `/advisor/decision` | Body `{"run": "<run id>", "verdict": "accepted"\|"rejected"}`. Records the owner's review of a proposal or idea (a note, nothing is deployed): `200` `advisor-runs-v1`; `404 not_found` without that run; `409 conflict` for a refused, no-change or unreadable run. Not a bot command. |
@@ -856,10 +858,12 @@ Which alert kinds go to which channel (backlog T14). Code: `src/tickr/api/alerts
 `src/tickr/runtime/alert_routing.py`. Alerts go through the channel interface of
 `runtime/alerts.py` (`Channels`); the routing only tells it which channels to skip for a kind.
 
-- `channels`: `mac` (the Mac notification), `imessage`, `push` (the iPhone app's push, not built
-  yet: always `configured` false, `cause` `not-built`). `configured` comes from the latest
-  preflight record's checks (`alert-channel` for `mac`; that and `alert-recipient` for
-  `imessage`); `cause` `no-preflight`, `preflight-unreadable` or `check-failed` when false.
+- `channels`: `mac` (the Mac notification), `imessage`, `telegram`, `push` (the apps' APNs
+  push). `configured` comes from the latest preflight record's checks (`alert-channel` for
+  `mac`; that and `alert-recipient` for `imessage`; `alert-telegram`; `alert-push`); `cause`
+  `no-preflight`, `preflight-unreadable` or `check-failed` when false, `not-configured` for
+  `telegram` and `push` while their variables are not set (their check is then absent).
+  `not-built` is no longer sent.
   The alerts feed file (`[alerts] feed_file`) is not a routable channel: it gets every alert.
 - `kinds`: every `AlertKind` value in code order, each with `group` (`critical`, `trading`,
   `day`, `lab`), `locked` and `channels` `{mac, imessage, push}` (true: it goes there).
@@ -880,9 +884,32 @@ each alert, so a change applies at the next alert. A missing file means every ki
 channel; a file out of shape (an unknown or locked kind, an unknown channel, another
 `schema_version`) is not used at all, never partly. An alert skipped on a channel is journaled
 with `routed_off` naming the channels skipped; when every channel this process has is skipped,
-its `delivery` is `routed-off` (not shown, so not a repeat either). `push` cells are stored and
-shown, and take effect once a push channel exists. On the remote port PUT needs the paired
-token like every other request.
+its `delivery` is `routed-off` (not shown, so not a repeat either). On the remote port PUT
+needs the paired token like every other request.
+
+### Push tokens: POST and DELETE /push-token
+
+Each app registers its APNs device token so the bot can push alerts to it. Code:
+`src/tickr/runtime/push_tokens.py` (the store) and `runtime/alerts.py` `ApnsNotifier` (the
+sender).
+
+- Which device: on the remote port, the SHA-256 of the bearer token the request carried (each
+  paired device has its own token: the same digest the device registry keeps); on the local
+  port, the Mac's own app (`local`). One token per device; registering again replaces it, and
+  the same device token stored under another device (a device paired again) is dropped.
+- Body of POST, exactly: `token` (the device token in hex), `environment` (the build's
+  `aps-environment`: `development` for Xcode and debug builds, `production` for TestFlight and
+  the App Store; the keys of `[alerts] apns_hosts`), `bundle_id` (one of `[alerts] apns_topics`:
+  any other is refused, the sender never signs for it either), `platform` (`ios`, `macos`).
+- `push-token-v1`: `{registered, environment, bundle_id, platform, registered_at}`; after
+  DELETE `registered` is false and the rest null. The device token is never echoed or logged;
+  the bot's journal names a device by the first 8 hex digits of the token's SHA-256.
+- The store is `<data_dir>/<[alerts] push_tokens_file>`, mode 0600, written atomically.
+- Sending: once `[alerts] apns_*_variable` are set (preflight `alert-push`), every alert routed
+  to `push` goes once to each stored device, never retried, to the host of its environment,
+  with `aps.alert {title, body}`, sound `default`, `thread-id` and a top-level `kind` set to the
+  alert kind, and `interruption-level` `time-sensitive` for locked kinds. A `410` or
+  `BadDeviceToken` answer removes that device's token; the journal says so.
 
 ### GET /journal (read-only)
 

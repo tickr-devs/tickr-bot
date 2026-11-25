@@ -1,0 +1,179 @@
+"""The apps' APNs device tokens: one per paired device, registered at POST /push-token.
+
+The store is one JSON file under data_dir (`[alerts] push_tokens_file`, 0600, written atomically):
+`{"schema_version": 1, "devices": {"<device key>": {"token", "environment", "bundle_id",
+"platform", "registered_at"}}}`. The API is its writer; the push sender reads it on each alert
+and removes a token APNs says is gone (410 or BadDeviceToken).
+
+A device key says which paired device registered the token: the SHA-256 of the bearer token it
+presented on the remote port (the digest the API already keeps, and the one each device of
+`api/devices.py` (#794) carries as `sha256`), or `LOCAL` for the Mac's own app on the local
+port, which needs no token. A device token is personal data: it is never logged or put in an
+error; `short_hash` names one in a journal line instead.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import threading
+from collections.abc import Collection
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from tickr.api import contract
+from tickr.api.contract import PushPlatform as Platform
+
+SCHEMA_VERSION = 1
+LOCAL = "local"  # the device key of the Mac's own app (the local port has no bearer token)
+PRIVATE_MODE = 0o600  # owner read and write only (POSIX mode bits)
+# An APNs device token: hex, an even number of digits. Apple documents no fixed length (32 bytes
+# today), so any non-empty whole-byte hex up to the HTTP/2 path limit Apple allows is taken.
+DEVICE_TOKEN = re.compile(r"^(?:[0-9a-fA-F]{2}){1,100}$")
+SHORT_HASH_DIGITS = 8  # hex digits of a token's SHA-256 shown in a journal line
+
+
+class StoreError(Exception):
+    """The store file cannot be read as written."""
+
+
+class BadRegistration(ValueError):
+    """A POST /push-token body that is refused; the message names the field, never its value."""
+
+
+@dataclass(frozen=True)
+class PushToken:
+    token: str  # lowercase hex; personal data, never logged
+    environment: str  # the build's aps-environment, a key of [alerts] apns_hosts
+    bundle_id: str  # the APNs topic, one of [alerts] apns_topics
+    platform: Platform
+    registered_at: datetime
+
+
+def short_hash(token: str) -> str:
+    """A name for a device token in a journal line or error: never the token itself."""
+    return hashlib.sha256(token.encode("ascii")).hexdigest()[:SHORT_HASH_DIGITS]
+
+
+def parse_registration(body: dict[str, Any], topics: tuple[str, ...],
+                       environments: Collection[str], now: datetime) -> PushToken:
+    """The token a POST /push-token body registers, or BadRegistration naming the field."""
+    if set(body) != {"token", "environment", "bundle_id", "platform"}:
+        raise BadRegistration('body must be exactly {"token", "environment", "bundle_id", '
+                              '"platform"}')
+    token, environment = body["token"], body["environment"]
+    bundle_id, platform = body["bundle_id"], body["platform"]
+    if not isinstance(token, str) or not DEVICE_TOKEN.match(token):
+        raise BadRegistration("token must be the device token in hex")
+    if not isinstance(environment, str) or environment not in environments:
+        raise BadRegistration("environment is not an APNs environment ([alerts] apns_hosts: "
+                              + ", ".join(sorted(environments)) + ")")
+    if not isinstance(bundle_id, str) or bundle_id not in topics:
+        raise BadRegistration("bundle_id is not one of the apps' bundle ids ([alerts] "
+                              "apns_topics)")
+    if not isinstance(platform, str) or platform not in set(Platform):
+        raise BadRegistration('platform must be "ios" or "macos"')
+    return PushToken(token.lower(), environment, bundle_id, Platform(platform), now)
+
+
+def _parse(text: str) -> dict[str, PushToken]:
+    body = json.loads(text)
+    if not isinstance(body, dict) or set(body) != {"schema_version", "devices"}:
+        raise ValueError("keys must be exactly schema_version and devices")
+    if body["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(f"schema_version {body['schema_version']!r}")
+    if not isinstance(body["devices"], dict):
+        raise ValueError("devices must be an object")
+    out = {}
+    for key, entry in body["devices"].items():
+        if not isinstance(entry, dict) or set(entry) != {"token", "environment", "bundle_id",
+                                                         "platform", "registered_at"}:
+            raise ValueError("a device entry is out of shape")
+        if not isinstance(entry["token"], str) or not DEVICE_TOKEN.match(entry["token"]):
+            raise ValueError("a device token is not hex")
+        if not isinstance(entry["bundle_id"], str) or not isinstance(entry["environment"], str):
+            raise ValueError("a bundle_id or environment is not text")
+        out[key] = PushToken(entry["token"], entry["environment"],
+                             entry["bundle_id"], Platform(entry["platform"]),
+                             contract.parse_time(entry["registered_at"]))
+    return out
+
+
+def _text(devices: dict[str, PushToken]) -> str:
+    return json.dumps({"schema_version": SCHEMA_VERSION, "devices": {
+        key: {"token": t.token, "environment": t.environment, "bundle_id": t.bundle_id,
+              "platform": t.platform.value, "registered_at": contract.format_time(t.registered_at)}
+        for key, t in sorted(devices.items())}}, indent=2, sort_keys=True) + "\n"
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Atomically, readable by the owner only (0600) from the first byte."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_MODE)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), PRIVATE_MODE)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+class PushTokenStore:
+    """Read-modify-write under one lock in this process. The API registers and deletes; the
+    sender removes a token APNs refused, re-reading first so a registration in between is kept
+    (an entry is removed only while it still holds that same token)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+
+    def read(self) -> dict[str, PushToken]:
+        """Every device's token; empty when the file is missing; StoreError when unreadable."""
+        try:
+            text = self.path.read_text("utf-8")
+        except FileNotFoundError:
+            return {}
+        except (OSError, UnicodeDecodeError) as exc:
+            raise StoreError(f"{self.path.name} unreadable: {type(exc).__name__}") from None
+        try:
+            return _parse(text)
+        except (ValueError, TypeError, KeyError, contract.ContractError) as exc:
+            # The message never holds file content: a ValueError above names a field only.
+            raise StoreError(f"{self.path.name} out of shape: {type(exc).__name__}") from None
+
+    def register(self, device: str, token: PushToken) -> None:
+        """Store `token` for `device`, replacing its earlier one. The same device token under
+        another key (the device paired again, so its bearer token changed) is dropped: one
+        device is pushed once."""
+        with self._lock:
+            devices = {k: t for k, t in self.read().items() if t.token != token.token}
+            devices[device] = token
+            _write_private(self.path, _text(devices))
+
+    def remove(self, device: str) -> bool:
+        """Drop `device`'s token; whether there was one."""
+        with self._lock:
+            devices = self.read()
+            if devices.pop(device, None) is None:
+                return False
+            _write_private(self.path, _text(devices))
+            return True
+
+    def remove_token(self, token: str) -> bool:
+        """Drop every entry still holding `token` (APNs said it is gone); whether any was."""
+        with self._lock:
+            devices = self.read()
+            kept = {k: t for k, t in devices.items() if t.token != token}
+            if len(kept) == len(devices):
+                return False
+            _write_private(self.path, _text(kept))
+            return True

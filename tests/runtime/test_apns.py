@@ -1,0 +1,401 @@
+"""APNs push to the Tickr apps (runtime/alerts.py ApnsNotifier) and its device token store.
+
+Every key here is generated in the test; the network is a fake transport, or an in-process
+HTTP/2 server on a socket pair for the wire framing."""
+
+from __future__ import annotations
+
+import base64
+import json
+import socket
+import stat
+import threading
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+
+import h2.config
+import h2.connection
+import h2.events
+import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+from tickr import config as config_module
+from tickr.api.contract import PushPlatform
+from tickr.runtime.alert_routing import LOCKED
+from tickr.runtime.alerts import (
+    APNS_PATH,
+    PUSH,
+    Alerter,
+    AlertKind,
+    ApnsNotifier,
+    Channels,
+    Delivery,
+    NotifyError,
+    ProviderToken,
+    apns_missing,
+    apns_on,
+    apns_payload,
+    default_notifier,
+    h2_post,
+)
+from tickr.runtime.push_tokens import PushToken, PushTokenStore, short_hash
+
+from .test_alerts import CONFIG
+
+BOT = Path(__file__).resolve().parents[2] / "config" / "bot.toml"
+IOS, MACOS = PushPlatform.IOS, PushPlatform.MACOS
+
+APNS = replace(CONFIG, apns_key_id_variable="TICKR_TEST_APNS_KEY_ID",
+               apns_team_id_variable="TICKR_TEST_APNS_TEAM_ID",
+               apns_key_path_variable="TICKR_TEST_APNS_KEY_PATH")
+KEY_ID = "KEYID12345"
+TEAM_ID = "TEAMID6789"
+IOS_TOKEN = "a1" * 32
+MAC_TOKEN = "b2" * 32
+AT = datetime(2026, 11, 25, 15, 0, tzinfo=UTC)
+NORMAL = AlertKind.DISK_LOW
+CRITICAL = AlertKind.UNPROTECTED_POSITION
+
+
+@pytest.fixture
+def key(tmp_path):
+    """A P-256 key made for this test (never a real one), written as Apple's .p8 is."""
+    private = ec.generate_private_key(ec.SECP256R1())
+    path = tmp_path / "AuthKey_TEST.p8"
+    path.write_bytes(private.private_bytes(serialization.Encoding.PEM,
+                                           serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    path.chmod(0o600)
+    return private, path
+
+
+@pytest.fixture
+def environ(key):
+    return {APNS.apns_key_id_variable: KEY_ID, APNS.apns_team_id_variable: TEAM_ID,
+            APNS.apns_key_path_variable: str(key[1])}
+
+
+@pytest.fixture
+def store(tmp_path):
+    store = PushTokenStore(tmp_path / "data" / APNS.push_tokens_file)
+    store.register("phone", PushToken(IOS_TOKEN, "development", "bot.tickr.ios", IOS, AT))
+    store.register("local", PushToken(MAC_TOKEN, "production", "bot.tickr.mac", MACOS, AT))
+    return store
+
+
+class Wire:
+    """A fake HTTP/2 transport: records each request, answers from `answers` by device token."""
+
+    def __init__(self, answers=None) -> None:
+        self.calls: list[tuple[str, str, dict[str, str], dict]] = []
+        self.answers = answers or {}
+
+    def __call__(self, host, path, headers, body, timeout):
+        self.calls.append((host, path, dict(headers), json.loads(body)))
+        answer = self.answers.get(path.removeprefix(APNS_PATH), (200, b""))
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1_800_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _critical(kind: str) -> bool:
+    return kind in {k.value for k in LOCKED}
+
+
+def notifier(store, environ, wire, clock=None, config=APNS):
+    return ApnsNotifier(config, store, environ, wire, critical=_critical,
+                        clock=clock or Clock())
+
+
+def _b64(part: str) -> bytes:
+    return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+
+
+def _jwt(headers: dict[str, str]) -> str:
+    scheme, token = headers["authorization"].split(" ")
+    assert scheme == "bearer"
+    return token
+
+
+# ---------------------------------------------------------------- provider token
+
+
+def test_provider_token_is_an_es256_jwt_with_kid_iss_and_iat(key, environ):
+    clock = Clock()
+    token = ProviderToken(APNS, environ, clock).get()
+    head, claims, signature = token.split(".")
+    assert json.loads(_b64(head)) == {"alg": "ES256", "kid": KEY_ID}
+    assert json.loads(_b64(claims)) == {"iss": TEAM_ID, "iat": int(clock.now)}
+    raw = _b64(signature)
+    assert len(raw) == 64  # raw r || s, as JWS ES256 requires (not DER)
+    der = encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big"))
+    key[0].public_key().verify(der, f"{head}.{claims}".encode(), ec.ECDSA(hashes.SHA256()))
+
+
+def test_provider_token_is_reused_within_its_lifetime_and_signed_again_after(key, environ):
+    clock = Clock()
+    tokens = ProviderToken(APNS, environ, clock)
+    first = tokens.get()
+    clock.now += APNS.apns_token_lifetime_seconds - 1
+    assert tokens.get() == first
+    clock.now += 1
+    second = tokens.get()
+    assert second != first
+    assert json.loads(_b64(second.split(".")[1]))["iat"] == int(clock.now)
+    # A changed variable is a new key: signed again at once.
+    environ[APNS.apns_key_id_variable] = "OTHERKEY99"
+    assert json.loads(_b64(tokens.get().split(".")[0]))["kid"] == "OTHERKEY99"
+    # APNs said it expired: forgotten, the next send signs again.
+    third = tokens.get()
+    tokens.forget()
+    clock.now += 1
+    assert tokens.get() != third
+
+
+def test_the_lifetime_stays_below_apples_hour():
+    assert 0 < config_module.load(BOT).alerts.apns_token_lifetime_seconds < 60 * 60
+
+
+# ---------------------------------------------------------------- sending
+
+
+def test_one_push_per_device_to_the_host_of_its_environment(store, environ):
+    wire = Wire()
+    notifier(store, environ, wire).notify_kind(NORMAL.value, "Tickr sandbox: disk-low", "12 MB")
+    assert sorted((host, path) for host, path, _, _ in wire.calls) == [
+        (APNS.apns_hosts["production"], APNS_PATH + MAC_TOKEN),
+        (APNS.apns_hosts["development"], APNS_PATH + IOS_TOKEN)]
+    for _, path, headers, _ in wire.calls:
+        topic = "bot.tickr.ios" if path.endswith(IOS_TOKEN) else "bot.tickr.mac"
+        assert headers["apns-topic"] == topic
+        assert headers["apns-push-type"] == "alert" and headers["apns-priority"] == "10"
+    # One provider token for both sends.
+    assert len({_jwt(headers) for _, _, headers, _ in wire.calls}) == 1
+
+
+def test_payload_of_a_normal_kind_and_of_a_locked_kind():
+    assert NORMAL not in LOCKED and CRITICAL in LOCKED
+    normal = json.loads(apns_payload(NORMAL.value, "T", "body", False))
+    assert normal == {"aps": {"alert": {"title": "T", "body": "body"}, "sound": "default",
+                              "thread-id": "disk-low"}, "kind": "disk-low"}
+    locked = json.loads(apns_payload(CRITICAL.value, "T", "body", True))
+    assert locked["aps"]["interruption-level"] == "time-sensitive"
+    assert locked["aps"]["thread-id"] == locked["kind"] == "unprotected-position"
+
+
+def test_the_alerter_hands_the_kind_to_the_push_and_locked_kinds_are_time_sensitive(
+        store, environ):
+    wire = Wire()
+    channels = Channels((), ((PUSH, notifier(store, environ, wire)),),
+                        spawn=lambda run: _Inline(run))
+    alerter = Alerter(CONFIG, "Tickr", channels)
+    alerter.alert(NORMAL, "12 MB left")
+    alerter.alert(CRITICAL, "AAPL has no stop")
+    outcomes = alerter.completed()
+    assert [o.delivery for o in outcomes] == [Delivery.SHOWN, Delivery.SHOWN]
+    payloads = [body for *_, body in wire.calls]
+    normal = [p for p in payloads if p["kind"] == NORMAL.value]
+    locked = [p for p in payloads if p["kind"] == CRITICAL.value]
+    assert len(normal) == len(locked) == 2  # both devices
+    assert all("interruption-level" not in p["aps"] for p in normal)
+    assert all(p["aps"]["interruption-level"] == "time-sensitive" for p in locked)
+    assert all(p["aps"]["alert"] == {"title": "Tickr: unprotected-position",
+                                      "body": "AAPL has no stop"} for p in locked)
+
+
+class _Inline:
+    def __init__(self, run) -> None:
+        run()
+
+    def is_alive(self) -> bool:
+        return False
+
+    def join(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize("answer", [(410, b'{"reason":"Unregistered","timestamp":1}'),
+                                    (400, b'{"reason":"BadDeviceToken"}')])
+def test_a_gone_token_is_removed_and_named_by_its_short_hash(store, environ, answer):
+    wire = Wire({IOS_TOKEN: answer})
+    with pytest.raises(NotifyError) as error:
+        notifier(store, environ, wire).notify_kind(NORMAL.value, "T", "x")
+    text = str(error.value)
+    assert f"device {short_hash(IOS_TOKEN)}: HTTP {answer[0]}" in text
+    assert "(token removed)" in text and IOS_TOKEN not in text
+    assert [t.token for t in store.read().values()] == [MAC_TOKEN]  # the other device kept
+    assert len(wire.calls) == 2  # one attempt each, never retried
+
+
+def test_other_refusals_keep_the_token_and_a_send_is_never_retried(store, environ):
+    wire = Wire({IOS_TOKEN: (403, b'{"reason":"InvalidProviderToken"}')})
+    with pytest.raises(NotifyError, match="HTTP 403 InvalidProviderToken"):
+        notifier(store, environ, wire).notify_kind(NORMAL.value, "T", "x")
+    assert len(store.read()) == 2 and len(wire.calls) == 2
+
+
+def test_an_expired_provider_token_is_signed_again_at_the_next_alert(store, environ):
+    clock = Clock()
+    wire = Wire({IOS_TOKEN: (403, b'{"reason":"ExpiredProviderToken"}')})
+    push = notifier(store, environ, wire, clock)
+    with pytest.raises(NotifyError):
+        push.notify_kind(NORMAL.value, "T", "x")
+    first = _jwt(wire.calls[0][2])
+    clock.now += 1
+    wire.answers = {}
+    push.notify_kind(NORMAL.value, "T", "x")
+    assert _jwt(wire.calls[-1][2]) != first
+
+
+def test_failures_name_status_or_reason_only(store, environ, key):
+    secret_reason = json.dumps({"reason": IOS_TOKEN}).encode()  # not one CamelCase word
+    wire = Wire({IOS_TOKEN: (500, secret_reason),
+                 MAC_TOKEN: OSError(f"connect to {MAC_TOKEN} failed")})
+    push = notifier(store, environ, wire)
+    with pytest.raises(NotifyError) as error:
+        push.notify_kind(NORMAL.value, "T", "x")
+    text = str(error.value)
+    jwt = _jwt(wire.calls[0][2])
+    pem = key[1].read_text()
+    for leaked in (IOS_TOKEN, MAC_TOKEN, jwt, KEY_ID, TEAM_ID, str(key[1]), pem):
+        assert leaked not in text
+    assert "HTTP 500" in text and "apns did not answer: OSError" in text
+
+
+def test_an_unreadable_or_wrong_key_fails_without_its_content(store, environ, key, tmp_path):
+    environ[APNS.apns_key_path_variable] = str(tmp_path / "missing.p8")
+    with pytest.raises(NotifyError, match="apns-key-unreadable: FileNotFoundError") as error:
+        notifier(store, environ, Wire()).notify_kind(NORMAL.value, "T", "x")
+    assert "missing.p8" not in str(error.value)
+    rsa_path = tmp_path / "rsa.p8"
+    rsa_path.write_bytes(rsa.generate_private_key(65537, 2048).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()))
+    environ[APNS.apns_key_path_variable] = str(rsa_path)
+    with pytest.raises(NotifyError, match="apns-key-invalid: not a P-256 key"):
+        notifier(store, environ, Wire()).notify_kind(NORMAL.value, "T", "x")
+    garbage = tmp_path / "garbage.p8"
+    garbage.write_text("-----BEGIN PRIVATE KEY-----\nsecretbytes\n-----END PRIVATE KEY-----\n")
+    environ[APNS.apns_key_path_variable] = str(garbage)
+    with pytest.raises(NotifyError) as error:
+        notifier(store, environ, Wire()).notify_kind(NORMAL.value, "T", "x")
+    assert "secretbytes" not in str(error.value)
+
+
+def test_the_sender_never_signs_for_a_topic_outside_the_configured_list(store, environ):
+    wire = Wire()
+    narrowed = replace(APNS, apns_topics=("bot.tickr.ios",))
+    with pytest.raises(NotifyError, match="topic-refused") as error:
+        notifier(store, environ, wire, config=narrowed).notify_kind(NORMAL.value, "T", "x")
+    assert short_hash(MAC_TOKEN) in str(error.value)
+    assert [path for _, path, _, _ in wire.calls] == [APNS_PATH + IOS_TOKEN]
+
+
+def test_no_registered_device_and_an_unreadable_store_are_failures(tmp_path, environ):
+    empty = PushTokenStore(tmp_path / "none.json")
+    with pytest.raises(NotifyError, match="apns-no-device"):
+        notifier(empty, environ, Wire()).notify_kind(NORMAL.value, "T", "x")
+    broken = tmp_path / "broken.json"
+    broken.write_text(json.dumps({"schema_version": 1, "devices": {"x": {"token": IOS_TOKEN}}}))
+    with pytest.raises(NotifyError, match="apns-store-unreadable") as error:
+        notifier(PushTokenStore(broken), environ, Wire()).notify_kind(NORMAL.value, "T", "x")
+    assert IOS_TOKEN not in str(error.value)
+
+
+# ---------------------------------------------------------------- setup
+
+
+def test_on_and_missing_check_presence_only(environ):
+    assert apns_on(APNS, {}) is False and apns_missing(APNS, {}) == []
+    half = {APNS.apns_key_id_variable: KEY_ID}
+    assert apns_on(APNS, half) is True
+    assert apns_missing(APNS, half) == [APNS.apns_team_id_variable,
+                                        APNS.apns_key_path_variable]
+    assert apns_missing(APNS, environ) == []
+
+
+def test_default_notifier_adds_push_once_set_up_and_given_the_data_folder(tmp_path, environ):
+    assert default_notifier(APNS, "linux", {}, data_dir=tmp_path) is None
+    channels = default_notifier(APNS, "linux", environ, data_dir=tmp_path)
+    assert isinstance(channels, Channels) and channels.background == (PUSH,)
+    mac = default_notifier(APNS, "darwin", environ, data_dir=tmp_path)
+    assert PUSH in mac.background
+
+
+def test_store_file_is_private_and_replaces_per_device(store):
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+    store.register("phone", PushToken(MAC_TOKEN, "production", "bot.tickr.ios", IOS, AT))
+    # The same device token under another key is dropped: one device is pushed once.
+    assert list(store.read()) == ["phone"]
+    assert store.remove("phone") is True and store.remove("phone") is False
+    assert store.read() == {}
+
+
+# ---------------------------------------------------------------- HTTP/2 framing
+
+
+def _serve_once(sock: socket.socket, status: int, body: bytes, seen: dict) -> None:
+    """A minimal HTTP/2 server: reads one request, answers `status` with `body`."""
+    conn = h2.connection.H2Connection(h2.config.H2Configuration(client_side=False,
+                                                                 header_encoding="utf-8"))
+    conn.initiate_connection()
+    sock.sendall(conn.data_to_send())
+    data = bytearray()
+    while True:
+        chunk = sock.recv(65535)
+        if not chunk:
+            return
+        for event in conn.receive_data(chunk):
+            if isinstance(event, h2.events.RequestReceived):
+                seen["headers"] = dict(event.headers)
+            elif isinstance(event, h2.events.DataReceived):
+                data += event.data
+                conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+            elif isinstance(event, h2.events.StreamEnded):
+                seen["body"] = bytes(data)
+                conn.send_headers(event.stream_id, [(":status", str(status))],
+                                  end_stream=not body)
+                if body:
+                    conn.send_data(event.stream_id, body, end_stream=True)
+                sock.sendall(conn.data_to_send())
+                return
+        sock.sendall(conn.data_to_send())
+
+
+@pytest.mark.parametrize(("status", "body"), [(200, b""), (410, b'{"reason":"Unregistered"}')])
+def test_h2_post_speaks_http2(status, body):
+    client, server = socket.socketpair()
+    seen: dict = {}
+    thread = threading.Thread(target=_serve_once, args=(server, status, body, seen))
+    thread.start()
+    try:
+        answer = h2_post("apns.test", APNS_PATH + IOS_TOKEN, [("apns-topic", "bot.tickr.ios")],
+                         b'{"aps":{}}', 5.0, connect=lambda _host, _timeout: client)
+    finally:
+        thread.join(5)
+        server.close()
+    assert answer == (status, body)
+    assert seen["headers"][":method"] == "POST"
+    assert seen["headers"][":path"] == APNS_PATH + IOS_TOKEN
+    assert seen["headers"][":authority"] == "apns.test"
+    assert seen["headers"]["apns-topic"] == "bot.tickr.ios"
+    assert seen["body"] == b'{"aps":{}}'
+
+
+def test_h2_post_refuses_a_connection_closed_before_the_answer():
+    client, server = socket.socketpair()
+    server.close()
+    with pytest.raises((NotifyError, OSError)):
+        h2_post("apns.test", APNS_PATH + IOS_TOKEN, [], b"{}", 5.0,
+                connect=lambda _host, _timeout: client)

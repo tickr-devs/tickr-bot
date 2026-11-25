@@ -431,7 +431,7 @@ def documents() -> dict[str, object]:
                                   None, "the bot has not written a status file"),
             None, "no preflight recorded yet", None, "no training job is reporting",
             None, "no machine services on this host ([api] system_services = none)"),
-        # The notification settings: disk-low kept off iMessage; push not built yet.
+        # The notification settings: disk-low kept off iMessage; Telegram and push not set up.
         "alerts-v1": contract.AlertsV1((
             contract.AlertChannelV1(contract.AlertChannel.MAC, True, None),
             contract.AlertChannelV1(contract.AlertChannel.IMESSAGE, False,
@@ -439,7 +439,7 @@ def documents() -> dict[str, object]:
             contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
                                     contract.AlertChannelCause.NOT_CONFIGURED),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
-                                    contract.AlertChannelCause.NOT_BUILT)),
+                                    contract.AlertChannelCause.NOT_CONFIGURED)),
             alerts_api._kinds(Routing(frozenset({(AlertKind.DISK_LOW,
                                                   contract.AlertChannel.IMESSAGE)}))), None),
         "alerts-v1.unreadable": contract.AlertsV1((
@@ -450,9 +450,13 @@ def documents() -> dict[str, object]:
             contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
                                     contract.AlertChannelCause.NO_PREFLIGHT),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
-                                    contract.AlertChannelCause.NOT_BUILT)),
+                                    contract.AlertChannelCause.NO_PREFLIGHT)),
             alerts_api._kinds(Routing(frozenset())),
             "routing-file-unreadable: Expecting value: line 1 column 1 (char 0)"),
+        # POST /push-token: the iPhone's TestFlight build registered; DELETE: nothing left.
+        "push-token-v1": contract.PushTokenV1(True, "production", "bot.tickr.ios",
+                                              contract.PushPlatform.IOS, T0),
+        "push-token-v1.removed": contract.PushTokenV1(False, None, None, None, None),
         # The Overview's journal card: the latest rows, oldest first; "line #731".
         "journal-v1": JournalV1(731, (
             JournalRowV1(728, T0 - timedelta(seconds=9), "order-intent", "ABCD"),

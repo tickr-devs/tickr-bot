@@ -1564,7 +1564,7 @@ class AlertChannel(StrEnum):
     MAC = "mac"  # the Mac notification (the Tickr app, else osascript)
     IMESSAGE = "imessage"  # an iMessage to the owner's phone
     TELEGRAM = "telegram"  # a Telegram message: works away from the Mac
-    PUSH = "push"  # the iPhone app's push: needs the Apple Developer Program and APNs (backlog)
+    PUSH = "push"  # the apps' push through APNs, to every device that registered a token
 
 
 class AlertGroup(StrEnum):
@@ -1582,7 +1582,7 @@ class AlertChannelCause(StrEnum):
     NO_PREFLIGHT = "no-preflight"  # no preflight record yet
     PREFLIGHT_UNREADABLE = "preflight-unreadable"  # the record cannot be read
     CHECK_FAILED = "check-failed"  # the latest preflight's alert-channel or alert-recipient check
-    NOT_BUILT = "not-built"  # no delivery in the bot yet (push)
+    NOT_BUILT = "not-built"  # no delivery in the bot yet (none today; push was until APNs)
     NOT_CONFIGURED = "not-configured"  # the owner has not set its variable names in bot.toml
 
 
@@ -1625,6 +1625,23 @@ class AlertsV1:
     channels: tuple[AlertChannelV1, ...]
     kinds: tuple[AlertKindV1, ...]
     routing_cause: str | None
+    api_version: int = _const(API_VERSION)
+
+class PushPlatform(StrEnum):
+    IOS = "ios"
+    MACOS = "macos"
+
+
+@dataclass(frozen=True)
+class PushTokenV1:
+    """POST and DELETE /push-token: this device's push registration now. `registered` false
+    (after DELETE) has every other key null. The device token itself is never echoed."""
+
+    registered: bool
+    environment: str | None  # the build's aps-environment: a key of [alerts] apns_hosts
+    bundle_id: str | None
+    platform: PushPlatform | None
+    registered_at: datetime | None
     api_version: int = _const(API_VERSION)
 
 # ---------------------------------------------------------------- lab replay
@@ -2841,6 +2858,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "journal-v1": JournalV1,
     "system-v1": SystemV1,
     "alerts-v1": AlertsV1,
+    "push-token-v1": PushTokenV1,
     "day-events-v1": DayEventsV1,
     "advisor-runs-v1": AdvisorRunsV1,
     "lab-replay-v1": LabReplayV1,
