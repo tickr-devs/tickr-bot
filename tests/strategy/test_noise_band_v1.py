@@ -9,7 +9,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from strategy_bars import PRIOR_DAYS, SYMBOL, TODAY, bar, d, quote
+from strategy_bars import PRIOR_DAYS, SIZING, SYMBOL, TODAY, bar, d, quote
 
 from tickr import config
 from tickr.observers.loader import check_history, load_strategy, parse_modules
@@ -55,7 +55,7 @@ def today(count, jump_at=None, open_=20.0):
 
 def ctx(bars, q=None, position=None, prior_sessions=None, budget=None):
     return SymbolContext(SYMBOL, bars, prior() if prior_sessions is None else prior_sessions, q,
-                         position, budget)
+                         position, budget, sizing=SIZING)
 
 
 def rules(decision):

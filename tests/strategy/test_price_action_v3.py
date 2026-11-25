@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from strategy_bars import SYMBOL, TODAY, bar, d, prior_sessions, quote, rising_session
+from strategy_bars import SIZING, SYMBOL, TODAY, bar, d, prior_sessions, quote, rising_session
 
 from tickr import config
 from tickr.data.movers import MoverSettings, measure
@@ -41,7 +41,7 @@ def make_v1():
 
 
 def ctx(bars, q=None):
-    return SymbolContext(SYMBOL, bars, prior_sessions(), q, None)
+    return SymbolContext(SYMBOL, bars, prior_sessions(), q, None, sizing=SIZING)
 
 
 SETTINGS = MoverSettings(10, d(5), d(2), d(5), d(250_000))

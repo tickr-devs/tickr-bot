@@ -47,7 +47,7 @@ from tickr.runtime.entries import (
 )
 from tickr.runtime.evaluation import Evaluator
 from tickr.store import Store
-from tickr.strategy.base import Strategy, SymbolContext, Verdict
+from tickr.strategy.base import SizingLimits, Strategy, SymbolContext, Verdict
 from tickr.types import Bar, Quote
 
 from .conftest import active_module
@@ -184,12 +184,12 @@ def _strategy() -> Strategy:
                            .read_text())
     values = copy.deepcopy(values)
     values["indicators"]["warmup_period_multiple"] = 1  # short generated sessions suffice
-    # The strategy sizes to the baseline's platform notional cap (tests/baseline.py pins it).
-    values["sizing"]["max_position_notional_usd"] = int(CFG.risk.position_notional_cap_usd)
     return active_module().create(values)
 
 
 STRATEGY = _strategy()
+# The strategy sizes on the baseline's platform limits (tests/baseline.py pins them), as live.
+SIZING = SizingLimits.of(CFG.risk)
 BAR_DAY = date(2026, 11, 13)
 PRIOR = [date(2026, 11, d) for d in (6, 9, 10, 11, 12)]
 PRIOR_MINUTES = 40  # enough for relative volume at minute 30; keeps the tests fast
@@ -229,7 +229,8 @@ def strategy_decision(rng: random.Random, budget: D | None, now: datetime):
     # At least one tick: a locked quote (bid == ask) is the case of test_bug_locked_quote_*.
     spread = tick * rng.choice([1, 1, 2])
     q = Quote(SYMBOL, ask - spread, ask, D(100), D(100), now, now)
-    decision = STRATEGY.evaluate(SymbolContext(SYMBOL, today, prior, q, None, budget))
+    decision = STRATEGY.evaluate(SymbolContext(SYMBOL, today, prior, q, None, budget,
+                                               sizing=SIZING))
     return decision, q
 
 
@@ -237,7 +238,8 @@ def enter_decision(now: datetime):
     """An ENTER of the real strategy at the baseline prices (cent spread, unscaled)."""
     today, prior = BARS[D(1)]
     q = Quote(SYMBOL, D("22.99"), D("23.00"), D(100), D(100), now, now)
-    decision = STRATEGY.evaluate(SymbolContext(SYMBOL, today, prior, q, None, None))
+    decision = STRATEGY.evaluate(SymbolContext(SYMBOL, today, prior, q, None, None,
+                                               sizing=SIZING))
     assert decision.verdict is Verdict.ENTER
     return decision
 
@@ -436,7 +438,8 @@ def test_the_strategy_size_fits_any_room_admission_accepts(seed):
         q = Quote(SYMBOL, ask - tick * rng.choice([1, 1, 2]), ask, D(100), D(100), now, now)
         room = D(rng.randint(int(MIN_ROOM * 100), int(CEILING * 100))) / D(100)
         budget = room  # what Evaluator._loss_budget passes at or above the minimum
-        decision = STRATEGY.evaluate(SymbolContext(SYMBOL, today, prior, q, None, budget))
+        decision = STRATEGY.evaluate(SymbolContext(SYMBOL, today, prior, q, None, budget,
+                                                   sizing=SIZING))
         if decision.verdict is not Verdict.ENTER:
             continue
         entered += 1

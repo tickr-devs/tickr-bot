@@ -13,7 +13,7 @@ from pathlib import Path
 from tickr import config as bot_config
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import ConfigError
-from tickr.replay.__main__ import session_clock, strategy_factory
+from tickr.replay.__main__ import platform_sizing, session_clock, strategy_factory
 from tickr.replay.bars import load_bars
 from tickr.replay.errors import ReplayError
 from tickr.replay.settings import load_settings
@@ -144,7 +144,8 @@ def _run(args: argparse.Namespace) -> dict:
                                         replay_settings, clock_for)
         return report.write_observer_report(result, args.out, places)
     factory = strategy_factory(args.strategy, args.values)
-    records = compare.decide(factory, load_bars(args.bars), replay_settings, clock_for)
+    records = compare.decide(factory, load_bars(args.bars), replay_settings, clock_for,
+                             platform_sizing(args.config))
     args.out.mkdir(parents=True, exist_ok=True)
     write_records(args.out / "decisions.jsonl", records)
     verdicts: dict[str, int] = {}

@@ -34,6 +34,7 @@ from .test_daily_room_properties import (
     CEILING,
     LIMITS,
     RISK,
+    SIZING,
     STRATEGY,
     SYMBOL,
     _admissible,
@@ -52,7 +53,8 @@ LOCKED = Quote(SYMBOL, D("4.60"), D("4.60"), D(100), D(100), NOW, NOW)
     "bug: locked quote, strategy sizes on the raw stop; the tick-rounded stop exceeds the limit"))
 @pytest.mark.parametrize("room", [None, D(20)])
 def test_a_locked_quote_entry_is_sized_to_what_admission_accepts(room):
-    decision = STRATEGY.evaluate(SymbolContext(SYMBOL, TODAY, PRIOR, LOCKED, None, room))
+    decision = STRATEGY.evaluate(SymbolContext(SYMBOL, TODAY, PRIOR, LOCKED, None, room,
+                                                sizing=SIZING))
     assert decision.verdict is Verdict.ENTER
     limit, stop = round_to_tick(decision.entry_high), round_to_tick(decision.stop)
     assert (limit, stop) == (D("4.61"), D("4.47"))

@@ -22,7 +22,14 @@ from tickr.observers.loader import (
 from tickr.observers.log import DecisionLog
 from tickr.observers.runner import Limits, ObserverSet, ProcessSpec, _Encoder
 from tickr.research.records import Admission, load_records
-from tickr.strategy.base import Decision, PositionView, Role, SymbolContext, Verdict
+from tickr.strategy.base import (
+    Decision,
+    PositionView,
+    Role,
+    SizingLimits,
+    SymbolContext,
+    Verdict,
+)
 from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -277,19 +284,17 @@ def test_active_strategy_needing_more_history_than_configured_is_refused(tmp_pat
         load_active(short)
 
 
-@pytest.mark.parametrize(("key", "platform"), [
-    ("max_position_notional_usd", "position_notional_cap_usd"),
-    ("planned_loss_usd", "planned_loss_usd"),
-])
-def test_active_strategy_sizing_above_the_platform_limit_is_refused(tmp_path, key, platform):
-    """A strategy sizing above the platform's [risk] limit would have its entries refused
-    (Fable, review of #638): refused when it loads, as preflight and the bot load it."""
+@pytest.mark.parametrize("key", ["planned_loss_usd", "max_position_notional_usd"])
+def test_a_strategy_with_its_own_sizing_is_refused_at_load(tmp_path, key):
+    """The planned loss and notional cap live only in config/bot.toml [risk] (owner
+    2026-11-15, T2/T3): a strategy file that brings back its own [sizing] is refused when it
+    loads, as preflight and the bot load it."""
     cfg = _config(tmp_path)
     load_active(cfg)
-    own = config.load(ROOT / "config" / "bot.toml").risk
-    below = replace(cfg, risk=replace(cfg.risk, **{platform: getattr(own, platform) - 1}))
-    with pytest.raises(ObserverError, match=f"{key} .* exceeds the platform's"):
-        load_active(below)
+    path = tmp_path / "strategies" / "price-action-v1" / "strategy.toml"
+    path.write_text(path.read_text() + f"\n[sizing]\n{key} = 50\n")
+    with pytest.raises(ObserverError, match="unknown .*sizing"):
+        load_active(cfg)
 
 
 def test_the_shipped_active_strategy_fits_the_shipped_platform_limits():
@@ -478,6 +483,19 @@ def test_the_worker_gets_only_new_bars_and_rebuilds_the_same_context(tmp_path):
     assert settle(observers) == () and observers.close(5)
     assert [s.bars for s in fake.seen] == [first.bars, grown.bars, tuple(revised)]
     assert all(s.prior_sessions == prior for s in fake.seen)
+
+
+def test_the_worker_gets_the_platform_sizing_limits(tmp_path):
+    """Observers size on the same [risk] values as the active strategy (T2/T3)."""
+    fake = Fake()
+    observers, _ = observer_set(tmp_path, fake)
+    limits = SizingLimits(Decimal(50), Decimal(1000))
+    for sizing in (limits, None):
+        ctx = SymbolContext("ABC", bars(3), (), sizing=sizing)
+        assert observers.on_evaluation(ctx, START + 3 * M1) == ()
+        assert settle(observers) == ()
+    assert observers.close(5)
+    assert [s.sizing for s in fake.seen] == [limits, None]
 
 
 def test_the_worker_gets_the_proven_session_open(tmp_path):

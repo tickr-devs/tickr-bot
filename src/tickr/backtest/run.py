@@ -46,7 +46,7 @@ from tickr.replay.engine import ReplayResult, replay
 from tickr.replay.errors import ReplayError
 from tickr.replay.report import write_all
 from tickr.replay.settings import ReplaySettings
-from tickr.strategy.base import Strategy
+from tickr.strategy.base import SizingLimits, Strategy
 
 SKIPPED_FILE = "skipped.csv"
 
@@ -91,7 +91,7 @@ def run_symbol(task: Task) -> tuple[ReplayResult | None, list[dict[str, str]]]:
     def one(days: tuple[date, ...], series: tuple) -> ReplayResult:
         pool = [(task.symbol, d) for d in days]
         return replay(lambda: GainerGate(create(), pool, task.change_percent),
-                      {task.symbol: series}, task.settings, clock)
+                      {task.symbol: series}, task.settings, clock, SizingLimits.of(task.cfg.risk))
 
     try:
         return one(task.pool_days, bars[task.symbol]), []

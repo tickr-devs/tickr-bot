@@ -34,6 +34,7 @@ from tickr.observers.loader import check_history, load_strategy, parse_modules
 from tickr.replay.bars import load_bars
 from tickr.replay.engine import SignalOutcome, replay
 from tickr.replay.errors import ReplayError
+from tickr.strategy.base import SizingLimits
 
 ZERO = Decimal(0)
 # Calendar answers that mean "no session now", so a what-if may run.
@@ -52,6 +53,7 @@ class TradeWhatIfSettings:
     history_sessions: int  # [market_data] history_sessions: the cache file's session count
     modules: tuple[str, ...]  # [observers] strategy_modules
     outside_session_only: bool  # [api] trade_whatif_outside_session_only
+    sizing: SizingLimits  # [risk] planned loss and notional cap, as the bot sizes
 
     @classmethod
     def from_config(cls, cfg: Config) -> TradeWhatIfSettings:
@@ -59,7 +61,7 @@ class TradeWhatIfSettings:
         return cls(cfg.root, SimulationPaths.from_config(cfg),
                    data / cfg.market_data.history_dir / cfg.environment_name,
                    cfg.market_data.history_sessions, tuple(cfg.observers.strategy_modules),
-                   cfg.api.trade_whatif_outside_session_only)
+                   cfg.api.trade_whatif_outside_session_only, SizingLimits.of(cfg.risk))
 
 
 def _quantize(value: Decimal, places: int) -> Decimal:
@@ -134,7 +136,8 @@ def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,
         return failed("cached prior sessions overlap the day's bars", name, version)
     try:
         result = replay(lambda: load_strategy(settings.root, folder, modules).strategy,
-                        {symbol: prior + today_bars}, replay_settings, clock_for)
+                        {symbol: prior + today_bars}, replay_settings, clock_for,
+                        settings.sizing)
     except (ReplayError, ObserverError) as exc:
         return failed(f"simulation refused: {exc}", name, version)
     except Exception as exc:  # noqa: BLE001 - a version's own bug is a cause, never a 500

@@ -54,6 +54,10 @@ us.
 `history_sessions` sessions of the symbol plus today's completed bars (oldest first), and the
 same sessions in `prior_sessions`. Indicators therefore warm up as they do live.
 
+**Sizing.** The strategy sizes on the bot's own planned loss and notional cap, read from
+`--config` (`config/bot.toml [risk]`) and given as `SymbolContext.sizing`, as live. A strategy
+file carries no sizing values of its own (owner 2026-11-15).
+
 **Synthetic quote.** Recorded bars carry no bid/ask. With `synthesize_quote = true` the
 strategy receives, after each completed bar, a quote around its close:
 spread = max(close x `synthetic_spread_percent` / 100, `synthetic_spread_min_usd`),

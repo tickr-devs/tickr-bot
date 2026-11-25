@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import time, timedelta
-from decimal import ROUND_FLOOR, Decimal
+from decimal import Decimal
 from itertools import pairwise
 from typing import Any
 
@@ -36,7 +36,6 @@ COMMON: Schema = {
               "signal_valid_minutes": v1._positive_int},
     "liquidity": {"max_spread_ratio": v1._positive, "min_dollar_volume_usd": v1._positive,
                   "min_previous_close_usd": v1._positive},
-    "sizing": {"planned_loss_usd": v1._positive, "max_position_notional_usd": v1._positive},
 }
 
 
@@ -50,8 +49,6 @@ class Common:
     max_spread_ratio: Decimal
     min_dollar_volume_usd: Decimal
     min_previous_close_usd: Decimal
-    planned_loss_usd: Decimal
-    max_position_notional_usd: Decimal
 
 
 def parse(values: Mapping[str, Any], schema: Schema, name: str) -> dict[str, Any]:
@@ -193,21 +190,8 @@ def enter(strategy: Any, c: Common, context: SymbolContext, checks: list[Check],
     stop = min(stop_level, entry_low * distance, quote.bid * distance)
     risk = entry_high - stop + spread
     checks.append(v1._check("sizing_risk_per_share", risk, ">", ZERO, "entry_high - stop + spread"))
-    checks.extend(v1.sizing_inputs(entry_high, c.planned_loss_usd, c.max_position_notional_usd,
-                                   context.loss_budget_usd))
-    planned_loss = c.planned_loss_usd
-    if context.loss_budget_usd is not None and context.loss_budget_usd < planned_loss:
-        planned_loss = max(context.loss_budget_usd, ZERO)
-        checks.append(v1._check("daily_loss_budget_usd", planned_loss, "<", c.planned_loss_usd,
-                                "sized down to the room the daily loss ceiling leaves"))
-    by_loss = (planned_loss / risk).to_integral_value(rounding=ROUND_FLOOR)
-    by_notional = (c.max_position_notional_usd / entry_high).to_integral_value(
-        rounding=ROUND_FLOOR)
-    quantity = min(by_loss, by_notional)
-    checks.append(v1._check("quantity", quantity, ">=", ONE,
-                            f"min(floor({planned_loss} / (entry_high - stop + spread)) = "
-                            f"{by_loss}, floor(notional cap / entry_high) = {by_notional})"))
-    if not checks[-1].passed:
+    quantity = v1.size(checks, context, entry_high, risk, "(entry_high - stop + spread)")
+    if quantity is None:
         return ignore()
     return decide(strategy, context, Verdict.ENTER, checks, entry_low=entry_low,
                   entry_high=entry_high, stop=stop, quantity=quantity, **levels)

@@ -8,12 +8,20 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from tickr import config
+from tickr.strategy.base import SizingLimits
 from tickr.types import Bar, Quote
 
 NY = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
 SYMBOL = "ABCD"
-TOML = Path(__file__).resolve().parents[2] / "strategies" / "price-action-v1" / "strategy.toml"
+ROOT = Path(__file__).resolve().parents[2]
+TOML = ROOT / "strategies" / "price-action-v1" / "strategy.toml"
+# The platform's sizing limits as shipped (config/bot.toml [risk]), given with every context.
+SIZING = SizingLimits.of(config.load(ROOT / "config" / "bot.toml").risk)
+# Many sizing tests were written for a 2500 USD notional cap (the shipped one is 1000 since
+# 2026-11-17, owner): pinned so their numbers still test the loss and the cap sizing.
+SIZING_2500 = SizingLimits(SIZING.planned_loss_usd, Decimal(2500))
 
 
 def strategy_values() -> dict:
