@@ -38,6 +38,12 @@ def report(i: str, *, lu: str, actual: float | None = 0.3, estimate: float | Non
     return r
 
 
+def full_coverage() -> rv.Coverage:
+    """A poll log that saw everything from 2025-04-01 to 2025-09-30 (one span of two polls)."""
+    return rv.Coverage([{"event": "ok", "sent_utc": "2025-04-01T00:00:00+00:00"},
+                        {"event": "ok", "sent_utc": "2025-09-30T00:00:00+00:00"}])
+
+
 def store_with(tmp_path, versions):
     """A store fed (receipt New York time, rows) in order."""
     s = rv.RevisionStore(tmp_path / "store", rv.EARNINGS)
@@ -163,8 +169,10 @@ def test_the_snapshot_files_are_read_by_the_pinned_l1bz(tmp_path):
     def features_at(cutoff: str, minute: int) -> pd.DataFrame:
         """The bz columns of IG's row whose mark is `cutoff`, from the snapshot at it."""
         folder = tmp_path / cutoff.replace(":", "")
-        rv.write_l1bz(er.as_of(at(cutoff)), rv.EARNINGS, folder, "2025-05-01", DAY)
-        rv.write_l1bz(news.as_of(at(cutoff)), rv.NEWS, folder, "2025-07-01", DAY)
+        rv.write_l1bz(er.as_of(at(cutoff)), rv.EARNINGS, folder, "2025-05-01", DAY,
+                      coverage=full_coverage())
+        rv.write_l1bz(news.as_of(at(cutoff)), rv.NEWS, folder, "2025-07-01", DAY,
+                      coverage=full_coverage())
         t = pd.DataFrame({"sym": ["IG"], "m": [minute]})
         bz.Earnings(str(folder), cal, DAY, settings).add(t)
         bz.News(str(folder), cal, DAY, settings).add(t)
@@ -181,11 +189,13 @@ def test_the_snapshot_files_are_read_by_the_pinned_l1bz(tmp_path):
     assert c.bz_c_mov == 1 and c.bz_n60 == 1
     snap = er.as_of(at("08:45:00"))
     assert snap.refused == {"e2": "report_after_cutoff"}
-    path = rv.write_l1bz(snap, rv.EARNINGS, tmp_path / "one", "2025-05-01", DAY)
+    path = rv.write_l1bz(snap, rv.EARNINGS, tmp_path / "one", "2025-05-01", DAY,
+                      coverage=full_coverage())
     with gzip.open(path, "rt") as f:
         assert [json.loads(x)["benzinga_id"] for x in f] == ["e0", "e1"]
     with pytest.raises(ModelRefused) as exc:
-        rv.write_l1bz(snap, rv.EARNINGS, tmp_path / "one", "2025-05-01", "2025-08-19")
+        rv.write_l1bz(snap, rv.EARNINGS, tmp_path / "one", "2025-05-01", "2025-08-19",
+                        coverage=full_coverage())
     assert exc.value.cause == "revision_file_range"
 
 

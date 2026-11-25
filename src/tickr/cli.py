@@ -1041,6 +1041,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("probe-news-delay", help="read-only, runs until Ctrl-C: polls Massive news, "
                    "Benzinga news and earnings and records each record's receipt time "
                    "(docs/operations.md)")
+    sub.add_parser("poll-revisions", help="runs until Ctrl-C, only when [massive] "
+                   "revision_poll_enabled: polls Benzinga earnings and news and keeps every "
+                   "version received, with the poll coverage (docs/operations.md)")
     demo_parser = sub.add_parser("demo", help="a made-up trading day in its own folder "
                                  "(config/demo.toml) served on [api] demo_port; never talks to "
                                  "Webull")
@@ -1101,6 +1104,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "probe-news-delay":
             from tickr.model import newsprobe
             return newsprobe.main(config_module.load(args.config))
+        if args.command == "poll-revisions":
+            from tickr.model import revpoll
+            return revpoll.main(config_module.load(args.config))
         if args.command == "demo":
             from tickr.demo.run import main as demo_main
             repo = config_module.load(args.config).root

@@ -32,10 +32,21 @@ reads them: a fraction of a second rounds UP to the next second. Per id:
 
 Ids with nothing received by the cutoff are simply unknown.
 
+COVERAGE. The poller (`tickr.model.revpoll`) logs every poll of a kind in `<folder>/coverage/
+<kind>.jsonl`: `start` (a run began), `ok` (send time of a poll that answered and was stored),
+`failed` (a poll that did not, with its typed cause). `Coverage` replays that log. The span
+between two consecutive `ok` polls is covered only when nothing came between them: after a
+`failed` poll or a restart, the versions that existed only between the two polls were never
+seen (the later poll lists only the state it finds), so that span is a GAP typed
+`poll_failed:<cause>` or `restart`, recorded and never closed by a later success. Before the first
+`ok` and after the last one nothing is covered.
+
 OUTPUT. `write_l1bz` writes the snapshot as `<kind>-<first>_<last>.jsonl.gz`, the file form
 `l1bz.files` reads (one raw record a line, as Benzinga returned it), with the records whose
 date (earnings `date`, news `published` in New York) lies in first..last. The caller states the
-range; that the polls covered it completely is the poller's claim, not the store's.
+range and passes the kind's `Coverage`: the range is the New York days first..last (in update
+time, up to the cutoff), and a range not fully covered refuses (`revision_range_not_covered`
+with the first gap's cause).
 
 REPORT. `python -m tickr.model.revisions report --config config/bot.toml LOG...` reads store
 files and/or the records of `tickr probe-news-delay` and prints the observed delays
@@ -296,6 +307,99 @@ class RevisionStore:
         return snapshot(self.kind, self.by_id, ns_of(cutoff))
 
 
+@dataclass(frozen=True)
+class Gap:
+    start_ns: int  # send time of the last poll before
+    end_ns: int | None  # send time of the next successful poll; None = none yet
+    cause: str
+
+
+class Coverage:
+    """What the polls of one kind saw completely (see the module docstring), from its log."""
+
+    def __init__(self, events: Iterable[Mapping[str, Any]]) -> None:
+        self.spans: list[list[int]] = []  # covered [from, to] send times, in order
+        self.gaps: list[Gap] = []
+        pending: str | None = None
+        for e in events:
+            what = e["event"]
+            if what == "start":
+                pending = pending or "restart"
+            elif what == "failed":
+                pending = pending or f"poll_failed:{e['cause']}"
+            elif what == "ok":
+                sent = _receipt_ns(e["sent_utc"])
+                if self.spans:
+                    last = self.spans[-1][1]
+                    if pending:
+                        self.gaps.append(Gap(last, sent, pending))
+                        self.spans.append([sent, sent])
+                    else:
+                        self.spans[-1][1] = sent
+                else:
+                    self.spans.append([sent, sent])
+                pending = None
+            else:
+                raise ValueError(f"coverage event {what!r}")
+        if pending and self.spans:
+            self.gaps.append(Gap(self.spans[-1][1], None, pending))
+
+    @property
+    def last_ok_ns(self) -> int | None:
+        return self.spans[-1][1] if self.spans else None
+
+    def refusal(self, start_ns: int, end_ns: int) -> str | None:
+        """None when [start, end] is inside one covered span, else the one cause."""
+        if any(a <= start_ns and end_ns <= b for a, b in self.spans):
+            return None
+        if not self.spans:
+            return "no_polls"
+        for g in self.gaps:
+            if g.start_ns < end_ns and (g.end_ns is None or g.end_ns > start_ns):
+                to = _stamp(g.end_ns) if g.end_ns is not None else "now"
+                return f"gap:{g.cause}:{_stamp(g.start_ns)}..{to}"
+        return "before_first_poll" if start_ns < self.spans[0][0] else "after_last_poll"
+
+    def require(self, start_ns: int, end_ns: int) -> None:
+        cause = self.refusal(start_ns, end_ns)
+        if cause:
+            raise ModelRefused("revision_range_not_covered",
+                               f"{cause} for {_stamp(start_ns)}..{_stamp(end_ns)}")
+
+
+class CoverageLog:
+    """Append-only poll log of one kind: `<folder>/coverage/<kind>.jsonl`."""
+
+    def __init__(self, folder: Path, kind: Kind) -> None:
+        self.path = Path(folder) / "coverage" / f"{kind.name}.jsonl"
+        self.events: list[dict[str, Any]] = []
+        if self.path.is_file():
+            with self.path.open(encoding="utf-8") as f:
+                for n, line in enumerate(f, 1):
+                    if line.strip():
+                        try:
+                            self.events.append(json.loads(line))
+                        except ValueError:
+                            raise ModelRefused("revision_store_unreadable",
+                                               f"coverage line {n}") from None
+        self.coverage()  # a log that cannot be replayed refuses now
+
+    def add(self, event: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, sort_keys=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        self.events.append(event)
+
+    def coverage(self) -> Coverage:
+        try:
+            return Coverage(self.events)
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ModelRefused("revision_store_unreadable",
+                               f"coverage log {self.path.name}: {type(exc).__name__}") from None
+
+
 def read_log(path: Path, kind: Kind | None = None) -> Iterable[Version]:
     """Versions from a store file, or from a record file of `tickr probe-news-delay` (only the
     fields it keeps). A line that is not JSON, or a store line without its parts, refuses."""
@@ -350,10 +454,12 @@ def date_key(kind: Kind, record: Mapping[str, Any]) -> str:
     return datetime.datetime.fromtimestamp(s, NEW_YORK).date().isoformat()
 
 
-def write_l1bz(snap: AsOf, kind: Kind, folder: Path, first: str, last: str) -> Path:
+def write_l1bz(snap: AsOf, kind: Kind, folder: Path, first: str, last: str, *,
+               coverage: Coverage) -> Path:
     """`<kind>-<first>_<last>.jsonl.gz` in `folder` with the snapshot's records dated
     first..last (one raw record a line). A range past the cutoff's New York date refuses: the
-    training refuses a file named past the day."""
+    training refuses a file named past the day. A range the polls did not cover completely
+    (New York days first..last, up to the cutoff) refuses with the gap's cause."""
     try:
         a, b = datetime.date.fromisoformat(first), datetime.date.fromisoformat(last)
     except ValueError:
@@ -362,6 +468,10 @@ def write_l1bz(snap: AsOf, kind: Kind, folder: Path, first: str, last: str) -> P
         NEW_YORK).date()
     if a > b or b > cut_day:
         raise ModelRefused("revision_file_range", f"{first}..{last} with cutoff {cut_day}")
+    start = datetime.datetime(a.year, a.month, a.day, tzinfo=NEW_YORK)
+    after = b + datetime.timedelta(days=1)
+    end = datetime.datetime(after.year, after.month, after.day, tzinfo=NEW_YORK)
+    coverage.require(ns_of(start), min(ns_of(end), snap.cutoff_ns))
     rows = sorted(((date_key(kind, r), key, r) for key, r in snap.records.items()
                    if first <= date_key(kind, r) <= last), key=lambda x: (x[0], x[1]))
     Path(folder).mkdir(parents=True, exist_ok=True)

@@ -402,6 +402,9 @@ class MassiveConfig:
     stream_reconnect_seconds: Decimal
     calendar_lookback_days: int
     revision_report_quantiles: tuple[Decimal, ...]
+    revision_poll_enabled: bool
+    revision_store_dir: str
+    revision_poll_overlap_seconds: int
     massive_news_path: str
     benzinga_news_path: str
     benzinga_earnings_path: str
@@ -743,10 +746,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
             or massive.stream_max_message_bytes < 1 or massive.stream_reconnect_seconds <= 0
             or massive.calendar_lookback_days < 1
             or not all(0 < q < 1 for q in massive.revision_report_quantiles)
-            or not massive.stock_types):
+            or massive.revision_poll_overlap_seconds < 0 or not massive.stock_types):
         raise ConfigError("[massive] timeouts, page sizes and the message limit must be at least "
                           "1, stream_reconnect_seconds above 0, stock_types not empty, "
-                          "revision_report_quantiles each above 0 and below 1")
+                          "revision_report_quantiles each above 0 and below 1, "
+                          "revision_poll_overlap_seconds at least 0")
     points = massive.arrival_report_points_seconds
     if (massive.arrival_flush_seconds <= 0 or massive.arrival_loop_seconds <= 0
             or massive.arrival_tail_seconds < 0 or points[0] < 0

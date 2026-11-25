@@ -450,6 +450,12 @@ receipt time, to `<data_dir>/massive/news-probe/<New York date>.jsonl`. Delay of
 `received_utc - published` (at most; it arrived after `previous_poll_sent_utc`). Lines of the
 first poll are `baseline` and time nothing.
 
+Revision poller (Codex 108 point 7; off): with `[massive] revision_poll_enabled = true`, `tickr
+poll-revisions` (same environment as the probe) keeps every version of each Benzinga earnings report
+and news article it receives under `<data_dir>/<revision_store_dir>`, with the poll coverage in
+`coverage/`. A failed poll or a restart leaves a typed gap there; `revisions.write_l1bz` refuses a
+range that touches one.
+
 The demo day had a launchd job of its own (`local.tickr.demo`) until the apps carried the day
 themselves. If it is still installed on this Mac, remove it once:
 
