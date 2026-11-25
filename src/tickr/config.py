@@ -397,6 +397,7 @@ class MassiveConfig:
     stream_max_message_bytes: int
     stream_reconnect_seconds: Decimal
     calendar_lookback_days: int
+    revision_report_quantiles: tuple[Decimal, ...]
 
 
 @dataclass(frozen=True)
@@ -724,9 +725,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if (massive.http_timeout_seconds < 1 or massive.page_limit < 1 or massive.max_pages < 1
             or massive.stream_max_message_bytes < 1 or massive.stream_reconnect_seconds <= 0
             or massive.calendar_lookback_days < 1
+            or not all(0 < q < 1 for q in massive.revision_report_quantiles)
             or not massive.stock_types):
         raise ConfigError("[massive] timeouts, page sizes and the message limit must be at least "
-                          "1, stream_reconnect_seconds above 0, stock_types not empty")
+                          "1, stream_reconnect_seconds above 0, stock_types not empty, "
+                          "revision_report_quantiles each above 0 and below 1")
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "

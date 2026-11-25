@@ -826,6 +826,10 @@ stream_reconnect_seconds = 5
 # Calendar days searched back from today for the history sessions (20 sessions span about 28 calendar days with weekends
 # and holidays; a search that finds fewer refuses); read by tickr.model.massive.
 calendar_lookback_days = 60
+# Quantiles (fractions, strictly increasing, each above 0 and below 1) the revision report prints of every observed
+# Benzinga delay (receipt - last_updated, receipt - report time, receipt - published); a description of the measured
+# distribution, never a guard (`--out` writes every value); read by tickr.model.revisions.
+revision_report_quantiles = [0.5, 0.9, 0.99]
 
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new
