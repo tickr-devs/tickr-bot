@@ -27,7 +27,7 @@ from pathlib import Path
 from tickr.api.contract import AlertChannel as RouteChannel
 from tickr.api.contract import AlertGroup, write_atomic
 from tickr.config import AlertsConfig, Config
-from tickr.runtime.alerts import IMESSAGE, MACOS, AlertKind
+from tickr.runtime.alerts import IMESSAGE, MACOS, TELEGRAM, AlertKind
 from tickr.runtime.watch import ALERT_AT_ONCE, FENCE_ALERTS
 
 ROUTING_SCHEMA_VERSION = 1
@@ -35,7 +35,8 @@ ROUTING_SCHEMA_VERSION = 1
 
 # The delivery (its name in `alerts.Channels`) behind each routable channel; push has none yet.
 DELIVERY: Mapping[RouteChannel, str] = {RouteChannel.MAC: MACOS,
-                                        RouteChannel.IMESSAGE: IMESSAGE}
+                                        RouteChannel.IMESSAGE: IMESSAGE,
+                                        RouteChannel.TELEGRAM: TELEGRAM}
 
 
 # Kinds that need the owner now: never switched off on any channel. Every kind an

@@ -142,6 +142,11 @@ All checks are reported; the first failure is the recorded cause.
    **Deadline:** `TICKR_IMESSAGE_TO` must be in this file before the first preflight run
    (03:30 Mac time on Monday with the default `[runtime] preflight_start_local`). Without it
    preflight fails with `alert-recipient-missing` and the bot job does not start the bot.
+   Optional, to be told away from the Mac: Telegram. Create a bot with @BotFather, put its token
+   and your chat id in this file under any names, and set those names in
+   `[alerts] telegram_token_variable` and `telegram_chat_variable` (both empty = off). Preflight
+   then fails with `alert-telegram-missing` if either is not set. Critical alerts always go to it;
+   the rest follow the routing in the app (channel `telegram`).
 3. Data and token folders: `mkdir -p data && mkdir -m 700 data/webull-token-sandbox`
    (`[environments.sandbox] token_dir`; `data/webull-token-production` before Production). A folder
    that already exists keeps its mode: `chmod 700 data/webull-token-sandbox` instead.

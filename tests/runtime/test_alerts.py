@@ -4,6 +4,7 @@ import json
 import plistlib
 import subprocess
 import threading
+import urllib.error
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -18,6 +19,7 @@ from tickr.runtime.alerts import (
     IMESSAGE,
     MACOS,
     OSASCRIPT,
+    TELEGRAM,
     Alerter,
     AlertKind,
     AppNotifier,
@@ -28,17 +30,22 @@ from tickr.runtime.alerts import (
     IMessageNotifier,
     MacNotifier,
     NotifyError,
+    TelegramNotifier,
     default_notifier,
     feed_path,
     mac_notifier,
     recipient_missing,
+    telegram_missing,
+    telegram_on,
 )
 
 CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_seconds=Decimal(5),
                       fence_alert_after_seconds=Decimal(30),
                       imessage_recipient_variable="TICKR_TEST_TO", mac_app="",
                       mac_app_timeout_seconds=Decimal(2), feed_file="alerts.jsonl",
-                      routing_file="alert-routing.json")
+                      routing_file="alert-routing.json",
+                      telegram_token_variable="", telegram_chat_variable="",
+                      telegram_host="api.telegram.org")
 T0 = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
 
 
@@ -480,3 +487,92 @@ def test_missing_app_falls_back_to_osascript_end_to_end(tmp_path):
     calls, runner = _capture()
     mac_notifier(replace(CONFIG, mac_app=str(tmp_path / "Missing.app")), runner).notify("t", "x")
     assert [argv[0] for argv in calls] == [OSASCRIPT]
+
+
+TG = replace(CONFIG, telegram_token_variable="TICKR_TEST_TG_TOKEN",
+             telegram_chat_variable="TICKR_TEST_TG_CHAT")
+TG_ENV = {"TICKR_TEST_TG_TOKEN": "token-canary", "TICKR_TEST_TG_CHAT": "chat-canary"}
+
+
+class FakeResponse:
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def _opener(sent, answer=None):
+    def opener(request, timeout):
+        sent.append((request, timeout))
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer or FakeResponse()
+    return opener
+
+
+def _inline(target):
+    thread = threading.Thread(target=target)
+    thread.start()
+    return thread
+
+
+def test_telegram_is_off_while_the_names_are_empty():
+    assert telegram_on(CONFIG) is False
+    assert telegram_missing(CONFIG, {}) == []
+    assert default_notifier(CONFIG, "linux", TG_ENV) is None  # no channel at all off the Mac
+
+
+def test_telegram_channel_joins_on_any_platform_when_configured():
+    mac = default_notifier(TG, "darwin", TG_ENV, feed=Path("a.jsonl"))
+    assert isinstance(mac, Channels) and mac.background == (MACOS, IMESSAGE, TELEGRAM, FEED)
+    linux = default_notifier(TG, "linux", TG_ENV)
+    assert isinstance(linux, Channels) and linux.background == (TELEGRAM,)
+
+
+def test_telegram_sends_one_https_post_and_never_retries():
+    sent = []
+    TelegramNotifier(TG, TG_ENV, _opener(sent)).notify("tickr: disk-low", "10 MB free")
+    ((request, timeout),) = sent
+    assert request.full_url == "https://api.telegram.org/bottoken-canary/sendMessage"
+    assert request.get_method() == "POST" and timeout == 5.0
+    assert json.loads(request.data) == {"chat_id": "chat-canary",
+                                        "text": "tickr: disk-low\n10 MB free"}
+
+
+@pytest.mark.parametrize("answer, message", [
+    (urllib.error.HTTPError("https://x/bottoken-canary/s", 401, "no", {}, None),
+     "telegram answered HTTP 401"),
+    (urllib.error.URLError("token-canary down"), "telegram did not answer: URLError"),
+    (TimeoutError("token-canary"), "telegram did not answer: TimeoutError"),
+    (FakeResponse(302), "telegram answered HTTP 302"),
+])
+def test_telegram_failure_is_one_attempt_and_leaks_no_secret(answer, message):
+    sent = []
+    with pytest.raises(NotifyError) as caught:
+        TelegramNotifier(TG, TG_ENV, _opener(sent, answer)).notify("t", "x")
+    assert str(caught.value) == message
+    assert len(sent) == 1
+
+
+def test_telegram_missing_variable_names_only_the_name():
+    sent = []
+    environ = {"TICKR_TEST_TG_TOKEN": "token-canary"}
+    assert telegram_missing(TG, environ) == ["TICKR_TEST_TG_CHAT"]
+    with pytest.raises(NotifyError, match="TICKR_TEST_TG_CHAT not set") as caught:
+        TelegramNotifier(TG, environ, _opener(sent)).notify("t", "x")
+    assert "canary" not in str(caught.value) and sent == []
+
+
+def test_a_failed_telegram_send_is_recorded_as_a_failed_delivery():
+    sent = []
+    notifier = TelegramNotifier(TG, TG_ENV, _opener(sent, urllib.error.URLError("x")))
+    alerter = Alerter(CONFIG, "tickr", Channels((), ((TELEGRAM, notifier),), spawn=_inline))
+    alerter.alert(AlertKind.DISK_LOW, "low")
+    (outcome,) = alerter.flush()
+    assert outcome.delivery is Delivery.FAILED and outcome.channel == TELEGRAM
+    assert "telegram did not answer" in (outcome.error or "")
+    assert len(sent) == 1

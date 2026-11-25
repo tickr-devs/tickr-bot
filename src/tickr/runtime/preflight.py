@@ -14,6 +14,8 @@ Checks, all reported, the first failure is the single cause:
 4b. this machine has an alert channel (`alerts.default_notifier`): today only macOS
    (notification and iMessage through osascript). Elsewhere (a Linux server, a container) the
    bot would run with no way to reach the owner, so the start is refused;
+4c'. when `[alerts] telegram_*_variable` name variables (Telegram on), both are present
+   (presence only; off passes), and on a machine that is not a Mac Telegram alone is the channel.
 4c. the iMessage recipient variable (`[alerts] imessage_recipient_variable`) present, the same
    way: it is personal data;
 5. broker token folder present;
@@ -49,7 +51,13 @@ from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_d
 from tickr.observers.errors import ObserverError
 from tickr.observers.loader import load_active
 from tickr.runtime import stopmarker
-from tickr.runtime.alerts import default_notifier, recipient_missing
+from tickr.runtime.alerts import (
+    DARWIN,
+    default_notifier,
+    recipient_missing,
+    telegram_missing,
+    telegram_on,
+)
 from tickr.runtime.launchd import PRIVATE_MODE_MASK, check_timings
 from tickr.store import (
     DATABASE_FILE,
@@ -82,6 +90,7 @@ class PreflightCause(StrEnum):
     CREDENTIALS_MISSING = "credentials-missing"
     ALERT_RECIPIENT_MISSING = "alert-recipient-missing"
     ALERT_CHANNEL_MISSING = "alert-channel-missing"
+    ALERT_TELEGRAM_MISSING = "alert-telegram-missing"
     TOKEN_DIR_MISSING = "token-dir-missing"
     TOKEN_DIR_OPEN = "token-dir-open"
     TOKEN_UNUSABLE = "token-unusable"
@@ -99,6 +108,7 @@ class CheckName(StrEnum):
     CREDENTIALS = "credentials"
     ALERT_RECIPIENT = "alert-recipient"
     ALERT_CHANNEL = "alert-channel"
+    ALERT_TELEGRAM = "alert-telegram"
     TOKEN_DIR = "token-dir"
     TOKEN = "token"
     STRATEGY = "strategy"
@@ -297,7 +307,25 @@ def _check_credentials(cfg: config_module.Config, environ: Mapping[str, str]) ->
     return Check(CheckName.CREDENTIALS, True, "set: " + ", ".join(names))
 
 
-def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str]) -> Check:
+def _check_alert_telegram(cfg: config_module.Config, environ: Mapping[str, str]) -> Check:
+    # Presence only: the bot token and the chat id are secrets. Off (names empty) passes.
+    if not telegram_on(cfg.alerts):
+        return Check(CheckName.ALERT_TELEGRAM, True, "off: no Telegram variable names in [alerts]")
+    missing = telegram_missing(cfg.alerts, environ)
+    if missing:
+        return Check(CheckName.ALERT_TELEGRAM, False,
+                     "not set: " + ", ".join(missing) + " (Telegram bot token and chat id); "
+                     + ENV_FILE_HINT, PreflightCause.ALERT_TELEGRAM_MISSING)
+    return Check(CheckName.ALERT_TELEGRAM, True,
+                 f"set: {cfg.alerts.telegram_token_variable}, {cfg.alerts.telegram_chat_variable}")
+
+
+def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str],
+                           platform: str) -> Check:
+    if platform != DARWIN and telegram_on(cfg.alerts):
+        # iMessage is a Mac channel; Telegram is this machine's channel.
+        return Check(CheckName.ALERT_RECIPIENT, True,
+                     f"not used on platform {platform!r} (Telegram is the channel)")
     # Presence only, like the credentials: the iMessage address is personal data.
     missing = recipient_missing(cfg.alerts, environ)
     if missing is not None:
@@ -401,7 +429,8 @@ def run_preflight(
     calendar, session_today = _check_calendar(cfg, now)
     checks = (config_check, _check_code_version(cfg, environ), disk, calendar,
               _check_credentials(cfg, environ),
-              _check_alert_channel(cfg, platform, environ), _check_alert_recipient(cfg, environ),
+              _check_alert_channel(cfg, platform, environ),
+              _check_alert_recipient(cfg, environ, platform), _check_alert_telegram(cfg, environ),
               _check_token_dir(cfg), _check_stop_marker(cfg), _check_database(cfg),
               _check_strategy(cfg))
     blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED

@@ -217,3 +217,13 @@ def test_a_routing_callable_that_raises_skips_nothing():
                       lambda: T0, routing=broken)
     assert alerter.alert(AlertKind.DISK_LOW, "x").delivery is Delivery.SHOWN
     assert len(mac.shown) == len(phone.shown) == 1
+
+
+def test_telegram_is_a_routable_channel_and_locked_kinds_always_reach_it():
+    from tickr.runtime.alert_routing import DELIVERY, RouteChannel, Routing
+    from tickr.runtime.alerts import TELEGRAM, AlertKind
+    assert DELIVERY[RouteChannel.TELEGRAM] == TELEGRAM
+    off = Routing(frozenset({(AlertKind.DISK_LOW, RouteChannel.TELEGRAM),
+                             (AlertKind.BOT_CRASHED, RouteChannel.TELEGRAM)}))
+    assert off.skipped(AlertKind.DISK_LOW) == {TELEGRAM}
+    assert off.skipped(AlertKind.BOT_CRASHED) == frozenset()  # locked: always on

@@ -375,3 +375,21 @@ def test_old_config_key_name_is_reported_in_the_journal(config_path):
     assert result.exit_code is ExitCode.READY
     body = json.dumps(result.journal_body())
     assert "[api] watching_check_decimal_places -> check_decimal_places" in body
+
+
+def test_telegram_off_passes_and_on_checks_presence_only(config_path, tmp_path):
+    result = _run(config_path, _ready(config_path))
+    check = next(c for c in result.checks if c.name.value == "alert-telegram")
+    assert check.passed and "off" in check.detail
+    on = tmp_path / "bot.toml"
+    on.write_text(config_path.read_text()
+                  .replace('telegram_token_variable = ""', 'telegram_token_variable = "TG_T"')
+                  .replace('telegram_chat_variable = ""', 'telegram_chat_variable = "TG_C"'))
+    environ = _ready(on)
+    refused = _run(on, environ)
+    assert refused.cause is PreflightCause.ALERT_TELEGRAM_MISSING
+    assert "TG_T, TG_C" in refused.summary()
+    environ.update({"TG_T": CANARY, "TG_C": CANARY})
+    ok = _run(on, environ)
+    assert ok.cause is None and CANARY not in ok.summary()
+    assert _run(on, environ, platform=LINUX).cause is None  # Telegram is the channel off the Mac

@@ -446,6 +446,9 @@ class AlertsConfig:
     mac_app_timeout_seconds: Decimal
     feed_file: str
     routing_file: str
+    telegram_token_variable: str
+    telegram_chat_variable: str
+    telegram_host: str
 
 
 @dataclass(frozen=True)
@@ -857,6 +860,13 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[api] quotes_file must name a file")
     if not built["alerts"].feed_file.strip():
         raise ConfigError("[alerts] feed_file must name a file")
+    alerts_cfg = built["alerts"]
+    if bool(alerts_cfg.telegram_token_variable.strip()) != bool(
+            alerts_cfg.telegram_chat_variable.strip()):
+        raise ConfigError("[alerts] telegram_token_variable and telegram_chat_variable must "
+                          "both be set (Telegram on) or both be empty (off)")
+    if alerts_cfg.telegram_token_variable and not alerts_cfg.telegram_host.strip():
+        raise ConfigError("[alerts] telegram_host must name a host while Telegram is on")
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:
         raise ConfigError("[strategy] the active strategy cannot also be an observer")
@@ -977,6 +987,8 @@ def credential_variables(config: Config) -> frozenset[str]:
     names = {config.advisor.api_key_variable, config.alerts.imessage_recipient_variable,
              config.massive.api_key_variable, config.massive.files_key_id_variable,
              config.massive.files_secret_variable}
+    names |= {name for name in (config.alerts.telegram_token_variable,
+                                config.alerts.telegram_chat_variable) if name}
     for env in config.environments.values():
         names |= {env.app_key_variable, env.app_secret_variable, env.account_variable}
     return frozenset(names)

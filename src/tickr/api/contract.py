@@ -1563,6 +1563,7 @@ class AlertChannel(StrEnum):
 
     MAC = "mac"  # the Mac notification (the Tickr app, else osascript)
     IMESSAGE = "imessage"  # an iMessage to the owner's phone
+    TELEGRAM = "telegram"  # a Telegram message: works away from the Mac
     PUSH = "push"  # the iPhone app's push: needs the Apple Developer Program and APNs (backlog)
 
 
@@ -1582,6 +1583,7 @@ class AlertChannelCause(StrEnum):
     PREFLIGHT_UNREADABLE = "preflight-unreadable"  # the record cannot be read
     CHECK_FAILED = "check-failed"  # the latest preflight's alert-channel or alert-recipient check
     NOT_BUILT = "not-built"  # no delivery in the bot yet (push)
+    NOT_CONFIGURED = "not-configured"  # the owner has not set its variable names in bot.toml
 
 
 @dataclass(frozen=True)
@@ -1599,6 +1601,7 @@ class AlertRoutesV1:
 
     mac: bool
     imessage: bool
+    telegram: bool
     push: bool
 
 
