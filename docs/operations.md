@@ -450,6 +450,35 @@ launchctl bootout gui/$(id -u)/local.tickr.demo 2>/dev/null
 rm -f ~/Library/LaunchAgents/local.tickr.demo.plist
 ```
 
+## Feed-arrival measurement (one trading day)
+
+Read-only: no orders, no model. It records when Massive's minute bars (every symbol, every
+correction) and Webull's three lists (request sent, answer received, members) reach this Mac,
+plus every stream drop (Codex 102, point 1). Start it before 04:00 ET in its own terminal; it
+ends by itself at 20:05 ET (`[massive] arrival_tail_seconds` after the close), or on Ctrl-C.
+It reads the lists at the bot's own cadence and budget (3 screener requests a minute); it may run
+next to the bot (a second market-data client, C1 passed in Sandbox), but only one process should
+hold a Massive stream, so nothing else may stream Massive meanwhile.
+
+```sh
+cd ~/Development/Tickr && source .venv/bin/activate && set -a && . ~/.config/tickr/env && set +a && tickr probe-feed-arrival
+```
+
+The capture is `data/massive/arrival/<date>/arrival-<HHMMSS>.jsonl.gz` (a restart adds a file;
+the report reads them all). The next morning, once Massive has published the day's flat file:
+
+```sh
+tickr report-feed-arrival 2026-11-27 > arrival-2026-11-27.txt
+```
+
+It prints per session the bar delay after the minute's end, what share of the file's
+symbol-minutes had arrived at each `[massive] arrival_report_points_seconds` (present, late,
+lost in a gap, never streamed; minutes without a trade are not in the file and are never counted
+as missing), corrections, list latency and, for each list member, whether its bar for the
+decision minute had arrived. `--flat-file PATH` uses a file already on disk. The report points
+are report columns only; no guard reads them. Keep the Mac's clock synchronised (Date & Time:
+set automatically): delays are measured on its wall clock.
+
 ## Disk upkeep: `tickr maintain`
 
 What grows under `data/`, per environment and New York date: `capture/<env>/<date>/`

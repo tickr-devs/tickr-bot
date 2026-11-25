@@ -397,6 +397,11 @@ class MassiveConfig:
     stream_max_message_bytes: int
     stream_reconnect_seconds: Decimal
     calendar_lookback_days: int
+    arrival_dir: str
+    arrival_flush_seconds: Decimal
+    arrival_loop_seconds: Decimal
+    arrival_tail_seconds: int
+    arrival_report_points_seconds: tuple[Decimal, ...]
 
 
 @dataclass(frozen=True)
@@ -727,6 +732,13 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
             or not massive.stock_types):
         raise ConfigError("[massive] timeouts, page sizes and the message limit must be at least "
                           "1, stream_reconnect_seconds above 0, stock_types not empty")
+    points = massive.arrival_report_points_seconds
+    if (massive.arrival_flush_seconds <= 0 or massive.arrival_loop_seconds <= 0
+            or massive.arrival_tail_seconds < 0 or points[0] < 0
+            or list(points) != sorted(set(points))):
+        raise ConfigError("[massive] arrival_flush_seconds and arrival_loop_seconds must be above "
+                          "0, arrival_tail_seconds at least 0, arrival_report_points_seconds "
+                          "rising and not below 0")
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "

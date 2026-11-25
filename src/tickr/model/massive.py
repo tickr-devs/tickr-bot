@@ -44,7 +44,7 @@ import zoneinfo
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import Config, MassiveConfig
@@ -331,12 +331,22 @@ class DayBars:
         return pd.DataFrame(rows, columns=list(FILE_COLUMNS))
 
 
-class MinuteStream:
-    """The real-time stream of full-market minute aggregates into a DayBars. `connect` is
-    `websockets.sync.client.connect` (a stand-in in the tests)."""
+class BarSink(Protocol):
+    """Where the stream hands its bars and gaps: `DayBars` for the model, the feed-arrival
+    recorder (`tickr.model.arrival`) for the measurement."""
 
-    def __init__(self, cfg: Config, bars: DayBars, connect: Callable[..., Any] | None = None,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+    def add(self, message: Mapping[str, Any], arrived: Any) -> None: ...
+
+    def gap(self, down: Any, up: Any, cause: str) -> None: ...
+
+
+class MinuteStream:
+    """The real-time stream of full-market minute aggregates into a DayBars (or another
+    `BarSink`). `connect` is `websockets.sync.client.connect` (a stand-in in the tests);
+    `clock` stamps each received batch and both ends of a gap."""
+
+    def __init__(self, cfg: Config, bars: BarSink, connect: Callable[..., Any] | None = None,
+                 clock: Callable[[], Any] = time.monotonic) -> None:
         self.m = cfg.massive
         self.bars = bars
         self.clock = clock

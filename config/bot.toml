@@ -826,6 +826,25 @@ stream_reconnect_seconds = 5
 # Calendar days searched back from today for the history sessions (20 sessions span about 28 calendar days with weekends
 # and holidays; a search that finds fewer refuses); read by tickr.model.massive.
 calendar_lookback_days = 60
+# Folder, relative to [run] data_dir, of the feed-arrival captures of `tickr probe-feed-arrival` (one sub-folder per New
+# York date, one gzip JSONL file per run): every Massive minute bar and the Webull lists with their receipt times, for
+# measurement only; read by tickr.model.arrival.
+arrival_dir = "massive/arrival"
+# Seconds between two flushes of the open capture to disk (a crash loses at most this much); a convenience pace of the
+# recorder, no decision depends on it; read by tickr.model.arrival.
+arrival_flush_seconds = 5
+# Seconds of the recorder's main loop between two checks for a due Webull list round and for the end of the day; a
+# convenience pace, the rounds keep the bot's own cadence ([market_data] discovery_interval_seconds in the regular
+# session, screener_record_seconds outside it); read by tickr.model.arrival.
+arrival_loop_seconds = 1
+# Seconds the recorder keeps listening after the calendar's extended close, for the last minute's bars and their
+# corrections, before it ends by itself; a convenience span of the measurement, not a measured value; read by
+# tickr.model.arrival.
+arrival_tail_seconds = 300
+# Seconds after a minute's end at which `tickr report-feed-arrival` counts what had arrived (columns of the report:
+# 5 is the label's entry offset). REPORT ONLY: no guard, wait or freshness limit reads these; read by
+# tickr.model.arrival.
+arrival_report_points_seconds = [1, 2, 5, 10, 15, 30, 60]
 
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new
