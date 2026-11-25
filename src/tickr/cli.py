@@ -585,6 +585,29 @@ def _report_feed_arrival(args: argparse.Namespace) -> int:
     return 0
 
 
+def _compare_stream_day(args: argparse.Namespace) -> int:
+    """Read-only: a stream-built day file against the day's published flat file (fetched from
+    Massive's flat files, or the given path). Report only. Exit 0 printed, 3 refused."""
+    from tickr.model import massive, streamday
+    from tickr.model.errors import ModelRefused
+
+    cfg = config_module.load(args.config)
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    try:
+        day = calendar.day(datetime.strptime(args.day, "%Y-%m-%d").date())
+        built = streamday.read(cfg, args.day, args.stream_file)
+        flat_path = args.flat_file or massive.History(cfg).fetch(args.day)
+        flat = massive.read_day_file(Path(flat_path).read_bytes(), args.day)
+        result = streamday.compare(built, flat, day,
+                                   cfg.massive.arrival_report_points_seconds[-1])
+    except (CalendarRefused, ModelRefused, ValueError, OSError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+    for line in streamday.render(result):
+        print(line)
+    return 0
+
+
 def _check_quote(args: argparse.Namespace) -> int:
     """Read-only: one snapshot quote through the probes' market-data path, and whether its age
     passes the check `probe-replace-stop` applies. Sends no orders. Exit 0 fresh, 3 not."""
@@ -993,6 +1016,13 @@ def main(argv: list[str] | None = None) -> int:
                                 help="capture file (repeatable; default: all of the day's)")
     arrival_report.add_argument("--flat-file", type=Path,
                                 help="the day's minute_aggs file (default: fetched from Massive)")
+    stream_day = sub.add_parser("compare-stream-day", help="read-only: a stream-built day "
+                                "file against the day's published minute_aggs file")
+    stream_day.add_argument("day", help="New York date, YYYY-MM-DD")
+    stream_day.add_argument("--stream-file", type=Path,
+                            help="stream-built day file (default: [massive] stream_day_dir)")
+    stream_day.add_argument("--flat-file", type=Path,
+                            help="the day's minute_aggs file (default: fetched from Massive)")
     explain_parser = sub.add_parser("explain", help="read-only: the latest decision recorded "
                                     "today for a symbol, with every check")
     explain_parser.add_argument("symbol")
@@ -1046,6 +1076,8 @@ def main(argv: list[str] | None = None) -> int:
             return _probe_feed_arrival(args)
         if args.command == "report-feed-arrival":
             return _report_feed_arrival(args)
+        if args.command == "compare-stream-day":
+            return _compare_stream_day(args)
         if args.command == "check-quote":
             return _check_quote(args)
         if args.command == "probe-quote-sources":

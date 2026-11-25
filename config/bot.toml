@@ -881,6 +881,12 @@ arrival_tail_seconds = 300
 # 5 is the label's entry offset). REPORT ONLY: no guard, wait or freshness limit reads these; read by
 # tickr.model.arrival.
 arrival_report_points_seconds = [1, 2, 5, 10, 15, 30, 60]
+# Folder, relative to [run] data_dir, of the stream-built day files (`<date>.csv.gz` in the flat file's columns plus each
+# row's first and last receipt and correction count, `<date>.gaps.json` the day's connection gaps), written from the
+# day's feed-arrival captures when the recorder reaches the calendar's extended close, for `tickr compare-stream-day`
+# (can a stream-built previous session replace the published file at 04:00?); measurement only; read by
+# tickr.model.streamday.
+stream_day_dir = "massive/stream_days"
 
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new

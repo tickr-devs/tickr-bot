@@ -413,6 +413,7 @@ class MassiveConfig:
     arrival_loop_seconds: Decimal
     arrival_tail_seconds: int
     arrival_report_points_seconds: tuple[Decimal, ...]
+    stream_day_dir: str
 
 
 @dataclass(frozen=True)

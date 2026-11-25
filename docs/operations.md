@@ -487,6 +487,20 @@ decision minute had arrived. `--flat-file PATH` uses a file already on disk. The
 are report columns only; no guard reads them. Keep the Mac's clock synchronised (Date & Time:
 set automatically): delays are measured on its wall clock.
 
+When the run reaches the extended close it also keeps the stream-built day (Codex 102, point 3):
+`data/massive/stream_days/<date>.csv.gz` (the flat file's bar columns as the model's `DayBars`
+holds them at the end, plus each row's first and last receipt and its correction count) and
+`<date>.gaps.json` (drops, and the hours the recorder was not running). Once the flat file is
+published, compare the two (report only):
+
+```sh
+tickr compare-stream-day 2026-11-27 > stream-day-2026-11-27.txt
+```
+
+Per session it counts symbol-minutes equal in every column, different (which column, by how
+much), only in the stream and only in the file, with the minutes a gap may have touched counted
+apart.
+
 ## Disk upkeep: `tickr maintain`
 
 What grows under `data/`, per environment and New York date: `capture/<env>/<date>/`

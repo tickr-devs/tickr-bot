@@ -198,10 +198,12 @@ def record(cfg: Config, day: MarketDay, market: MarketData, stop: threading.Even
     thread = threading.Thread(target=run_stream, name="feed-arrival-stream", daemon=True)
     thread.start()
     polls = ListPoller(cfg, market, capture)
+    reached_end = False
     try:
         while not stop.is_set():
             now = datetime.datetime.fromtimestamp(wall_ns() / NS, NEW_YORK)
             if now >= end:
+                reached_end = True
                 break
             polls.tick(day, now)
             wait(float(m.arrival_loop_seconds))
@@ -218,6 +220,14 @@ def record(cfg: Config, day: MarketDay, market: MarketData, stop: threading.Even
         f"connection gaps: {capture.path}")
     for kind, cause, detail in outcome:
         say(f"stream {kind}: {cause}" + (f" ({detail})" if detail else ""))
+    if reached_end and not outcome:  # the day's stream is over: keep the stream-built day
+        from tickr.model import streamday
+
+        try:
+            say(f"stream-built day: {streamday.retain(cfg, day)}")
+        except (ModelRefused, OSError) as exc:
+            say(f"stream-built day not written: {exc}")
+            return 1
     if outcome:
         return 3 if outcome[0][0] == "refused" else 1
     return 0
