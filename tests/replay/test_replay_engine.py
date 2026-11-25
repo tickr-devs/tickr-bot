@@ -18,7 +18,7 @@ FLAT = ("10.00", "10.05", "9.95", "10.00")
 
 def run(settings, strategy, bars, last_entry=LAST_ENTRY, flatten=FLATTEN):
     clock = fixed_clock(NY, REGULAR_OPEN, last_entry, flatten)
-    return replay(lambda: strategy, {"ABC": bars}, settings, clock)
+    return replay(lambda: strategy, {"ABC": bars}, settings, clock, None)  # scripted: no sizing
 
 
 def test_entry_at_top_of_window_plus_slippage_and_stop_exit(settings, scripted):
@@ -252,5 +252,5 @@ def test_each_symbol_gets_a_fresh_strategy(settings, scripted):
         return made[-1]
 
     bars = {"AAA": series("10:00", [FLAT], "AAA"), "BBB": series("10:00", [FLAT], "BBB")}
-    replay(factory, bars, settings, CLOCK)
+    replay(factory, bars, settings, CLOCK, None)
     assert [m.contexts[0].symbol for m in made] == ["AAA", "BBB"]

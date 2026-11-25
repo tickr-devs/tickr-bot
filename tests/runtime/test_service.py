@@ -354,6 +354,10 @@ def test_cli_run_marks_its_start_and_stop_in_the_capture(tmp_path, monkeypatch):
         FakeBroker(), FakeMarketData(), lambda: None, lambda: None))
     monkeypatch.setattr(cli, "NOW", lambda: MONDAY_11)
     monkeypatch.setattr(cli, "SLEEP", lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+    # On a fake clock the discovery pass runs in place (cli.DISCOVERY_SPAWN). On its own thread
+    # it races the SIGTERM: a pass that has not sent its first screener read when the stop
+    # lands is cancelled and marks all three kinds `screener-skipped` (DiscoveryCancelled).
+    monkeypatch.setattr(cli, "DISCOVERY_SPAWN", cli.run_in_place)
     assert cli.main(["--config", str(bot_toml), "run"]) == 0
     cfg = config.load(bot_toml)
     capture = CaptureWriter.from_config(cfg, FakeMarketData().provider)

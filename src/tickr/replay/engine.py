@@ -10,7 +10,8 @@ Timeline per symbol and NY session. Bar `i` is processed in three steps:
    bar also reaches the stop, the stop is assumed hit after the fill (worst case).
 3. The strategy is evaluated with the last `history_sessions` sessions plus bars `0..i` of
    this session in `bars` (bar `i` is now complete), the same sessions in `prior_sessions`,
-   and, if enabled, a synthetic quote around bar `i`'s close stamped at the bar's end. An
+   and, if enabled, a synthetic quote around bar `i`'s close stamped at the bar's end, and
+   the platform's sizing limits (`config/bot.toml [risk]`, the bot's own values). An
    ENTER becomes a pending entry for the following bars; an EXIT is executed on bar `i + 1`.
 
 The strategy never sees bar `i + 1` before its decision on bar `i`, so it cannot look ahead.
@@ -30,7 +31,14 @@ from tickr.calendar import ny_date_of
 from tickr.replay.clock import ClockFor, SessionClock
 from tickr.replay.errors import ReplayError, StrategyContractError
 from tickr.replay.settings import ReplaySettings
-from tickr.strategy.base import Decision, PositionView, Strategy, SymbolContext, Verdict
+from tickr.strategy.base import (
+    Decision,
+    PositionView,
+    SizingLimits,
+    Strategy,
+    SymbolContext,
+    Verdict,
+)
 from tickr.types import Bar, Quote
 
 LABEL = "simulated"
@@ -184,8 +192,10 @@ class _SessionReplay:
         prior: tuple[tuple[Bar, ...], ...],
         settings: ReplaySettings,
         clock: SessionClock,
+        sizing: SizingLimits | None,
     ) -> None:
         self.strategy = strategy
+        self.sizing = sizing
         self.symbol = symbol
         self.day = day
         self.bars = tuple(bars)
@@ -323,6 +333,7 @@ class _SessionReplay:
             position=view,
             # Replay input is the recorded session itself: its bars are the whole session.
             session_open=self.session_clock.regular_open,
+            sizing=self.sizing,
         )
         decision = self.strategy.evaluate(context)
         _check_decision(self.strategy, self.symbol, decision)
@@ -387,8 +398,12 @@ def replay(
     bars_by_symbol: Mapping[str, Sequence[Bar]],
     settings: ReplaySettings,
     clock_for: ClockFor,
+    sizing: SizingLimits | None,
 ) -> ReplayResult:
-    """Replay every symbol through a fresh strategy instance; `clock_for` gives each day's clock."""
+    """Replay every symbol through a fresh strategy instance; `clock_for` gives each day's clock
+    and `sizing` is the platform's sizing limits (`SizingLimits.of(config.risk)`), as live.
+    None only where nothing is sized (a recorded decision replayed as it was): a strategy given
+    none refuses every entry."""
     trades: list[SimulatedTrade] = []
     signals: list[Signal] = []
     verdicts: dict[str, int] = {}
@@ -404,7 +419,7 @@ def replay(
         prior: list[tuple[Bar, ...]] = []
         for day, day_bars in split_sessions(bars_by_symbol[symbol]):
             session = _SessionReplay(
-                strategy, symbol, day, day_bars, tuple(prior), settings, clock_for(day)
+                strategy, symbol, day, day_bars, tuple(prior), settings, clock_for(day), sizing
             )
             session.run()
             trades.extend(session.trades)

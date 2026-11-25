@@ -10,6 +10,7 @@ from datetime import date
 import pytest
 from strategy_bars import (
     PRIOR_DAYS,
+    SIZING_2500,
     SYMBOL,
     TODAY,
     bar,
@@ -25,16 +26,13 @@ from tickr.api import contract
 from tickr.api.contract import TRIGGER_RULES
 from tickr.strategy import indicators as ind
 from tickr.strategy import price_action_v1 as pa
-from tickr.strategy.base import PositionView, SymbolContext, Verdict
+from tickr.strategy.base import PositionView, SizingLimits, SymbolContext, Verdict
 
 
 def make(**overrides):
     """Strategy from the repo toml. Rule tests use a warm-up multiple of 1 so short generated
     sessions are enough; the warm-up itself is tested with the repo value."""
-    # The sizing tests below were written for a 2500 USD notional cap (the shipped one is 1000
-    # since 2026-11-17, owner): pinned so their numbers still test the loss and cap sizing.
-    overrides = {"indicators__warmup_period_multiple": 1,
-                 "sizing__max_position_notional_usd": 2500, **overrides}
+    overrides = {"indicators__warmup_period_multiple": 1, **overrides}
     values = copy.deepcopy(strategy_values())
     for dotted, value in overrides.items():
         section, key = dotted.split("__")
@@ -42,8 +40,10 @@ def make(**overrides):
     return pa.create(values)
 
 
-def ctx(bars, q=None, prior=None, position=None):
-    return SymbolContext(SYMBOL, bars, prior_sessions() if prior is None else prior, q, position)
+def ctx(bars, q=None, prior=None, position=None, sizing=SIZING_2500):
+    """The sizing tests below use a 2500 USD notional cap (`SIZING_2500`)."""
+    return SymbolContext(SYMBOL, bars, prior_sessions() if prior is None else prior, q, position,
+                         sizing=sizing)
 
 
 # Breakout baseline: 30 rising bars, close 20.1 .. 23.0, TR 0.14 each, ATR 0.14.
@@ -181,17 +181,25 @@ def test_quantity_by_planned_loss_and_notional_cap():
     # sizing risk 0.704: 50 / 0.704 = 71.02 -> 71; 2500 / 23.06 = 108.4 -> 108
     assert quantity(make().evaluate(ctx(BREAKOUT_BARS, GOOD_QUOTE))) == d(71)
     # planned loss 100 -> 142 by loss; the notional cap binds at 108
-    assert quantity(
-        make(sizing__planned_loss_usd=100).evaluate(ctx(BREAKOUT_BARS, GOOD_QUOTE))
-    ) == (d(108))
+    def limits(loss="50", cap="2500"):
+        return ctx(BREAKOUT_BARS, GOOD_QUOTE, sizing=SizingLimits(d(loss), d(cap)))
+
+    assert quantity(make().evaluate(limits(loss="100"))) == d(108)
     # exactly 1 share passes; below 1 refuses
-    one = make(sizing__planned_loss_usd=0.704).evaluate(ctx(BREAKOUT_BARS, GOOD_QUOTE))
+    one = make().evaluate(limits(loss="0.704"))
     assert one.verdict == Verdict.ENTER and quantity(one) == d(1)
-    decision = make(sizing__planned_loss_usd=0.7).evaluate(ctx(BREAKOUT_BARS, GOOD_QUOTE))
+    decision = make().evaluate(limits(loss="0.7"))
     assert_refused(decision, Verdict.IGNORE, "quantity")
     assert decision.quantity is None
-    decision = make(sizing__max_position_notional_usd=23).evaluate(ctx(BREAKOUT_BARS, GOOD_QUOTE))
+    decision = make().evaluate(limits(cap="23"))
     assert_refused(decision, Verdict.IGNORE, "quantity")
+
+
+def test_an_entry_without_the_platform_sizing_limits_is_refused():
+    """Refuse, never guess: no planned loss or notional cap given = no entry (T2/T3)."""
+    decision = make().evaluate(ctx(BREAKOUT_BARS, GOOD_QUOTE, sizing=None))
+    assert_refused(decision, Verdict.IGNORE, "planned_loss_limit_usd")
+    assert decision.quantity is None
 
 
 def test_watch_without_quote():
@@ -527,7 +535,7 @@ def test_quantity_shrinks_to_the_daily_loss_budget():
     """Owner decision 2026-11-14: near the daily ceiling, size down to the room left."""
     def sized(budget):
         context = SymbolContext(SYMBOL, BREAKOUT_BARS, prior_sessions(), GOOD_QUOTE, None,
-                                budget)
+                                budget, sizing=SIZING_2500)
         return make().evaluate(context)
 
     # sizing risk 0.704: a 20 USD budget -> floor(28.4) = 28 shares instead of 71

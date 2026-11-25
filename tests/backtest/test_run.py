@@ -260,3 +260,54 @@ def test_run_last_sessions_reports_its_window(tmp_path):
         date(2026, 11, 11), TODAY, 3)
     assert summary.sessions_without_replayed_days == 2 and summary.replayed_symbol_days == 1
     assert summary.bot_trades == report["bot"]["trades"] <= summary.trades
+
+
+def test_an_incomplete_warm_up_or_target_session_refuses_the_symbol(tmp_path):
+    from tickr.backtest.run import tradable_days
+    from tickr.calendar import SessionCalendar
+
+    out = tmp_path / "data"
+    warm = PRIOR[-1]  # PAGE_LIMIT kept one bar of the 12th; later nights fetch only the 13th
+    for symbol in ("WARM", "LAST", "GOOD"):
+        history = [b for d in PRIOR for b in flat_bars(
+            symbol, d, "20", "3000", 1 if symbol == "WARM" and d == warm else 390)]
+        write_symbol(out, symbol, history + flat_bars(symbol, TODAY, "20"))
+    statuses = [{"symbol": "WARM", "first_session": warm.isoformat(),
+                 "last_session": warm.isoformat(), "complete": False,
+                 "cause": "PAGE_LIMIT: 1 pages"},
+                {"symbol": "WARM", "first_session": TODAY.isoformat(),
+                 "last_session": TODAY.isoformat(), "complete": True, "cause": ""},
+                {"symbol": "LAST", "first_session": PRIOR[0].isoformat(),
+                 "last_session": TODAY.isoformat(), "complete": False,
+                 "cause": "PAGE_LIMIT: 3 pages"}]
+    fetch._write_lines(out / fetch.MINUTES_STATUS_FILE, statuses)
+    pool = [PoolEntry(TODAY, i, s, Decimal(20), Decimal(20), Decimal(50), Decimal(10**8))
+            for i, s in enumerate(("WARM", "LAST", "GOOD"), start=1)]
+    days, skipped = tradable_days(cfg(), SessionCalendar.load(ROOT / "config" / "calendar"),
+                                  pool, out, len(PRIOR), Decimal(1))
+    assert days == {"GOOD": [TODAY]}
+    causes = {r["symbol"]: r["cause"] for r in skipped}
+    assert causes["WARM"] == "FETCH_INCOMPLETE: 2026-11-12 PAGE_LIMIT: 1 pages"
+    assert causes["LAST"].startswith("FETCH_INCOMPLETE: 2026-11-06 PAGE_LIMIT")
+    assert causes["LAST"].endswith("2026-11-13 PAGE_LIMIT: 3 pages")
+
+
+def test_the_holdout_splits_on_every_session_not_only_those_with_candidates(tmp_path):
+    out, results = tmp_path / "data", tmp_path / "results"
+    prior = [b for d in PRIOR for b in flat_bars("ABCD", d, "20", "3000")]
+    write_symbol(out, "ABCD", prior + rising("ABCD", "20", "0.30", 30, "300000"))
+    write_pool([PoolEntry(PRIOR[0], 1, "OLD", Decimal(20), Decimal(21), Decimal(50),
+                          Decimal(10**8)),
+                PoolEntry(TODAY, 1, "ABCD", Decimal(20), Decimal(29), Decimal(50),
+                          Decimal(10**8))], out / "pool.csv")
+    # Ten sessions 11-02 .. 11-13 were selected; only two had a candidate.
+    quiet = [date(2026, 11, d) for d in (2, 3, 4, 5, 9, 10, 11, 12)]
+    write_caps(sorted([CapRecord(d, 0, 0) for d in quiet]
+                      + [CapRecord(PRIOR[0], 1, 1), CapRecord(TODAY, 1, 1)],
+                      key=lambda c: c.session_date), out / "pool_cap.csv")
+    run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
+                 "tickr.strategy.price_action_v1",
+                 ROOT / "strategies" / "price-action-v1" / "strategy.toml")
+    holdout = json.loads((results / "report.json").read_text())["holdout"]
+    # The last 33% of ten sessions is three: 11-11 .. 11-13, whatever days had candidates.
+    assert holdout["starts"] == "2026-11-11" and holdout["calendar_sessions"] == 10

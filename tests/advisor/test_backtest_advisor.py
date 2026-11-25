@@ -237,7 +237,7 @@ def test_reads_what_the_real_backtest_writes(tmp_path):
     results = tmp_path / "results"
     write_all(result, results, replay.output_decimal_places)
     write_report(result, pool, [], len(days), [], cfg,
-                 load_backtest(ROOT / "config" / "backtest.toml"), replay, results)
+                 load_backtest(ROOT / "config" / "backtest.toml"), replay, results, days)
     starts = json.loads((results / "report.json").read_text())["holdout"]["starts"]
     advised = run_backtest_advisor(cfg, results, write_minutes(tmp_path / "data"),
                                    FakeClient(answer(no_change="thin")), replay, NOW,

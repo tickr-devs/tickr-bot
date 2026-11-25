@@ -123,8 +123,9 @@ def simulate_one(
     )
     if session is None:
         return skip("decision bar not in bars", qty)
+    # The recorded decision is replayed as it was (its quantity included): nothing is sized.
     result = replay(
-        lambda: _OneDecision(record), {record.symbol: session}, settings, clock_for
+        lambda: _OneDecision(record), {record.symbol: session}, settings, clock_for, None
     )
     if len(result.signals) != 1 or len(result.trades) > 1:
         raise ResearchError(

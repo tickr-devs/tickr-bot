@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from research_helpers import (
@@ -16,7 +17,9 @@ from research_helpers import (
 from tickr.research.compare import DiffKind, decide, diff, select
 from tickr.research.errors import ResearchError
 from tickr.research.records import Admission
-from tickr.strategy.base import Role, Verdict
+from tickr.strategy.base import Role, SizingLimits, Verdict
+
+SIZING = SizingLimits(Decimal(50), Decimal(1000))  # Breakout sets its own quantity
 
 BARS = series("10:00", [
     flat("10.00"),
@@ -28,7 +31,8 @@ BARS = series("10:00", [
 
 
 def run(version="1", edge="0"):
-    return decide(lambda: Breakout(version, edge), {"ABC": BARS}, replay_settings(), CLOCK)
+    return decide(lambda: Breakout(version, edge), {"ABC": BARS}, replay_settings(), CLOCK,
+                  SIZING)
 
 
 def test_decide_records_every_decision_as_observer():

@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from tickr.replay.__main__ import session_clock
+from tickr.replay.__main__ import platform_sizing, session_clock
 from tickr.replay.engine import ExitReason, SignalOutcome, replay
 from tickr.replay.settings import load_settings
 from tickr.strategy import price_action_v1 as pa
@@ -58,6 +58,7 @@ def test_real_strategy_enters_and_trades():
         {SYMBOL: bars},
         settings,
         session_clock(ROOT / "config" / "bot.toml"),
+        platform_sizing(ROOT / "config" / "bot.toml"),
     )
     assert (result.strategy, result.version) == ("price-action-v1", "1")
     assert result.verdict_counts.get("ENTER", 0) >= 1

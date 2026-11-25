@@ -14,10 +14,17 @@ trap fail_boot ERR
 %{ endif ~}
 apt-get update -q
 apt-get install -y -q python3-venv git unzip curl
-curl -sSfL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
+# Installers run as root, so each is a pinned version checked against its pinned sha256
+# (variable "installers"); a mismatch stops the setup here, before anything runs.
+curl -sSfL https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${aws_cli_version}.zip -o /tmp/awscli.zip
+echo "${aws_cli_sha256}  /tmp/awscli.zip" | sha256sum -c -
 unzip -q /tmp/awscli.zip -d /tmp
 /tmp/aws/install
-curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
+# uv: its official wheel from PyPI; only the uv binary inside it is used.
+curl -sSfL "${uv_wheel_url}" -o /tmp/uv.whl
+echo "${uv_sha256}  /tmp/uv.whl" | sha256sum -c -
+unzip -q -j -o /tmp/uv.whl "uv-${uv_version}.data/scripts/uv" -d /usr/local/bin
+chmod 755 /usr/local/bin/uv
 install -d -o ubuntu -g ubuntu /work
 echo "bucket=${bucket}" > /work/README
 %{ if job != "" ~}
@@ -27,7 +34,8 @@ echo "bucket=${bucket}" > /work/README
 # - resume from what it already saved in S3; save progress to S3 as often as it can;
 # - on SIGTERM, or when /work/STOP appears, save and exit within 90 seconds;
 # - exit 0 only when the whole job is finished.
-# Env: BUCKET, JOB, STOP_FILE, AWS_DEFAULT_REGION. jobs/${job}/failures counts failed runs.
+# Env: BUCKET, JOB, STOP_FILE, AWS_DEFAULT_REGION. jobs/${job}/failures counts failed runs
+# (a job script that cannot be fetched counts too).
 # The wrapper runs it only while s3://${bucket}/jobs/${job}/until holds a future Unix time
 # (written after the owner's yes on a named sum) and no jobs/${job}/done exists.
 cat > /usr/local/bin/tickr-job <<'WRAP'
@@ -69,7 +77,17 @@ spot_notice() {
   curl -sf -o /dev/null -H "X-aws-ec2-metadata-token: $t" http://169.254.169.254/latest/meta-data/spot/instance-action
 }
 allowed || { echo "not allowed: no future deadline or job done"; stop_group; exit 0; }
-aws s3 cp "s3://${bucket}/${job_script}" /work/job.sh || { sleep 60; shutdown -h now; exit 1; }
+# Crash loop guard: every failed run counts in the shared counter, a job script that cannot be
+# fetched as well as one that exits non-zero, so a permanent error cannot relaunch machines
+# forever; after max_failures failed runs the group stops until research looks.
+fail_run() {
+  f=$(( $(s3_read "$M/failures" | tr -dc 0-9 || true) + 1 ))
+  echo "$f" | aws s3 cp - "$M/failures" || true
+  echo "$1 (failure $f of ${max_failures})"
+  if [ "$f" -ge ${max_failures} ]; then stop_group; fi
+  sleep 60; shutdown -h now
+}
+aws s3 cp "s3://${bucket}/${job_script}" /work/job.sh || { fail_run "job script could not be fetched"; exit 1; }
 cd /work
 rm -f /work/STOP
 setsid bash /work/job.sh &
@@ -94,12 +112,7 @@ if [ "$rc" -eq 0 ]; then
 elif [ -e /work/STOP ]; then
   echo "job stopped for a spot notice"
 else
-  # Crash loop guard: after max_failures failed runs the group stops until research looks.
-  f=$(( $(s3_read "$M/failures" | tr -dc 0-9 || true) + 1 ))
-  echo "$f" | aws s3 cp - "$M/failures" || true
-  echo "job exited $rc (failure $f of ${max_failures})"
-  if [ "$f" -ge ${max_failures} ]; then stop_group; fi
-  sleep 60; shutdown -h now
+  fail_run "job exited $rc"
 fi
 WRAP
 chmod 755 /usr/local/bin/tickr-job

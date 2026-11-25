@@ -15,6 +15,10 @@ Alert text must never contain a secret value: callers pass variable NAMES, never
 The iMessage recipient is personal data: Tickr code only knows the NAME of the environment
 variable that holds it (`[alerts] imessage_recipient_variable`) and checks its presence; the
 AppleScript reads the value itself (`system attribute`), so it is never in Python, argv or logs.
+The Telegram bot token and chat id are the same: only the variable NAMES are configuration
+(`[alerts] bot_token_variable`, `chat_id_variable`); the values are read from the
+environment at the moment of one send and never stored, logged or put in an error text. The
+channel is off while neither variable is set.
 """
 
 from __future__ import annotations
@@ -27,6 +31,8 @@ import re
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -69,6 +75,7 @@ DARWIN = "darwin"
 MACOS = "macos"
 IMESSAGE = "imessage"
 FEED = "feed"
+TELEGRAM = "telegram"
 NOTIFIER = "notifier"  # name of a single channel given to Alerter
 
 
@@ -273,6 +280,76 @@ class IMessageNotifier:
                    [self._config.imessage_recipient_variable, f"{title}\n{text}"])
 
 
+# Telegram Bot API protocol constants: the method, its JSON fields and the HTTPS scheme.
+TELEGRAM_SCHEME = "https"
+TELEGRAM_METHOD = "sendMessage"
+HTTP_OK = 200
+Opener = Callable[[urllib.request.Request, float], Any]
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx answer is refused, never followed: the bot token is in the request path."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
+def _open(request: urllib.request.Request, timeout: float) -> Any:
+    return _OPENER.open(request, timeout=timeout)
+
+
+def telegram_on(config: AlertsConfig, environ: Mapping[str, str]) -> bool:
+    """Whether the owner set up Telegram: either variable is present (presence only). Neither
+    present = the channel is off; one alone is a half setup that preflight refuses."""
+    return any(environ.get(name) for name in (config.bot_token_variable, config.chat_id_variable)
+               if name)
+
+
+def telegram_missing(config: AlertsConfig, environ: Mapping[str, str]) -> list[str]:
+    """NAMES of the Telegram variables not set (empty when it is off or complete). Presence
+    only: the values are compared with "" and never stored, printed or returned."""
+    if not telegram_on(config, environ):
+        return []
+    return [name for name in (config.bot_token_variable, config.chat_id_variable)
+            if not environ.get(name)]
+
+
+class TelegramNotifier:
+    """One Telegram message to the owner's chat (HTTPS POST to the Bot API), so the owner is
+    told away from the Mac. One attempt per alert, never retried. Errors name the failure kind
+    or the HTTP status only: the request address holds the bot token."""
+
+    def __init__(self, config: AlertsConfig, environ: Mapping[str, str] = os.environ,
+                 opener: Opener = _open) -> None:
+        self._config = config
+        self._environ = environ
+        self._timeout = float(config.notification_timeout_seconds)
+        self._opener = opener
+
+    def notify(self, title: str, text: str) -> None:
+        missing = telegram_missing(self._config, self._environ)
+        if missing:
+            raise NotifyError("telegram-missing: " + ", ".join(missing) + " not set")
+        token = self._environ[self._config.bot_token_variable]
+        body = json.dumps({"chat_id": self._environ[self._config.chat_id_variable],
+                           "text": f"{title}\n{text}"}).encode()
+        url = f"{TELEGRAM_SCHEME}://{self._config.telegram_host}/bot{token}/{TELEGRAM_METHOD}"
+        request = urllib.request.Request(url, data=body, method="POST",
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with self._opener(request, self._timeout) as response:
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            raise NotifyError(f"telegram answered HTTP {exc.code}") from None
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise NotifyError(f"telegram did not answer: {type(exc).__name__}") from None
+        if status != HTTP_OK:
+            raise NotifyError(f"telegram answered HTTP {status}")
+
+
 class FeedNotifier:
     """Appends one JSON line per alert ({at, title, text}) to the alerts feed file, so whatever
     waits on that file (a Claude session on the Mac) learns of the alert at once. Every process
@@ -390,16 +467,22 @@ def _once(channel: Notifier, name: str, title: str, text: str, done: Done) -> Ca
 def default_notifier(config: AlertsConfig, platform: str = sys.platform,
                      environ: Mapping[str, str] = os.environ,
                      feed: Path | None = None) -> Notifier | None:
-    """The channels for this machine (Mac notification, iMessage and, given its path, the
-    alerts feed file, all in the background: the Tickr app and osascript can each take
-    seconds, and the bot's loop must not wait for them), or None where there are none (CI,
-    Linux)."""
+    """The channels for this machine (on a Mac the notification and iMessage; Telegram on any
+    machine once one of its variables is set; and, given its path, the alerts feed
+    file), all in the background: the Tickr app, osascript and the network can each take
+    seconds, and the bot's loop must not wait for them. None where there are none (CI, Linux
+    without Telegram)."""
+    background: list[tuple[str, Notifier]] = []
     if platform == DARWIN:
-        feeds: tuple[tuple[str, Notifier], ...] = (
-            () if feed is None else ((FEED, FeedNotifier(feed)),))
-        return Channels((), ((MACOS, mac_notifier(config)),
-                             (IMESSAGE, IMessageNotifier(config, environ)), *feeds))
-    return None
+        background += [(MACOS, mac_notifier(config)),
+                       (IMESSAGE, IMessageNotifier(config, environ))]
+    if telegram_on(config, environ):
+        background.append((TELEGRAM, TelegramNotifier(config, environ)))
+    if not background:
+        return None
+    if feed is not None:
+        background.append((FEED, FeedNotifier(feed)))
+    return Channels((), tuple(background))
 
 
 @dataclass(frozen=True)
@@ -496,7 +579,10 @@ class Alerter:
         def done(name: str, error: str | None) -> None:  # on a background thread
             self._done.put((kind, text, name, error))
 
-        skip = self._routing(kind)
+        try:
+            skip = self._routing(kind)
+        except Exception:  # noqa: BLE001 - an injected routing never drops an alert
+            skip = frozenset()
         routed_off = tuple(name for name in self._channels.names() if name in skip)
         if routed_off and len(routed_off) == len(self._channels.names()):
             return AlertOutcome(kind, text, now, Delivery.ROUTED_OFF, None,

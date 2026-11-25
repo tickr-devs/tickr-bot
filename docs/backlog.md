@@ -26,22 +26,28 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
   Until then every item respects the design rules W9-W14 (owner-approved 2026-11-19), so the bot
   and the apps fit ticker.bot later without being redone.
 - Done items move to "Done" at the end with the pull request that did them.
+- Re-scope (owner, 2026-11-25): the bot trades the trained model (layer 1 plus layer 2), not hand-written
+  strategies and observers. Items about strategies and observers are dropped or reworked; R28 removes
+  the old strategies. The first model run is ACTIVE in the Webull Sandbox, with no shadow run, no
+  comparison with the old strategy and no profit threshold before the Sandbox start (owner,
+  2026-11-24). The apps follow mockup v126 (R14).
 
 ## Overview
 
 | Version | Goal | Done when (built, not waited for) | Keeps running to collect |
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
-| **v1.1** | Tools to find an edge, and the model path | R1, R4, R5, R15, R16, R35 and T12 merged | observer, replay and model results |
-| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T11, T13-T19, X3, X4 merged and released | unattended Sandbox days |
-| **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S7, X1, X2 merged in both apps (X5 only if its condition holds) | |
+| **v1.1** | Tools to find an edge, and the model path | R1, R5, R15, R16, R35 and T12 merged | replay and model results |
+| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T3, T6-T11, T13-T19, X3, X4 merged and released | unattended Sandbox days |
+| **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S6, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
 | **v5** | The product: ticker.bot (site, accounts, one cloud bot per user) and the apps signed in to it; standalone Mac scope settled in W1 | W1 spec agreed with the owner, W2-W8 and W15-W17 built | |
 | **v6** | Selling it: legal and business | only if the owner still wants it after v5; O3 (Webull's answer) gates the rest | |
 
-Why this order: the biggest risk is that no strategy has an edge after costs (every family tested on
-history so far is negative, `docs/strategy-ledger.md`). So the research tools come right after v1,
-and strategy research goes on in every later version beside the build work.
+Why this order: the edge now comes from the model path (R15 to R30), not from hand-written strategies
+(every family tested on history so far is negative, `docs/strategy-ledger.md`, and strategy tuning is
+frozen). So the tools that judge a model come right after v1, and model research goes on in every later
+version beside the build work.
 
 ---
 
@@ -87,49 +93,48 @@ Owner's own setup tasks (outside the repository):
 
 ## v1.1: Tools to find an edge
 
-Goal: the tools and rules to tell a strategy with a positive net result after costs, on data it was
-not fitted on, from a fitted one. Scope: offline research tools and strategy versions only; nothing
-in the order, risk or session path changes, except T12, moved here from v2 because shadow trading
-(R25) needs it. Strategies still never send orders (rule 8). Hand-written strategy tuning is frozen
-(owner 2026-11-17: models replace it), so R6, R7, R8, R10 and R12 are frozen; research runs never
-gate a merge.
+Goal: the tools and rules to tell a model version with a positive net result after costs, on data it
+was not fitted on, from a fitted one. Scope: offline research tools and the model path; nothing in the
+order, risk or session path changes, except T12, moved here from v2 because the model's dollar exam
+and backtest need it. Models and strategies never send orders (rule 8). Hand-written strategy tuning is
+frozen (owner 2026-11-17: models replace it); R6 to R12 are dropped in the 2026-11-25 re-scope;
+research runs never gate a merge.
 
-- **R1** Promotion ladder with written criteria: history, observer for N sessions, active in Sandbox,
-  real account at small size, full size. Answers Q3 ("what counts as Sandbox proved the strategy").
+- **R1** Promotion ladder of MODEL versions with written criteria: exam on sealed data (R20), then the
+  Sandbox, then the real account at small size, then full size. Answers Q3 ("what counts as Sandbox
+  proved the model version"). Status: decided, criteria to be written.
 - **R2** Walk-forward run as the standard evaluation, with a counter of how often each data set and
   hold-out was used. Status: merged into R15 and R16 (2026-11-19).
 - **R3** Parameter sweep and sensitivity report: result against each parameter moved by one step; a
   strategy must sit on a plateau, not a peak. Status: merged into R15 and R16 (2026-11-19).
-- **R4** Fewer parameters: new strategies test one hypothesis with at most about 10 parameters
-  (price-action-v1 has 23).
+- **R4** Fewer parameters for new strategies. Status: dropped (2026-11-25, model re-scope); hand-written
+  strategies are not extended.
 - **R5** Slippage measurement: planned loss against the realized loss of every stopped trade, per
   day; replay and backtests use the measured value instead of the fixed 0.05%. Stop overshoot: read
   trade prints (`ticks/list`) after the session for symbols with own fills, since Webull triggers
-  stops on the last trade (old #087).
+  stops on the last trade (old #087). Status: in review, #762.
 - **R6** Pre-registered R21 test (screener rank 21 and lower, `tickr/b4b5/preregistered.txt` in
-  project files) on the May-Aug data, run once exactly as registered. Status: frozen (2026-11-19).
-- **R7** Recheck on recorded live days: screener rank and source vs outcome (old Q46), acceleration
-  check (old #153-33). Both studied on history 2026-11-15 (`docs/strategy-ledger.md`): rank fades,
-  source predicts nothing, acceleration does not help. Status: frozen (2026-11-19).
-- **R8** Candidate `price-action-v2` (no-progress exit, old Q43; trigger confirmation, old #153)
-  judged by replay and observers; provisional X and N (`docs/observers.md`). Status: frozen
+  project files) on the May-Aug data. Status: dropped (2026-11-25, model re-scope); it was frozen (2026-11-19).
+- **R7** Recheck on recorded live days: screener rank and source vs outcome (old Q46), acceleration check
+  (old #153-33). Both studied on history 2026-11-15 (`docs/strategy-ledger.md`): rank fades, source predicts
+  nothing, acceleration does not help. Status: dropped (2026-11-25, model re-scope); it was frozen
   (2026-11-19).
-- **R9** Per-variant evidence and missed-moves "trade of the day".
-- **R10** Spike-entry setup block: built as the spike setup of `price-action-v3`, active since
-  2026-11-16 (docs/decisions.md); judged like any other setup. Status: frozen (2026-11-19).
-- **R11** Observers see what they would trade: discovery applies the union of the active strategy's
-  and the observers' liquidity rules, so an observer with looser rules is not starved (left over
-  from #403).
-- **R12** Intra-minute breakout entry (owner, 2026-11-16): a strategy variant that enters on the L1
-  stream when the breakout happens, instead of waiting for the M1 bar to close above it. Webull
-  history has only minute bars, so it cannot be backtested. First step: record every L1 quote of
-  WATCH symbols from the stream the bot already holds (no extra bars quota), check the capture
-  (`quotes.jsonl`) misses none, then judge the variant by quote-level replay and as an observer.
-  Status: frozen (2026-11-19); tick data returns in R21.
-- **R13** Model research order (decided 2026-11-18): train the remaining 6 questions of the wide
-  model overnight, then the entry model, then the exit model. Status: in progress.
-- **R14** Integrate the trained model into the macOS and iOS apps. Training runs as a job (W13).
-  Status: decided, after R13 and only once R23 (Step 0 gate) passes.
+- **R8** Candidate `price-action-v2` (no-progress exit, old Q43; trigger confirmation, old #153)
+  judged by replay and observers. Status: dropped (2026-11-25, model re-scope); it was frozen (2026-11-19).
+- **R9** Per-variant evidence and missed-moves "trade of the day". Status: dropped (2026-11-25, model
+  re-scope) (PR #772 closed).
+- **R10** Spike-entry setup block, built as the spike setup of `price-action-v3`. Status: dropped
+  (2026-11-25, model re-scope); it was frozen (2026-11-19).
+- **R11** Observers see what they would trade (discovery applies the union of liquidity rules; left
+  over from #403). Status: dropped (2026-11-25, model re-scope) (PR #764 closed).
+- **R12** Intra-minute breakout entry on the L1 stream (owner, 2026-11-16), a strategy variant.
+  Status: dropped (2026-11-25, model re-scope); it was frozen (2026-11-19); tick data returns in R21.
+- **R13** Model research order (decided 2026-11-18): the remaining 6 questions of the wide model, then
+  the entry model, then the exit model. Status: superseded by R19 and R20.
+- **R14** The apps follow mockup v126 (https://claude.ai/artifact/FzDPRpGgQPmKWi3AJyzztN): "model
+  version" everywhere, confidence against the threshold with the top reasons, "Closest to entry", the
+  Model lab, candidate versions and the "New model version" flow. Training runs as a job (W13).
+  Status: decided, waits for the model decision API from R24 to R26.
 
 Model path, training stages (approved 2026-11-19; source: the training spec,
 https://claude.ai/artifact/RLasCBhBcU9JiwF6QZ8BkR). Acceptance for every stage: income goes up AND
@@ -159,8 +164,6 @@ losses go down, on both validation periods.
   files are deleted 30 days after the subscription ends. Status: in progress.
 - **R22** Stage 7: neural networks, only if ticks pay off in R19 against its "without ticks"
   control. Status: decided.
-- **R31** Benzinga News add-on on Massive for one month (99 USD) as a news feature. Status: proposed
-  (recommended by the training thread, 2026-11-20), owner has not decided.
 - **R32** Free float history from SEC filings as a feature. Status: in progress.
 - **R33** Live feature parity, a hard condition before the model is switched on live (before the R23
   gate): every first-layer input is fed live from the same source as training (Massive) and computed
@@ -182,13 +185,15 @@ losses go down, on both validation periods.
 
 Model path, plan v1.5 phases (approved 2026-11-19; source: `model-migration/plan-v1.5.md` in
 project files):
-- **R23** Step 0 gate (needs R33 first): plus after costs on the sealed period, plus in 2 of 3 months, plus without
-  the best 1% of trades, every feature available live, stop and decision frequency chosen. Status:
-  decided, not passed.
-- **R24** Live data for the model's features. Status: decided, after R23.
-- **R25** Shadow: the model decides live without orders, through T12's shared rules. Status:
-  decided, after R24 and T12.
-- **R26** Sandbox, regular session. Status: decided, after R25.
+- **R23** Step 0 gate (needs R33 first), applied before real money (v4), not before the Sandbox start:
+  plus after costs on the sealed period, plus in 2 of 3 months, plus without the best 1% of trades,
+  every feature available live, stop and decision frequency chosen. The Sandbox starts with a trained
+  layer 2 and no threshold (owner, 2026-11-24). Status: decided, not passed.
+- **R24** Live data for the model's features. Status: in progress; the model bundle loader and the
+  Massive inputs are merged (#747, #752), the wiring PR is next.
+- **R25** Shadow: the model decides live without orders. Status: dropped (2026-11-25, model re-scope)
+  (owner: no shadow run, 2026-11-24); the first model run is ACTIVE in the Sandbox.
+- **R26** Sandbox, regular session. Status: decided, after R24 (no shadow run first).
 - **R27** Pre- and post-market. Status: decided, after R26 and X4.
 - **R28** Cleanup of the old hand-written strategies, right after R26 once the models trade the
   regular session; it does not wait for R27 (owner, 2026-11-19). Status: decided, after R26.
@@ -205,26 +210,20 @@ project files):
   (2026-11-17) did better sized by filter rank than flat in all three periods; liquidity of larger
   bets in thin stocks was not checked. A config setting now, in the settings schema (S1) later.
   Status: decided, after R29.
-- **T12** (moved from v2, 2026-11-19) Simulations obey platform rules: observers, replay and "what if"
-  run through the same admission rules (position limit, pause after a loss, daily ceiling) from one
-  shared code path, and the apps label each result with the rules it was computed under. R25 needs
-  it.
+- **T12** (moved from v2, 2026-11-19) Shared admission rules (position limit, pause after a loss, daily
+  ceiling) from one code path, kept for the model's dollar exam (R20) and for R30's backtest on stored
+  model answers; the apps label each result with the rules it was computed under. Observer and
+  strategy-replay wiring is dropped (2026-11-25). Status: in progress; PR #767 is being reworked, #775
+  is closed.
 
-- **R35** Backtest calendar correctness (review 2026-11-24 section 5, P2): a warm-up or target
-  session marked incomplete (for example PAGE_LIMIT) refuses the symbol with a typed cause instead of
-  feeding truncated history; the hold-out boundary is computed from the full calendar of completed
-  sessions, including sessions without candidates, before symbols are chosen, and the same dates
-  apply to every compared setting; the nightly download keeps the last completed session apart from
-  the last candidate date, so a day without candidates is not downloaded twice and each date has one
-  result row. Status: decided.
 - **R36** Training stack safety on AWS (review 2026-11-24 section 8, P2): releasing an S3 job lock
   deletes only the version it holds (conditional delete), and a mismatch is a refusal; a failed
   download of the job script counts toward the restart limit, so a permanent error cannot keep the
   Auto Scaling group relaunching machines; the AWS CLI and uv installers are pinned and checked by
-  checksum or signature before they run as root. Status: decided.
+  checksum or signature before they run as root. Status: in review, #760.
 
-Exit: R1, R4, R5, R15, R16, R35 and T12 merged. A strategy climbs R1's ladder as its observer and Sandbox days come in,
-while later versions are built.
+Exit: R1, R5, R15, R16, R35 and T12 merged. A model version climbs R1's ladder as its exam and Sandbox
+days come in, while later versions are built.
 
 ## Design rules for ticker.bot (owner-approved 2026-11-19, apply from now on)
 
@@ -266,16 +265,13 @@ One source of truth (old group A):
   API: `docs/api-planned.md` section 2. The PR that brings stop replacement into the loop must handle
   an operator clearing `replace-unresolved` while the broker already holds the new price (Fable
   review of #742, 2026-11-25).
-- **T2** Planned loss per trade (50 USD) lives only in `config/bot.toml [risk]`; remove
-  `[sizing] planned_loss_usd` from the strategies, which receive it with their input (owner
-  2026-11-15).
-- **T3** Position notional cap (2,500 USD) likewise: remove `[sizing] max_position_notional_usd`.
-- **T4** History sessions: the strategy declares its need (`prior_sessions_needed`); the bot and the
-  replay load the largest declared need; remove `history_sessions` from `bot.toml` and `replay.toml`.
-- **T5** A variant stores only its differences from the strategy it extends (`price-action-v2`
-  repeats all 23 values of v1).
-- **T6** Smaller repeats: `atr_period` in `config/research.toml`, `output_decimal_places` in
-  `research.toml` and `replay.toml`.
+- **T4** History sessions declared by the strategy. Status: dropped (2026-11-25, model re-scope) (PR #774
+  closed); the model loads 20 days of history from Massive by its manifest.
+- **T5** A variant stores only its differences from its strategy. Status: dropped (2026-11-25, model
+  re-scope) (PR #765 closed).
+- **T6** Smaller repeats: `output_decimal_places` in `config/research.toml` and `config/replay.toml`.
+  Status: `atr_period` dropped (2026-11-25, model re-scope): only the strategy-decision research tool
+  reads it.
 - **T7** `tests/test_config.py` refuses a key that means the same thing at two levels. The Sandbox and
   Production tables repeat equal values on purpose (spec section 4, owner 2026-11-15); that stays.
 
@@ -286,16 +282,13 @@ Platform checks (old group B):
   (old #158). A halt with a position open follows Q2. Before Production it also gates price-action-v3's spike setup, which
   enters right after a sharp move, where LULD pauses are most likely (Fable review of #476,
   2026-11-16).
-- **T9** Money in the account as an admission check: buying power, settled cash, intraday margin
-  (the account file shows the broker's buying power since 2026-11-16, display only). The pattern day trader rule is being replaced
-  by an intraday margin standard (FINRA 4210 amendments effective 2026-06-04, broker phase-in to
-  2027-10-20); check what the account enforces.
 - **T10** Price collar: refuse an entry whose price is implausibly far from the last completed bar
   and the previous quote.
 - **T11** Loss locks: weekly loss ceiling and a stop-out streak lock, beyond v1's per-symbol pause.
 - T12 moved to v1.1 (2026-11-19).
-- **T13** Profit target and time exit as strategy rules.
-- **T14** (W11) Notification settings in the apps (`docs/api-planned.md` section 4).
+- **T13** Profit target and time exit become the exit rules stored per model version (in its
+  manifest), unless an exit model replaces them.
+- **T14** (W11) Notification settings in the apps (`docs/api-planned.md` section 4). Status: in review, #768.
 
 The owner's own bot in the cloud (owner 2026-11-19, pulled forward from W6; plan:
 https://claude.ai/artifact/QhzoePqMNyeqFeYwUga59C):
@@ -316,7 +309,8 @@ Long unattended runs (review 2026-11-24, P2):
   boundary. Today a two-second late answer turns a partial candle into a closed one and admits a
   symbol below the turnover threshold. Also: under a lasting request-budget deficit, discovery
   continues from the symbol it skipped (by priority) and shows the age of each symbol's last check,
-  so the tail of the list is not starved. Status: decided.
+  so the tail of the list is not starved. Status: decided; review when the model's bars come from the
+  Massive stream (Webull discovery may keep only the lists).
 - **T17** Reads scale with today's work, not with history (review section 7): `Engine.step()` reads
   the whole `orders` table three times per step (756 ms at 30,000 closed orders, on top of the 3 s
   loop); the one-day history query reads orders for every old trade; the clean-days list decodes the
@@ -346,7 +340,7 @@ Trading outside the regular session (owner 2026-11-16, ids kept):
   outside the regular session. Old-tracker answer, reconfirm: limit orders only in PRE/POST, smaller
   size, no entries on stream or broker loss (old Q118, #020-12).
 
-Exit: T1-T11, T13-T19, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
+Exit: T1-T3, T6-T11, T13-T19, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
 PRE/POST stop probe for X4), the
 duplicate-key test green, v2 released and running unattended in the Sandbox.
 
@@ -355,28 +349,24 @@ duplicate-key test green, v2 released and running unattended in the Sandbox.
 Goal: the owner configures and runs the bot from the Mac and iPhone apps like a user; no owner
 setting needs a config file. Order: design first, then macOS, then iOS.
 
-- **S1** (W10) Settings schema: one record per setting (key, owner: platform or one strategy, type, unit,
-  min, max, step, group, description in English and Spanish, when a change applies, whether it needs
-  biometrics, whether it requires retraining the model) plus cross-field rules. A setting that
-  requires retraining changes only on the ticker.bot site (2026-11-19). TOML comments, validation, app forms and the advisor's limits
-  all come from it.
-- **S2** Three classes: owner settings (about 20 platform keys plus strategy parameters) in the
+- **S2** Three classes: owner settings (about 20 platform keys plus model settings) in the
   apps; engineering settings (about 210 keys) file only; closed settings (environment, Production
   authorization, secrets) never changeable from an app.
-- **S3** Strategy version computed by the bot as a fingerprint of the values; the owner only names
-  it. Every decision and trade references the settings version.
+- **S3** The settings version is a fingerprint of the platform settings plus the model version (the
+  bundle manifest hash), computed by the bot; the owner only names it. Every decision and trade
+  references the settings version. Status: PR #769 is being reworked.
 - **S4** (W9, W10) Settings API: schema, current values, validate a draft, apply, history, rollback; every
-  change journaled with time and device.
-- **S5** Apply rules: tightening protection applies at once; strategy parameters and the active
-  strategy apply when flat, by a safe restart through normal startup and reconciliation; loosening
-  protection applies from the next session and only after Face ID (owner 2026-11-15, 2026-11-19);
-  a setting that requires retraining applies only with a newly trained model; an open trade
-  finishes under the version it was opened with. No generic hot reload.
-- **S6** App screens: Protection, Strategy, Rules in force (every limit with its level and value),
+  change journaled with time and device. Status: in review, #773.
+- **S5** Apply rules: tightening protection applies at once; model settings (threshold, size, sessions) and
+  the active model version apply when flat, by a safe restart through normal startup and reconciliation;
+  loosening protection applies from the next session and only after Face ID (owner 2026-11-15, 2026-11-19);
+  a setting that requires retraining applies only with a newly trained model; an open trade finishes under
+  the version it was opened with. No generic hot reload.
+- **S6** App screens: Protection, Model (mockup v126), Rules in force (every limit with its level and value),
   Change history; a "platform rule" label and value on every refusal; a count of entries the platform
   stopped, by cause.
-- **S7** Try before apply: replay a draft of strategy parameters on recent sessions from the
-  Strategy screen (Lab).
+- **S7** Try before apply on strategy parameters. Status: dropped (2026-11-25, model re-scope); replaced by
+  the Model lab what-if on stored model answers (R30).
 
 Several positions and risk (owner 2026-11-16, ids kept):
 - **X1** Several simultaneous positions, top-up. The cheapest of the three limits; needs the owner's
@@ -388,7 +378,7 @@ Several positions and risk (owner 2026-11-16, ids kept):
   authority (no own SSR rule); record `shortable` as read and map short-sell rejections to typed
   causes (old Q107, #158).
 
-Exit: S1-S7, X1 and X2 merged and shown in both apps; nothing the owner sets needs an edit of a file.
+Exit: S1-S6, X1 and X2 merged and shown in both apps; nothing the owner sets needs an edit of a file.
 
 ## v4: Real money at small size
 
@@ -396,7 +386,7 @@ Goal: the bot is ready to trade the real Webull account at small size. Enabling 
 owner decision plus the authorization file (rule 5), never a code change.
 
 - **M1** Production readiness view: authorization record form, readiness checklist
-  (`docs/api-planned.md` section 3), enabling day.
+  (`docs/api-planned.md` section 3), enabling day. Status: in review, #776.
 - **M2** Account page completeness: done 2026-11-16 (balances, account kind, per-position P&L,
   today's fills with fees); left: fee evidence on real fills against the backtest assumptions.
 - **M3** gRPC trade events (faster fill and order updates than polling), if the probe shows they are
@@ -406,7 +396,7 @@ owner decision plus the authorization file (rule 5), never a code change.
 - **M5** Webull support questions: is there a documented Sandbox calendar endpoint; which real-time
   entitlement applies to Sandbox L1 (old #080).
 
-Exit: M1-M5 merged. Which strategy goes live, and when, is the owner's decision on the enabling
+Exit: M1-M5 merged. Which model version goes live, and when, is the owner's decision on the enabling
 day (R1's rungs inform it); Production days then run beside v5 work.
 
 ## v5: The product (ticker.bot)
@@ -461,8 +451,8 @@ given below, confirmed in W1.
   not trading; settings only through v3 screens and the site.
 - **P4** Updates and data: a bot update never runs with a position open, database migration with
   backup, export of logs and a diagnostics bundle without secrets.
-- **P5** Strategies without code for the user: templates with parameters and the advisor; no visual
-  strategy builder; new logic stays a developer task.
+- **P5** Strategies without code for the user (templates and the advisor). Status: dropped (2026-11-25,
+  model re-scope); replaced by the "New model version" flow of mockup v126.
 - **P6** User documentation in the apps and on the site (English and Spanish): setup, every setting, every refusal
   cause, what to do on each alert.
 - **P7** Clean-machine test of the installable Mac app. Status: dropped (2026-11-19) with P1.
@@ -480,7 +470,8 @@ runs a full Sandbox day on the cloud bot.
   months; under 50 means stop). Status: covered by W2 and its email field (2026-11-19).
 - **F4** Company, securities lawyer (tool, not advice), direct sale of the notarized Mac app by
   subscription (App Store rule 3.2.1(viii) blocks trading apps from individuals), closed beta.
-- **F5** Strategy marketplace: postponed until demand is proven (owner 2026-11-15).
+- **F5** Strategy marketplace. Status: dropped (2026-11-25, model re-scope); it was postponed (owner
+  2026-11-15).
 - **F6** Selling access through ticker.bot (owner idea 2026-11-18, to discuss later): software, not
   advice; the user sets the main settings. Subscription covers Sandbox only (N hours of bot runtime,
   N model trainings); Production and extra Sandbox time paid by credits, charged for time, never a
@@ -507,6 +498,12 @@ Answered (recorded in `docs/decisions.md`):
 
 ## Done
 
+- **R31** Benzinga News and Earnings add-ons on Massive, bought 2026-11-20.
+- **S1** Settings schema (#763).
+- **T2** Planned loss per trade lives only in `config/bot.toml [risk]` (#766).
+- **T3** Position notional cap lives only in `config/bot.toml [risk]` (#766).
+- **T9** Money in the account as an admission check (done earlier, #641).
+- **R35** Backtest calendar correctness (#761).
 - **A3** Operator commands are idempotent end to end (Codex review 2026-11-24): one key per
   command until its outcome is known, settled by `GET /commands/receipt`, kept no longer than
   `[api] command_max_age_seconds` (#748).

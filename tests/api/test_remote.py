@@ -533,3 +533,17 @@ def test_every_get_route_answers_the_phone_as_it_answers_the_mac(local_api, remo
     if mac.status >= 400:
         assert (doc(phone_body)["error"], doc(phone_body).get("cause")) == \
             (doc(mac_body)["error"], doc(mac_body).get("cause")), path
+
+
+@pytest.mark.parametrize(("method", "path", "body"), [
+    ("GET", "/settings/schema", None), ("GET", "/settings/values", None),
+    ("POST", "/settings/validate",
+     {"changes": [{"owner": "platform", "key": "risk.max_open_positions", "value": "1"}]})])
+def test_the_settings_routes_need_the_paired_token(remote_api, remote_settings, method, path,
+                                                    body):
+    token = paired(remote_api, remote_settings)
+    for headers in ({}, {"Authorization": "Bearer wrong"}):
+        resp, payload = remote(remote_api, method, path, body=body, headers=headers)
+        assert resp.status == 401 and doc(payload)["error"] == "unauthorized"
+    resp, _ = remote(remote_api, method, path, body=body, token=token)
+    assert resp.status != 401

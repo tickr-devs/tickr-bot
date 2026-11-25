@@ -445,3 +445,86 @@ def test_builder_gives_the_five_year_list_byte_for_byte(tmp_path):
             [sys.executable, builder, *files, first, out], check=True, capture_output=True
         )
         assert md5(out) == want
+
+
+class _ClientError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
+class _FakeS3:
+    """In-memory claim store with S3's conditional delete: If-Match must equal the object's
+    current ETag, else 412 PreconditionFailed; a missing key is 404 NoSuchKey."""
+
+    def __init__(self):
+        self.objects = {}
+        self.deletes = []
+
+    def delete_object(self, Bucket, Key, IfMatch):
+        self.deletes.append((Bucket, Key, IfMatch))
+        if Key not in self.objects:
+            raise _ClientError("NoSuchKey")
+        if self.objects[Key] != IfMatch:
+            raise _ClientError("PreconditionFailed")
+        del self.objects[Key]
+
+
+def _s3_release(fake):
+    """The runner's S3 cdel and its release(), compiled from the file with a fake client."""
+    import ast
+    import threading
+    import types
+
+    tree = ast.parse(RUNNER.read_text())
+    s3_block = next(
+        n for n in tree.body if isinstance(n, ast.If) and getattr(n.test, "id", "") == "S3"
+    )
+    picked = [n for n in s3_block.body if isinstance(n, ast.FunctionDef) and n.name == "cdel"]
+    picked += [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "release"]
+    said = []
+    ns = {
+        "s3": lambda: fake,
+        "ob": "bucket",
+        "CPRE": "claims/ticks",
+        "botocore": types.SimpleNamespace(
+            exceptions=types.SimpleNamespace(ClientError=_ClientError)
+        ),
+        "MINE": {},
+        "L": threading.Lock(),
+        "say": lambda *a: said.append(" ".join(str(x) for x in a)),
+    }
+    exec(compile(ast.Module(body=picked, type_ignores=[]), str(RUNNER), "exec"), ns)
+    return ns, said
+
+
+def test_s3_release_deletes_only_the_claim_version_it_holds():
+    fake = _FakeS3()
+    ns, said = _s3_release(fake)
+    key = "claims/ticks/2021-11-15.json"
+    fake.objects[key] = '"e-mine"'
+    ns["MINE"]["2021-11-15"] = '"e-mine"'
+    ns["release"]("2021-11-15")
+    assert key not in fake.objects and said == []
+    assert fake.deletes == [("bucket", key, '"e-mine"')]
+
+
+def test_s3_release_of_a_claim_taken_over_is_refused_and_left_alone():
+    fake = _FakeS3()
+    ns, said = _s3_release(fake)
+    key = "claims/ticks/2021-11-15.json"
+    fake.objects[key] = '"e-other"'  # another machine took the stale claim over
+    ns["MINE"]["2021-11-15"] = '"e-mine"'
+    ns["release"]("2021-11-15")
+    assert fake.objects[key] == '"e-other"'
+    assert fake.deletes == [("bucket", key, '"e-mine"')]  # one conditional request, no plain one
+    assert len(said) == 1 and said[0].startswith("REFUSED: claim delete of 2021-11-15")
+    assert ns["MINE"] == {}
+
+
+def test_s3_release_of_a_claim_already_gone_is_quiet():
+    fake = _FakeS3()
+    ns, said = _s3_release(fake)
+    ns["MINE"]["2021-11-15"] = '"e-mine"'
+    ns["release"]("2021-11-15")
+    assert said == [] and len(fake.deletes) == 1

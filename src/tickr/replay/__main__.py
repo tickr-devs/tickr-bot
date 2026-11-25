@@ -18,7 +18,7 @@ from tickr.replay.engine import replay
 from tickr.replay.errors import ReplayError, SettingsError
 from tickr.replay.report import render_summary, write_all
 from tickr.replay.settings import load_settings
-from tickr.strategy.base import Strategy
+from tickr.strategy.base import SizingLimits, Strategy
 
 
 def strategy_factory(module_name: str, values_path: Path) -> Callable[[], Strategy]:
@@ -37,6 +37,11 @@ def strategy_factory(module_name: str, values_path: Path) -> Callable[[], Strate
     except ValueError as exc:
         raise ReplayError(f"strategy values refused by {module_name}: {exc}") from exc
     return lambda: create(values)
+
+
+def platform_sizing(config_path: Path) -> SizingLimits:
+    """The bot's own sizing limits, bot.toml `[risk]` (one source of truth, owner 2026-11-15)."""
+    return SizingLimits.of(config.load(config_path).risk)
 
 
 def session_clock(config_path: Path) -> ClockFor:
@@ -65,7 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=Path("config/bot.toml"),
-        help="bot config: [session] offsets and the calendar give each day's clock",
+        help="bot config: [session] offsets and the calendar give each day's clock; [risk] the "
+        "planned loss and notional cap the strategy sizes on",
     )
     parser.add_argument("--out", type=Path, required=True, help="output directory")
     return parser
@@ -78,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         clock_for = session_clock(args.config)
         factory = strategy_factory(args.strategy, args.values)
         bars = load_bars(args.bars)
-        result = replay(factory, bars, settings, clock_for)
+        result = replay(factory, bars, settings, clock_for, platform_sizing(args.config))
         summary = write_all(result, args.out, settings.output_decimal_places)
     except (
         ReplayError,

@@ -26,7 +26,7 @@ def test_half_day_refuses_entries_when_disabled(settings, scripted):
     assert clock.entries_refused == "half day: trading disabled"
     strategy = scripted({0: enter("10.00", "10.10", "9.80")})
     bars = series("10:00", [FLAT, FLAT], day=half_day)
-    result = replay(lambda: strategy, {"ABC": bars}, settings, clock_for)
+    result = replay(lambda: strategy, {"ABC": bars}, settings, clock_for, None)
     (signal,) = result.signals
     assert (signal.outcome, signal.cause) == (SignalOutcome.REJECTED, "half day: trading disabled")
 
@@ -35,4 +35,4 @@ def test_half_day_refuses_entries_when_disabled(settings, scripted):
 def test_bars_on_a_day_the_calendar_refuses_refuse_the_replay(settings, scripted, day):
     bars = series("10:00", [FLAT], day=day)
     with pytest.raises(ReplayError, match="calendar refuses"):
-        replay(lambda: scripted({}), {"ABC": bars}, settings, session_clock(BOT_TOML))
+        replay(lambda: scripted({}), {"ABC": bars}, settings, session_clock(BOT_TOML), None)

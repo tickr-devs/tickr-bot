@@ -43,7 +43,7 @@ def test_everything_is_on_before_the_owner_changes_anything(api):  # noqa: F811
     assert body["routing_cause"] is None
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
         ("mac", False, "no-preflight"), ("imessage", False, "no-preflight"),
-        ("push", False, "not-built")]
+        ("telegram", False, "no-preflight"), ("push", False, "not-built")]
 
 
 def test_channels_come_from_the_latest_preflight_checks(api, settings):  # noqa: F811
@@ -51,7 +51,8 @@ def test_channels_come_from_the_latest_preflight_checks(api, settings):  # noqa:
     _record(settings, [("alert-channel", True), ("alert-recipient", False)])
     body = doc(request(server, "GET", "/alerts")[1])
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
-        ("mac", True, None), ("imessage", False, "check-failed"), ("push", False, "not-built")]
+        ("mac", True, None), ("imessage", False, "check-failed"),
+        ("telegram", False, "not-configured"), ("push", False, "not-built")]
 
 
 def test_a_cell_is_switched_off_and_on_and_the_answer_is_the_new_settings(api, settings):  # noqa: F811
@@ -61,7 +62,7 @@ def test_a_cell_is_switched_off_and_on_and_the_answer_is_the_new_settings(api, s
     assert resp.status == 200, payload
     assert errors(schema("alerts-v1"), doc(payload)) == []
     assert _kind(doc(payload), "disk-low")["channels"] == {
-        "mac": True, "imessage": False, "push": True}
+        "mac": True, "imessage": False, "telegram": True, "push": True}
     assert _kind(doc(request(server, "GET", "/alerts")[1]), "disk-low")["channels"]["imessage"] \
         is False
     assert settings.alerts.routing.path.exists()
@@ -106,6 +107,18 @@ def test_an_unreadable_routing_file_is_shown_and_never_overwritten(api, settings
     resp, payload = request(server, "PUT", ROUTING,
                             {"kind": "disk-low", "channel": "mac", "on": False})
     assert resp.status == 409 and path.read_text("utf-8") == "{broken"
+
+
+def test_a_deeply_nested_routing_file_shows_its_cause_and_everything_on(api, settings):  # noqa: F811
+    server, _ = api
+    path = settings.alerts.routing.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[" * 200000, "utf-8")
+    resp, payload = request(server, "GET", "/alerts")
+    assert resp.status == 200
+    body = doc(payload)
+    assert body["routing_cause"] == "routing-file-unreadable: RecursionError"
+    assert all(all(k["channels"].values()) for k in body["kinds"])
 
 
 @pytest.mark.parametrize(("method", "path"), [

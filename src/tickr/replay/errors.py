@@ -23,3 +23,8 @@ class SettingsError(ReplayError):
 
 class StrategyContractError(ReplayError):
     """The strategy returned a decision that breaks the interface contract."""
+
+
+class MeasuredSlippageError(SettingsError):
+    """The measured slippage file the settings select is missing, malformed, or holds too few
+    measured stopped trades."""

@@ -20,3 +20,7 @@ synthetic_spread_percent = 0.10
 synthetic_spread_min_usd = 0.02
 # Bid and ask size of the synthetic quote, shares; read by replay/engine.py.
 synthetic_quote_size_shares = 100
+# Measured slippage file written by `python -m tickr.research slippage` (its slippage_summary.json), relative to this file's folder; when set, its measured stop slippage replaces slippage_percent; "" = use slippage_percent; read by replay/settings.py.
+measured_slippage_file = ""
+# Fewest measured stopped trades the selected measured slippage file must hold, else the replay refuses; count; read by replay/settings.py.
+measured_slippage_min_trades = 20

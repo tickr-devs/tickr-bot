@@ -27,7 +27,7 @@ from pathlib import Path
 from tickr.api.contract import AlertChannel as RouteChannel
 from tickr.api.contract import AlertGroup, write_atomic
 from tickr.config import AlertsConfig, Config
-from tickr.runtime.alerts import IMESSAGE, MACOS, AlertKind
+from tickr.runtime.alerts import IMESSAGE, MACOS, TELEGRAM, AlertKind
 from tickr.runtime.watch import ALERT_AT_ONCE, FENCE_ALERTS
 
 ROUTING_SCHEMA_VERSION = 1
@@ -35,7 +35,8 @@ ROUTING_SCHEMA_VERSION = 1
 
 # The delivery (its name in `alerts.Channels`) behind each routable channel; push has none yet.
 DELIVERY: Mapping[RouteChannel, str] = {RouteChannel.MAC: MACOS,
-                                        RouteChannel.IMESSAGE: IMESSAGE}
+                                        RouteChannel.IMESSAGE: IMESSAGE,
+                                        RouteChannel.TELEGRAM: TELEGRAM}
 
 
 # Kinds that need the owner now: never switched off on any channel. Every kind an
@@ -147,18 +148,23 @@ def _text(off: frozenset[tuple[AlertKind, RouteChannel]]) -> str:
 
 def read_routing(path: Path) -> Routing:
     """The routing in `path`: everything on when the file is missing; everything on with the
-    cause when it cannot be read or is out of shape (refused, never partly used)."""
+    cause when it cannot be read or is out of shape (refused, never partly used). Never
+    raises: any error at all (a deeply nested file makes json raise RecursionError) means
+    everything on."""
     try:
         text = path.read_text("utf-8")
     except FileNotFoundError:
         return EVERYTHING_ON
-    except (OSError, UnicodeDecodeError) as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure means every channel, never a drop
         return Routing(frozenset(), f"{RefusalCause.FILE_UNREADABLE.value}: "
                                     f"{type(exc).__name__}")
     try:
         return Routing(_parse(text))
     except (ValueError, TypeError) as exc:
         return Routing(frozenset(), f"{RefusalCause.FILE_UNREADABLE.value}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        return Routing(frozenset(), f"{RefusalCause.FILE_UNREADABLE.value}: "
+                                    f"{type(exc).__name__}")
 
 
 def routing_path(config: Config) -> Path:
@@ -170,8 +176,17 @@ def routing_path_in(data_dir: Path, alerts: AlertsConfig) -> Path:
 
 
 def skipped_by(path: Path) -> Callable[[AlertKind], frozenset[str]]:
-    """`Alerter`'s routing: the file is read on each alert, so a change applies at once."""
-    return lambda kind: read_routing(path).skipped(kind)
+    """`Alerter`'s routing: the file is read on each alert, so a change applies at once. A
+    locked kind is decided before any file access (it skips nothing), and any error for the
+    other kinds skips nothing too: this never raises."""
+    def skipped(kind: AlertKind) -> frozenset[str]:
+        if kind in LOCKED:
+            return frozenset()
+        try:
+            return read_routing(path).skipped(kind)
+        except Exception:  # noqa: BLE001 - any failure means every channel, never a drop
+            return frozenset()
+    return skipped
 
 
 class RoutingStore:

@@ -2,8 +2,11 @@
 the replay engine with the strategy behind the gainer gate (gate.py), one process per symbol.
 
 A pool day is skipped, with its cause in `skipped.csv`, when the symbol's M1 file lacks the day
-or one of the `history_sessions` sessions before it, or the fetch recorded that run incomplete:
-live, the bot refuses a symbol whose prior-session history is incomplete, so it never trades it.
+or one of the `history_sessions` sessions before it, or the fetch recorded a run holding the day
+or one of those sessions incomplete (`FETCH_INCOMPLETE`, for example a PAGE_LIMIT run that kept
+one bar of a session: a later night only fetches sessions without bars, so its truncated
+history would otherwise be replayed as complete). Live, the bot refuses a symbol whose
+prior-session history is incomplete, so it never trades it.
 A symbol whose replay the engine refuses (a bad bar, such as a 0.01 USD print that makes the
 synthetic bid non-positive) is replayed again one pool day at a time on only that day's bars,
 and only the days that are still refused are skipped (`REPLAY_REFUSED`), never the whole run.
@@ -27,7 +30,14 @@ from tickr.backtest.errors import BacktestError
 from tickr.backtest.gate import GainerGate
 from tickr.backtest.sessions import sessions_before
 from tickr.backtest.settings import BacktestSettings
-from tickr.backtest.universe import CAP_FILE, POOL_FILE, PoolEntry, read_caps, read_pool
+from tickr.backtest.universe import (
+    CAP_FILE,
+    POOL_FILE,
+    CapRecord,
+    PoolEntry,
+    read_caps,
+    read_pool,
+)
 from tickr.calendar import SessionCalendar, ny_date_of
 from tickr.config import Config
 from tickr.replay.bars import load_bars
@@ -36,7 +46,7 @@ from tickr.replay.engine import ReplayResult, replay
 from tickr.replay.errors import ReplayError
 from tickr.replay.report import write_all
 from tickr.replay.settings import ReplaySettings
-from tickr.strategy.base import Strategy
+from tickr.strategy.base import SizingLimits, Strategy
 
 SKIPPED_FILE = "skipped.csv"
 
@@ -81,7 +91,7 @@ def run_symbol(task: Task) -> tuple[ReplayResult | None, list[dict[str, str]]]:
     def one(days: tuple[date, ...], series: tuple) -> ReplayResult:
         pool = [(task.symbol, d) for d in days]
         return replay(lambda: GainerGate(create(), pool, task.change_percent),
-                      {task.symbol: series}, task.settings, clock)
+                      {task.symbol: series}, task.settings, clock, SizingLimits.of(task.cfg.risk))
 
     try:
         return one(task.pool_days, bars[task.symbol]), []
@@ -111,13 +121,13 @@ def tradable_days(cfg: Config, calendar: SessionCalendar, pool: list[PoolEntry],
                   history_sessions: int, tolerance_percent: Decimal,
                   ) -> tuple[dict[str, list[date]], list[dict[str, str]]]:
     """Pool days per symbol that can be replayed as live would see them, and the skipped ones."""
-    incomplete: dict[str, set[date]] = defaultdict(set)
+    incomplete: dict[str, dict[date, str]] = defaultdict(dict)
     for status in fetch.load_statuses(out):
         if not status["complete"]:
             first = date.fromisoformat(status["first_session"])
             last = date.fromisoformat(status["last_session"])
-            incomplete[status["symbol"]].update(
-                d.ny_date for d in fetch.sessions_between(calendar, first, last))
+            for d in fetch.sessions_between(calendar, first, last):
+                incomplete[status["symbol"]].setdefault(d.ny_date, status["cause"])
     session_days: dict[str, dict[date, Decimal]] = {}
     days: dict[str, list[date]] = defaultdict(list)
     skipped: list[dict[str, str]] = []
@@ -129,14 +139,16 @@ def tradable_days(cfg: Config, calendar: SessionCalendar, pool: list[PoolEntry],
             skipped.append({"symbol": symbol, "session_date": day.isoformat(),
                             "cause": "NO_MINUTE_FILE"})
             continue
-        if day in incomplete.get(symbol, set()):
+        wanted = [d.ny_date for d in sessions_before(calendar, day, history_sessions, lookback)]
+        cut = incomplete.get(symbol, {})
+        short = [f"{d.isoformat()} {cut[d]}" for d in [*wanted, day] if d in cut]
+        if short:
             skipped.append({"symbol": symbol, "session_date": day.isoformat(),
-                            "cause": "FETCH_INCOMPLETE"})
+                            "cause": "FETCH_INCOMPLETE: " + ", ".join(short)})
             continue
         if symbol not in session_days:
             session_days[symbol] = _last_closes(path)
         closes = session_days[symbol]
-        wanted = [d.ny_date for d in sessions_before(calendar, day, history_sessions, lookback)]
         missing = [d for d in [*wanted, day] if d not in closes]
         if missing:
             skipped.append({"symbol": symbol, "session_date": day.isoformat(),
@@ -187,6 +199,17 @@ def last_sessions(calendar: SessionCalendar, pool: list[PoolEntry], count: int,
     return [e for e in pool if e.session_date in kept], sessions
 
 
+def data_sessions(calendar: SessionCalendar, pool: list[PoolEntry],
+                  caps: list[CapRecord]) -> list[date]:
+    """Every calendar session from the data's first selected session to its last, oldest first.
+    `pool_cap.csv` holds a row for every session selection ran on, also those without a
+    candidate, so a quiet stretch at either end still counts."""
+    selected = [c.session_date for c in caps] + [e.session_date for e in pool]
+    if not selected:
+        raise BacktestError("the pool and pool_cap.csv are empty")
+    return [d.ny_date for d in fetch.sessions_between(calendar, min(selected), max(selected))]
+
+
 def run_backtest(cfg: Config, settings: BacktestSettings, replay_settings: ReplaySettings,
                  out: Path, results: Path, strategy_module: str, values_path: Path,
                  last_session_count: int | None = None, end_day: date | None = None) -> None:
@@ -196,17 +219,18 @@ def run_backtest(cfg: Config, settings: BacktestSettings, replay_settings: Repla
         values = tomllib.load(handle)
     factory(strategy_module, values)  # refuse bad values before any work
     pool = read_pool(out / POOL_FILE)
+    caps = read_caps(out / CAP_FILE)
     window: list[date] | None = None
     if end_day is not None and last_session_count is None:
         raise BacktestError("--end-day needs --last-sessions")
     if last_session_count is not None:
         pool, window = last_sessions(calendar, pool, last_session_count,
                                      cfg.market_data.history_max_lookback_days, end_day)
+        caps = [c for c in caps if c.session_date in set(window)]
+    # The hold-out splits on these dates, fixed before any symbol is chosen or refused.
+    sessions = window if window is not None else data_sessions(calendar, pool, caps)
     days, skipped = tradable_days(cfg, calendar, pool, out, replay_settings.history_sessions,
                                   settings.split_tolerance_percent)
-    caps = read_caps(out / CAP_FILE)
-    if window is not None:
-        caps = [c for c in caps if c.session_date in set(window)]
     tasks = [Task(symbol, out / fetch.MINUTES_DIR / f"{symbol}.jsonl", tuple(sorted(d)),
                   strategy_module, values, settings.gainer_change_percent, calendar_dir,
                   cfg, replay_settings) for symbol, d in sorted(days.items())]
@@ -236,7 +260,7 @@ def run_backtest(cfg: Config, settings: BacktestSettings, replay_settings: Repla
         recent = report.LastSessions(last_session_count, window[0], window[-1],
                                      sum(1 for d in window if d not in replayed))
     text = report.write_report(merged, pool, caps, traded_days, skipped, cfg, settings,
-                               replay_settings, results, recent)
+                               replay_settings, results, sessions, recent)
     print(text)
 
 

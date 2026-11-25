@@ -124,10 +124,13 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/quotes` | `200` `quotes-response-v1`: the newest valid L1 quote of every symbol on the bot's quote stream (`quotes-v1`, see "GET /quotes" below); `503` `unavailable` while the bot has written no quotes file or it is invalid. |
 | GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. `command_max_age_seconds` is the age past which the bot refuses a command as expired: the apps keep a lost send's `Idempotency-Key` at most this long (`null` from an older API, and then they keep none). |
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
+| GET | `/settings/schema` | `200` `settings-schema-v1`: every owner setting of the settings schema with its kind, unit, bounds, step, group, words in English and Spanish, when a change applies, the direction that needs Face ID and whether it needs retraining, plus the rules across settings (read-only; see Owner settings below). `503 unavailable` when `[api] settings_schema_file` cannot be read. |
+| GET | `/settings/values` | `200` `settings-values-v1`: each schema setting's value in its owner's file as it is on disk now (TOML text), with each file's SHA-256. `503 unavailable` without a config file path (the demo) or when a file cannot be read. |
+| POST | `/settings/validate` | Body `{"changes": [{"owner", "key", "value"}, ...]}`. `200` `settings-draft-v1`: typed refusals and, per key, when the change would apply and whether it needs Face ID. Writes and applies nothing. `400` for any other body, `503` as GET /settings/values. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
 | GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
-| PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "mac"\|"imessage"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
+| PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "mac"\|"imessage"\|"telegram"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
 | GET | `/advisor` | `200` `advisor-runs-v1`: the AI advisor's newest `[api] advisor_runs` runs with their proposals, ideas, hold-out verdicts and the owner's decision (read-only; see GET /advisor below). |
 | POST | `/advisor/decision` | Body `{"run": "<run id>", "verdict": "accepted"\|"rejected"}`. Records the owner's review of a proposal or idea (a note, nothing is deployed): `200` `advisor-runs-v1`; `404 not_found` without that run; `409 conflict` for a refused, no-change or unreadable run. Not a bot command. |
@@ -713,6 +716,45 @@ A journal row it cannot read makes every field `null` with `entry_cause` = `jour
 unreadable: <error>`; in the bot it is journaled once per trade (`entry-send-failed`) and the
 step goes on. The bot reads it again on every status write while the trade is open, and keeps
 it once the trade is closed (or a row is unreadable). `/days/<date>` computes it the same way.
+
+### Owner settings: schema, values, validate (read-only, nothing applied)
+
+The first slice of backlog S4: what the apps' settings forms read and how a draft is checked.
+Code: `src/tickr/api/settingsview.py` on top of `src/tickr/settings_schema.py` (the records:
+kinds, units, words, apply timing, rules) and `[api] settings_schema_file` (each setting's step
+and any maximum), read on every request, so a bad edit of it answers `503` with its cause.
+These routes pass the same guard as every other route: on the remote port they need the paired
+bearer token (`401` without it), on the local port the `Host` rule. Nothing here writes a file,
+a journal row or a database row; applying a draft, its history and rollback come later.
+
+- An owner is `platform` (the config file this API was started with) or a strategy folder
+  under `strategies/`; a `key` is the dotted `table.key` inside that owner's file.
+- Values travel as TOML text, as GET /config shows them: `"5"` (int), `"0.25"` (decimal, never
+  an exponent), `"true"`/`"false"` (bool).
+- `settings-schema-v1`: `settings[]` with `owner`, `key`, `kind` (`int`, `decimal`, `bool`),
+  `unit`, `group`, `description_en`, `description_es`, `applies` (when a change that does not
+  loosen protection takes effect: `at_once`, `when_flat` by a safe restart, `next_session`),
+  `loosens` (the direction that loosens protection: `raise`, `lower`, `never`), `needs_face_id`
+  (some change of it loosens protection), `requires_retraining`, `minimum` with
+  `minimum_inclusive`, `maximum` and `step` (decimal strings in the setting's unit, `null` when
+  it has none); `rules[]` with `owner`, `name`, `left`, `compare` (`<`, `<=`), `right` and the
+  rule's words. A rule's `right` key may be a key of the file outside the schema.
+- `settings-values-v1`: `files[]` (`owner`, `file` relative to the bot's folder, `digest`
+  SHA-256 of the file now, so a later apply can refuse a draft made against an older file) and
+  `values[]` (`owner`, `key`, `value`; `null` when the file has no such key). The files are read
+  as they are on disk now: the running bot may still use older values until it restarts.
+- POST /settings/validate: each change is `{"owner", "key", "value"}`, all strings, at least
+  one, no owner and key twice; anything else is `400`. `settings-draft-v1` answers `valid`
+  (no refusal), `refusals[]` (`owner`, `key`, `cause`, `detail`) and `changes[]`. Causes:
+  `UNKNOWN_KEY` (not a schema setting, or no such owner), `WRONG_TYPE` (the text is not of the
+  setting's kind), `BELOW_MINIMUM`, `ABOVE_MAXIMUM`, `OFF_STEP`, `RULE_BROKEN` (the draft over
+  the file breaks a rule; named on the rule's left key), `VALUE_MISSING` (the file has no present
+  value to compare with, or a rule needs a key the file lacks). `changes[]` holds every draft key
+  of the right kind with a present value: `current` and `draft` (TOML text), `changed` (false
+  when the draft repeats the present value), `applies`, `needs_face_id` and
+  `requires_retraining`. A change that loosens protection applies at `next_session` and needs
+  Face ID; any other change follows the setting's `applies` (owner decisions 2026-11-15 and
+  2026-11-19, backlog S5).
 
 ### GET /jobs (read-only)
 

@@ -104,7 +104,29 @@ variable "jobs" {
 }
 
 variable "job_max_failures" {
-  description = "Failed runs of a job script (non-zero exit) after which its auto-restart group stops itself; read by the boot wrapper."
+  description = "Failed runs of a job (job script not fetched, or a non-zero exit) after which its auto-restart group stops itself; read by the boot wrapper."
   type        = number
   default     = 3
+}
+
+variable "installers" {
+  description = "The installers user-data.sh downloads and runs as root on every training machine, each pinned to one version and refused unless its file has this sha256. aws_cli_version: AWS CLI v2 release (https://awscli.amazonaws.com/awscli-exe-linux-x86_64-<version>.zip); aws_cli_sha256: sha256 of that zip. uv_version: uv release; uv_wheel_url: its manylinux x86_64 wheel on PyPI (only the uv binary inside is used); uv_sha256: sha256 of that wheel (PyPI shows it). To move a version: download the new file, run sha256sum on it, change version, URL and sha256 together."
+  type = object({
+    aws_cli_version = string
+    aws_cli_sha256  = string
+    uv_version      = string
+    uv_wheel_url    = string
+    uv_sha256       = string
+  })
+  default = {
+    aws_cli_version = "2.39.0"
+    aws_cli_sha256  = "6c89ce7ed7bc0a2520e2bc3eeedfea4e2eb2e7da2836860c9471871408404036"
+    uv_version      = "0.11.32"
+    uv_wheel_url    = "https://files.pythonhosted.org/packages/90/b0/114463d056b6b328d45557001e848b8ab15539bd8f4fa7a457ccb83e2b5d/uv-0.11.32-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+    uv_sha256       = "3da76cd4e2697de30928b8a8524bd39183ac1e08cb7e72833807c022b7cba6c4"
+  }
+  validation {
+    condition     = can(regex("^[0-9a-f]{64}$", var.installers.aws_cli_sha256)) && can(regex("^[0-9a-f]{64}$", var.installers.uv_sha256))
+    error_message = "installers: every sha256 must be 64 lowercase hex characters."
+  }
 }

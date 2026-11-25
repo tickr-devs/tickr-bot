@@ -1,0 +1,155 @@
+# Settings schema numbers that are product choices (backlog S1): per owner setting, the step an
+# app form offers and, where an owner decision sets one, the largest value allowed (key
+# `maximum`, same unit as the setting; none is set yet). One table per setting, named
+# <owner>."<table.key>": owner `platform` = config/bot.toml, any other owner =
+# strategies/<owner>/strategy.toml. On/off settings have no entry. Every shipped value sits on
+# its step (tests/test_settings_schema.py). Read only by tickr.settings_schema (load); nothing
+# at runtime reads it yet.
+
+# Owner platform: config/bot.toml.
+
+[platform."risk.max_daily_loss_usd"]
+# Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.min_daily_room_usd"]
+# Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.buying_power_max_age_seconds"]
+# Step of this setting in the app forms and the validator, seconds; read by tickr.settings_schema.
+step = 0.1
+
+[platform."risk.max_open_positions"]
+# Step of this setting in the app forms and the validator, count; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.max_working_entries"]
+# Step of this setting in the app forms and the validator, count; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.max_quote_age_seconds"]
+# Step of this setting in the app forms and the validator, seconds; read by tickr.settings_schema.
+step = 0.1
+
+[platform."risk.max_clock_skew_seconds"]
+# Step of this setting in the app forms and the validator, seconds; read by tickr.settings_schema.
+step = 0.1
+
+[platform."risk.symbol_cooldown_minutes_after_loss"]
+# Step of this setting in the app forms and the validator, minutes; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.max_entry_rest_bars"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.entry_snapshot_interval_seconds"]
+# Step of this setting in the app forms and the validator, seconds; read by tickr.settings_schema.
+step = 0.1
+
+# Owner price-action-v3: strategies/price-action-v3/strategy.toml.
+
+["price-action-v3"."indicators.fast_ema_period"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."indicators.slow_ema_period"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."indicators.atr_period"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."indicators.relative_volume_sessions"]
+# Step of this setting in the app forms and the validator, sessions; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."indicators.minimum_relative_volume"]
+# Step of this setting in the app forms and the validator, ratio; read by tickr.settings_schema.
+step = 0.05
+
+["price-action-v3"."indicators.warmup_period_multiple"]
+# Step of this setting in the app forms and the validator, multiple of each indicator length; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."breakout.lookback_bars"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."continuation.impulse_bars"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."continuation.base_bars"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."continuation.minimum_impulse_atr"]
+# Step of this setting in the app forms and the validator, ATR multiples; read by tickr.settings_schema.
+step = 0.05
+
+["price-action-v3"."continuation.maximum_base_range_atr"]
+# Step of this setting in the app forms and the validator, ATR multiples; read by tickr.settings_schema.
+step = 0.05
+
+["price-action-v3"."continuation.maximum_pre_breakout_distance_atr"]
+# Step of this setting in the app forms and the validator, ATR multiples; read by tickr.settings_schema.
+step = 0.05
+
+["price-action-v3"."entry.entry_extension_max_atr"]
+# Step of this setting in the app forms and the validator, ATR multiples; read by tickr.settings_schema.
+step = 0.05
+
+["price-action-v3"."entry.max_round_trip_atr_ratio"]
+# Step of this setting in the app forms and the validator, ratio; read by tickr.settings_schema.
+step = 0.01
+
+["price-action-v3"."entry.max_round_trip_risk_ratio"]
+# Step of this setting in the app forms and the validator, ratio; read by tickr.settings_schema.
+step = 0.01
+
+["price-action-v3"."entry.minimum_stop_spreads"]
+# Step of this setting in the app forms and the validator, spreads; read by tickr.settings_schema.
+step = 0.5
+
+["price-action-v3"."entry.minimum_stop_percent"]
+# Step of this setting in the app forms and the validator, percent of price; read by tickr.settings_schema.
+step = 0.1
+
+["price-action-v3"."entry.slippage_reserve_atr"]
+# Step of this setting in the app forms and the validator, ATR multiples; read by tickr.settings_schema.
+step = 0.01
+
+["price-action-v3"."liquidity.max_spread_ratio"]
+# Step of this setting in the app forms and the validator, ratio; read by tickr.settings_schema.
+step = 0.001
+
+["price-action-v3"."liquidity.min_dollar_volume_usd"]
+# Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
+step = 1000
+
+["price-action-v3"."spike.lookback_bars"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1
+
+["price-action-v3"."spike.min_volume_ratio"]
+# Step of this setting in the app forms and the validator, ratio; read by tickr.settings_schema.
+step = 0.1
+
+["price-action-v3"."spike.min_move_atr"]
+# Step of this setting in the app forms and the validator, ATR multiples; read by tickr.settings_schema.
+step = 0.1
+
+["price-action-v3"."spike.min_dollar_volume_ratio"]
+# Step of this setting in the app forms and the validator, ratio; read by tickr.settings_schema.
+step = 0.1
+
+["price-action-v3"."spike.min_bar_dollar_volume_usd"]
+# Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
+step = 1000
+
+["price-action-v3"."spike.signal_valid_bars"]
+# Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
+step = 1

@@ -5,11 +5,10 @@ from __future__ import annotations
 import copy
 import tomllib
 from datetime import timedelta
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from strategy_bars import SYMBOL, TODAY, bar, d, minute, quote
+from strategy_bars import SIZING, SYMBOL, TODAY, bar, d, minute, quote
 
 from tickr import config
 from tickr.api import contract
@@ -41,7 +40,8 @@ OPEN = minute(TODAY, 0)
 
 
 def ctx(bars, q=None, position=None, session_open=OPEN):
-    return SymbolContext(SYMBOL, bars, (), q, position, session_open=session_open)
+    return SymbolContext(SYMBOL, bars, (), q, position, session_open=session_open,
+                         sizing=SIZING)
 
 
 def rules(decision):
@@ -61,8 +61,12 @@ def test_ignition_enters_at_the_ask_with_the_stop_twenty_percent_under():
     assert decision.verdict is Verdict.ENTER, rules(decision)
     assert decision.entry_high == d("1.20") * d("1.02")
     assert decision.stop == min(decision.entry_high * d("0.8"), d("1.20") * d("0.8"))
-    assert decision.quantity == (Decimal(1000) / decision.entry_high).to_integral_value(
-        rounding="ROUND_FLOOR")
+    # Sized on the platform's [risk] limits: the 50 USD planned loss binds at a 20 % stop.
+    risk = decision.entry_high - decision.stop + d("0.01")
+    assert decision.quantity == min(
+        (SIZING.planned_loss_usd / risk).to_integral_value(rounding="ROUND_FLOOR"),
+        (SIZING.notional_cap_usd / decision.entry_high).to_integral_value(rounding="ROUND_FLOOR"))
+    assert decision.quantity == 182
     assert decision.setup == "ignition-v1"
     limits = contract.size_limits({c.rule: c for c in decision.checks})
     assert min(x.shares for x in limits) == decision.quantity
@@ -192,7 +196,9 @@ def test_a_new_ignition_after_the_exit_enters_again():
     (lambda v: v["exit"][0].pop("percent"), "missing keys"),
     (lambda v: v["stop"].update(percent=100), "below 100"),
     (lambda v: v["liquidity"].update(min_session_dollar_volume_usd=900000), "floor"),
-    (lambda v: v.pop("sizing"), "missing"),
+    (lambda v: v.pop("exit"), "missing"),
+    # The planned loss and notional cap are the platform's alone (T2/T3).
+    (lambda v: v.update(sizing={"planned_loss_usd": 50}), "unknown"),
 ])
 def test_a_file_naming_what_the_module_cannot_do_is_refused(change, message):
     values = copy.deepcopy(VALUES)

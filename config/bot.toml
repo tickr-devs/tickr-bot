@@ -37,9 +37,11 @@ observers = ["price-action-v3-relvol-1.5", "price-action-v3-relvol-1.75"]
 extended_hours_strategies = []
 
 [risk]
-# Planned loss per trade in USD (owner 2026-11-07); read by the strategy for sizing and by safety for the check.
+# Planned loss per trade in USD (owner 2026-11-07). The only copy (owner 2026-11-15): every strategy sizes on it from
+# SymbolContext.sizing (the bot, observers, replay, backtest); read by safety for the check too.
 planned_loss_usd = 50
-# Maximum notional per position in USD (owner 2026-11-17: 1000, with 20 positions in view); read by safety.
+# Maximum notional per position in USD (owner 2026-11-17: 1000, with 20 positions in view). The only copy, like
+# planned_loss_usd: every strategy caps its quantity at it (SymbolContext.sizing); read by safety for the check too.
 position_notional_cap_usd = 1000
 # Daily loss ceiling in USD: today's NET realized loss (wins offset losses) + open reservations + new planned loss (owner
 # 2026-11-17: 5000, so the reservations of 20 trades at planned_loss_usd fit); read by safety.
@@ -470,6 +472,9 @@ status_recent_commands = 10
 idempotency_key_ttl_seconds = 86400
 # Replay settings file (fill model) the API uses to simulate each observer's day result at GET /observers, the same simulation as `python -m tickr.research observers`, relative to the repo root; read by the api server.
 replay_settings_file = "config/replay.toml"
+# Settings schema file (owner settings: steps and maxima) GET /settings/schema, GET /settings/values and POST
+# /settings/validate read on every request, relative to the repo root; read by the api server (api/settingsview.py).
+settings_schema_file = "config/settings_schema.toml"
 # Most simulated trades (ENTERs, oldest first) GET /observers lists per observer; more = cut, with `trades_truncated` true; read by the api server (api/observer_results.py).
 observer_trades_max_rows = 100
 # Latest journal rows GET /journal returns (oldest first; `last_seq` is the newest row's number); read by the api server.
@@ -956,6 +961,15 @@ feed_file = "alerts.jsonl"
 # relative to [run] data_dir written by PUT /alerts/routing; a preference, never a trading setting. Missing or
 # unreadable = every kind on every channel; critical kinds are always on; read by runtime.alert_routing.
 routing_file = "alert-routing.json"
+# Telegram alerts, so the owner is told away from the Mac. NAMES of the environment variables holding the Telegram bot
+# token (from @BotFather) and the owner's chat id; the values are secrets and personal data, set only in the owner's env
+# file, never here. Neither variable set = the Telegram channel is off; one without the other fails preflight
+# (alert-telegram-missing); read by runtime.alerts and preflight.
+bot_token_variable = "TICKR_TELEGRAM_BOT_TOKEN"
+# NAME of the environment variable holding the owner's Telegram chat id (see bot_token_variable); read by runtime.alerts and preflight.
+chat_id_variable = "TICKR_TELEGRAM_CHAT_ID"
+# Host of the Telegram Bot API, reached over HTTPS only; read by runtime.alerts.
+telegram_host = "api.telegram.org"
 
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API

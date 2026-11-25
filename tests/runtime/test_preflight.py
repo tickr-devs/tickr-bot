@@ -375,3 +375,18 @@ def test_old_config_key_name_is_reported_in_the_journal(config_path):
     assert result.exit_code is ExitCode.READY
     body = json.dumps(result.journal_body())
     assert "[api] watching_check_decimal_places -> check_decimal_places" in body
+
+
+def test_telegram_check_exists_only_once_set_up_and_checks_presence_only(config_path):
+    cfg = config_module.load(config_path).alerts
+    environ = _ready(config_path)
+    names = {c.name.value for c in _run(config_path, environ).checks}
+    assert "alert-telegram" not in names  # off: neither variable set
+    environ[cfg.bot_token_variable] = CANARY
+    refused = _run(config_path, environ)
+    assert refused.cause is PreflightCause.ALERT_TELEGRAM_MISSING
+    assert cfg.chat_id_variable in refused.summary() and CANARY not in refused.summary()
+    environ[cfg.chat_id_variable] = CANARY
+    ok = _run(config_path, environ)
+    assert ok.cause is None and CANARY not in ok.summary()
+    assert _run(config_path, environ, platform=LINUX).cause is None  # the channel off the Mac
