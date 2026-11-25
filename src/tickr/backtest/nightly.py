@@ -6,7 +6,9 @@ A full fetch of 60 sessions takes many hours under Webull's limits, so a night f
 the new sessions add: their daily bars, their pool days, and the minute bars those pool days
 need that the folder does not hold yet. Layout under `--out`:
 
-- `current/`: the data the Lab reads (pool.csv, daily/, minutes/ ... as `fetch-all` writes);
+- `current/`: the data the Lab reads (pool.csv, daily/, minutes/ ... as `fetch-all` writes)
+  and `last_session.txt`, the last completed session the folder holds, which can be newer than
+  its last pool day (a session without candidates is fetched once, never again);
 - `staging/`: tonight's copy being built (minute and daily files hard-linked from `current`,
   every file it changes rewritten under a new name, so `current` is never modified);
 - `raw/`: first and failed responses, outside the swap;
@@ -58,6 +60,7 @@ LINKED_DIRS = (fetch.DAILY_DIR, fetch.MINUTES_DIR)  # large, never rewritten in 
 DAILY_PREFIX = "n"  # tonight's daily chunks: n<last day>-<chunk>.jsonl
 BYTES_PER_MB = 1024 * 1024
 SECONDS_PER_MINUTE = 60
+LAST_SESSION_FILE = "last_session.txt"  # ISO date of the last session the folder holds
 
 
 @dataclass(frozen=True)
@@ -180,7 +183,7 @@ def _night(source: fetch.HistorySource, calendar: SessionCalendar, cfg: Config,
     pool = read_pool(base / POOL_FILE)
     if not pool:
         raise BacktestError(f"{base / POOL_FILE} is empty")
-    have = max(e.session_date for e in pool)
+    have = last_session(base, pool)
     if have >= target.ny_date:
         log(f"nightly: up to date, data ends {have.isoformat()}")
         return Outcome(deadline.now().isoformat(), None, have.isoformat(), 0, source.requests,
@@ -210,10 +213,15 @@ def _night(source: fetch.HistorySource, calendar: SessionCalendar, cfg: Config,
     keep_from = sessions_before(calendar, last, settings.nightly_window_sessions - 1,
                                 lookback)[0].ny_date if settings.nightly_window_sessions > 1 \
         else last
-    pool = [e for e in pool + added if e.session_date >= keep_from]
+    # One row per session: tonight's sessions replace any rows the folder held for them.
+    tonight = {c.session_date for c in caps}
+    pool = [e for e in pool if e.session_date not in tonight] + added
+    pool = [e for e in pool if e.session_date >= keep_from]
     old_caps = read_caps(staging / CAP_FILE) if (staging / CAP_FILE).exists() else []
     write_pool(pool, staging / POOL_FILE)
-    write_caps([c for c in old_caps + caps if c.session_date >= keep_from], staging / CAP_FILE)
+    kept_caps = [c for c in old_caps if c.session_date not in tonight] + caps
+    write_caps([c for c in kept_caps if c.session_date >= keep_from], staging / CAP_FILE)
+    (staging / LAST_SESSION_FILE).write_text(last.isoformat() + "\n", "utf-8")
 
     # Minute bars the new pool days need and the folder does not hold yet.
     runs = _missing_runs(calendar, added, staging, history_sessions, lookback)
@@ -231,6 +239,20 @@ def _night(source: fetch.HistorySource, calendar: SessionCalendar, cfg: Config,
     log(f"nightly: data ends {last.isoformat()}, {source.requests} requests")
     return Outcome(deadline.now().isoformat(), first.isoformat(), last.isoformat(), len(new),
                    source.requests, None)
+
+
+def last_session(base: Path, pool: Sequence[Any]) -> date:
+    """The last completed session `base` holds: `last_session.txt` when a night wrote it, else
+    (a fetch-all seed) the newest session of pool_cap.csv, which has a row for every selected
+    session, with or without candidates, or of the pool."""
+    path = base / LAST_SESSION_FILE
+    if path.exists():
+        try:
+            return date.fromisoformat(path.read_text("utf-8").strip())
+        except (OSError, ValueError) as exc:
+            raise BacktestError(f"cannot read {path}: {exc}") from exc
+    caps = read_caps(base / CAP_FILE) if (base / CAP_FILE).exists() else []
+    return max([c.session_date for c in caps] + [e.session_date for e in pool])
 
 
 def _stage(root: Path, base: Path) -> Path:

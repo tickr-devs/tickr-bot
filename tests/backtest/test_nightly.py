@@ -13,7 +13,7 @@ import pytest
 from tickr.backtest import fetch, nightly
 from tickr.backtest.errors import BacktestError
 from tickr.backtest.settings import load_settings
-from tickr.backtest.universe import PoolEntry, read_pool, write_caps, write_pool
+from tickr.backtest.universe import PoolEntry, read_caps, read_pool, write_caps, write_pool
 
 from .helpers import NY, ROOT, FakeHistory, calendar, cfg, daily_bar, flat_bars
 
@@ -136,3 +136,21 @@ def test_refusals_leave_current_as_it_was(tmp_path):
     with pytest.raises(BacktestError, match="nightly_max_new_sessions"):
         night(tmp_path, source(), at(date(2026, 11, 17), 20), few, folder)
     assert not (tmp_path / "nightly" / nightly.CURRENT).exists()
+
+
+def test_a_session_without_candidates_is_fetched_once_and_has_one_row(tmp_path):
+    folder = seed(tmp_path)
+    quiet = source()
+    for symbol, bars in quiet.daily.items():  # no symbol gains on the new day
+        quiet.daily[symbol] = [*bars[:-1], daily_bar(symbol, NEW_DAY, "10", "10", "10", "10",
+                                                     "1000000")]
+    first = night(tmp_path, quiet, at(NEW_DAY, 20), seed_folder=folder)
+    assert first.new_sessions == 1 and quiet.requests > 0
+    current = tmp_path / "nightly" / nightly.CURRENT
+    assert max(e.session_date for e in read_pool(current / "pool.csv")) < NEW_DAY
+    assert (current / nightly.LAST_SESSION_FILE).read_text().strip() == NEW_DAY.isoformat()
+    # The rerun the same evening knows the 16th is held although it had no candidate.
+    again = source()
+    assert night(tmp_path, again, at(NEW_DAY, 23)).new_sessions == 0 and again.requests == 0
+    caps = read_caps(current / "pool_cap.csv")
+    assert [c.session_date for c in caps] == [NEW_DAY] and caps[0].candidates == 0
