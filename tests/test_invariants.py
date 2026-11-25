@@ -225,6 +225,8 @@ NETWORK_IMPORTERS = {
                         "comes from [massive] in config, credentials by variable name only",
     "demo/record.py": "`tickr demo --record`: reads the demo's own API on the loopback port it "
                       "opened itself (127.0.0.1, port 0), never another host",
+    "runtime/alerts.py": "the Telegram alert channel: one HTTPS POST to [alerts] telegram_host "
+                         "from config, token and chat id by variable name only, never retried",
 }
 
 
