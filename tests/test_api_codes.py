@@ -1,7 +1,7 @@
 """The apps' translations of the bot's codes (apps/scripts/kit_api_strings.py and
-kit_reason_strings.py) stay in step with the bot: every fence kind, entry-block cause, alert kind,
-gate reason and fence reason the bot can send has a translated case, a sentence names only values the
-bot sends, and the committed Swift and catalog match the generators."""
+kit_reason_strings.py) stay in step with the bot: every fence kind, entry-block cause, alert
+kind, gate reason and fence reason the bot can send has a translated case, a sentence names only
+values the bot sends, and the committed Swift and catalog match the generators."""
 
 from __future__ import annotations
 
