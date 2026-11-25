@@ -39,12 +39,15 @@ from tickr.broker.base import Broker, BrokerError
 from tickr.calendar import CalendarRefused
 from tickr.runtime import launchd, watchdog
 from tickr.runtime import release as release_module
+from tickr.runtime.alert_routing import routing_path, skipped_by
 from tickr.runtime.alerts import (
     Alerter,
     AlertKind,
+    Routing,
     default_notifier,
     feed_path,
     recipient_missing,
+    route_all,
     token_pending_text,
 )
 from tickr.runtime.preflight import (
@@ -78,15 +81,28 @@ def _alerts_config(config_path: Path) -> config_module.AlertsConfig | None:
         return None
 
 
-def _feed(config_path: Path, alerts: config_module.AlertsConfig) -> Path | None:
-    """The alerts feed file even when the rest of the config is invalid; None when [run]
-    itself is not readable (the Mac notification and iMessage still go out)."""
+def _data_dir(config_path: Path) -> Path | None:
+    """[run] data_dir even when the rest of the config is invalid; None when [run] itself is
+    not readable."""
     try:
         data = tomllib.loads(config_path.read_text("utf-8"))
         run = config_module.build_section("run", data.get("run"), config_module.RunConfig)
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, config_module.ConfigError):
         return None
-    return feed_path(config_path.resolve().parent.parent, run.data_dir, alerts)
+    return config_path.resolve().parent.parent / run.data_dir
+
+
+def _feed(config_path: Path, alerts: config_module.AlertsConfig) -> Path | None:
+    """The alerts feed file even when the rest of the config is invalid; None when [run]
+    itself is not readable (the Mac notification and iMessage still go out)."""
+    data = _data_dir(config_path)
+    return None if data is None else data / alerts.feed_file
+
+
+def _routing(config_path: Path, alerts: config_module.AlertsConfig) -> Routing:
+    """The owner's alert routing; every kind on every channel when [run] is not readable."""
+    data = _data_dir(config_path)
+    return route_all if data is None else skipped_by(data / alerts.routing_file)
 
 
 def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: str) -> None:
@@ -96,7 +112,8 @@ def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: st
                         "error": None, "at": datetime.now(UTC).isoformat()})
         return
     title = f"{TITLE} {environment}" if environment else TITLE
-    alerter = Alerter(alerts, title, default_notifier(alerts, feed=_feed(config_path, alerts)))
+    alerter = Alerter(alerts, title, default_notifier(alerts, feed=_feed(config_path, alerts)),
+                      routing=_routing(config_path, alerts))
     _emit("alert", alerter.alert(kind, text).journal_body())
     for outcome in alerter.flush():  # background channels (iMessage) before this process exits
         _emit("alert", outcome.journal_body())
@@ -240,7 +257,7 @@ def _watchdog(config_path: Path) -> int:
     notifier = default_notifier(cfg.alerts,
                                 feed=feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
     alerter = Alerter(cfg.alerts, f"{TITLE} {cfg.environment_name}", notifier,
-                      clock=WATCHDOG_NOW)
+                      clock=WATCHDOG_NOW, routing=skipped_by(routing_path(cfg)))
     if notifier is None:
         # No channel on this machine (not macOS): every alert is journaled "no-notifier" only.
         # Recorded once at the start so the journal says why nobody was told; the exit code is

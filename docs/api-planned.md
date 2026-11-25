@@ -119,6 +119,9 @@ the latest alerts with how each was delivered, and a test button.
 Push needs the Apple Developer Program and APNs (backlog); its column stays drawn as disabled until
 then.
 
+Built so far (bot and API side): `GET /alerts` without `recent`, and `PUT /alerts/routing`
+(docs/api.md, "Notification settings"). `recent`, `POST /alerts/test` and the app screens follow.
+
 ### `GET /alerts` → `alerts-v1`
 
 | Key | Type | Meaning |

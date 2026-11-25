@@ -46,6 +46,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from tickr.api import contract, flow, settled, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
+from tickr.api.alerts import AlertsSettings, alerts_document
 from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from tickr.api.configview import config_document
@@ -82,6 +83,7 @@ from tickr.observers.loader import STRATEGIES_DIR, read_identity, read_values
 from tickr.observers.log import DecisionLog
 from tickr.research.errors import RecordFileError
 from tickr.research.records import DecisionRecord
+from tickr.runtime.alert_routing import RefusalCause, RoutingRefused
 from tickr.strategy.base import Role
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -162,6 +164,7 @@ class ApiSettings:
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
     system: SystemSettings  # GET /system: link, preflight record, training, machine services
+    alerts: AlertsSettings  # GET /alerts and PUT /alerts/routing: the notification settings
     lab: LabReplaySettings  # GET and POST /lab/replay: the Lab's simulated replay
     start: StartSettings  # POST /commands/start-bot: launchd's start of the bot job
     trade_whatif: trade_whatif.TradeWhatIfSettings  # GET /trades/whatif
@@ -301,6 +304,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
         system=SystemSettings.from_config(cfg),
+        alerts=AlertsSettings.from_config(cfg),
         lab=LabReplaySettings.from_config(cfg, config_path),
         start=StartSettings.from_config(cfg),
         trade_whatif=trade_whatif.TradeWhatIfSettings.from_config(cfg),
@@ -758,7 +762,8 @@ GET_ROUTES = ("/", "/status", "/commands/pending", RECEIPT_ROUTE, "/schema", "/d
               "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/system", "/journal", "/config",
-              "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events")
+              "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events",
+              "/alerts")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
 HTML_TYPE = "text/html; charset=utf-8"
@@ -777,6 +782,7 @@ TRADE_WHATIF = "/trades/whatif"  # GET: another version on one trade's day, simu
 # A strategy folder name: one path segment, never "." or "..".
 FOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 ADVISOR_DECISION = "/advisor/decision"  # POST only: the owner's note on a run, never a command
+ALERT_ROUTING = "/alerts/routing"  # PUT only: one cell of the owner's alert routing
 DAY_PREFIX = "/days/"
 # Headers a proxy adds to a request it forwards (Go's ReverseProxy, which `tailscale serve` is,
 # adds X-Forwarded-For; Tailscale adds its identity headers). The remote port's loopback Host is
@@ -969,6 +975,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/system":
                 self._json(200, system_document(self.server.settings.system,
                                                 self.server.status_response()))
+            elif path == "/alerts":
+                self._json(200, alerts_document(self.server.settings.alerts))
+            elif path == ALERT_ROUTING:
+                self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
             elif path == "/journal":
                 self._json(200, journal_document(self.server.settings.jobs.database,
                                                  self.server.settings.journal_rows))
@@ -1016,6 +1026,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == ADVISOR_DECISION:
                 self._advisor_decision()
+                return
+            if path == ALERT_ROUTING:
+                self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
                 return
             if path == PAIR_ROUTE and self.server.remote:
                 self._redeem()
@@ -1105,6 +1118,40 @@ class Handler(BaseHTTPRequestHandler):
             self._error("not_found" if exc.missing else "conflict", str(exc))
             return
         self._json(200, advisor_document(settings.advisor_dir, settings.advisor_runs))
+
+    def do_PUT(self) -> None:  # noqa: N802 - stdlib naming
+        if not self._guard():
+            return
+        try:
+            if self._path() != ALERT_ROUTING:
+                self._error("method_not_allowed", "only GET and POST are supported",
+                            {"Allow": "GET, POST"})
+                return
+            self._alert_routing()
+        except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
+            self._error("internal", type(exc).__name__)
+
+    def _alert_routing(self) -> None:
+        """PUT /alerts/routing with {"kind": "<alert kind>", "channel": "mac"|"imessage"|"push",
+        "on": true|false}: change that one cell of the owner's alert routing, 200 alerts-v1;
+        400 for an unknown kind or channel, 409 for a critical kind turned off or a routing
+        file that cannot be used. A preference about where to be told, never a bot command."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        if (set(body) != {"kind", "channel", "on"} or not isinstance(body["kind"], str)
+                or not isinstance(body["channel"], str) or not isinstance(body["on"], bool)):
+            self._error("bad_request", 'body must be exactly {"kind": "<alert kind>", '
+                        '"channel": "mac" | "imessage" | "push", "on": true | false}')
+            return
+        settings = self.server.settings.alerts
+        try:
+            routing = settings.routing.set(body["kind"], body["channel"], body["on"])
+        except RoutingRefused as exc:
+            bad = exc.cause in (RefusalCause.UNKNOWN_KIND, RefusalCause.UNKNOWN_CHANNEL)
+            self._error("bad_request" if bad else "conflict", str(exc))
+            return
+        self._json(200, alerts_document(settings, routing))
 
     def _redeem(self) -> None:
         """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`
@@ -1404,7 +1451,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error("method_not_allowed", "only GET and POST are supported",
                         {"Allow": "GET, POST"})
 
-    do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
+    do_HEAD = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
 
 
 def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now, *,

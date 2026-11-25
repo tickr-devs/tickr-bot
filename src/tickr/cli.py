@@ -682,6 +682,7 @@ def _run(path: Path) -> int:
     from tickr.observers.errors import ObserverError
     from tickr.runtime import service
     from tickr.runtime.account import AccountReads
+    from tickr.runtime.alert_routing import routing_path, skipped_by
     from tickr.runtime.alerts import Alerter, AlertKind, token_pending_text
     from tickr.runtime.market import (
         IGNITION_NOT_LOADED,
@@ -721,7 +722,8 @@ def _run(path: Path) -> int:
         quote_file: QuoteFile | None = None
         try:
             alerter = Alerter(cfg.alerts, f"Tickr {cfg.environment_name}",
-                              NOTIFIER(cfg), clock=NOW)
+                              NOTIFIER(cfg), clock=NOW,
+                              routing=skipped_by(routing_path(cfg)))
 
             def token_pending() -> None:  # before the SDK waits for the owner (no engine yet)
                 outcome = alerter.alert(AlertKind.TOKEN_NEEDS_CONFIRMATION, token_pending_text(

@@ -1430,6 +1430,75 @@ class SystemV1:
     training_cause_codes: tuple[ReasonV1, ...] = _reasons_of("training_cause")
     host_cause_codes: tuple[ReasonV1, ...] = _reasons_of("host_cause")
 
+# ---------------------------------------------------------------- alerts (notification settings)
+
+
+class AlertChannel(StrEnum):
+    """An owner-facing alert channel the routing switches (runtime/alert_routing.py)."""
+
+    MAC = "mac"  # the Mac notification (the Tickr app, else osascript)
+    IMESSAGE = "imessage"  # an iMessage to the owner's phone
+    PUSH = "push"  # the iPhone app's push: needs the Apple Developer Program and APNs (backlog)
+
+
+class AlertGroup(StrEnum):
+    """How the apps group alert kinds."""
+
+    CRITICAL = "critical"  # needs the owner now: locked on every channel
+    TRADING = "trading"  # the day's trading or money, nothing at risk
+    DAY = "day"  # the machine and the bot's own housekeeping
+    LAB = "lab"  # research and the advisor (no such alert kind yet)
+
+
+class AlertChannelCause(StrEnum):
+    """Why a channel is not known to work on this machine."""
+
+    NO_PREFLIGHT = "no-preflight"  # no preflight record yet
+    PREFLIGHT_UNREADABLE = "preflight-unreadable"  # the record cannot be read
+    CHECK_FAILED = "check-failed"  # the latest preflight's alert-channel or alert-recipient check
+    NOT_BUILT = "not-built"  # no delivery in the bot yet (push)
+
+
+@dataclass(frozen=True)
+class AlertChannelV1:
+    """One channel: `configured` from the latest preflight's checks (null `cause` when true)."""
+
+    channel: AlertChannel
+    configured: bool
+    cause: AlertChannelCause | None
+
+
+@dataclass(frozen=True)
+class AlertRoutesV1:
+    """Whether one kind goes to each channel (a locked kind: true everywhere)."""
+
+    mac: bool
+    imessage: bool
+    push: bool
+
+
+@dataclass(frozen=True)
+class AlertKindV1:
+    """One alert kind (`runtime/alerts.py` AlertKind value) and where it goes. `locked`: it
+    needs the owner now and cannot be turned off (PUT /alerts/routing answers 409)."""
+
+    kind: str
+    group: AlertGroup
+    locked: bool
+    channels: AlertRoutesV1
+
+
+@dataclass(frozen=True)
+class AlertsV1:
+    """GET /alerts and PUT /alerts/routing: the notification settings. `routing_cause` is set
+    when the routing file cannot be used: then every kind goes to every channel and writes are
+    refused until the file is deleted."""
+
+    channels: tuple[AlertChannelV1, ...]
+    kinds: tuple[AlertKindV1, ...]
+    routing_cause: str | None
+    api_version: int = _const(API_VERSION)
+
 # ---------------------------------------------------------------- lab replay
 
 
@@ -2640,6 +2709,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
     "system-v1": SystemV1,
+    "alerts-v1": AlertsV1,
     "day-events-v1": DayEventsV1,
     "advisor-runs-v1": AdvisorRunsV1,
     "lab-replay-v1": LabReplayV1,
