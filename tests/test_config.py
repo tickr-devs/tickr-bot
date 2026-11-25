@@ -43,6 +43,7 @@ COMMENTED_TOML = [
     ROOT / "config" / "replay.toml",
     ROOT / "config" / "backtest.toml",
     ROOT / "config" / "demo.toml",
+    ROOT / "config" / "settings_schema.toml",
     *sorted((ROOT / "strategies").glob("*/strategy.toml")),
 ]
 
