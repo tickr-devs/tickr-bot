@@ -48,7 +48,10 @@ All simulation numbers live in `config/replay.toml`, one comment per key (tested
 unknown keys are refused. The bot never reads this file.
 
 Slippage per fill = max(price x `slippage_percent` / 100, `slippage_min_usd`), always against
-us.
+us. `measured_slippage_file` (empty: none) replaces `slippage_percent` with the stop slippage
+measured from the bot's own stopped trades (`python -m tickr.research slippage`,
+`docs/research.md`); a missing file or one with fewer than `measured_slippage_min_trades`
+measured trades is refused.
 
 **History.** The strategy gets the same shape of input as live: `bars` = the last
 `history_sessions` sessions of the symbol plus today's completed bars (oldest first), and the

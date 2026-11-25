@@ -14,10 +14,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from tickr.replay.measured import FORMAT as MEASURED_FORMAT
 from tickr.research import latency as lat
 from tickr.research import observer_report as orep
 from tickr.research import outcomes as oc
 from tickr.research import refusals as rf
+from tickr.research import slippage as sl
 from tickr.research import whatif as wi
 from tickr.research.compare import DiffResult
 from tickr.research.records import DecisionRecord
@@ -220,3 +222,33 @@ def write_refusals(rows: Sequence[rf.RefusalRow], out_dir: Path, places: int) ->
     body = {"days": sorted({r.day.isoformat() for r in rows}), "rows": len(rows),
             "by_kind": by_kind}
     return _json(out_dir / "refusals_summary.json", body, places)
+
+
+SLIPPAGE_TRADE_COLUMNS = (
+    "day", "trade_id", "symbol", "close_cause", "stop_quantity", "stop_price", "stop_fill_price",
+    "slippage_usd", "slippage_percent", "entry_price", "sold_quantity", "planned_loss_usd",
+    "realized_loss_usd", "cause")
+SLIPPAGE_DAY_COLUMNS = (
+    "day", "stopped_trades", "measured_trades", "planned_loss_usd", "realized_loss_usd",
+    "stop_slippage_usd", "stop_slippage_percent")
+
+
+def write_slippage(trades: Sequence[sl.StoppedTrade], environment: str | None, out_dir: Path,
+                   places: int) -> dict[str, Any]:
+    """`slippage_trades.csv`, `slippage_days.csv` and `slippage_summary.json`, the file the
+    replay's `measured_slippage_file` selects (`tickr.replay.measured`)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(out_dir / "slippage_trades.csv", SLIPPAGE_TRADE_COLUMNS,
+               ([getattr(t, c) for c in SLIPPAGE_TRADE_COLUMNS] for t in trades), places)
+    days = sl.by_day(trades)
+    _write_csv(out_dir / "slippage_days.csv", SLIPPAGE_DAY_COLUMNS,
+               ([getattr(d, c) for c in SLIPPAGE_DAY_COLUMNS] for d in days), places)
+    total = sl.group(trades, None)
+    body = {"format": MEASURED_FORMAT, "label": "measured", "environment": environment,
+            "days": [d.day.isoformat() for d in days if d.day is not None],
+            "stopped_trades": total.stopped_trades, "measured_trades": total.measured_trades,
+            "planned_loss_usd": total.planned_loss_usd,
+            "realized_loss_usd": total.realized_loss_usd,
+            "stop_slippage_usd": total.stop_slippage_usd,
+            "stop_slippage_percent": total.stop_slippage_percent}
+    return _json(out_dir / "slippage_summary.json", body, places)

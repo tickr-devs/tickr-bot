@@ -3,6 +3,12 @@
 The file has one table `[replay]` with exactly the keys in `KEYS`. Missing or unknown keys,
 wrong types and out-of-range values are refused with a `SettingsError`. An example with the
 required comment for every key is in `docs/replay.md`.
+
+`measured_slippage_file` (empty: none) selects a file written by `python -m tickr.research
+slippage`; its measured stop slippage then replaces `slippage_percent` (backlog R5). A relative
+path is read from the settings file's folder. A missing file, a malformed one or one with fewer
+than `measured_slippage_min_trades` measured stopped trades is refused, never replaced by the
+fixed value.
 """
 
 from __future__ import annotations
@@ -13,7 +19,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from tickr.replay.errors import SettingsError
+from tickr.replay.errors import MeasuredSlippageError, SettingsError
+from tickr.replay.measured import load_measured_slippage
 
 KEYS = frozenset(
     {
@@ -26,6 +33,8 @@ KEYS = frozenset(
         "synthetic_spread_percent",
         "synthetic_spread_min_usd",
         "synthetic_quote_size_shares",
+        "measured_slippage_file",
+        "measured_slippage_min_trades",
     }
 )
 
@@ -50,6 +59,8 @@ class ReplaySettings:
     """Minimum synthetic quote spread, USD."""
     synthetic_quote_size_shares: Decimal
     """Bid and ask size of the synthetic quote, shares."""
+    measured_slippage_file: Path | None = None
+    """The measured slippage file `slippage_percent` came from (None: the fixed value)."""
 
     def slippage(self, price: Decimal) -> Decimal:
         """Adverse slippage per share for a fill at `price`."""
@@ -77,7 +88,9 @@ def _count(key: str, raw: Any, minimum: int) -> int:
     return raw
 
 
-def settings_from_mapping(data: dict[str, Any]) -> ReplaySettings:
+def settings_from_mapping(data: dict[str, Any], base_dir: Path | None = None) -> ReplaySettings:
+    """`base_dir` is the settings file's folder: a relative `measured_slippage_file` is read
+    from it (refused without one)."""
     if set(data) != {"replay"} or not isinstance(data["replay"], dict):
         raise SettingsError("settings must contain exactly one table: [replay]")
     table = data["replay"]
@@ -88,8 +101,23 @@ def settings_from_mapping(data: dict[str, Any]) -> ReplaySettings:
     flag = table["synthesize_quote"]
     if not isinstance(flag, bool):
         raise SettingsError("synthesize_quote must be true or false")
+    slippage_percent = _number("slippage_percent", table["slippage_percent"])
+    min_trades = _count("measured_slippage_min_trades", table["measured_slippage_min_trades"], 1)
+    name = table["measured_slippage_file"]
+    if not isinstance(name, str):
+        raise SettingsError("measured_slippage_file must be a string (empty: none)")
+    measured: Path | None = None
+    if name:
+        measured = Path(name)
+        if not measured.is_absolute():
+            if base_dir is None:
+                raise MeasuredSlippageError(
+                    f"measured_slippage_file {name!r} is relative and no settings folder is "
+                    "known")
+            measured = base_dir / measured
+        slippage_percent = load_measured_slippage(measured, min_trades)
     return ReplaySettings(
-        slippage_percent=_number("slippage_percent", table["slippage_percent"]),
+        slippage_percent=slippage_percent,
         slippage_min_usd=_number("slippage_min_usd", table["slippage_min_usd"]),
         entry_wait_bars=_count("entry_wait_bars", table["entry_wait_bars"], 1),
         output_decimal_places=_count("output_decimal_places", table["output_decimal_places"], 0),
@@ -104,6 +132,7 @@ def settings_from_mapping(data: dict[str, Any]) -> ReplaySettings:
         synthetic_quote_size_shares=Decimal(
             _count("synthetic_quote_size_shares", table["synthetic_quote_size_shares"], 1)
         ),
+        measured_slippage_file=measured,
     )
 
 
@@ -113,4 +142,4 @@ def load_settings(path: Path) -> ReplaySettings:
             data = tomllib.load(handle)
     except tomllib.TOMLDecodeError as exc:
         raise SettingsError(f"{path}: invalid TOML: {exc}") from exc
-    return settings_from_mapping(data)
+    return settings_from_mapping(data, Path(path).parent)
