@@ -108,6 +108,18 @@ def test_an_unreadable_routing_file_is_shown_and_never_overwritten(api, settings
     assert resp.status == 409 and path.read_text("utf-8") == "{broken"
 
 
+def test_a_deeply_nested_routing_file_shows_its_cause_and_everything_on(api, settings):  # noqa: F811
+    server, _ = api
+    path = settings.alerts.routing.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[" * 200000, "utf-8")
+    resp, payload = request(server, "GET", "/alerts")
+    assert resp.status == 200
+    body = doc(payload)
+    assert body["routing_cause"] == "routing-file-unreadable: RecursionError"
+    assert all(all(k["channels"].values()) for k in body["kinds"])
+
+
 @pytest.mark.parametrize(("method", "path"), [
     ("POST", ROUTING), ("GET", ROUTING), ("PUT", "/alerts"), ("PUT", "/status")])
 def test_other_methods_are_refused(api, method, path):  # noqa: F811

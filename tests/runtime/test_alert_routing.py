@@ -148,3 +148,72 @@ def test_a_critical_alert_goes_everywhere_whatever_the_file_says(tmp_path):
     outcome = alerter.alert(AlertKind.UNPROTECTED_POSITION, "ABCD")
     assert outcome.delivery is Delivery.SHOWN and "routed_off" not in outcome.journal_body()
     assert len(mac.shown) == len(phone.shown) == len(feed.shown) == 1
+
+
+DEEP = "[" * 200000  # json.loads raises RecursionError, not ValueError
+
+CORRUPT = {
+    "bad-json": "{broken",
+    "wrong-types": json.dumps({"schema_version": "1", "off": [["disk-low", "mac"]]}),
+    "wrong-inner-types": json.dumps({"schema_version": 1, "off": {"disk-low": [["mac"], {}]}}),
+    "nested-garbage": json.dumps({"schema_version": 1, "off": {"disk-low": [[[[[None]]]]]}}),
+    "deep-nesting": DEEP,
+    "not-utf8": b"\xff\xfe\x00garbage",
+}
+
+
+def _corrupt(tmp_path, shape, monkeypatch):
+    path = tmp_path / "routing.json"
+    if shape == "directory":
+        path.mkdir()
+    elif shape == "permission-denied":
+        path.write_text("{}", "utf-8")
+        real = type(path).read_text
+
+        def refuse(self, *args, **kwargs):
+            if self == path:
+                raise PermissionError(13, "Permission denied")
+            return real(self, *args, **kwargs)
+        monkeypatch.setattr(type(path), "read_text", refuse)
+    else:
+        text = CORRUPT[shape]
+        if isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text, "utf-8")
+
+
+@pytest.mark.parametrize("shape", [*CORRUPT, "directory", "permission-denied"])
+@pytest.mark.parametrize("kind", [AlertKind.UNPROTECTED_POSITION, AlertKind.DISK_LOW])
+def test_a_corrupt_routing_file_delivers_everywhere_and_never_raises(tmp_path, monkeypatch,
+                                                                    shape, kind):
+    _corrupt(tmp_path, shape, monkeypatch)
+    routing = read_routing(tmp_path / "routing.json")
+    assert routing.off == frozenset() and routing.cause is not None
+    mac, phone, feed = Recorder(), Recorder(), Recorder()
+    outcome = _alerter(tmp_path, mac, phone, feed).alert(kind, "ABCD")
+    assert outcome.delivery is Delivery.SHOWN and "routed_off" not in outcome.journal_body()
+    assert len(mac.shown) == len(phone.shown) == len(feed.shown) == 1
+
+
+def test_a_locked_kind_never_touches_the_routing_file(tmp_path, monkeypatch):
+    from tickr.runtime import alert_routing
+
+    def opened(_path):
+        raise AssertionError("the routing file was read for a locked kind")
+    monkeypatch.setattr(alert_routing, "read_routing", opened)
+    route = skipped_by(tmp_path / "routing.json")
+    for kind in LOCKED:
+        assert route(kind) == frozenset()
+    assert route(AlertKind.DISK_LOW) == frozenset()  # the read raised: nothing skipped
+
+
+def test_a_routing_callable_that_raises_skips_nothing():
+    mac, phone = Recorder(), Recorder()
+
+    def broken(_kind):
+        raise RecursionError("deep")
+    alerter = Alerter(CONFIG, "Tickr", Channels(((MACOS, mac), (IMESSAGE, phone))),
+                      lambda: T0, routing=broken)
+    assert alerter.alert(AlertKind.DISK_LOW, "x").delivery is Delivery.SHOWN
+    assert len(mac.shown) == len(phone.shown) == 1

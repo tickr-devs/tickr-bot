@@ -496,7 +496,10 @@ class Alerter:
         def done(name: str, error: str | None) -> None:  # on a background thread
             self._done.put((kind, text, name, error))
 
-        skip = self._routing(kind)
+        try:
+            skip = self._routing(kind)
+        except Exception:  # noqa: BLE001 - an injected routing never drops an alert
+            skip = frozenset()
         routed_off = tuple(name for name in self._channels.names() if name in skip)
         if routed_off and len(routed_off) == len(self._channels.names()):
             return AlertOutcome(kind, text, now, Delivery.ROUTED_OFF, None,
