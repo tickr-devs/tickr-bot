@@ -25,8 +25,8 @@ HALF_DAY = datetime(2026, 11, 27, 13, 30, tzinfo=UTC)
 NEXT_YEAR = datetime(2028, 1, 4, 13, 30, tzinfo=UTC)  # past the last calendar file
 CANARY = "canary-secret-value-7f3a"
 PLENTY = 10**6 * BYTES_PER_MB
-MAC = "darwin"  # the owner's machine: notification and iMessage are available
-LINUX = "linux"  # a server or container: no alert channel today
+MAC = "darwin"  # the owner's Mac
+LINUX = "linux"  # a server or container
 SHA = "0123456789abcdef0123456789abcdef01234567"  # the image's code version (no .git here)
 
 
@@ -36,14 +36,13 @@ def _ready(config_path: Path) -> dict[str, str]:
     (cfg.root / cfg.run.data_dir / cfg.environment.token_dir).mkdir(parents=True, mode=0o700)
     env = cfg.environment
     return {env.app_key_variable: CANARY, env.app_secret_variable: CANARY,
-            env.account_variable: CANARY, cfg.alerts.imessage_recipient_variable: CANARY,
-            ENV_VARIABLE: SHA}
+            env.account_variable: CANARY, cfg.alerts.bot_token_variable: CANARY,
+            cfg.alerts.chat_id_variable: CANARY, ENV_VARIABLE: SHA}
 
 
 def _run(config_path: Path, environ: dict[str, str], now: datetime = MONDAY, free: int = PLENTY,
-         platform: str = MAC):
-    return run_preflight(config_path, now=now, environ=environ, disk_free=lambda _: free,
-                         platform=platform)
+         ):
+    return run_preflight(config_path, now=now, environ=environ, disk_free=lambda _: free)
 
 
 def test_ready_on_a_trading_day(config_path):
@@ -105,35 +104,30 @@ def test_missing_credentials_name_the_variables(config_path):
     assert "~/.config/tickr/env" in result.summary()  # says where to add it
 
 
-def test_missing_imessage_recipient_refuses_with_its_own_cause(config_path):
-    environ = _ready(config_path)
-    name = config_module.load(config_path).alerts.imessage_recipient_variable
-    del environ[name]
-    result = _run(config_path, environ)
-    assert result.cause is PreflightCause.ALERT_RECIPIENT_MISSING
-    assert result.blocks_start and name in result.summary()
-    assert "Apple ID" in result.summary() and "~/.config/tickr/env" in result.summary()
-    assert CANARY not in json.dumps(result.journal_body()) + result.summary()
-
-
 def test_no_alert_channel_refuses_with_its_own_cause(config_path):
     calls: list[str] = []
-    result = run_preflight(config_path, now=MONDAY, environ=_ready(config_path),
-                           disk_free=lambda _: PLENTY, platform=LINUX,
-                           token_probe=_probe(None, calls))
+    alerts = config_module.load(config_path).alerts
+    environ = _ready(config_path)
+    del environ[alerts.bot_token_variable], environ[alerts.chat_id_variable]
+    result = run_preflight(config_path, now=MONDAY, environ=environ,
+                           disk_free=lambda _: PLENTY, token_probe=_probe(None, calls))
     assert result.cause is PreflightCause.ALERT_CHANNEL_MISSING
     assert result.exit_code is ExitCode.FAILED and result.blocks_start
-    assert "alert-channel" in result.summary() and "'linux'" in result.summary()
+    assert "alert-channel" in result.summary() and "Telegram" in result.summary()
+    assert alerts.bot_token_variable in result.summary()
     assert calls == []  # a blocked start never reaches the token probe
 
 
-def test_no_alert_channel_is_reported_before_a_missing_recipient(config_path):
+@pytest.mark.parametrize("platform", [MAC, LINUX, "win32"])
+def test_preflight_refuses_without_telegram_on_any_platform(config_path, monkeypatch, platform):
+    """No channel depends on the operating system: Telegram alone is the alert channel."""
+    monkeypatch.setattr("sys.platform", platform)
+    alerts = config_module.load(config_path).alerts
     environ = _ready(config_path)
-    del environ[config_module.load(config_path).alerts.imessage_recipient_variable]
-    result = _run(config_path, environ, platform=LINUX)
-    assert result.cause is PreflightCause.ALERT_CHANNEL_MISSING  # the real blocker first
-    failed = [c.name.value for c in result.checks if not c.passed]
-    assert failed == ["alert-channel", "alert-recipient"]
+    del environ[alerts.bot_token_variable], environ[alerts.chat_id_variable]
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.ALERT_CHANNEL_MISSING and result.blocks_start
+    assert _run(config_path, _ready(config_path)).cause is None
 
 
 def test_missing_token_dir(config_path):
@@ -255,7 +249,7 @@ def _probe(answer: str | None, calls: list[str]):
 def test_usable_token_is_the_last_check(config_path):
     calls: list[str] = []
     result = run_preflight(config_path, now=MONDAY, environ=_ready(config_path),
-                           disk_free=lambda _: PLENTY, platform=MAC,
+                           disk_free=lambda _: PLENTY,
                            token_probe=_probe(None, calls))
     assert result.exit_code is ExitCode.READY and len(calls) == 1
     assert result.checks[-1].name.value == "token" and result.checks[-1].passed
@@ -264,7 +258,7 @@ def test_usable_token_is_the_last_check(config_path):
 def test_unusable_token_fails_with_its_cause(config_path):
     cause = "token initialisation failed: token check failed or token INVALID/EXPIRED"
     result = run_preflight(config_path, now=MONDAY, environ=_ready(config_path),
-                           disk_free=lambda _: PLENTY, platform=MAC,
+                           disk_free=lambda _: PLENTY,
                            token_probe=_probe(cause, []))
     assert result.exit_code is ExitCode.FAILED
     assert result.cause is PreflightCause.TOKEN_UNUSABLE
@@ -276,7 +270,7 @@ def test_token_is_not_probed_without_a_session_or_after_a_failure(config_path, n
     calls: list[str] = []
     environ = _ready(config_path) if now is SATURDAY else {}  # MONDAY: credentials missing
     result = run_preflight(config_path, now=now, environ=environ,
-                           disk_free=lambda _: PLENTY, platform=MAC,
+                           disk_free=lambda _: PLENTY,
                            token_probe=_probe(None, calls))
     assert calls == [] and "token" not in [c.name.value for c in result.checks]
 
@@ -293,7 +287,7 @@ def test_token_is_probed_when_only_the_strategy_is_refused(config_path, break_st
     break_strategy("raises")
     calls: list[str] = []
     result = run_preflight(config_path, now=MONDAY, environ=_ready(config_path),
-                           disk_free=lambda _: PLENTY, platform=MAC,
+                           disk_free=lambda _: PLENTY,
                            token_probe=_probe(None, calls))
     assert result.cause is PreflightCause.STRATEGY_REFUSED and not result.blocks_start
     assert len(calls) == 1 and result.checks[-1].name.value == "token"
@@ -381,7 +375,10 @@ def test_telegram_check_exists_only_once_set_up_and_checks_presence_only(config_
     cfg = config_module.load(config_path).alerts
     environ = _ready(config_path)
     names = {c.name.value for c in _run(config_path, environ).checks}
-    assert "alert-telegram" not in names  # off: neither variable set
+    assert "alert-telegram" in names and "alert-channel" in names
+    del environ[cfg.bot_token_variable], environ[cfg.chat_id_variable]
+    names = {c.name.value for c in _run(config_path, environ).checks}
+    assert "alert-telegram" not in names  # off: neither variable set (alert-channel refuses)
     environ[cfg.bot_token_variable] = CANARY
     refused = _run(config_path, environ)
     assert refused.cause is PreflightCause.ALERT_TELEGRAM_MISSING
@@ -389,4 +386,3 @@ def test_telegram_check_exists_only_once_set_up_and_checks_presence_only(config_
     environ[cfg.chat_id_variable] = CANARY
     ok = _run(config_path, environ)
     assert ok.cause is None and CANARY not in ok.summary()
-    assert _run(config_path, environ, platform=LINUX).cause is None  # the channel off the Mac

@@ -336,7 +336,7 @@ class Sentinel:
         self.alert(kind, text)
 
     def completed(self, flush: bool = False) -> list[AlertOutcome]:
-        """Finished background sends (iMessage); with `flush`, after waiting for them."""
+        """Finished background sends (Telegram); with `flush`, after waiting for them."""
         return self._alerter.flush() if flush else self._alerter.completed()
 
     def check(self, now: datetime) -> None:
@@ -484,7 +484,7 @@ class Watchdog:
         self.journal.write(ALERT, self._alerter.alert(kind, text).journal_body())
 
     def _background_outcomes(self, flush: bool = False) -> None:
-        """Journal finished background sends (iMessage); at exit wait for them first."""
+        """Journal finished background sends (Telegram); at exit wait for them first."""
         for outcome in self._alerter.flush() if flush else self._alerter.completed():
             self.journal.write(ALERT, outcome.journal_body())
 

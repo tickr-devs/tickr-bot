@@ -21,7 +21,7 @@ from tickr.runtime.alert_routing import (
     read_routing,
     skipped_by,
 )
-from tickr.runtime.alerts import FEED, IMESSAGE, MACOS, Alerter, AlertKind, Channels, Delivery
+from tickr.runtime.alerts import FEED, TELEGRAM, Alerter, AlertKind, Channels, Delivery
 from tickr.runtime.watch import ALERT_AT_ONCE, FENCE_ALERTS
 
 from .test_alerts import CONFIG, Recorder
@@ -51,10 +51,10 @@ def test_a_missing_file_means_everything_on(tmp_path):
 @pytest.mark.parametrize("text", [
     "not json",
     json.dumps({"schema_version": 2, "off": {}}),
-    json.dumps({"schema_version": 1, "off": {"no-such-kind": ["mac"]}}),
+    json.dumps({"schema_version": 1, "off": {"no-such-kind": ["telegram"]}}),
     json.dumps({"schema_version": 1, "off": {"disk-low": ["fax"]}}),
-    json.dumps({"schema_version": 1, "off": {"unprotected-position": ["mac"]}}),
-    json.dumps({"schema_version": 1, "off": {"disk-low": "mac"}}),
+    json.dumps({"schema_version": 1, "off": {"unprotected-position": ["telegram"]}}),
+    json.dumps({"schema_version": 1, "off": {"disk-low": "telegram"}}),
     json.dumps({"schema_version": 1}),
 ])
 def test_a_bad_file_means_everything_on_with_its_cause(tmp_path, text):
@@ -67,21 +67,21 @@ def test_a_bad_file_means_everything_on_with_its_cause(tmp_path, text):
 
 def test_a_cell_turned_off_and_on_again(tmp_path):
     store = RoutingStore(tmp_path / "data" / "routing.json")
-    routing = store.set("disk-low", "imessage", False)
-    assert not routing.is_on(AlertKind.DISK_LOW, RouteChannel.IMESSAGE)
-    assert routing.is_on(AlertKind.DISK_LOW, RouteChannel.MAC)
+    routing = store.set("disk-low", "telegram", False)
+    assert not routing.is_on(AlertKind.DISK_LOW, RouteChannel.TELEGRAM)
+    assert routing.is_on(AlertKind.DISK_LOW, RouteChannel.PUSH)
     assert store.read() == routing
     assert json.loads(store.path.read_text("utf-8")) == {
-        "schema_version": 1, "off": {"disk-low": ["imessage"]}}
-    assert store.set("disk-low", "imessage", True) == EVERYTHING_ON
+        "schema_version": 1, "off": {"disk-low": ["telegram"]}}
+    assert store.set("disk-low", "telegram", True) == EVERYTHING_ON
     assert store.read() == EVERYTHING_ON
 
 
 @pytest.mark.parametrize(("kind", "channel", "on", "cause"), [
-    ("unprotected-position", "imessage", False, RefusalCause.LOCKED_KIND),
-    ("unknown-order-status", "mac", False, RefusalCause.LOCKED_KIND),
-    ("bot-down", "mac", False, RefusalCause.LOCKED_KIND),
-    ("no-such-kind", "mac", False, RefusalCause.UNKNOWN_KIND),
+    ("unprotected-position", "push", False, RefusalCause.LOCKED_KIND),
+    ("unknown-order-status", "telegram", False, RefusalCause.LOCKED_KIND),
+    ("bot-down", "telegram", False, RefusalCause.LOCKED_KIND),
+    ("no-such-kind", "telegram", False, RefusalCause.UNKNOWN_KIND),
     ("disk-low", "fax", False, RefusalCause.UNKNOWN_CHANNEL),
 ])
 def test_refused_writes_name_one_cause_and_write_nothing(tmp_path, kind, channel, on, cause):
@@ -94,7 +94,7 @@ def test_refused_writes_name_one_cause_and_write_nothing(tmp_path, kind, channel
 
 def test_a_locked_kind_turned_on_is_accepted_and_stores_nothing(tmp_path):
     store = RoutingStore(tmp_path / "routing.json")
-    assert store.set("unprotected-position", "mac", True) == EVERYTHING_ON
+    assert store.set("unprotected-position", "telegram", True) == EVERYTHING_ON
     assert not store.path.exists()
 
 
@@ -102,60 +102,58 @@ def test_an_unreadable_file_is_never_overwritten(tmp_path):
     store = RoutingStore(tmp_path / "routing.json")
     store.path.write_text("{broken", "utf-8")
     with pytest.raises(RoutingRefused) as refused:
-        store.set("disk-low", "mac", False)
+        store.set("disk-low", "telegram", False)
     assert refused.value.cause is RefusalCause.FILE_UNREADABLE
     assert store.path.read_text("utf-8") == "{broken"
 
 
-def _alerter(tmp_path, mac, phone, feed):
-    channels = Channels(((MACOS, mac), (IMESSAGE, phone), (FEED, feed)))
+def _alerter(tmp_path, phone, feed):
+    channels = Channels(((TELEGRAM, phone), (FEED, feed)))
     return Alerter(CONFIG, "Tickr", channels, lambda: T0,
                    routing=skipped_by(tmp_path / "routing.json"))
 
 
 def test_the_alerter_skips_the_channels_routed_off_and_says_so(tmp_path):
-    mac, phone, feed = Recorder(), Recorder(), Recorder()
-    alerter = _alerter(tmp_path, mac, phone, feed)
-    RoutingStore(tmp_path / "routing.json").set("disk-low", "imessage", False)
+    phone, feed = Recorder(), Recorder()
+    alerter = _alerter(tmp_path, phone, feed)
+    RoutingStore(tmp_path / "routing.json").set("disk-low", "telegram", False)
     outcome = alerter.alert(AlertKind.DISK_LOW, "12 MB free")
     assert outcome.delivery is Delivery.SHOWN
-    assert outcome.journal_body()["routed_off"] == ["imessage"]
-    assert len(mac.shown) == 1 and phone.shown == [] and len(feed.shown) == 1
+    assert outcome.journal_body()["routed_off"] == ["telegram"]
+    assert phone.shown == [] and len(feed.shown) == 1
 
 
 def test_routed_off_everywhere_is_recorded_and_not_counted_as_shown(tmp_path):
-    mac, phone = Recorder(), Recorder()
-    channels = Channels(((MACOS, mac), (IMESSAGE, phone)))
-    alerter = Alerter(CONFIG, "Tickr", channels, lambda: T0,
+    phone = Recorder()
+    alerter = Alerter(CONFIG, "Tickr", Channels(((TELEGRAM, phone),)), lambda: T0,
                       routing=skipped_by(tmp_path / "routing.json"))
     store = RoutingStore(tmp_path / "routing.json")
-    store.set("disk-low", "imessage", False)
-    store.set("disk-low", "mac", False)
+    store.set("disk-low", "telegram", False)
     outcome = alerter.alert(AlertKind.DISK_LOW, "12 MB free")
     assert outcome.delivery is Delivery.ROUTED_OFF
-    assert outcome.journal_body()["routed_off"] == ["macos", "imessage"]
-    assert mac.shown == [] and phone.shown == []
-    store.set("disk-low", "mac", True)  # applies at the next alert, not after a restart
+    assert outcome.journal_body()["routed_off"] == ["telegram"]
+    assert phone.shown == []
+    store.set("disk-low", "telegram", True)  # applies at the next alert, not after a restart
     assert alerter.alert(AlertKind.DISK_LOW, "12 MB free").delivery is Delivery.SHOWN
-    assert len(mac.shown) == 1
+    assert len(phone.shown) == 1
 
 
 def test_a_critical_alert_goes_everywhere_whatever_the_file_says(tmp_path):
-    mac, phone, feed = Recorder(), Recorder(), Recorder()
-    alerter = _alerter(tmp_path, mac, phone, feed)
+    phone, feed = Recorder(), Recorder()
+    alerter = _alerter(tmp_path, phone, feed)
     (tmp_path / "routing.json").write_text(json.dumps({
-        "schema_version": 1, "off": {"unprotected-position": ["mac", "imessage"]}}), "utf-8")
+        "schema_version": 1, "off": {"unprotected-position": ["telegram"]}}), "utf-8")
     outcome = alerter.alert(AlertKind.UNPROTECTED_POSITION, "ABCD")
     assert outcome.delivery is Delivery.SHOWN and "routed_off" not in outcome.journal_body()
-    assert len(mac.shown) == len(phone.shown) == len(feed.shown) == 1
+    assert len(phone.shown) == len(feed.shown) == 1
 
 
 DEEP = "[" * 200000  # json.loads raises RecursionError, not ValueError
 
 CORRUPT = {
     "bad-json": "{broken",
-    "wrong-types": json.dumps({"schema_version": "1", "off": [["disk-low", "mac"]]}),
-    "wrong-inner-types": json.dumps({"schema_version": 1, "off": {"disk-low": [["mac"], {}]}}),
+    "wrong-types": json.dumps({"schema_version": "1", "off": [["disk-low", "telegram"]]}),
+    "wrong-inner-types": json.dumps({"schema_version": 1, "off": {"disk-low": [["telegram"], {}]}}),
     "nested-garbage": json.dumps({"schema_version": 1, "off": {"disk-low": [[[[[None]]]]]}}),
     "deep-nesting": DEEP,
     "not-utf8": b"\xff\xfe\x00garbage",
@@ -190,10 +188,10 @@ def test_a_corrupt_routing_file_delivers_everywhere_and_never_raises(tmp_path, m
     _corrupt(tmp_path, shape, monkeypatch)
     routing = read_routing(tmp_path / "routing.json")
     assert routing.off == frozenset() and routing.cause is not None
-    mac, phone, feed = Recorder(), Recorder(), Recorder()
-    outcome = _alerter(tmp_path, mac, phone, feed).alert(kind, "ABCD")
+    phone, feed = Recorder(), Recorder()
+    outcome = _alerter(tmp_path, phone, feed).alert(kind, "ABCD")
     assert outcome.delivery is Delivery.SHOWN and "routed_off" not in outcome.journal_body()
-    assert len(mac.shown) == len(phone.shown) == len(feed.shown) == 1
+    assert len(phone.shown) == len(feed.shown) == 1
 
 
 def test_a_locked_kind_never_touches_the_routing_file(tmp_path, monkeypatch):
@@ -209,14 +207,14 @@ def test_a_locked_kind_never_touches_the_routing_file(tmp_path, monkeypatch):
 
 
 def test_a_routing_callable_that_raises_skips_nothing():
-    mac, phone = Recorder(), Recorder()
+    phone = Recorder()
 
     def broken(_kind):
         raise RecursionError("deep")
-    alerter = Alerter(CONFIG, "Tickr", Channels(((MACOS, mac), (IMESSAGE, phone))),
+    alerter = Alerter(CONFIG, "Tickr", Channels(((TELEGRAM, phone),)),
                       lambda: T0, routing=broken)
     assert alerter.alert(AlertKind.DISK_LOW, "x").delivery is Delivery.SHOWN
-    assert len(mac.shown) == len(phone.shown) == 1
+    assert len(phone.shown) == 1
 
 
 def test_telegram_is_a_routable_channel_and_locked_kinds_always_reach_it():

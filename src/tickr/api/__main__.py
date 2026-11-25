@@ -17,16 +17,14 @@ build fails it answers 503 with the cause.
 At its start `serve` checks which credential variables it holds (names only): any beyond what its
 launchd job is meant to give it (`runtime.launchd.api_credential_variables`: none with the chart
 off, the active environment's app key and secret with it on) raise the
-`api-credentials-unexpected` alert (Mac notification) and a line in api.log naming them; the API
+`api-credentials-unexpected` alert (the alerts feed file) and a line in api.log naming them; the API
 still serves. Its plist is then stale or edited: render and reinstall it (docs/operations.md).
 """
 
 from __future__ import annotations
 
 import argparse
-import functools
 import os
-import subprocess
 import sys
 import threading
 from collections.abc import Callable, Mapping
@@ -46,14 +44,12 @@ from tickr.broker.base import BrokerError
 from tickr.data.base import MarketData
 from tickr.runtime.alerts import (
     FEED,
-    MACOS,
     Alerter,
     AlertKind,
     Channels,
     FeedNotifier,
     Notifier,
     feed_path,
-    mac_notifier,
 )
 from tickr.runtime.launchd import api_credential_variables
 
@@ -130,15 +126,9 @@ def unexpected_credentials(cfg: config_module.Config,
 
 
 def _api_notifier(cfg: config_module.Config) -> Notifier | None:
-    """The Mac notification (run without any credential variable) and the alerts feed file; no
-    iMessage (the API has no recipient variable); None off macOS."""
-    if sys.platform != "darwin":
-        return None
-    run = functools.partial(subprocess.run,
-                            env=config_module.environ_without(
-                                config_module.credential_variables(cfg)))
-    feed = FeedNotifier(feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
-    return Channels((), ((MACOS, mac_notifier(cfg.alerts, run)), (FEED, feed)))
+    """The alerts feed file only: the API runs without any credential variable, so it has no
+    Telegram token or chat id (the alert is also a line in api.log and on stderr)."""
+    return Channels((), ((FEED, FeedNotifier(feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))),))
 
 
 def check_credentials(cfg: config_module.Config, environ: Mapping[str, str] = os.environ,

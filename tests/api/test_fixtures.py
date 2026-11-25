@@ -431,22 +431,14 @@ def documents() -> dict[str, object]:
                                   None, "the bot has not written a status file"),
             None, "no preflight recorded yet", None, "no training job is reporting",
             None, "no machine services on this host ([api] system_services = none)"),
-        # The notification settings: disk-low kept off iMessage; push not built yet.
+        # The notification settings: disk-low kept off Telegram; push not built yet.
         "alerts-v1": contract.AlertsV1((
-            contract.AlertChannelV1(contract.AlertChannel.MAC, True, None),
-            contract.AlertChannelV1(contract.AlertChannel.IMESSAGE, False,
-                                    contract.AlertChannelCause.CHECK_FAILED),
-            contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
-                                    contract.AlertChannelCause.NOT_CONFIGURED),
+            contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, True, None),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
                                     contract.AlertChannelCause.NOT_BUILT)),
             alerts_api._kinds(Routing(frozenset({(AlertKind.DISK_LOW,
-                                                  contract.AlertChannel.IMESSAGE)}))), None),
+                                                  contract.AlertChannel.TELEGRAM)}))), None),
         "alerts-v1.unreadable": contract.AlertsV1((
-            contract.AlertChannelV1(contract.AlertChannel.MAC, False,
-                                    contract.AlertChannelCause.NO_PREFLIGHT),
-            contract.AlertChannelV1(contract.AlertChannel.IMESSAGE, False,
-                                    contract.AlertChannelCause.NO_PREFLIGHT),
             contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
                                     contract.AlertChannelCause.NO_PREFLIGHT),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,

@@ -1,9 +1,8 @@
 """GET /alerts and PUT /alerts/routing: the notification settings (backlog T14).
 
 Where each alert kind goes is the owner's routing file (`runtime/alert_routing.py`); whether a
-channel works on this machine comes from the latest preflight's checks (`alert-channel` for
-the Mac notification, that and `alert-recipient` for iMessage, `alert-telegram` for Telegram).
-Names only: the iMessage address and the Telegram token and chat id are never read here.
+channel works on this machine comes from the latest preflight's checks (`alert-telegram` for
+Telegram). Names only: the Telegram token and chat id are never read here.
 """
 
 from __future__ import annotations
@@ -27,8 +26,6 @@ from tickr.runtime.preflight import CheckName, record_path
 
 # The preflight checks each channel needs to pass; push has no delivery in the bot yet.
 NEEDS: dict[RouteChannel, tuple[str, ...]] = {
-    RouteChannel.MAC: (CheckName.ALERT_CHANNEL.value,),
-    RouteChannel.IMESSAGE: (CheckName.ALERT_CHANNEL.value, CheckName.ALERT_RECIPIENT.value),
     RouteChannel.TELEGRAM: (CheckName.ALERT_TELEGRAM.value,),
 }
 
@@ -68,8 +65,6 @@ def _channels(record: Path) -> tuple[api.AlertChannelV1, ...]:
 def _kinds(routing: Routing) -> tuple[api.AlertKindV1, ...]:
     return tuple(
         api.AlertKindV1(kind.value, group(kind), kind in LOCKED, api.AlertRoutesV1(
-            mac=routing.is_on(kind, RouteChannel.MAC),
-            imessage=routing.is_on(kind, RouteChannel.IMESSAGE),
             telegram=routing.is_on(kind, RouteChannel.TELEGRAM),
             push=routing.is_on(kind, RouteChannel.PUSH)))
         for kind in AlertKind)
