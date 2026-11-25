@@ -379,9 +379,9 @@ def test_old_config_key_name_is_reported_in_the_journal(config_path):
 
 def test_telegram_check_exists_only_once_set_up_and_checks_presence_only(config_path):
     cfg = config_module.load(config_path).alerts
-    names = {c.name.value for c in _run(config_path, _ready(config_path)).checks}
-    assert "alert-telegram" not in names  # off: neither variable set
     environ = _ready(config_path)
+    names = {c.name.value for c in _run(config_path, environ).checks}
+    assert "alert-telegram" not in names  # off: neither variable set
     environ[cfg.bot_token_variable] = CANARY
     refused = _run(config_path, environ)
     assert refused.cause is PreflightCause.ALERT_TELEGRAM_MISSING

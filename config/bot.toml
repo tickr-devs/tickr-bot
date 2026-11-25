@@ -966,6 +966,7 @@ routing_file = "alert-routing.json"
 # file, never here. Neither variable set = the Telegram channel is off; one without the other fails preflight
 # (alert-telegram-missing); read by runtime.alerts and preflight.
 bot_token_variable = "TICKR_TELEGRAM_BOT_TOKEN"
+# NAME of the environment variable holding the owner's Telegram chat id (see bot_token_variable); read by runtime.alerts and preflight.
 chat_id_variable = "TICKR_TELEGRAM_CHAT_ID"
 # Host of the Telegram Bot API, reached over HTTPS only; read by runtime.alerts.
 telegram_host = "api.telegram.org"
