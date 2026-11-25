@@ -221,6 +221,8 @@ NETWORK_IMPORTERS = {
     "broker/webull.py": "the Webull adapter: every host comes from the allowlist (rule 9)",
     "advisor/client.py": "the owner's offline advisor tool calls Anthropic; never imported "
                          "by the bot (checked below)",
+    "model/massive.py": "the model's market data (Massive REST, flat files, stream): every host "
+                        "comes from [massive] in config, credentials by variable name only",
     "demo/record.py": "`tickr demo --record`: reads the demo's own API on the loopback port it "
                       "opened itself (127.0.0.1, port 0), never another host",
 }

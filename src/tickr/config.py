@@ -377,6 +377,28 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class MassiveConfig:
+    api_host: str
+    stream_host: str
+    stream_path: str
+    files_host: str
+    files_bucket: str
+    files_region: str
+    minute_aggs_prefix: str
+    api_key_variable: str
+    files_key_id_variable: str
+    files_secret_variable: str
+    history_dir: str
+    stock_types: tuple[str, ...]
+    http_timeout_seconds: int
+    page_limit: int
+    max_pages: int
+    stream_max_message_bytes: int
+    stream_reconnect_seconds: Decimal
+    calendar_lookback_days: int
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     min_free_disk_mb: int
     disk_clear_free_mb: int
@@ -472,6 +494,7 @@ class Config:
     observers: ObserversConfig
     advisor: AdvisorConfig
     model: ModelConfig
+    massive: MassiveConfig
     environments: dict[str, EnvironmentConfig]
     root: Path
     digest: str
@@ -502,6 +525,7 @@ _SECTIONS: dict[str, type] = {
     "observers": ObserversConfig,
     "advisor": AdvisorConfig,
     "model": ModelConfig,
+    "massive": MassiveConfig,
 }
 
 
@@ -695,6 +719,13 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[model] enabled must stay false: the trained model is not wired into "
                           "the trading loop yet (the bundle loader and the shared feature code "
                           "are; the live data feed and the decision path follow)")
+    massive: MassiveConfig = built["massive"]
+    if (massive.http_timeout_seconds < 1 or massive.page_limit < 1 or massive.max_pages < 1
+            or massive.stream_max_message_bytes < 1 or massive.stream_reconnect_seconds <= 0
+            or massive.calendar_lookback_days < 1
+            or not massive.stock_types):
+        raise ConfigError("[massive] timeouts, page sizes and the message limit must be at least "
+                          "1, stream_reconnect_seconds above 0, stock_types not empty")
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "
@@ -941,7 +972,9 @@ def _authorization_valid(config: Config, env: EnvironmentConfig) -> GateResult:
 def credential_variables(config: Config) -> frozenset[str]:
     """The NAMES of every environment variable the configuration says holds a credential or a
     private detail (rule 4): processes that need none of them are started without them."""
-    names = {config.advisor.api_key_variable, config.alerts.imessage_recipient_variable}
+    names = {config.advisor.api_key_variable, config.alerts.imessage_recipient_variable,
+             config.massive.api_key_variable, config.massive.files_key_id_variable,
+             config.massive.files_secret_variable}
     for env in config.environments.values():
         names |= {env.app_key_variable, env.app_secret_variable, env.account_variable}
     return frozenset(names)

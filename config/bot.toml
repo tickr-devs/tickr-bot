@@ -769,6 +769,59 @@ bundles_dir = "models"
 # tickr.model.bundle.
 bundle = ""
 
+[massive]
+# Market data vendor of the model's inputs (owner 2026-11-20: the model's features come live from Massive, the same
+# source as its training; Webull stays for orders, positions and the bot's lists). Read by tickr.model.massive only.
+# REST host of Massive's reference data (splits, ticker types); read by tickr.model.massive.
+api_host = "api.massive.com"
+# WebSocket host of the real-time stocks stream (full-market minute aggregates, channel AM.*); read by
+# tickr.model.massive.
+stream_host = "socket.massive.com"
+# Path of the stocks channel set on stream_host; read by tickr.model.massive.
+stream_path = "/stocks"
+# S3-compatible host of Massive's flat files, the same day files of minute bars the training
+# reads; read by tickr.model.massive.
+files_host = "files.massive.com"
+# Bucket of the flat files on files_host; read by tickr.model.massive.
+files_bucket = "flatfiles"
+# Region named in the flat-files request signature (AWS Signature Version 4); read by tickr.model.massive.
+files_region = "us-east-1"
+# Key prefix of the minute aggregates day files in the bucket (<prefix>/YYYY/MM/YYYY-MM-DD.csv.gz); read by
+# tickr.model.massive.
+minute_aggs_prefix = "us_stocks_sip/minute_aggs_v1"
+# NAMES of the environment variables holding the Massive API key and the flat-files key pair (in ~/.config/tickr/env);
+# presence is checked, values are sent only in request headers and never printed, logged or stored; read by
+# tickr.model.massive.
+api_key_variable = "MASSIVE_API_KEY"
+# NAME of the variable holding the flat-files access key id (same rules); read by tickr.model.massive.
+files_key_id_variable = "MASSIVE_FILES_KEY_ID"
+# NAME of the variable holding the flat-files secret key (same rules); read by tickr.model.massive.
+files_secret_variable = "MASSIVE_FILES_SECRET"
+# Folder, relative to [run] data_dir, of the minute-bar day files the model's 20-day history is built from; only the
+# current window is kept, an older day is deleted (owner 2026-11-22: the full history lives in S3); read by
+# tickr.model.massive.
+history_dir = "massive/minute_aggs"
+# Massive ticker types whose bars reach the feature code, as in the training's types file (common stocks and ADRs,
+# types-5y.csv); read by tickr.model.massive.
+stock_types = ["CS", "ADRC"]
+# Seconds one REST or flat-file request may take before it fails; read by tickr.model.massive.
+http_timeout_seconds = 120
+# Rows asked per REST page (Massive's largest page for reference lists); read by tickr.model.massive.
+page_limit = 1000
+# Most REST pages one reference listing may take; more refuses the listing as incomplete; read by tickr.model.massive.
+max_pages = 100
+# Largest stream message accepted, bytes. Not measured yet (the first live day records the sizes): the websocket
+# library's default of 1 MiB would cut a whole-market minute sent as one batch, so 16 MiB until measured; read by
+# tickr.model.massive.
+stream_max_message_bytes = 16777216
+# Seconds before the stream connects again after it dropped (the day is marked gapped either way), also the longest
+# wait of one read before the stop flag is checked again; a convenience pause, not a measured value, no decision
+# depends on it; read by tickr.model.massive.
+stream_reconnect_seconds = 5
+# Calendar days searched back from today for the history sessions (20 sessions span about 28 calendar days with weekends
+# and holidays; a search that finds fewer refuses); read by tickr.model.massive.
+calendar_lookback_days = 60
+
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new
 # entry (fence disk-low); keep it well above zero, since the bot needs room to write its status, journal and database
