@@ -115,10 +115,6 @@ def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,
         replay_settings, clock_for = replay_inputs(settings.paths)
     except NoInputs as exc:
         return failed(str(exc), name, version)
-    if replay_settings.history_sessions != settings.history_sessions:
-        return failed(f"replay settings history_sessions {replay_settings.history_sessions} "
-                      f"differ from [market_data] history_sessions {settings.history_sessions}: "
-                      "the version would not see the history the bot cached", name, version)
     today_bars = tuple(b for b in today_bars if ny_date_of(b.start) == day)
     if not today_bars:
         return failed(f"no captured bars for {symbol} on {day.isoformat()}", name, version)

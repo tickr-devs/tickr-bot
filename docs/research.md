@@ -12,6 +12,7 @@ format (`records.py`), through the observers (`docs/observers.md`).
 | `observers` | How did the live observer versions do against the active one today? | `simulated` |
 | `latency` | How late do captured quotes arrive, by symbol and hour? What do stream notices say? | (measured) |
 | `refusals` | Per day and setup: which check refused first, which platform causes, how many entries? | (counts) |
+| `calibration` | Does a model answer of 0.7 come true 70% of the time? | `measured` |
 | `slippage` | How far below the planned stop did stops fill? Planned against realized loss per day? | `measured` |
 
 Live observers see only the symbols discovery kept, and discovery applies the active strategy's
@@ -225,11 +226,33 @@ value, or fewer than `measured_slippage_min_trades` measured trades is refused, 
 by the fixed value. Not measured yet: how far the price traded through the stop (trade prints,
 `ticks/list`), and entry slippage.
 
+## calibration: "70 means 70" (R29)
+
+```
+python -m tickr.research calibration --answers answers.csv --settings config/research.toml \
+  --out out/calibration
+```
+
+Input: one CSV of stored model answers on months the model never saw (the caller picks the
+months; the tool cannot tell). Header row; `outcome` = 1 if the event the probabilities predict
+happened, else 0; every column named `p_<name>` is a probability in 0..1 (for example `p_layer1`,
+`p_layer2`); other columns are ignored. A blank probability cell means that layer gave no
+answer for the row and is skipped (counted). Nothing writes this file yet: the training job or
+the bot must export it. A bad value is refused with file and line, never clipped.
+
+Per probability column, a table of `calibration_buckets` equal buckets (10 = tenths; p = 1 goes
+in the last): count, mean predicted, observed rate and gap (observed - predicted). Outputs:
+`calibration.csv` and `calibration_summary.json` (per column: answers, skipped, base rate,
+Brier score, expected calibration error = count-weighted mean absolute gap). Report only: no
+pass/fail threshold exists until the owner chooses one.
+
 ## Settings
 
 `config/research.toml` `[research]` (one comment per key, tested; missing or unknown keys are
-refused): `horizons_minutes`, `atr_period`, `session_timezone`, `output_decimal_places`
-(`latency` reads only the last two).
-What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay.
+refused): `horizons_minutes`, `atr_period`, `session_timezone`
+(`latency` reads only the last), `calibration_buckets` (`calibration` reads it).
+What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay. Every
+report also rounds to its `output_decimal_places` (`--replay-settings` with `--config`, default
+`config/replay.toml`): that number has one home.
 
 Exit code 2 and `research refused: <cause>` on any bad input; nothing is guessed.

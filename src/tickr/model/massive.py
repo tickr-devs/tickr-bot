@@ -44,7 +44,7 @@ import zoneinfo
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import Config, MassiveConfig
@@ -104,18 +104,33 @@ def _get(opener: Opener, url: str, headers: Mapping[str, str], timeout: int) -> 
         raise ModelRefused("http_failed", type(exc).__name__) from exc
 
 
+def head(opener: Opener, url: str, headers: Mapping[str, str],
+         timeout: int) -> tuple[int, Mapping[str, str]]:
+    """(status, response headers) of a HEAD of `url` (the prev-day probe); an HTTP error
+    status is returned as the answer, a failed request refuses (`http_failed`)."""
+    request = urllib.request.Request(url, headers=dict(headers), method="HEAD")
+    try:
+        with opener(request, timeout) as response:
+            return response.status, response.headers
+    except urllib.error.HTTPError as exc:
+        return exc.code, {}
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ModelRefused("http_failed", type(exc).__name__) from exc
+
+
 def sigv4_headers(*, host: str, path: str, region: str, key_id: str, secret: str,
                   moment: datetime.datetime, extra: Mapping[str, str] | None = None,
-                  payload_sha256: str = EMPTY_SHA256) -> dict[str, str]:
-    """AWS Signature Version 4 headers of a GET of `path` (already URI-encoded) on an
-    S3-compatible `host` without a query. Massive's flat files are served this way."""
+                  payload_sha256: str = EMPTY_SHA256, method: str = "GET") -> dict[str, str]:
+    """AWS Signature Version 4 headers of a `method` (GET, or HEAD for the prev-day probe) of
+    `path` (already URI-encoded) on an S3-compatible `host` without a query. Massive's flat
+    files are served this way."""
     amz_date = moment.astimezone(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     scope_day = amz_date[:8]
     headers = {"host": host, "x-amz-content-sha256": payload_sha256, "x-amz-date": amz_date}
     headers.update({k.lower(): v for k, v in (extra or {}).items()})
     names = sorted(headers)
     canonical = "\n".join([
-        "GET", path, "",
+        method, path, "",
         "".join(f"{n}:{headers[n].strip()}\n" for n in names),
         ";".join(names), payload_sha256])
     scope = f"{scope_day}/{region}/s3/aws4_request"
@@ -255,6 +270,10 @@ class Reference:
             url = nxt
         raise ModelRefused("reference_incomplete", f"{path}: more than {self.m.max_pages} pages")
 
+    def listing(self, path: str, query: Mapping[str, str]) -> list[dict[str, Any]]:
+        """Every row of one REST listing on the API host, paged to the end, or a refusal."""
+        return self._pages(path, query)
+
     def splits(self, first: str, last: str) -> dict[str, list[tuple[str, float]]]:
         """Execution date -> [(ticker, split_from / split_to)] for first..last (the training's
         factor, l1labels.splits_parse)."""
@@ -331,12 +350,22 @@ class DayBars:
         return pd.DataFrame(rows, columns=list(FILE_COLUMNS))
 
 
-class MinuteStream:
-    """The real-time stream of full-market minute aggregates into a DayBars. `connect` is
-    `websockets.sync.client.connect` (a stand-in in the tests)."""
+class BarSink(Protocol):
+    """Where the stream hands its bars and gaps: `DayBars` for the model, the feed-arrival
+    recorder (`tickr.model.arrival`) for the measurement."""
 
-    def __init__(self, cfg: Config, bars: DayBars, connect: Callable[..., Any] | None = None,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+    def add(self, message: Mapping[str, Any], arrived: Any) -> None: ...
+
+    def gap(self, down: Any, up: Any, cause: str) -> None: ...
+
+
+class MinuteStream:
+    """The real-time stream of full-market minute aggregates into a DayBars (or another
+    `BarSink`). `connect` is `websockets.sync.client.connect` (a stand-in in the tests);
+    `clock` stamps each received batch and both ends of a gap."""
+
+    def __init__(self, cfg: Config, bars: BarSink, connect: Callable[..., Any] | None = None,
+                 clock: Callable[[], Any] = time.monotonic) -> None:
         self.m = cfg.massive
         self.bars = bars
         self.clock = clock

@@ -210,6 +210,10 @@ class ProbeConfig:
     paging_send_interval_seconds: int
     open_orders_paging_orders: int
     open_orders_end_margin_minutes: int
+    prev_day_window_start: str
+    prev_day_window_end: str
+    prev_day_poll_seconds: int
+    prev_day_tick_prefixes: tuple[str, ...]
 
 
 # [api] system_services values: the machine services GET /system can report (docs/api.md).
@@ -398,6 +402,19 @@ class MassiveConfig:
     stream_reconnect_seconds: Decimal
     calendar_lookback_days: int
     revision_report_quantiles: tuple[Decimal, ...]
+    massive_news_path: str
+    benzinga_news_path: str
+    benzinga_earnings_path: str
+    news_probe_poll_seconds: int
+    news_probe_news_lookback_seconds: int
+    news_probe_earnings_lookback_days: int
+    news_probe_dir: str
+    arrival_dir: str
+    arrival_flush_seconds: Decimal
+    arrival_loop_seconds: Decimal
+    arrival_tail_seconds: int
+    arrival_report_points_seconds: tuple[Decimal, ...]
+    stream_day_dir: str
 
 
 @dataclass(frozen=True)
@@ -730,6 +747,13 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[massive] timeouts, page sizes and the message limit must be at least "
                           "1, stream_reconnect_seconds above 0, stock_types not empty, "
                           "revision_report_quantiles each above 0 and below 1")
+    points = massive.arrival_report_points_seconds
+    if (massive.arrival_flush_seconds <= 0 or massive.arrival_loop_seconds <= 0
+            or massive.arrival_tail_seconds < 0 or points[0] < 0
+            or list(points) != sorted(set(points))):
+        raise ConfigError("[massive] arrival_flush_seconds and arrival_loop_seconds must be above "
+                          "0, arrival_tail_seconds at least 0, arrival_report_points_seconds "
+                          "rising and not below 0")
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "
@@ -766,6 +790,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                          ("tick_cap_steps", probe.tick_cap_steps)):
         if list(values) != sorted(set(values)):
             raise ConfigError(f"[probe] {name} must be ascending, without repeats")
+    if (probe.prev_day_poll_seconds < 1 or not probe.prev_day_tick_prefixes
+            or not all(re.fullmatch(r"\d{2}:\d{2}", w) for w in (
+                probe.prev_day_window_start, probe.prev_day_window_end))):
+        raise ConfigError("[probe] prev_day_window_start/end must be HH:MM, "
+                          "prev_day_poll_seconds at least 1, prev_day_tick_prefixes not empty")
     if not 1 <= risk.max_open_positions <= md.stream_reserved_symbols:
         raise ConfigError("[risk] max_open_positions must be at least 1 and at most "
                           "[market_data] stream_reserved_symbols (a stream slot per position)")

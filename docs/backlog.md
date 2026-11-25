@@ -37,8 +37,8 @@ decisions until recorded in `docs/decisions.md`. The full original product spec 
 | Version | Goal | Done when (built, not waited for) | Keeps running to collect |
 |---|---|---|---|
 | **v1** (current) | The bot trades safely in the Sandbox and records everything | the Monday probes are answered and v1 is released | Sandbox days, broker vs our records |
-| **v1.1** | Tools to find an edge, and the model path | R1, R5, R15, R16, R35 and T12 merged | replay and model results |
-| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T3, T6-T11, T13-T19, X3, X4 merged and released | unattended Sandbox days |
+| **v1.1** | Tools to find an edge, and the model path | R1, R5, R15, R16, R35 and T12 merged (R5, R35, T12 core done) | replay and model results |
+| **v2** | Unattended Sandbox: the bot can run a day alone, also outside the regular session | T1-T3, T6-T11, T13-T19, X3, X4 merged and released (T2, T3, T9, T16-T19 done) | unattended Sandbox days |
 | **v3** | The owner sets up and runs the bot from the apps; several positions | S1-S6, X1, X2 merged in both apps (X5 only if its condition holds) | |
 | **v4** | Real money at small size | M1-M5 merged; enabling Production stays an owner decision | Production days, real fills |
 | **v5** | The product: ticker.bot (site, accounts, one cloud bot per user) and the apps signed in to it; standalone Mac scope settled in W1 | W1 spec agreed with the owner, W2-W8 and W15-W17 built | |
@@ -102,17 +102,14 @@ research runs never gate a merge.
 
 - **R1** Promotion ladder of MODEL versions with written criteria: exam on sealed data (R20), then the
   Sandbox, then the real account at small size, then full size. Answers Q3 ("what counts as Sandbox
-  proved the model version"). Status: decided, criteria to be written.
+  proved the model version"). Written in `docs/promotion.md` (rungs, evidence, who decides, report
+  format); numbers the owner has not set are listed there. Status: criteria written.
 - **R2** Walk-forward run as the standard evaluation, with a counter of how often each data set and
   hold-out was used. Status: merged into R15 and R16 (2026-11-19).
 - **R3** Parameter sweep and sensitivity report: result against each parameter moved by one step; a
   strategy must sit on a plateau, not a peak. Status: merged into R15 and R16 (2026-11-19).
 - **R4** Fewer parameters for new strategies. Status: dropped (2026-11-25, model re-scope); hand-written
   strategies are not extended.
-- **R5** Slippage measurement: planned loss against the realized loss of every stopped trade, per
-  day; replay and backtests use the measured value instead of the fixed 0.05%. Stop overshoot: read
-  trade prints (`ticks/list`) after the session for symbols with own fills, since Webull triggers
-  stops on the last trade (old #087). Status: in review, #762.
 - **R6** Pre-registered R21 test (screener rank 21 and lower, `tickr/b4b5/preregistered.txt` in
   project files) on the May-Aug data. Status: dropped (2026-11-25, model re-scope); it was frozen (2026-11-19).
 - **R7** Recheck on recorded live days: screener rank and source vs outcome (old Q46), acceleration check
@@ -210,19 +207,9 @@ project files):
   (2026-11-17) did better sized by filter rank than flat in all three periods; liquidity of larger
   bets in thin stocks was not checked. A config setting now, in the settings schema (S1) later.
   Status: decided, after R29.
-- **T12** (moved from v2, 2026-11-19) Shared admission rules (position limit, pause after a loss, daily
-  ceiling) from one code path, kept for the model's dollar exam (R20) and for R30's backtest on stored
-  model answers; the apps label each result with the rules it was computed under. Observer and
-  strategy-replay wiring is dropped (2026-11-25). Status: in progress; PR #767 is being reworked, #775
-  is closed.
 
-- **R36** Training stack safety on AWS (review 2026-11-24 section 8, P2): releasing an S3 job lock
-  deletes only the version it holds (conditional delete), and a mismatch is a refusal; a failed
-  download of the job script counts toward the restart limit, so a permanent error cannot keep the
-  Auto Scaling group relaunching machines; the AWS CLI and uv installers are pinned and checked by
-  checksum or signature before they run as root. Status: in review, #760.
-
-Exit: R1, R5, R15, R16, R35 and T12 merged. A model version climbs R1's ladder as its exam and Sandbox
+Exit: R1, R5, R15, R16, R35 and T12 merged (R5 #762, R35 #761 and T12's shared admission core #767
+are merged; R1, R15 and R16 are open). A model version climbs R1's ladder as its exam and Sandbox
 days come in, while later versions are built.
 
 ## Design rules for ticker.bot (owner-approved 2026-11-19, apply from now on)
@@ -302,33 +289,6 @@ https://claude.ai/artifact/QhzoePqMNyeqFeYwUga59C):
   Trading-critical and auth parts: Fable review. Status: decided (order, Telegram alerts); domain and AWS
   account wait for the owner.
 
-Long unattended runs (review 2026-11-24, P2):
-- **T16** Discovery stamps candle completeness per request (review section 6): a bar counts as
-  closed relative to the time its own sub-request was sent, and the same stamp goes to selection,
-  archive and cache; a test puts a fast and a delayed sub-request on both sides of one minute
-  boundary. Today a two-second late answer turns a partial candle into a closed one and admits a
-  symbol below the turnover threshold. Also: under a lasting request-budget deficit, discovery
-  continues from the symbol it skipped (by priority) and shows the age of each symbol's last check,
-  so the tail of the list is not starved. Status: decided; review when the model's bars come from the
-  Massive stream (Webull discovery may keep only the lists).
-- **T17** Reads scale with today's work, not with history (review section 7): `Engine.step()` reads
-  the whole `orders` table three times per step (756 ms at 30,000 closed orders, on top of the 3 s
-  loop); the one-day history query reads orders for every old trade; the clean-days list decodes the
-  whole reconciliation log. Acceptance: grow closed history with fixed active orders and today's
-  trades, and measure rows read, SQL queries and step latency; late-fill reconciliation still
-  reaches the historical orders it needs. Trading-critical: independent review. Status: decided.
-- **T18** Daily backup retries after a failure (review section 8): the success date is written only
-  after the copy is published and checked, and a failed attempt is retried with a delay the same day
-  instead of the next. Status: decided.
-
-- **T19** A way out of a hard `order-conflict` (Fable review of #742, 2026-11-25): when a broker row
-  contradicts the order as sent forever (for example "filled 20 of 2"), the bot records nothing
-  from it and entries stay blocked across restarts, and the clean-day check counts an unknown
-  outcome every day; nothing in the bot ends that today. Add a documented recovery or an operator
-  path to clear it once the operator has checked the Webull app, keeping "refuse, never guess" for
-  recording. Must land before `max_open_positions` is raised above 6. Trading-critical: Fable review.
-  Status: in review (`tickr resolve-order`, docs/operations.md).
-
 Trading outside the regular session (owner 2026-11-16, ids kept):
 - **X3** Limit-exit chase before a market exit. Old-tracker answer, reconfirm when it starts: SELL
   LIMIT one tick through the bid, re-price every 10 s at most 6 times, never worse than 0.5 ATR from
@@ -340,7 +300,7 @@ Trading outside the regular session (owner 2026-11-16, ids kept):
   outside the regular session. Old-tracker answer, reconfirm: limit orders only in PRE/POST, smaller
   size, no entries on stream or broker loss (old Q118, #020-12).
 
-Exit: T1-T3, T6-T11, T13-T19, X3 and X4 merged with their probes answered (V1 for T1, the halt probe for T8, the
+Exit: T1-T3, T6-T11, T13-T19, X3 and X4 merged (T2, T3, T9, T16-T19 are merged) with their probes answered (V1 for T1, the halt probe for T8, the
 PRE/POST stop probe for X4), the
 duplicate-key test green, v2 released and running unattended in the Sandbox.
 
@@ -356,7 +316,8 @@ setting needs a config file. Order: design first, then macOS, then iOS.
   bundle manifest hash), computed by the bot; the owner only names it. Every decision and trade
   references the settings version. Status: PR #769 is being reworked.
 - **S4** (W9, W10) Settings API: schema, current values, validate a draft, apply, history, rollback; every
-  change journaled with time and device. Status: in review, #773.
+  change journaled with time and device. Status: read and validate done in #773; apply, history and
+  rollback left.
 - **S5** Apply rules: tightening protection applies at once; model settings (threshold, size, sessions) and
   the active model version apply when flat, by a safe restart through normal startup and reconciliation;
   loosening protection applies from the next session and only after Face ID (owner 2026-11-15, 2026-11-19);
@@ -490,7 +451,8 @@ Answered (recorded in `docs/decisions.md`):
 - **Q2** A halt, or a position that cannot close: keep the resting stop, alert, send no order into the
   halted book, close at the first chance once trading resumes, the next morning if forced
   (2026-11-16).
-- **Q3** What counts as "Sandbox proved the strategy": R1's promotion ladder.
+- **Q3** What counts as "Sandbox proved the strategy": R1's promotion ladder, written in
+  `docs/promotion.md`.
 - **Q4** Captured quotes, bars and decisions are kept forever (archived as gzip, never deleted);
   low disk is caught by preflight's `[runtime] min_free_disk_mb` check (2026-11-16).
 - **Q5** A new listing without relative-volume history is refused with a typed cause (2026-11-16).
@@ -511,6 +473,16 @@ Answered (recorded in `docs/decisions.md`):
   server are dropped (#748).
 - **A5** Phone pairing stores its token with one confirmed Keychain update (#744); a refused write
   keeps the earlier pairing (#756).
+- **R5** Slippage measured from the bot's own records; replay uses the measured value (#762).
+- **R36** Training stack safety on AWS: conditional lock delete, fetch failures count toward the restart
+  limit, pinned installers (#760).
+- **T12** Shared admission rules from one code path (shared admission core only; the model exam calls
+  it later) (#767).
+- **T16** Discovery stamps candle completeness per request; no symbol starved (#750).
+- **T17** Reads scale with today's work, not with history (#749).
+- **T18** Daily backup retried the same day after a failure (#745).
+  Retries every `[run] backup_retry_seconds` with no cap per day; the cap is an owner number.
+- **T19** Operator path for a hard `order-conflict`, `tickr resolve-order` (#751).
 - **A6** VoiceOver "no data" before statistics arrive; unknown stop codes in local language (#746).
 
 Items from earlier versions of this file that are built:

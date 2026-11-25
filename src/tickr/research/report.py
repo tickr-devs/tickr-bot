@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from tickr.replay.measured import FORMAT as MEASURED_FORMAT
+from tickr.research import calibration as cal
 from tickr.research import latency as lat
 from tickr.research import observer_report as orep
 from tickr.research import outcomes as oc
@@ -252,3 +253,19 @@ def write_slippage(trades: Sequence[sl.StoppedTrade], environment: str | None, o
             "stop_slippage_usd": total.stop_slippage_usd,
             "stop_slippage_percent": total.stop_slippage_percent}
     return _json(out_dir / "slippage_summary.json", body, places)
+
+
+CALIBRATION_COLUMNS = ("column", "bucket", "low", "high", "count", "mean_predicted",
+                       "observed_rate", "gap")
+
+
+def write_calibration(reports: Sequence[cal.ColumnReport], out_dir: Path,
+                      places: int) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(out_dir / "calibration.csv", CALIBRATION_COLUMNS,
+               ([r.column, b.index, b.low, b.high, b.count, b.mean_predicted, b.observed_rate,
+                 b.gap] for r in reports for b in r.buckets), places)
+    body = {"columns": {r.column: {"answers": r.answers, "skipped_blank": r.skipped_blank,
+                                   "base_rate": r.base_rate, "brier": r.brier, "ece": r.ece}
+                        for r in reports}}
+    return _json(out_dir / "calibration_summary.json", body, places)

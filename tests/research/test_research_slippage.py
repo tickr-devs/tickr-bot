@@ -106,11 +106,11 @@ def _replay(tmp_path, file: str, minimum: int):
                                    f'measured_slippage_file = "{file}"')
                     .replace("measured_slippage_min_trades = 20",
                              f"measured_slippage_min_trades = {minimum}"))
-    return load_settings(path)
+    return load_settings(path, 2)
 
 
 def test_fixed_slippage_is_the_default():
-    settings = load_settings(HERE / "replay_settings.toml")
+    settings = load_settings(HERE / "replay_settings.toml", 2)
     assert settings.slippage_percent == Decimal("0.1")
     assert settings.measured_slippage_file is None
 

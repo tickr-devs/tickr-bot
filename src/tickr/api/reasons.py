@@ -431,9 +431,6 @@ _PROSE = _shapes(
     ("cached_history_refused", r"cached prior sessions refused: (?P<detail>.+)"),
     ("cached_history_empty", r"cached prior sessions hold no bar of (?P<symbol>\S+)"),
     ("cached_history_overlaps", r"cached prior sessions overlap the day's bars"),
-    ("history_sessions_differ",
-     r"replay settings history_sessions (?P<replay>[0-9]+) differ from \[market_data\] "
-     r"history_sessions (?P<bot>[0-9]+): the version would not see the history the bot cached"),
     ("simulation_failed", r"simulation failed: (?P<error>\w+): (?P<detail>.*)"),
     ("strategy_without_module",
      r"(?P<folder>\S+): no module for strategy '(?P<strategy>[^']*)' in strategy_modules"),

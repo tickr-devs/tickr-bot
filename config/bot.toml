@@ -398,6 +398,19 @@ open_orders_paging_orders = 90
 # Probe H2d: least minutes left in the extended session when the probe starts (placing, reading and cancelling 90 orders
 # takes about 20 min); read by tickr.engine.paging_probe.
 open_orders_end_margin_minutes = 30
+# Probe prev-day (tickr probe-prev-day): start of the overnight window, New York time HH:MM, in which it records when the
+# previous session's Massive files and splits become available before the bot's 04:00 ET start; read by
+# tickr.model.prevday_probe.
+prev_day_window_start = "23:00"
+# Probe prev-day: end of that window, New York time HH:MM (an end at or before the start is on the next day); read by
+# tickr.model.prevday_probe.
+prev_day_window_end = "06:00"
+# Probe prev-day: seconds between two rounds of checks (one HEAD per day file, one splits listing); the measurement's
+# own pacing, not a guard: no decision of the bot depends on it; read by tickr.model.prevday_probe.
+prev_day_poll_seconds = 120
+# Probe prev-day: key prefixes of the trades and quotes day files in [massive] files_bucket (<prefix>/YYYY/MM/
+# YYYY-MM-DD.csv.gz, the training's tick sources), checked by HEAD only; read by tickr.model.prevday_probe.
+prev_day_tick_prefixes = ["us_stocks_sip/trades_v1", "us_stocks_sip/quotes_v1"]
 
 [api]
 # Local API bind address; loopback only; read by the api server.
@@ -830,6 +843,54 @@ calendar_lookback_days = 60
 # Benzinga delay (receipt - last_updated, receipt - report time, receipt - published); a description of the measured
 # distribution, never a guard (`--out` writes every value); read by tickr.model.revisions.
 revision_report_quantiles = [0.5, 0.9, 0.99]
+# Path of Massive's general news listing on api_host, the training's own fetch of the nw_* news (owner's fetch_ref2.py
+# and reftopup.py: GET /v2/reference/news); read by tickr.model.newsprobe.
+massive_news_path = "/v2/reference/news"
+# Path of Massive's Benzinga news listing on api_host, the training's own fetch (bzfetch.py: GET /benzinga/v2/news);
+# read by tickr.model.newsprobe (`tickr probe-news-delay`).
+benzinga_news_path = "/benzinga/v2/news"
+# Path of Massive's Benzinga earnings listing on api_host, the training's own fetch (bzfetch.py: GET
+# /benzinga/v1/earnings); read by tickr.model.newsprobe.
+benzinga_earnings_path = "/benzinga/v1/earnings"
+# Seconds between the starts of two polls of `tickr probe-news-delay`: the probe's own pacing, not a feature lag; an
+# arrival is timed between the previous poll and the receipt, so this bounds the precision; read by
+# tickr.model.newsprobe.
+news_probe_poll_seconds = 15
+# Seconds back from now of the published window each news poll (Benzinga and general news) lists: an article that
+# first appears more than this after its published time is never seen by the probe (one day: about 1,000 Benzinga
+# articles, one or two pages); read by tickr.model.newsprobe.
+news_probe_news_lookback_seconds = 86400
+# Calendar days back from today (New York) of the report dates each Benzinga earnings poll lists; a revision of an older
+# report is not seen; read by tickr.model.newsprobe.
+news_probe_earnings_lookback_days = 7
+# Folder, relative to [run] data_dir, of the probe's records (one JSON-lines file per New York day); read by
+# tickr.model.newsprobe.
+news_probe_dir = "massive/news-probe"
+# Folder, relative to [run] data_dir, of the feed-arrival captures of `tickr probe-feed-arrival` (one sub-folder per New
+# York date, one gzip JSONL file per run): every Massive minute bar and the Webull lists with their receipt times, for
+# measurement only; read by tickr.model.arrival.
+arrival_dir = "massive/arrival"
+# Seconds between two flushes of the open capture to disk (a crash loses at most this much); a convenience pace of the
+# recorder, no decision depends on it; read by tickr.model.arrival.
+arrival_flush_seconds = 5
+# Seconds of the recorder's main loop between two checks for a due Webull list round and for the end of the day; a
+# convenience pace, the rounds keep the bot's own cadence ([market_data] discovery_interval_seconds in the regular
+# session, screener_record_seconds outside it); read by tickr.model.arrival.
+arrival_loop_seconds = 1
+# Seconds the recorder keeps listening after the calendar's extended close, for the last minute's bars and their
+# corrections, before it ends by itself; a convenience span of the measurement, not a measured value; read by
+# tickr.model.arrival.
+arrival_tail_seconds = 300
+# Seconds after a minute's end at which `tickr report-feed-arrival` counts what had arrived (columns of the report:
+# 5 is the label's entry offset). REPORT ONLY: no guard, wait or freshness limit reads these; read by
+# tickr.model.arrival.
+arrival_report_points_seconds = [1, 2, 5, 10, 15, 30, 60]
+# Folder, relative to [run] data_dir, of the stream-built day files (`<date>.csv.gz` in the flat file's columns plus each
+# row's first and last receipt and correction count, `<date>.gaps.json` the day's connection gaps), written from the
+# day's feed-arrival captures when the recorder reaches the calendar's extended close, for `tickr compare-stream-day`
+# (can a stream-built previous session replace the published file at 04:00?); measurement only; read by
+# tickr.model.streamday.
+stream_day_dir = "massive/stream_days"
 
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new

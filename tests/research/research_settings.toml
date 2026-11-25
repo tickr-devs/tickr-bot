@@ -7,5 +7,5 @@ horizons_minutes = [1, 2, 5]
 atr_period = 2
 # Exchange time zone (IANA name); read by research/outcomes.py.
 session_timezone = "America/New_York"
-# Decimal places in outputs; read by research/report.py.
-output_decimal_places = 4
+# Probability buckets of the calibration table; read by research/calibration.py.
+calibration_buckets = 10
