@@ -124,10 +124,11 @@ def test_preflight_refuses_without_telegram_on_any_platform(config_path, monkeyp
     monkeypatch.setattr("sys.platform", platform)
     alerts = config_module.load(config_path).alerts
     environ = _ready(config_path)
+    ready = _run(config_path, environ)
     del environ[alerts.bot_token_variable], environ[alerts.chat_id_variable]
     result = _run(config_path, environ)
     assert result.cause is PreflightCause.ALERT_CHANNEL_MISSING and result.blocks_start
-    assert _run(config_path, _ready(config_path)).cause is None
+    assert ready.cause is None
 
 
 def test_missing_token_dir(config_path):
@@ -169,7 +170,7 @@ def test_missing_data_dir_is_first_cause_and_all_checks_reported(config_path):
     result = _run(config_path, {ENV_VARIABLE: SHA})
     assert result.cause is PreflightCause.DATA_DIR_MISSING
     failed = [c.name.value for c in result.checks if not c.passed]
-    assert failed == ["disk", "credentials", "alert-recipient", "token-dir"]
+    assert failed == ["disk", "credentials", "alert-channel", "token-dir"]
 
 
 def test_invalid_config(config_path):

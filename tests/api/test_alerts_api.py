@@ -26,7 +26,7 @@ def _record(settings, checks):  # noqa: F811 - the fixture is passed in
     path.write_text(json.dumps({
         "schema_version": 1, "job": "preflight", "started_at": "2026-11-16T08:30:00+00:00",
         "finished_at": "2026-11-16T08:30:05+00:00", "ny_date": "2026-11-16",
-        "outcome": "failed", "blocks_start": True, "cause": "alert-recipient-missing",
+        "outcome": "failed", "blocks_start": True, "cause": "alert-channel-missing",
         "checks": [{"name": name, "passed": passed, "cause": None} for name, passed in checks],
     }), "utf-8")
 
