@@ -126,10 +126,13 @@ class Watch:
         now = self.now()
         midnight = datetime.combine(now.astimezone(NEW_YORK).date(), time(), NEW_YORK)
         limit = float(self.config.orders.fees_unknown_alert_seconds)
+        # Orders whose alert falls due today: one that finished less than `limit` before New
+        # York midnight is due after it, so the new day must not hide it.
+        due_since = midnight - timedelta(seconds=limit)
         rows = self.engine.store.query(
             "SELECT client_order_id, symbol, side, filled_quantity, broker_state, updated_at "
             "FROM orders WHERE fees_usd IS NULL AND updated_at >= ?",
-            (midnight.astimezone(UTC).isoformat(),))
+            (due_since.astimezone(UTC).isoformat(),))
         for row in rows:
             cid = row["client_order_id"]
             if cid in self._fees_alerted or Decimal(row["filled_quantity"]) <= 0:
@@ -142,7 +145,7 @@ class Watch:
             self._fees_alerted.add(cid)
             self.alert(AlertKind.FEES_UNKNOWN,
                        f"{row['symbol']} {row['side']} {cid}: broker fees unknown "
-                       f"{waited:.0f} s after it finished; today's loss is unknown and "
+                       f"{waited:.0f} s after it finished; its day's loss is unknown and "
                        "entries are refused until they are read")
         for correction in self.engine.store.query(
                 "SELECT seq, key, body FROM journal WHERE kind = ? AND seq > ? ORDER BY seq",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -32,10 +32,14 @@ class Recorder:
 
 
 class Rig:
-    def __init__(self, tmp_path: Path, broker: FakeBroker | None = None) -> None:
+    def __init__(self, tmp_path: Path, broker: FakeBroker | None = None,
+                 stamped: datetime | None = None) -> None:
+        """`stamped`: the time the store stamps its rows with (the real clock without it)."""
         self.cfg = replace(CFG, root=tmp_path)
         self.broker = broker or FakeBroker()
-        self.store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
+        self.store = (Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0) if stamped is None
+                      else Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0,
+                                      now=lambda: stamped.astimezone(UTC)))
         self.clock = [1_000.0]
         self.engine = Engine(self.store, self.broker, self.cfg, "watch001",
                              lambda: GateResult(True, "t"), clock=lambda: self.clock[0])
@@ -332,20 +336,38 @@ def test_loop_pass_never_waits_on_imessage_and_journals_its_outcome_when_known(t
     assert len(rig.notifier.shown) == 1
 
 
-def test_fees_still_unknown_after_the_configured_wait_alert_once(tmp_path):
-    rig = Rig(tmp_path, FakeBroker(fill_fees=None))  # Detail shows no readable fees
+def _filled_without_fees(tmp_path: Path, finished: datetime) -> tuple[Rig, str]:
+    """A rig whose entry filled at `finished` and whose Detail shows no readable fees."""
+    rig = Rig(tmp_path, FakeBroker(fill_fees=None), stamped=finished)
     t = rig.engine.open_trade("ABC", D(2), D(10), D(9), D(1))
     entry = rig.engine.orders(t)[0].client_order_id
     rig.broker.fill(entry, D(2), D(10))
     for _ in range(3):
         rig.engine.step()
-    finished = datetime.now(NEW_YORK)  # the store stamps rows with the real clock here
+    return rig, entry
+
+
+def test_fees_still_unknown_after_the_configured_wait_alert_once(tmp_path):
+    finished = MONDAY_11
+    rig, entry = _filled_without_fees(tmp_path, finished)
     wait = float(rig.cfg.orders.fees_unknown_alert_seconds)
     rig.now = finished + timedelta(seconds=wait / 2)
     rig.watch.check()
     assert AlertKind.FEES_UNKNOWN not in rig.kinds()
     rig.now = finished + timedelta(seconds=wait + 5)
     rig.watch.check()
+    rig.watch.check()
+    assert rig.kinds().count(AlertKind.FEES_UNKNOWN) == 1
+    assert entry in rig.notifier.shown[-1][1]
+
+
+def test_fees_unknown_of_an_order_finished_just_before_ny_midnight_still_alert(tmp_path):
+    # Due after midnight: the new day must not hide it.
+    wait = float(CFG.orders.fees_unknown_alert_seconds)
+    midnight = datetime(2026, 11, 17, tzinfo=NEW_YORK)
+    finished = midnight - timedelta(seconds=wait / 2)
+    rig, entry = _filled_without_fees(tmp_path, finished)
+    rig.now = finished + timedelta(seconds=wait + 5)
     rig.watch.check()
     assert rig.kinds().count(AlertKind.FEES_UNKNOWN) == 1
     assert entry in rig.notifier.shown[-1][1]
