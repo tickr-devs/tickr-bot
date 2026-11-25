@@ -69,23 +69,6 @@ Goal, scope and stages: `docs/spec-v1.md`. What is left:
 - **A2** (W9, W11) "System" card in both apps: watchdog, supervisor restarts, Webull link freshness, the 03:30
   preflight result, caffeinate, model training progress. Status: proposed, owner not confirmed.
 
-From the external code review of 2026-11-24 (Codex, `tickr/entry-exit-research/training-spec/codex-mailbox/attachments/tickr-review-2026-11-24/Tickr-review-full.md`
-in project files; its three P1 engine defects have their own fix thread):
-- **A3** Operator commands are idempotent end to end (review section 4, P2): iOS and macOS keep one
-  idempotency key per command until its outcome is known; a lost response shows "outcome unknown"
-  and is settled by reading the server's command record, never by a new key. Today a retry after a
-  network error creates a second command. Status: decided.
-- **A4** A command is sent only on a fresh, same-server check (review section 4, P2): on iOS, Resume
-  and Close after Face ID need a successful status read from that address, not an older cached one;
-  on macOS every async result is applied only if it belongs to the current connection, so a late
-  answer from server A never replaces status after a switch to B. Status: decided.
-- **A5** Phone pairing stores its token with one confirmed Keychain update instead of delete then
-  add, so a failed second write cannot show success and lose access after a restart (review
-  section 4, P2). Status: decided.
-- **A6** Small app fixes from the same review (P3 and low): VoiceOver says "no data" instead of zeros
-  before statistics arrive; a stop code unknown to the app (older server) shows a local-language
-  text and keeps the original code in diagnostics. Status: decided.
-
 Owner's own setup tasks (outside the repository):
 - **O1** Merge-queue timeout 30 to 60 minutes in the GitHub repository settings (decided
   2026-11-18). Status: owner to change.
@@ -523,6 +506,15 @@ Answered (recorded in `docs/decisions.md`):
 - **Q6** iMessage is enough before unattended days; app push waits for v5 (2026-11-16).
 
 ## Done
+
+- **A3** Operator commands are idempotent end to end (Codex review 2026-11-24): one key per
+  command until its outcome is known, settled by `GET /commands/receipt`, kept no longer than
+  `[api] command_max_age_seconds` (#748).
+- **A4** A command is sent only on a fresh, same-server status read; late answers from a former
+  server are dropped (#748).
+- **A5** Phone pairing stores its token with one confirmed Keychain update (#744); a refused write
+  keeps the earlier pairing (#756).
+- **A6** VoiceOver "no data" before statistics arrive; unknown stop codes in local language (#746).
 
 Items from earlier versions of this file that are built:
 
