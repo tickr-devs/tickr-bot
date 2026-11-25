@@ -102,7 +102,8 @@ research runs never gate a merge.
 
 - **R1** Promotion ladder of MODEL versions with written criteria: exam on sealed data (R20), then the
   Sandbox, then the real account at small size, then full size. Answers Q3 ("what counts as Sandbox
-  proved the model version"). Status: decided, criteria to be written.
+  proved the model version"). Written in `docs/promotion.md` (rungs, evidence, who decides, report
+  format); numbers the owner has not set are listed there. Status: criteria written.
 - **R2** Walk-forward run as the standard evaluation, with a counter of how often each data set and
   hold-out was used. Status: merged into R15 and R16 (2026-11-19).
 - **R3** Parameter sweep and sensitivity report: result against each parameter moved by one step; a
@@ -450,7 +451,8 @@ Answered (recorded in `docs/decisions.md`):
 - **Q2** A halt, or a position that cannot close: keep the resting stop, alert, send no order into the
   halted book, close at the first chance once trading resumes, the next morning if forced
   (2026-11-16).
-- **Q3** What counts as "Sandbox proved the strategy": R1's promotion ladder.
+- **Q3** What counts as "Sandbox proved the strategy": R1's promotion ladder, written in
+  `docs/promotion.md`.
 - **Q4** Captured quotes, bars and decisions are kept forever (archived as gzip, never deleted);
   low disk is caught by preflight's `[runtime] min_free_disk_mb` check (2026-11-16).
 - **Q5** A new listing without relative-volume history is refused with a typed cause (2026-11-16).
