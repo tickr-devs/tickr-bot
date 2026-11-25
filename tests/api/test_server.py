@@ -453,6 +453,53 @@ def test_unreadable_key_record_queues_nothing(api, settings):
     assert contract.count_inbox(settings.inbox) == 1
 
 
+def receipt(server, key):
+    return request(server, "GET", "/commands/receipt", headers={"Idempotency-Key": key})
+
+
+def test_receipt_answers_what_the_key_queued_and_writes_nothing(api, settings):
+    """A client whose POST answer was lost reads the key's receipt instead of sending again."""
+    server, clock = api
+    resp, payload = receipt(server, "phone:lost")
+    assert resp.status == 200
+    assert doc(payload) == {"queued": False, "accepted": None, "api_version": 1}
+    assert errors(schema("command-receipt-v1"), doc(payload)) == []
+    _, body = keyed(server, "/commands/flatten", {"symbol": "ABCD"}, "phone:lost")
+    clock.now += timedelta(seconds=5)
+    resp, payload = receipt(server, "phone:lost")
+    assert resp.status == 200 and doc(payload)["queued"] is True
+    assert doc(payload)["accepted"] == doc(body)
+    assert errors(schema("command-receipt-v1"), doc(payload)) == []
+    # Reading it queued nothing and stored nothing: one command, one key.
+    assert contract.count_inbox(settings.inbox) == 1
+    assert len(list(settings.idempotency.glob("*.json"))) == 1
+    assert doc(receipt(server, "phone:other")[1])["queued"] is False
+
+
+def test_receipt_after_the_bot_consumed_the_command(api, settings):
+    server, clock = api
+    _, body = keyed(server, "/commands/emergency", {}, "k")
+    (item,) = contract.read_commands(settings.inbox, clock.now, Decimal("60"))
+    contract.retire_command(item, settings.inbox.parent / contract.PROCESSED)
+    assert doc(receipt(server, "k")[1])["accepted"] == doc(body)
+
+
+@pytest.mark.parametrize("headers", [{}, {"Idempotency-Key": "a b"}])
+def test_receipt_needs_a_well_formed_key(api, headers):
+    server, _ = api
+    resp, payload = request(server, "GET", "/commands/receipt", headers=headers)
+    assert resp.status == 400 and doc(payload)["error"] == "bad_request"
+
+
+def test_unreadable_key_record_is_no_receipt(api, settings):
+    server, _ = api
+    keyed(server, "/commands/flatten", {}, "k")
+    (record,) = settings.idempotency.glob("*.json")
+    record.write_text("{", "utf-8")
+    resp, payload = receipt(server, "k")
+    assert resp.status == 500 and doc(payload)["error"] == "internal"
+
+
 def test_key_lifetime_must_outlast_the_command_age(tmp_path):
     cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
     bad = replace(cfg, api=replace(cfg.api, idempotency_key_ttl_seconds=int(

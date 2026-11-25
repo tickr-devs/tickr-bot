@@ -101,6 +101,8 @@ COMMAND_ROUTES = {
 IDEMPOTENCY_HEADER = "Idempotency-Key"
 IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 IDEMPOTENCY = "idempotency"  # folder under <commands_dir> holding one file per key
+# GET with an Idempotency-Key: the answer that key got, or that it queued nothing (no write).
+RECEIPT_ROUTE = "/commands/receipt"
 
 
 # A remote Host header: a lowercase DNS name with at least one dot, optionally ":port".
@@ -336,6 +338,7 @@ def shown_settings(cfg: Config) -> SettingsV1:
         broker_read_warn_seconds=cfg.api.broker_read_warn_seconds,
         live_quote_max_age_seconds=cfg.api.live_quote_max_age_seconds,
         quotes_poll_seconds=cfg.api.quotes_poll_seconds,
+        command_max_age_seconds=cfg.api.command_max_age_seconds,
     )
 
 
@@ -693,6 +696,17 @@ class ApiServer(ThreadingHTTPServer):
                 self._remember(key, now, request, contract.dumps(accepted))
         return accepted
 
+    def receipt(self, key: str) -> contract.CommandReceiptV1:
+        """What a POST /commands/* with `key` was answered, read under the inbox lock so a send
+        of the same key in progress is either wholly before or after it; nothing is written.
+        A record that cannot be read raises (`internal`), never "not queued"."""
+        with self.inbox_lock:
+            stored = self._remembered(key, self.clock())
+        if stored is None:
+            return contract.CommandReceiptV1(queued=False, accepted=None)
+        accepted = contract.loads(CommandAcceptedV1, stored["answer"].encode("utf-8"))
+        return contract.CommandReceiptV1(queued=True, accepted=accepted)
+
     def _key_path(self, key: str) -> Path:
         # Hashed: file names stay safe and distinct on a case-insensitive file system.
         return self.settings.idempotency / (hashlib.sha256(key.encode()).hexdigest() + ".json")
@@ -740,7 +754,8 @@ _ERROR_CODES = {
     "internal": 500, "unavailable": 503, "unauthorized": 401, "conflict": 409,
     "rate_limited": 429,
 }
-GET_ROUTES = ("/", "/status", "/commands/pending", "/schema", "/days", "/bars", "/settings",
+GET_ROUTES = ("/", "/status", "/commands/pending", RECEIPT_ROUTE, "/schema", "/days", "/bars",
+              "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/system", "/journal", "/config",
               "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events")
@@ -931,6 +946,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, self.server.page, HTML_TYPE, dict(PAGE_HEADERS))
             elif path == "/status":
                 self._json(200, self.server.status_response())
+            elif path == RECEIPT_ROUTE:
+                key = self.headers.get(IDEMPOTENCY_HEADER)
+                if key is None or not IDEMPOTENCY_KEY.match(key):
+                    self._error("bad_request", f"{IDEMPOTENCY_HEADER} must be 1-128 characters "
+                                "from A-Z a-z 0-9 . _ : -")
+                else:
+                    self._json(200, self.server.receipt(key))
             elif path == "/commands/pending":
                 pending = contract.pending_commands(self.server.settings.inbox)
                 self._json(200, PendingCommandsV1(commands=tuple(pending)))

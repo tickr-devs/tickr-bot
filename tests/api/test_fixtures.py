@@ -195,6 +195,10 @@ def documents() -> dict[str, object]:
         "command-accepted-v1.flatten-symbol": CommandAcceptedV1(
             command=CommandV1("8b1e4d2c-6a3f-4e9b-8c7d-2f1a0b9c8d7e", CommandKind.FLATTEN,
                               T0, "api", "ABCD"), warning=None),
+        # GET /commands/receipt: the key's first answer, or that it queued nothing.
+        "command-receipt-v1": contract.CommandReceiptV1(
+            queued=True, accepted=CommandAcceptedV1(command=command, warning=None)),
+        "command-receipt-v1.not-queued": contract.CommandReceiptV1(queued=False, accepted=None),
         "pending-commands-v1": PendingCommandsV1(commands=(command,)),
         "pending-commands-v1.empty": PendingCommandsV1(commands=()),
         "error-v1": ErrorV1("forbidden_host", "Host 'evil.example:8766' is not allowed"),
@@ -279,7 +283,7 @@ def documents() -> dict[str, object]:
                          Decimal("10")),
             SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL,
             Decimal("30"), Decimal("15"), live_quote_max_age_seconds=Decimal("60"),
-            quotes_poll_seconds=Decimal("1")),
+            quotes_poll_seconds=Decimal("1"), command_max_age_seconds=Decimal("60")),
         # 10:00 New York on a Monday: the bot runs, its last broker read was 4 s ago.
         "jobs-v1": JobsV1(
             T0, BotState.RUNNING, False, T0.replace(hour=13, minute=12, second=4),

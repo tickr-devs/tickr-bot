@@ -113,6 +113,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/` | The status page (one HTML file, read-only, refreshes every `poll_seconds`). |
 | GET | `/status` | `200` `status-response-v1`, always this shape. |
 | GET | `/commands/pending` | `200` `pending-commands-v1`: commands written but not yet consumed. |
+| GET | `/commands/receipt` | Header `Idempotency-Key`. `200` `command-receipt-v1`: what the `POST /commands/*` with that key was answered (`queued` true, `accepted` its `command-accepted-v1`), or `queued` false when no command was queued with it within its lifetime; writes nothing (see Idempotency-Key below). `400` without a well-formed key. |
 | GET | `/schema` | `200` all schemas by name. |
 | GET | `/days` | `200` `days-v1`: every New York date with records (closed trades, a bot run, captured data), newest first, each with its clean-day verdict (`clean`). |
 | GET | `/days/<YYYY-MM-DD>` | `200` `day-v1`: trades closed that New York date (with prices after the exit and overshoot) and the symbols with captured M1 bars that start on that date. A date without records answers with empty lists. |
@@ -121,7 +122,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, whether they matched its records, and the latest balances. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/quotes` | `200` `quotes-response-v1`: the newest valid L1 quote of every symbol on the bot's quote stream (`quotes-v1`, see "GET /quotes" below); `503` `unavailable` while the bot has written no quotes file or it is invalid. |
-| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. |
+| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. `command_max_age_seconds` is the age past which the bot refuses a command as expired: the apps keep a lost send's `Idempotency-Key` at most this long (`null` from an older API, and then they keep none). |
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
@@ -1536,6 +1537,17 @@ new key is stored). Within that lifetime:
   also when the inbox is full;
 - the same key with another command answers `409 conflict` and queues nothing;
 - an unreadable record of the key answers `500 internal` and queues nothing.
+
+`GET /commands/receipt` with the same header reads the key's record without queuing or storing
+anything: `200 command-receipt-v1` with `queued: true` and the first answer as `accepted`, or
+`queued: false` and `accepted: null` when no command was queued with the key within its
+lifetime; an unreadable record answers `500 internal`, never "not queued". The apps use it
+when a send's answer was lost (timeout, dropped connection): they keep the key, show the
+outcome as unknown and read the receipt until it says queued or not, instead of sending again
+under a new key (two commands). It reads under the same lock as the send, so a send of that key
+in progress is seen whole or not at all. The crash window below (command file written, key not
+yet) reads as "not queued" although the command is in the inbox: the safe side, since a second
+send is tolerated and a receipt never claims a command that was not queued.
 
 After its lifetime a key is new again. The lifetime must be above
 `[api] command_max_age_seconds` (checked at startup), so a repeat can never queue a second copy of

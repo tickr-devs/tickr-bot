@@ -529,6 +529,18 @@ class CommandAcceptedV1:
 
 
 @dataclass(frozen=True)
+class CommandReceiptV1:
+    """GET /commands/receipt: what the API answered the POST /commands/* that carried this
+    Idempotency-Key, read without queuing anything, so a client whose answer was lost learns
+    whether its command was queued. `queued` false (`accepted` null): no command was queued
+    with this key within its lifetime."""
+
+    queued: bool
+    accepted: CommandAcceptedV1 | None
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
 class BotStartV1:
     """POST /commands/start-bot: launchd accepted the start of the bot job (its exit code was 0).
     The bot itself is not running yet: its preflight runs first and may still refuse; follow
@@ -904,6 +916,11 @@ class SettingsV1:
     # Seconds between two client reads of GET /quotes ([api] quotes_poll_seconds). Added after
     # v1 shipped (2026-11-17); null from an older API, which has no /quotes.
     quotes_poll_seconds: Decimal | None = _added_later(None)
+    # Seconds after which the bot refuses a command as expired ([api] command_max_age_seconds):
+    # how long the apps keep the Idempotency-Key of a send whose answer was lost, since a command
+    # queued under it can no longer run after that. Added after v1 shipped (2026-11-25); null
+    # from an older API, and then the apps keep no key.
+    command_max_age_seconds: Decimal | None = _added_later(None)
 
 
 # ---------------------------------------------------------------- jobs (read-only)
@@ -2609,6 +2626,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "command-v1": CommandV1,
     "status-response-v1": StatusResponseV1,
     "command-accepted-v1": CommandAcceptedV1,
+    "command-receipt-v1": CommandReceiptV1,
     "bot-start-v1": BotStartV1,
     "paired-v1": PairedV1,
     "pending-commands-v1": PendingCommandsV1,

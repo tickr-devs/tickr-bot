@@ -461,7 +461,7 @@ max_request_body_bytes = 1024
 request_timeout_seconds = 10
 # Maximum unconsumed commands waiting in the inbox; more = new commands refused; read by the api server.
 max_pending_commands = 20
-# A command older than this many seconds when the bot reads it is refused as expired, never executed late; read by the bot via read_commands.
+# A command older than this many seconds when the bot reads it is refused as expired, never executed late; read by the bot via read_commands, and served at GET /settings so the apps keep a lost send's Idempotency-Key no longer than this.
 command_max_age_seconds = 60
 # How many of the latest processed commands the bot lists in status.json (recent_commands); read by the bot's status writer.
 status_recent_commands = 10
