@@ -124,6 +124,9 @@ class AlertKind(StrEnum):
     # give it (any, while [chart] webull_enabled is false; any but the active environment's app
     # key and secret while it is true): its plist is stale or hand-edited (runtime/launchd.py).
     API_CREDENTIALS_UNEXPECTED = "api-credentials-unexpected"
+    # Raised by `tickr news-lag --alert` (R34), at most once a day per feed kind: the median
+    # receipt lag of the Benzinga feed is above the training's assumed bz_lag_s. A report only.
+    NEWS_LAG_HIGH = "news-lag-high"
 
 
 class Delivery(StrEnum):

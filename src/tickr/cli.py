@@ -1044,6 +1044,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("poll-revisions", help="runs until Ctrl-C, only when [massive] "
                    "revision_poll_enabled: polls Benzinga earnings and news and keeps every "
                    "version received, with the poll coverage (docs/operations.md)")
+    lag = sub.add_parser("news-lag", help="reads the revision store written by poll-revisions: "
+                         "median, worst and share above bz_lag_s of the Benzinga feed lag")
+    lag.add_argument("--window-seconds", type=float, required=True,
+                     help="length of the recent window, seconds")
+    lag.add_argument("--alert", action="store_true",
+                     help="send news-lag-high (once a day per kind) when the median is above "
+                     "bz_lag_s")
     demo_parser = sub.add_parser("demo", help="a made-up trading day in its own folder "
                                  "(config/demo.toml) served on [api] demo_port; never talks to "
                                  "Webull")
@@ -1107,6 +1114,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "poll-revisions":
             from tickr.model import revpoll
             return revpoll.main(config_module.load(args.config))
+        if args.command == "news-lag":
+            from tickr.model import newslag
+            cfg = config_module.load(args.config)
+            return newslag.main(cfg, window_s=args.window_seconds, send_alert=args.alert,
+                                notifier=_default_notifier(cfg) if args.alert else None)
         if args.command == "demo":
             from tickr.demo.run import main as demo_main
             repo = config_module.load(args.config).root

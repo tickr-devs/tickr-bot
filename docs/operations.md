@@ -584,7 +584,7 @@ straight to the supervisor. Limits:
 "The API job and the Webull keys"), and from
 the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
 `watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`, `bot-down`,
-`disk-low`. Every alert goes to
+`disk-low`, and from `tickr news-lag --alert` `news-lag-high`. Every alert goes to
 the Mac notification, to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4) and to
 the alerts feed below.
 The iMessage is sent on a background thread, so the bot's loop never waits for Messages.app; its
