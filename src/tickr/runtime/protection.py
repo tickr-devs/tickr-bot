@@ -18,8 +18,15 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from tickr.engine.core import Engine, Leg, TradeState
-from tickr.store import JournalRow
+from tickr.engine.core import (
+    OPEN_TRADE_STATES,
+    Engine,
+    Leg,
+    TradeRow,
+    TradeState,
+    trade_from_row,
+)
+from tickr.store import JournalRow, marks
 from tickr.types import OrderState
 
 PROTECTION_LATENCY = "protection-latency"
@@ -57,18 +64,46 @@ def _seconds(start: JournalRow, end: JournalRow | None) -> float | None:
 
 class LatencyLog:
     """Writes the per-trade latency row once: as soon as a stop is verified, or with what is
-    known when the trade closed first. Trades already written (any run) are skipped."""
+    known when the trade closed first. Trades already written (any run) are skipped.
+
+    A pass reads only trades without a row: on the first pass of a run every one, later
+    only open trades and those closed since the previous pass began, so a pass reads today's
+    work and never the whole trade history (backlog T17)."""
 
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
-        self._done = {r.key for r in engine.store.journal(PROTECTION_LATENCY)}
+        self._done: set[str] = set()  # trades this run found nothing to write for, ever
+        self._since: str | None = None  # store stamp when the previous pass began
+
+    def _candidates(self) -> list[TradeRow]:
+        """Trades with no `protection-latency` row yet that this pass must look at."""
+        without_row = ("NOT EXISTS (SELECT 1 FROM journal j WHERE j.kind = ? "
+                       "AND j.key = trades.trade_id)")
+        if self._since is None:
+            # Open trades, and closed ones with an entry fill (a trade closed unfilled never
+            # gets a row, so it is not read again at every start).
+            rows = self.engine.store.query(
+                f"SELECT * FROM trades WHERE (state IN ({marks(OPEN_TRADE_STATES)}) OR EXISTS "
+                "(SELECT 1 FROM orders o WHERE o.trade_id = trades.trade_id AND o.leg = ? "
+                f"AND CAST(o.filled_quantity AS REAL) > 0)) AND {without_row} "
+                "ORDER BY opened_at, trade_id",
+                (*OPEN_TRADE_STATES, Leg.ENTRY, PROTECTION_LATENCY))
+        else:
+            rows = self.engine.store.query(
+                f"SELECT * FROM trades WHERE (state IN ({marks(OPEN_TRADE_STATES)}) "
+                f"OR closed_at >= ?) AND {without_row} ORDER BY opened_at, trade_id",
+                (*OPEN_TRADE_STATES, self._since, PROTECTION_LATENCY))
+        return [trade_from_row(r) for r in rows if r["trade_id"] not in self._done]
 
     def _rows(self, kind: str, cids: list[str]) -> list[JournalRow]:
         return [r for cid in cids for r in self.engine.store.journal(kind, cid)]
 
     def record(self) -> None:
         engine = self.engine
-        for trade in engine.trades(open_only=False):
+        since = engine.store.stamp()
+        candidates = self._candidates()
+        self._since = since
+        for trade in candidates:
             if trade.trade_id in self._done:
                 continue
             body = self._body(trade.trade_id, trade.state is TradeState.CLOSED)

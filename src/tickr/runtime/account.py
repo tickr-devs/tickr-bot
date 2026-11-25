@@ -404,7 +404,9 @@ def account_document(engine: Engine, read_at: datetime,
     causes = mismatch_causes(engine)
     if view is None or causes is None:
         return None
-    ours = {o.client_order_id for o in engine.orders()}
+    ours = engine.orders_by_id(
+        [o.client_order_id for o in view.open_orders if o.client_order_id]
+        + [f.client_order_id for f in balances.fills if f.client_order_id])
     b = balances.balance
     return api.AccountV1(
         read_at=read_at,

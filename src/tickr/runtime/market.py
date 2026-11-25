@@ -437,8 +437,7 @@ class MarketRuntime:
 
     def _entry_symbols(self) -> set[str]:
         """Symbols with a working entry: their quotes decide whether it may keep resting."""
-        return {o.symbol for o in self.engine.orders()
-                if o.leg is Leg.ENTRY and o.live}
+        return {o.symbol for o in self.engine.live_orders() if o.leg is Leg.ENTRY}
 
     def _candidate_symbols(self) -> set[str]:
         # Only on a live transport: a subscribe while down is queued silently and sent by the

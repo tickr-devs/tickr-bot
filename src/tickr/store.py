@@ -10,7 +10,7 @@ import json
 import sqlite3
 import sys
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sized
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -172,6 +172,30 @@ def _schema_v10(db: sqlite3.Connection) -> None:
     db.execute("ALTER TABLE trades ADD COLUMN reserved_usd TEXT")
 
 
+# Bound parameters one `IN (...)` query takes at most: SQLite's historic default limit
+# (protocol constant). Longer lists are read in parts of this size.
+IN_LIST_LIMIT = 999
+
+
+def marks(values: Sized) -> str:
+    """`?, ?, ...`, one placeholder per value, for an `IN (...)` clause."""
+    return ", ".join("?" * len(values))
+
+
+# Indexes the loop's reads need so they scale with today's work, not with history (backlog
+# T17): open trades by state, live orders by their states, a symbol's orders we gave up on,
+# the day's closed trades by close time, the day's finished orders by update time. Indexes
+# change no data, so they are made on every writable open rather than by a migration: a
+# rollback to code without them still opens the database (an older schema version is not
+# raised for them).
+INDEXES = (
+    "CREATE INDEX IF NOT EXISTS trades_state ON trades(state)",
+    "CREATE INDEX IF NOT EXISTS trades_closed_at ON trades(closed_at)",
+    "CREATE INDEX IF NOT EXISTS orders_states ON orders(broker_state, send_state)",
+    "CREATE INDEX IF NOT EXISTS orders_symbol_send ON orders(symbol, send_state)",
+    "CREATE INDEX IF NOT EXISTS orders_updated_at ON orders(updated_at)",
+)
+
 # Forward-only migrations. Never edit a released entry; append a new one.
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _schema_v1, _schema_v2, _schema_v3, _schema_v4, _schema_v5, _schema_v6, _schema_v7,
@@ -241,6 +265,8 @@ class Store:
         if existed and 0 < current < len(MIGRATIONS):
             store.backup(path.with_name(f"{path.stem}.pre-v{current + 1}{path.suffix}"))
         store._migrate()
+        for statement in INDEXES:
+            db.execute(statement)
         return store
 
     @classmethod
@@ -359,7 +385,10 @@ class Store:
             )
             self.append("run-ended", {"cause": cause}, key=run_id, run_id=run_id)
 
-    def journal(self, kind: str | None = None, key: str | None = None) -> list[JournalRow]:
+    def journal(self, kind: str | None = None, key: str | None = None,
+                newest: int | None = None) -> list[JournalRow]:
+        """Rows oldest first; `newest` keeps only that many of the latest (read newest first,
+        so the cost does not grow with the journal)."""
         sql = "SELECT seq, at_utc, run_id, kind, key, body FROM journal"
         clauses, params = [], []
         if kind is not None:
@@ -370,7 +399,11 @@ class Store:
             params.append(key)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY seq"
+        if newest is None:
+            sql += " ORDER BY seq"
+        else:
+            sql = f"SELECT * FROM ({sql} ORDER BY seq DESC LIMIT ?) ORDER BY seq"
+            params.append(newest)
         return [JournalRow(r[0], r[1], r[2], r[3], r[4], json.loads(r[5]))
                 for r in self._db.execute(sql, params)]
 

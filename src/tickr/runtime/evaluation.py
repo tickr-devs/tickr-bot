@@ -34,6 +34,7 @@ ever ends the trading loop.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -165,11 +166,14 @@ class Evaluator:
 
     def _pending_remainder(self) -> Remainder | None:  # bar, saved quotes, loss budget
         """The latest protect-first remainder not yet evaluated (survives restarts)."""
-        rows = [r for r in self.engine.store.journal(EVALUATION_STOPPED)
-                if r.body.get("stage") == PROTECT_FIRST and r.body.get("remaining")]
-        if not rows or self.engine.store.journal(REMAINDER, rows[-1].key):
+        # The newest such row only, found by SQL, not by decoding every stop ever (T17).
+        latest = self.engine.store.query(
+            "SELECT key, body FROM journal WHERE kind = ? AND json_extract(body, '$.stage') = ? "
+            "AND json_array_length(json_extract(body, '$.remaining')) > 0 "
+            "ORDER BY seq DESC LIMIT 1", (EVALUATION_STOPPED, PROTECT_FIRST))
+        if not latest or self.engine.store.journal(REMAINDER, latest[0]["key"]):
             return None
-        body = rows[-1].body
+        body = json.loads(latest[0]["body"])
         budget = body.get("loss_budget_usd")
         return (datetime.fromisoformat(body["bar_start"]),
                 {s: _quote(s, body["quotes"].get(s)) for s in body["remaining"]},

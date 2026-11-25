@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from tickr.api.history import closed_trades, total_net
+from tickr.api.history import close_window, closed_trades, orders_of, total_net
 from tickr.broker.base import BrokerError
 from tickr.calendar import (
     NEW_YORK,
@@ -232,16 +232,14 @@ def _closed_today_orders(engine: Engine, now: datetime,
     time, its orders)."""
     today = now.astimezone(NEW_YORK).date()
     rows = engine.store.query("SELECT trade_id, symbol, closed_at FROM trades "
-                              "WHERE closed_at IS NOT NULL")
-    found = {}
-    for row in rows:
-        closed = datetime.fromisoformat(row["closed_at"])
-        if closed.astimezone(NEW_YORK).date() != today:
-            continue
-        if symbol is not None and row["symbol"] != symbol:
-            continue
-        found[row["trade_id"]] = (closed, engine.orders(row["trade_id"]))
-    return found
+                              "WHERE closed_at >= ? AND closed_at < ? ORDER BY rowid",
+                              close_window(today))
+    kept = [row for row in rows
+            if datetime.fromisoformat(row["closed_at"]).astimezone(NEW_YORK).date() == today
+            and (symbol is None or row["symbol"] == symbol)]
+    orders = orders_of(engine.store, [row["trade_id"] for row in kept])
+    return {row["trade_id"]: (datetime.fromisoformat(row["closed_at"]),
+                              orders.get(row["trade_id"], [])) for row in kept}
 
 
 def _prices_known(orders: list[OrderRow]) -> bool:
@@ -305,7 +303,7 @@ def own_exposure(engine: Engine, symbol: str | None = None) -> tuple[int, int]:
 
 def working_entries(engine: Engine) -> int:
     """Our entries working in any symbol, against `[risk] max_working_entries`."""
-    return sum(1 for o in engine.orders() if o.leg is Leg.ENTRY and o.live)
+    return sum(1 for o in engine.live_orders() if o.leg is Leg.ENTRY)
 
 
 def stop_requests_owed(engine: Engine) -> int:

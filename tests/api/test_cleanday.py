@@ -258,3 +258,56 @@ def test_without_a_calendar_no_day_is_clean(tmp_path):
     journal.session(weekend)
     journal.day_end(weekend)
     assert journal.verdict(weekend).cause.startswith("calendar: ")
+
+
+def test_a_kept_fold_reads_only_new_rows_and_agrees_with_a_full_read(tmp_path):
+    """GET /days keeps one fold and extends it per request (backlog T17): every verdict equals
+    the one a fold of the whole journal gives, and no row is decoded twice."""
+    journal = Journal(tmp_path)
+    fold = cleanday.JournalFold("sandbox")
+    days = [DAY, NEXT]
+    key = f"{Fence.UNKNOWN_ORDER}:ap-1-e1"
+
+    def same() -> None:
+        kept = clean_days(journal.store, "sandbox", days, TODAY, CALENDAR, MAX_GAP, fold)
+        assert kept == clean_days(journal.store, "sandbox", days, TODAY, CALENDAR, MAX_GAP)
+        again = clean_days(journal.store, "sandbox", days, TODAY, CALENDAR, MAX_GAP, fold)
+        assert again == kept  # a verdict never adds to the fold's own rows
+
+    same()
+    journal.session()
+    same()
+    journal.at(OPEN + timedelta(hours=5)).row("fence-set", {"cause": "x"}, key)
+    journal.day_end()
+    same()
+    journal.session(NEXT)
+    journal.at(datetime(2026, 11, 17, 12, tzinfo=NEW_YORK)).row("fence-cleared", {}, key)
+    journal.day_end(NEXT)
+    same()
+    read = fold.last_seq
+    decoded: list[int] = []
+    real = cleanday._read
+    cleanday._read = lambda row: (decoded.append(row["seq"]), real(row))[1]
+    try:
+        same_rows = clean_days(journal.store, "sandbox", days, TODAY, CALENDAR, MAX_GAP, fold)
+        assert decoded == [] and fold.last_seq == read
+        seq = journal.at(OPEN + timedelta(hours=6)).reconcile()
+        clean_days(journal.store, "sandbox", days, TODAY, CALENDAR, MAX_GAP, fold)
+        assert decoded == [seq]
+    finally:
+        cleanday._read = real
+    assert same_rows[NEXT].verdict is api.CleanVerdict.CLEAN
+
+
+def test_a_kept_fold_starts_over_on_another_database_file(tmp_path):
+    first = _clean_day(tmp_path / "a")
+    fold = cleanday.JournalFold("sandbox")
+    assert clean_days(first.store, "sandbox", [DAY], TODAY, CALENDAR, MAX_GAP,
+                      fold)[DAY].verdict is api.CleanVerdict.CLEAN
+    other = Journal(tmp_path / "b")  # a restored or replaced file: its rows differ
+    other.at(OPEN).reconcile(False, "x")
+    for _ in range(first.store.query("SELECT MAX(seq) AS n FROM journal")[0]["n"]):
+        other.row("noise", {})
+    found = clean_days(other.store, "sandbox", [DAY], TODAY, CALENDAR, MAX_GAP, fold)
+    assert found == clean_days(other.store, "sandbox", [DAY], TODAY, CALENDAR, MAX_GAP)
+    assert found[DAY].verdict is api.CleanVerdict.NOT_CLEAN

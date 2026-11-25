@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+from tickr.api.history import close_window
 from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar
 from tickr.engine.core import BrokerView, Engine
 from tickr.runtime.alerts import AlertKind
@@ -35,7 +36,8 @@ ZERO = Decimal(0)
 def own_left(engine: Engine, view: BrokerView) -> tuple[list[str], list[str]]:
     """Our positions and our open orders the broker still shows, in plain words."""
     open_symbols = {t.symbol for t in engine.trades()}
-    ours = {o.client_order_id for o in engine.orders()}
+    ours = engine.orders_by_id(o.client_order_id for o in view.open_orders
+                               if o.client_order_id)
     positions = [f"position {p.symbol} {p.quantity}" for p in view.positions
                  if p.quantity != 0 and p.symbol in open_symbols]
     orders = [f"order {o.client_order_id} {o.symbol}" for o in view.open_orders
@@ -52,13 +54,15 @@ def records_agree(engine: Engine, view: BrokerView) -> bool:
         if quantity != 0:
             expected[trade.symbol] = expected.get(trade.symbol, ZERO) + quantity
     held = {p.symbol: p.quantity for p in view.positions if p.quantity != 0}
-    live = {o.client_order_id for o in engine.orders() if o.live}
+    live = {o.client_order_id for o in engine.live_orders()}
     return held == expected and {o.client_order_id for o in view.open_orders} == live
 
 
 def day_end_record(engine: Engine, view: BrokerView | None, now: datetime) -> dict[str, Any]:
     day = now.astimezone(NEW_YORK).date()
-    opened = [r for r in engine.store.query("SELECT opened_at, closed_at FROM trades")
+    opened = [r for r in engine.store.query(
+                  "SELECT opened_at, closed_at FROM trades WHERE opened_at >= ? AND opened_at < ?",
+                  close_window(day))
               if datetime.fromisoformat(r["opened_at"]).astimezone(NEW_YORK).date() == day]
     open_trades = len(engine.trades())
     record: dict[str, Any] = {

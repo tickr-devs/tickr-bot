@@ -230,6 +230,29 @@ def test_a_trade_closed_before_its_stop_was_seen_working_is_recorded_as_such(tmp
     assert trade.planned_loss_usd == D(1)
 
 
+def test_a_trade_opened_and_closed_between_two_passes_still_gets_its_row(tmp_path):
+    """Later passes read only open trades and those closed since the previous pass began
+    (backlog T17): a whole trade between two passes is one of them."""
+    rig = Rig(tmp_path)
+    engine, log = rig.engine, LatencyLog(rig.engine)
+    engine.recover()
+    log.record()  # the run's first pass: nothing yet
+    t = engine.open_trade("ABC", D(1), D(10), D("9.80"), D(1))
+    rig.broker.fill(rig.entry(), D(1), D(10))
+    for _ in range(3):
+        rig.advance(POLL)
+        engine.step()
+    (stop,) = [o for o in rig.broker.open_orders() if o.order_type == "STOP_LOSS"]
+    rig.broker.fill(stop.client_order_id, D(1), D("9.80"))
+    for _ in range(3):
+        rig.advance(POLL)
+        engine.step()
+    assert engine.trades() == []
+    log.record()
+    log.record()
+    assert len(rig.store.journal(PROTECTION_LATENCY, t)) == 1
+
+
 def test_a_trade_never_filled_has_no_latency_row(tmp_path):
     rig = Rig(tmp_path)
     rig.actions[3] = lambda: rig.engine.cancel_entries()

@@ -71,6 +71,11 @@ class _Day:
     faults: dict[api.CleanCauseKind, list[tuple[int, str]]] = field(default_factory=dict)
     day_end: tuple[int, dict[str, Any]] | None = None
 
+    def copy(self) -> _Day:
+        """A copy a verdict may add its end-of-day faults to (the fold's own stays as read)."""
+        return _Day(list(self.reconcile), {k: list(v) for k, v in self.faults.items()},
+                    self.day_end)
+
     def fault(self, kind: api.CleanCauseKind, seq: int, text: str) -> None:
         self.faults.setdefault(kind, []).append((seq, text))
 
@@ -90,21 +95,53 @@ def _read(row: Any) -> tuple[datetime, dict[str, Any]]:
         raise _Unreadable(f"journal row {row['seq']} ({row['kind']}): {exc}") from exc
 
 
-def _collect(store: Store, environment: str,
-             ) -> tuple[dict[date, _Day], dict[str, list[tuple[int, datetime, datetime | None]]]]:
-    """Rows bucketed by New York date, and every unknown-outcome fence's
-    (set seq, set at, cleared at) stretches."""
-    marks = ", ".join("?" for _ in KINDS)
-    rows = store.query(
-        f"SELECT seq, at_utc, kind, key, body FROM journal WHERE kind IN ({marks}) AND run_id IN "
-        "(SELECT run_id FROM runs WHERE environment = ?) ORDER BY seq", (*KINDS, environment))
-    days: dict[date, _Day] = {}
-    stretches: dict[str, list[tuple[int, datetime, datetime | None]]] = {}
-    for row in rows:
+class JournalFold:
+    """The clean-day rows of one environment folded in journal order: rows bucketed by New
+    York date, and every unknown-outcome fence's (set seq, set at, cleared at) stretches.
+
+    Extended with only the rows after the last one it read, so a long-running reader (the API
+    server answering GET /days every few seconds) decodes each journal row once, not the whole
+    journal per request (backlog T17). The journal is append-only and SQLite commits one
+    writer at a time, so a row never appears below one already read. A database where the
+    last row read is gone or differs is another file (restored from a backup, say): it is
+    folded again from the start."""
+
+    def __init__(self, environment: str) -> None:
+        self.environment = environment
+        self._reset()
+
+    def _reset(self) -> None:
+        self.days: dict[date, _Day] = {}
+        self.stretches: dict[str, list[tuple[int, datetime, datetime | None]]] = {}
+        self.last_seq = 0
+        self.last_at: str | None = None  # at_utc of row `last_seq` (same file check)
+        self.unreadable: str | None = None  # the first row that could not be read
+
+    def extend(self, store: Store) -> None:
+        if self.last_seq:
+            same = store.query("SELECT at_utc FROM journal WHERE seq = ?", (self.last_seq,))
+            if not same or same[0]["at_utc"] != self.last_at:
+                self._reset()
+        if self.unreadable is not None:
+            return  # every verdict is unknown with that cause until the file changes
+        marks = ", ".join("?" for _ in KINDS)
+        rows = store.query(
+            f"SELECT seq, at_utc, kind, key, body FROM journal WHERE kind IN ({marks}) "
+            "AND seq > ? AND run_id IN (SELECT run_id FROM runs WHERE environment = ?) "
+            "ORDER BY seq", (*KINDS, self.last_seq, self.environment))
+        try:
+            for row in rows:
+                self._add(row)
+                self.last_seq, self.last_at = row["seq"], row["at_utc"]
+        except _Unreadable as exc:
+            self.unreadable = str(exc)
+
+    def _add(self, row: Any) -> None:
         at, body = _read(row)
         kind, key, seq = row["kind"], row["key"] or "", row["seq"]
-        day = days.setdefault(ny_date_of(at), _Day())
+        day = self.days.setdefault(ny_date_of(at), _Day())
         fence = key.split(":", 1)[0]
+        stretches = self.stretches
         if kind == RECONCILE_CHECKED:
             matches = body.get("matches_records")
             if not isinstance(matches, bool):
@@ -136,7 +173,6 @@ def _collect(store: Store, environment: str,
         elif kind == COMMAND and body.get("kind") == EMERGENCY:
             day.fault(api.CleanCauseKind.SAFETY_EXIT, seq,
                       f"emergency command ({body.get('outcome')})")
-    return days, stretches
 
 
 def _gap(day: date, times: list[datetime], calendar: SessionCalendar | None,
@@ -203,17 +239,20 @@ def unknown(day_cause: str) -> api.CleanDay:
 
 def clean_days(store: Store | None, environment: str, days: Iterable[date], today: date,
                calendar: SessionCalendar | None, max_gap: Decimal,
-               ) -> dict[date, api.CleanDay]:
+               fold: JournalFold | None = None) -> dict[date, api.CleanDay]:
     """The verdict of each date. `store` None (no database yet): every date is unknown. A
     journal row that cannot be read makes every date unknown with that cause. `calendar` (None:
     it cannot be read) gives the regular session the reconcile rows must cover with no gap
-    longer than `max_gap` seconds ([orders] reconcile_max_gap_seconds)."""
+    longer than `max_gap` seconds ([orders] reconcile_max_gap_seconds). `fold` (the caller's
+    own, of `environment`, kept between calls) is extended with the new rows only; None folds
+    the whole journal for this call."""
     wanted = list(days)
     if store is None:
         return {d: unknown(NOT_OVER if d >= today else NOT_RECORDED) for d in wanted}
-    try:
-        found, stretches = _collect(store, environment)
-    except _Unreadable as exc:
-        return {d: unknown(f"journal unreadable: {exc}") for d in wanted}
-    return {d: _verdict(d, today, found.get(d, _Day()), stretches, calendar, max_gap)
+    fold = fold if fold is not None else JournalFold(environment)
+    fold.extend(store)
+    if fold.unreadable is not None:
+        return {d: unknown(f"journal unreadable: {fold.unreadable}") for d in wanted}
+    return {d: _verdict(d, today, fold.days.get(d, _Day()).copy(), fold.stretches, calendar,
+                        max_gap)
             for d in wanted}

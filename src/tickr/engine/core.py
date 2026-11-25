@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
@@ -26,7 +26,7 @@ from tickr.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, R
 from tickr.config import Config, GateResult
 from tickr.risk.ticks import CENT, tick
 from tickr.risk.timers import WindowKind
-from tickr.store import Store
+from tickr.store import IN_LIST_LIMIT, Store, marks
 from tickr.types import (
     OrderDetail,
     OrderRequest,
@@ -182,6 +182,8 @@ LISTED_KEY = "/listed"
 UNLISTED_CAUSE = ("last seen working but not in the broker's open orders: proves nothing "
                   "until its Detail is read")
 _LIVE_SEND = (SendState.INTENT, SendState.ATTEMPTED, SendState.ACKNOWLEDGED, SendState.UNKNOWN)
+_NOT_TERMINAL = tuple(state for state in OrderState if not state.terminal)
+OPEN_TRADE_STATES = tuple(state for state in TradeState if state is not TradeState.CLOSED)
 _WORKING = (OrderState.ACCEPTED, OrderState.PARTIALLY_FILLED)
 # Cancel states after which a later Detail read decides whether the cancel took.
 _CANCEL_AWAITING = ("sent", "unknown", "refused")
@@ -305,7 +307,7 @@ def order_from_row(row: Any) -> OrderRow:
     )
 
 
-def _trade(row: Any) -> TradeRow:
+def trade_from_row(row: Any) -> TradeRow:
     return TradeRow(
         trade_id=row["trade_id"], symbol=row["symbol"], state=TradeState(row["state"]),
         entry_quantity=Decimal(row["entry_quantity"]),
@@ -452,7 +454,8 @@ class Engine:
         if any(fence == Fence.FOREIGN_ORDER for fence, _, _ in names):
             if self.broker_view is None:
                 return None
-            ours = {o.client_order_id for o in self.orders()}
+            ours = self.orders_by_id(o.client_order_id for o in self.broker_view.open_orders
+                                     if o.client_order_id)
             foreign = [o for o in self.broker_view.open_orders if o.client_order_id not in ours]
             if not foreign or any(not o.symbol for o in foreign):
                 return None
@@ -580,13 +583,16 @@ class Engine:
     # --- reads -----------------------------------------------------------------------------
 
     def trades(self, *, open_only: bool = True) -> list[TradeRow]:
-        sql = "SELECT * FROM trades"
-        if open_only:
-            sql += f" WHERE state != '{TradeState.CLOSED}'"
-        return [_trade(r) for r in self.store.query(sql + " ORDER BY opened_at, trade_id")]
+        if not open_only:
+            return [trade_from_row(r) for r in self.store.query(
+                "SELECT * FROM trades ORDER BY opened_at, trade_id")]
+        return [trade_from_row(r) for r in self.store.query(
+            f"SELECT * FROM trades WHERE state IN ({marks(OPEN_TRADE_STATES)}) "
+            "ORDER BY opened_at, trade_id", OPEN_TRADE_STATES)]
 
     def trade(self, trade_id: str) -> TradeRow:
-        return _trade(self.store.query("SELECT * FROM trades WHERE trade_id = ?", (trade_id,))[0])
+        return trade_from_row(
+            self.store.query("SELECT * FROM trades WHERE trade_id = ?", (trade_id,))[0])
 
     def orders(self, trade_id: str | None = None) -> list[OrderRow]:
         if trade_id is None:
@@ -595,6 +601,31 @@ class Engine:
             rows = self.store.query("SELECT * FROM orders WHERE trade_id = ? ORDER BY rowid",
                                     (trade_id,))
         return [order_from_row(r) for r in rows]
+
+    def live_orders(self) -> list[OrderRow]:
+        """Every order that could still create exposure or fill (`OrderRow.live`), in send
+        order. The loop's reads go through here, not `orders()`, so a step reads what today's
+        work holds open and never the closed history (backlog T17): the states are indexed
+        and finished orders are never decoded."""
+        rows = self.store.query(
+            f"SELECT * FROM orders WHERE send_state IN ({marks(_LIVE_SEND)}) "
+            f"AND (broker_state IS NULL OR broker_state IN ({marks(_NOT_TERMINAL)})) "
+            "ORDER BY rowid", (*_LIVE_SEND, *_NOT_TERMINAL))
+        return [order_from_row(r) for r in rows]
+
+    def orders_by_id(self, client_order_ids: Iterable[str]) -> dict[str, OrderRow]:
+        """Our records of these client order ids, whatever their age (a broker row of an
+        order we gave up on long ago must still be recognised as ours)."""
+        found: dict[str, OrderRow] = {}
+        ids = sorted(set(client_order_ids))
+        for start in range(0, len(ids), IN_LIST_LIMIT):
+            part = ids[start:start + IN_LIST_LIMIT]
+            for row in self.store.query(
+                    f"SELECT * FROM orders WHERE client_order_id IN ({marks(part)})",
+                    tuple(part)):
+                order = order_from_row(row)
+                found[order.client_order_id] = order
+        return found
 
     def order(self, client_order_id: str) -> OrderRow:
         return order_from_row(self.store.query("SELECT * FROM orders WHERE client_order_id = ?",
@@ -1363,7 +1394,7 @@ class Engine:
         is None when the positions read failed. New stops are verified first, all of them by
         one open-orders read."""
         self._verify_listed()
-        due = [o for o in self.orders()
+        due = [o for o in self.live_orders()
                if o.send_state in (SendState.ACKNOWLEDGED, SendState.UNKNOWN)
                and (o.broker_state is None or not o.broker_state.terminal)]
         if held is not None:
@@ -1372,7 +1403,7 @@ class Engine:
         poll = float(self.config.orders.detail_poll_seconds)
         # A symbol being closed moves because of our own closes: its other stops are not read
         # ahead of its cancel (they would only delay it).
-        closing = {o.symbol for o in self.orders() if o.leg is Leg.EXIT and o.live}
+        closing = {o.symbol for o in self.live_orders() if o.leg is Leg.EXIT}
         cancelling = {row.symbol for row in due
                       if self._awaits_cancel_read(row) and row.symbol not in closing}
         moved = self._read_history(due, held)
@@ -1485,7 +1516,7 @@ class Engine:
         budget-refused read leaves them to Detail too. The list is read every step while a new
         stop is unverified, so one listed a few polls late costs no Detail read."""
         self._list_answered = False
-        new = {o.client_order_id: o for o in self.orders()
+        new = {o.client_order_id: o for o in self.live_orders()
                if o.leg is Leg.STOP and o.send_state is SendState.ACKNOWLEDGED
                and o.broker_state is None and o.cancel_state is None}
         if not new:
@@ -1588,6 +1619,13 @@ class Engine:
         return (row.leg is not Leg.EXIT and row.cancel_state in _CANCEL_AWAITING
                 and row.cancel_at is not None and (row.last_detail_at or 0.0) <= row.cancel_at)
 
+    def _absent_in(self, symbol: str) -> list[OrderRow]:
+        """Our orders in `symbol` we gave up on (not in Detail, not in open orders), however
+        old: a late fill of any of them may explain the position (indexed by symbol)."""
+        return [order_from_row(r) for r in self.store.query(
+            "SELECT * FROM orders WHERE symbol = ? AND send_state = ? ORDER BY rowid",
+            (symbol, SendState.ABSENT))]
+
     def _lost_fill_suspects(self, held: dict[str, Decimal]) -> list[OrderRow]:
         """Orders we gave up on whose fill would explain the position: any in a symbol
         holding more than Detail accounts for, and an open trade's sells where it holds
@@ -1596,8 +1634,7 @@ class Engine:
         for symbol, quantity in held.items():
             if quantity <= self._expected_in(symbol):
                 continue
-            suspects += [o for o in self.orders()
-                         if o.symbol == symbol and o.send_state is SendState.ABSENT]
+            suspects += self._absent_in(symbol)
         for trade in self.trades():
             orders = self.orders(trade.trade_id)
             if held.get(trade.symbol, ZERO) < self._expected_in(trade.symbol):
@@ -1844,8 +1881,8 @@ class Engine:
     def _stop_clashes(self, symbol: str, quantity: Decimal, price: Decimal) -> bool:
         """A live SELL stop of ours in `symbol` with this quantity and stop price exists."""
         return any(o.symbol == symbol and o.leg is Leg.STOP and o.side is Side.SELL
-                   and o.live and o.quantity == quantity and o.stop_price == price
-                   for o in self.orders())
+                   and o.quantity == quantity and o.stop_price == price
+                   for o in self.live_orders())
 
     def _distinct_stop_price(self, symbol: str, quantity: Decimal, price: Decimal) -> Decimal:
         """`price`, or one valid tick higher per clash, so that the new SELL stop is not
@@ -1855,9 +1892,9 @@ class Engine:
         scale-out split, equal partial fills) would otherwise be refused and their shares left
         unstopped. Higher is tighter for a long, so the planned loss only shrinks; no live stop
         is cancelled or changed. Journaled when it moves the price."""
-        taken = {o.stop_price for o in self.orders()
+        taken = {o.stop_price for o in self.live_orders()
                  if o.symbol == symbol and o.leg is Leg.STOP and o.side is Side.SELL
-                 and o.live and o.quantity == quantity}
+                 and o.quantity == quantity}
         distinct = price
         while distinct in taken:
             distinct += tick(distinct)
@@ -1900,7 +1937,7 @@ class Engine:
             self._held_reads.pop(tid, None)
             self._hold(tid, None)
             return True
-        ours = {o.client_order_id for o in self.orders()}
+        ours = self.orders_by_id(o.client_order_id for o in rows if o.client_order_id)
         foreign = sorted(o.client_order_id for o in rows
                          if o.symbol == trade.symbol and o.side is Side.SELL
                          and not o.state.terminal and o.client_order_id not in ours)
@@ -2089,8 +2126,8 @@ class Engine:
         """Whether a stop's cancel waits for Detail (its shares may have no stop until the read
         confirms it and their close is sent). A stop whose Detail reads keep failing (the
         detail-unreadable fence alerts) does not hold the others back."""
-        return any(o.leg is Leg.STOP and o.live and o.cancelling and not self._detail_lost(o)
-                   for o in self.orders())
+        return any(o.leg is Leg.STOP and o.cancelling and not self._detail_lost(o)
+                   for o in self.live_orders())
 
     def _may_close(self, trade: TradeRow, held: Decimal | None, expected: Decimal,
                    selling: Decimal = ZERO) -> bool:
@@ -2109,8 +2146,8 @@ class Engine:
             return True
         if held < self._expected_in(trade.symbol):
             return False
-        return not any(o.live for o in self.orders()
-                       if o.symbol == trade.symbol and o.leg is Leg.ENTRY)
+        return not any(o.symbol == trade.symbol and o.leg is Leg.ENTRY
+                       for o in self.live_orders())
 
     def _watch_exit(self, trade: TradeRow, live_exits: list[OrderRow]) -> None:
         """A closing order not filled `max_exit_seconds` after its send attempt (store clock,
@@ -2252,7 +2289,12 @@ class Engine:
         """Call once at startup before anything else. Fences entries until reconciled."""
         self._set_fence(Fence.STARTUP_RECONCILE, "", "startup reconciliation pending")
         self._clear_fence(Fence.SHUTTING_DOWN)
-        for row in self.orders():
+        # Only rows a crash can leave half done: never attempted, attempted without an answer,
+        # or a cancel requested without one (not the closed history, backlog T17).
+        pending = self.store.query(
+            "SELECT * FROM orders WHERE send_state IN (?, ?) OR cancel_state = 'requested' "
+            "ORDER BY rowid", (SendState.INTENT, SendState.ATTEMPTED))
+        for row in map(order_from_row, pending):
             if row.send_state is SendState.INTENT:
                 # The attempt was never written, so the broker was never called.
                 with self.store.transaction():
@@ -2302,7 +2344,7 @@ class Engine:
             self.step()  # fills are still observed and protection maintained
             return False
         self._clear_fence(Fence.BROKER_READ, OPEN_ORDERS_READ)
-        rows = {o.client_order_id: o for o in self.orders()}
+        rows = self.orders_by_id(o.client_order_id for o in open_orders if o.client_order_id)
         broker_ids = set()
         for order in open_orders:
             cid = order.client_order_id

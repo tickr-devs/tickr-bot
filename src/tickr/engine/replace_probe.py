@@ -225,7 +225,7 @@ def _settle(engine: Engine, plan: ReplacePlan, last: OrderDetail | None,
             and any(o.client_order_id == cid for o in rows)):
         engine.replace_confirmed(cid, plan.new, {"broker_order_id": last.broker_order_id})
         return Verdict.CONFIRMED
-    known = {o.client_order_id for o in engine.orders()}
+    known = engine.orders_by_id(o.client_order_id for o in rows if o.client_order_id)
     if last.state.terminal and last.filled_quantity == 0 and len(others) == 1:
         new = others[0]
         if (new.side is Side.SELL and new.order_type is OrderType.STOP_LOSS

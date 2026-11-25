@@ -430,7 +430,7 @@ class Service:
                 self.engine.clock)
         now = self.now()
         quotes = self._entry_quotes
-        quotes.refresh({o.symbol for o in self.engine.orders() if o.leg is Leg.ENTRY and o.live},
+        quotes.refresh({o.symbol for o in self.engine.live_orders() if o.leg is Leg.ENTRY},
                        now)
         guard_entries(self.engine, self.config, self.calendar,
                       lambda symbol: quotes(symbol, now), now)
@@ -803,7 +803,7 @@ class Service:
         return found
 
     def _recent_commands(self) -> tuple[api.CommandRecord, ...]:
-        rows = self.engine.store.journal(COMMAND)[-self.config.api.status_recent_commands:]
+        rows = self.engine.store.journal(COMMAND, newest=self.config.api.status_recent_commands)
         return tuple(api.CommandRecord(
             r.key or "", api.CommandKind(r.body["kind"]), _iso(r.body["requested_at"]),
             _iso(r.at_utc), api.CommandOutcome(r.body["outcome"]), r.body["cause"])
@@ -992,7 +992,7 @@ class Service:
         self.state = api.BotState.STOPPED
         self.write_status()
         if not clean and self.watch is not None:
-            pending = self.engine.store.journal("shutdown-deadline")[-1].body["pending"]
+            pending = self.engine.store.journal("shutdown-deadline", newest=1)[-1].body["pending"]
             self.watch.alert(AlertKind.BOT_DID_NOT_STOP,
                              "shutdown deadline passed with work pending: " + "; ".join(pending))
         return clean

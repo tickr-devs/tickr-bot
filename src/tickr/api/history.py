@@ -21,7 +21,7 @@ from typing import Any
 
 from tickr.api import contract as api
 from tickr.api.after import AfterSettings, Closes, trade_after
-from tickr.api.cleanday import clean_days
+from tickr.api.cleanday import JournalFold, clean_days
 from tickr.api.performance import performance
 from tickr.api.settled import DayBarsIndex
 from tickr.archive import existing
@@ -37,7 +37,7 @@ from tickr.engine.core import (
     SendState,
     order_from_row,
 )
-from tickr.store import DATABASE_FILE, MIGRATIONS, Store
+from tickr.store import DATABASE_FILE, IN_LIST_LIMIT, MIGRATIONS, Store, marks
 from tickr.types import Bar, OrderState
 from tickr.version import recorded
 
@@ -319,6 +319,26 @@ def entry_send(store: Store, trade_id: str) -> tuple[api.EntrySend, str | None]:
     return entry, "; ".join(causes) or None
 
 
+def close_window(day: date) -> tuple[str, str]:
+    """A text range of stored UTC times (`Store.stamp()`) that holds every time on New York
+    date `day`, a calendar day wider on each side, so the close-time index narrows the read to
+    a few days of rows whatever offset a row carries; callers still check the exact date."""
+    return (day - timedelta(days=1)).isoformat(), (day + timedelta(days=2)).isoformat()
+
+
+def orders_of(store: Store, trade_ids: Sequence[str]) -> dict[str, list[OrderRow]]:
+    """The orders of these trades in send order, a bounded number of queries however many
+    trades (one per `IN_LIST_LIMIT` trades, not one per trade; backlog T17)."""
+    found: dict[str, list[OrderRow]] = {}
+    for start in range(0, len(trade_ids), IN_LIST_LIMIT):
+        part = trade_ids[start:start + IN_LIST_LIMIT]
+        for row in store.query(f"SELECT * FROM orders WHERE trade_id IN ({marks(part)}) "
+                               "ORDER BY rowid", tuple(part)):
+            order = order_from_row(row)
+            found.setdefault(order.trade_id, []).append(order)
+    return found
+
+
 def closed_trades(store: Store, environment: str | None = None,
                   closed_on: date | None = None) -> list[api.DayTrade]:
     """Closed trades that had fills, oldest close first, with their gross result.
@@ -328,22 +348,24 @@ def closed_trades(store: Store, environment: str | None = None,
     their orders are read, so the bot's per-step call stays cheap). Quantity is what was
     sold; prices are fill-weighted averages."""
     # The code version is the opening run's own record (`runs.code_version`), never re-derived.
+    low, high = ("", "~") if closed_on is None else close_window(closed_on)
     if environment is None:
         rows = store.query("SELECT t.*, r.code_version AS run_code_version FROM trades t "
                            "LEFT JOIN runs r ON r.run_id = t.run_id "
-                           "WHERE t.closed_at IS NOT NULL ORDER BY t.closed_at, t.trade_id")
+                           "WHERE t.closed_at >= ? AND t.closed_at < ? "
+                           "ORDER BY t.closed_at, t.trade_id", (low, high))
     else:
         rows = store.query("SELECT t.*, r.code_version AS run_code_version FROM trades t "
                            "JOIN runs r ON r.run_id = t.run_id "
-                           "WHERE r.environment = ? AND t.closed_at IS NOT NULL "
-                           "ORDER BY t.closed_at, t.trade_id", (environment,))
+                           "WHERE r.environment = ? AND t.closed_at >= ? AND t.closed_at < ? "
+                           "ORDER BY t.closed_at, t.trade_id", (environment, low, high))
+    if closed_on is not None:
+        rows = [row for row in rows
+                if ny_date_of(datetime.fromisoformat(row["closed_at"])) == closed_on]
+    by_trade = orders_of(store, [row["trade_id"] for row in rows])
     result = []
     for row in rows:
-        if closed_on is not None and ny_date_of(
-                datetime.fromisoformat(row["closed_at"])) != closed_on:
-            continue
-        orders = [order_from_row(o) for o in store.query(
-            "SELECT * FROM orders WHERE trade_id = ? ORDER BY rowid", (row["trade_id"],))]
+        orders = by_trade.get(row["trade_id"], [])
         entries = [o for o in orders if o.leg is Leg.ENTRY]
         sells = [o for o in orders if o.leg is not Leg.ENTRY]
         entry_price, exit_price = average_fill_price(entries), average_fill_price(sells)
@@ -402,6 +424,9 @@ class History:
         self.closes = None if after is None else Closes(after.calendar)
         self._lock = threading.Lock()
         self._session_calendar: SessionCalendar | None = None
+        # The clean-day journal fold, extended per request with the new rows only (T17).
+        self._fold = JournalFold(paths.environment)
+        self._fold_lock = threading.Lock()
 
     # ------------------------------------------------------------ sources
 
@@ -471,12 +496,14 @@ class History:
     def _read_db(self, metrics_of: tuple[date, date] | None = None,
                  ) -> tuple[list[api.DayTrade], set[date]]:
         """Closed trades and New York dates of bot runs; none while no database exists.
-        `metrics_of` (day, today): the trades closed that day get their display metrics."""
+        `metrics_of` (day, today): only the trades closed that day, with their display
+        metrics (one day's answer reads that day's trades, not the whole history)."""
         store = self._open()
         if store is None:
             return [], set()
         try:
-            trades = closed_trades(store, self.paths.environment)
+            trades = closed_trades(store, self.paths.environment,
+                                   None if metrics_of is None else metrics_of[0])
             if metrics_of is not None:
                 trades = [self._with_metrics(store, t, *metrics_of) for t in trades]
             runs = {ny_date_of(datetime.fromisoformat(r["started_at"])) for r in store.query(
@@ -597,8 +624,9 @@ class History:
         calendar = self._calendar()
         store = self._open()
         try:
-            return clean_days(store, self.paths.environment, dates, today, calendar,
-                              self.paths.reconcile_max_gap_seconds)
+            with self._fold_lock:
+                return clean_days(store, self.paths.environment, dates, today, calendar,
+                                  self.paths.reconcile_max_gap_seconds, self._fold)
         except sqlite3.Error as exc:
             raise HistoryUnavailable(f"database unreadable: {exc}") from exc
         finally:
