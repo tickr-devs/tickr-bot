@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from strategy_bars import SYMBOL, TODAY, bar, d, prior_sessions, quote
+from strategy_bars import SIZING_2500, SYMBOL, TODAY, bar, d, prior_sessions, quote
 
 from tickr import config
 from tickr.api import contract
@@ -27,9 +27,7 @@ SIGNAL_TESTS_FLOOR = 1
 
 def make(**overrides):
     vals = copy.deepcopy(VALUES)
-    # Written for a 2500 USD notional cap (the shipped one is 1000 since 2026-11-17, owner).
-    overrides = {"liquidity__min_dollar_volume_usd": SIGNAL_TESTS_FLOOR,
-                 "sizing__max_position_notional_usd": 2500, **overrides}
+    overrides = {"liquidity__min_dollar_volume_usd": SIGNAL_TESTS_FLOOR, **overrides}
     for dotted, value in overrides.items():
         section, key = dotted.split("__")
         vals[section][key] = value
@@ -52,7 +50,9 @@ def shock(count=10, at=None, close=20.4, volume=80_000):
 
 
 def ctx(bars, q=None, position=None, prior=None):
-    return SymbolContext(SYMBOL, bars, prior_sessions() if prior is None else prior, q, position)
+    """Written for a 2500 USD notional cap (`SIZING_2500`)."""
+    return SymbolContext(SYMBOL, bars, prior_sessions() if prior is None else prior, q, position,
+                         sizing=SIZING_2500)
 
 
 def rules(decision):
@@ -96,7 +96,8 @@ def test_loss_budget_sizes_down():
     bars = shock()
     q = quote("20.40", "20.42")
     full = make().evaluate(ctx(bars, q))
-    small = make().evaluate(SymbolContext(SYMBOL, bars, prior_sessions(), q, None, d("5")))
+    small = make().evaluate(SymbolContext(SYMBOL, bars, prior_sessions(), q, None, d("5"),
+                                          sizing=SIZING_2500))
     assert small.verdict is Verdict.ENTER and small.quantity < full.quantity
     assert ("daily_loss_budget_usd", True) in rules(small)
     for decision in (full, small):
@@ -233,7 +234,7 @@ def test_a_later_signal_after_the_first_expired_is_ignored():
 @pytest.mark.parametrize("value", ["nan", "inf"])
 def test_non_finite_values_are_refused(value):
     vals = copy.deepcopy(VALUES)
-    vals["sizing"]["planned_loss_usd"] = float(value)
+    vals["entry"]["entry_window_percent"] = float(value)
     with pytest.raises(ValueError):
         vs.create(vals)
 

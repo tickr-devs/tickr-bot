@@ -307,6 +307,12 @@ def _check_cooldown(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | Non
 
 
 def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Check 5: the decision and its order prices, then the quote."""
+    return _check_decision(i, lim) or _check_quote(i, lim)
+
+
+def _check_decision(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Check 5, first part: the decision, its final order prices and its setup."""
     d = i.decision
     if d.verdict is not Verdict.ENTER:
         return _refuse(C.DECISION_NOT_ENTER, f"verdict is {d.verdict}")
@@ -314,7 +320,6 @@ def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admissio
         return _refuse(C.DECISION_NOT_ACTIVE,
                        f"decision from {d.strategy} {d.version}, active is {lim.active_strategy}")
     window = _window(i, lim)
-    max_age, max_spread, _ = window_limits(window, lim)
     if window.kind is not WindowKind.REGULAR and d.strategy not in lim.extended_hours_strategies:
         return _refuse(C.STRATEGY_NOT_EXTENDED,
                        f"{d.strategy} is not allowed to enter in the {window.kind}")
@@ -353,6 +358,16 @@ def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admissio
                        f"need 0 < stop price {i.stop_price} < limit {i.limit_price}")
     if not i.setup_valid:
         return _refuse(C.SETUP_INVALIDATED, "setup no longer valid")
+    return None
+
+
+def _check_quote(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Check 5, second part: the quote (runs after `_check_decision` passed)."""
+    d = i.decision
+    assert d.entry_low is not None and i.limit_price is not None
+    window = _window(i, lim)
+    max_age, max_spread, _ = window_limits(window, lim)
+    rest = d.rest_bars
     q = i.quote
     if q is None:
         return _refuse(C.QUOTE_MISSING, "no quote")
@@ -473,6 +488,33 @@ CHECKS = (
 )
 """Spec section 7 checks 1..7, in order; the buying power part of check 6 runs last."""
 
+SIMULATED_CHECKS = (
+    _check_session,
+    _check_own_state,
+    _check_decision,
+    _check_money,
+)
+"""The checks a simulation (the model's dollar exam, a backtest on stored model answers) runs
+through `admit_simulated`: the platform's rules on the trading window, the position and
+working-entry limits, one trade per symbol, the pause after a loss, the decision and its order
+prices, size and the daily loss ceiling. The same functions as `CHECKS`, in the same order,
+never a copy."""
+
+NOT_SIMULATED = ("gate", "reconciliation", "quote", "request_budget", "buying_power")
+"""The checks a simulation has no counterpart for: the trading gate, broker reads and the
+entry-stop flag, the live quote (a simulation fills on bars), the request budget and the
+account's buying power."""
+
+
+def admit_simulated(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admission:
+    """`admit` with `SIMULATED_CHECKS` only. Never on the order path: an entry the bot sends is
+    admitted by `admit`."""
+    for check in SIMULATED_CHECKS:
+        refused = check(inputs, limits)
+        if refused is not None:
+            return refused
+    return _admitted(inputs, limits)
+
 
 def refusal_before_buying_power(inputs: AdmissionInputs,
                                 limits: AdmissionLimits) -> Admission | None:
@@ -491,6 +533,10 @@ def admit(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admission:
         refused = check(inputs, limits)
         if refused is not None:
             return refused
+    return _admitted(inputs, limits)
+
+
+def _admitted(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admission:
     d = inputs.decision
     assert d.quantity is not None
     assert inputs.limit_price is not None and inputs.stop_price is not None

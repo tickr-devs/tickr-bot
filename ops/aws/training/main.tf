@@ -269,6 +269,11 @@ resource "aws_launch_template" "training" {
     job_script          = ""
     group               = ""
     max_failures        = 0
+    aws_cli_version     = var.installers.aws_cli_version
+    aws_cli_sha256      = var.installers.aws_cli_sha256
+    uv_version          = var.installers.uv_version
+    uv_wheel_url        = var.installers.uv_wheel_url
+    uv_sha256           = var.installers.uv_sha256
   }))
 
   tag_specifications {

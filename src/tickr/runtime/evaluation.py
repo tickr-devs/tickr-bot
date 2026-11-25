@@ -51,7 +51,14 @@ from tickr.runtime.entries import EntryDesk, daily_loss_room
 from tickr.runtime.market import StreamInbox
 from tickr.runtime.preload import HistoryPreload
 from tickr.runtime.protection import busy
-from tickr.strategy.base import PositionView, Strategy, SymbolContext, Verdict, usable_quote
+from tickr.strategy.base import (
+    PositionView,
+    SizingLimits,
+    Strategy,
+    SymbolContext,
+    Verdict,
+    usable_quote,
+)
 from tickr.types import Bar, Quote
 
 M1 = timedelta(minutes=1)
@@ -418,7 +425,7 @@ class Evaluator:
                                  timedelta(seconds=float(risk.max_quote_age_seconds)),
                                  timedelta(seconds=float(risk.max_clock_skew_seconds)))
         context = SymbolContext(symbol, tuple(bars), prior, quote, position, self._budget,
-                                session_open)
+                                session_open, SizingLimits.of(self.config.risk))
         try:
             decision = self.strategy.evaluate(context)
         except Exception as exc:  # noqa: BLE001 - a strategy bug never ends the loop

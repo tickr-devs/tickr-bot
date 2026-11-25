@@ -71,6 +71,15 @@ from tickr.api.jobs import JobsSettings, jobs_document
 from tickr.api.journal import day_events, journal_document
 from tickr.api.lab_replay import LabReplay, LabReplayRefused, LabReplaySettings
 from tickr.api.observer_results import ObserverResults, SimulationPaths
+from tickr.api.settingsview import (
+    BadDraft,
+    SettingsUnavailable,
+    draft_document,
+    load_schema,
+    parse_draft,
+    schema_document,
+    values_document,
+)
 from tickr.api.system import SystemSettings, system_document
 from tickr.api.warm import PastDayWarmer
 from tickr.calendar import ny_date_of
@@ -171,6 +180,7 @@ class ApiSettings:
     config_file: Path | None  # the bot.toml this API loaded, shown at GET /config
     config_root: Path  # GET /config shows the file's path relative to this
     config_digest: str  # sha256 of the file when this API loaded it
+    settings_schema_file: Path  # [api] settings_schema_file: GET /settings/schema and siblings
     settled_dir: Path  # <data_dir>/<[api] settled_cache_dir>/<environment>: past days' answers
     settled_memory_days: int  # [api] settled_memory_days
     settled_disk_days: int  # [api] settled_disk_days
@@ -311,6 +321,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         config_file=config_path,
         config_root=cfg.root,
         config_digest=cfg.digest,
+        settings_schema_file=cfg.root / api.settings_schema_file,
         settled_dir=data / api.settled_cache_dir / cfg.environment_name,
         settled_memory_days=api.settled_memory_days,
         settled_disk_days=api.settled_disk_days,
@@ -763,7 +774,7 @@ GET_ROUTES = ("/", "/status", "/commands/pending", RECEIPT_ROUTE, "/schema", "/d
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/system", "/journal", "/config",
               "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events",
-              "/alerts")
+              "/settings/schema", "/settings/values", "/alerts")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
 HTML_TYPE = "text/html; charset=utf-8"
@@ -782,6 +793,7 @@ TRADE_WHATIF = "/trades/whatif"  # GET: another version on one trade's day, simu
 # A strategy folder name: one path segment, never "." or "..".
 FOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 ADVISOR_DECISION = "/advisor/decision"  # POST only: the owner's note on a run, never a command
+SETTINGS_VALIDATE = "/settings/validate"  # POST only: checks a draft, writes nothing
 ALERT_ROUTING = "/alerts/routing"  # PUT only: one cell of the owner's alert routing
 DAY_PREFIX = "/days/"
 # Headers a proxy adds to a request it forwards (Go's ReverseProxy, which `tailscale serve` is,
@@ -969,6 +981,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.settings.shown)
             elif path == "/config":
                 self._config()
+            elif path in ("/settings/schema", "/settings/values"):
+                self._owner_settings(path)
+            elif path == SETTINGS_VALIDATE:
+                self._error("method_not_allowed", "use POST", {"Allow": "POST"})
             elif path == "/jobs":
                 self._json(200, jobs_document(self.server.settings.jobs,
                                               self.server.status_response()))
@@ -1026,6 +1042,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == ADVISOR_DECISION:
                 self._advisor_decision()
+                return
+            if path == SETTINGS_VALIDATE:
+                self._validate_settings()
                 return
             if path == ALERT_ROUTING:
                 self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
@@ -1269,6 +1288,47 @@ class Handler(BaseHTTPRequestHandler):
             self._error("unavailable", f"config file unreadable ({type(exc).__name__})")
             return
         self._json(200, document)
+
+    def _owner_settings(self, path: str) -> None:
+        """GET /settings/schema and GET /settings/values (api/settingsview.py), read-only."""
+        settings = self.server.settings
+        try:
+            _query(urlsplit(self.path).query, frozenset())
+        except BadQuery as exc:
+            self._error("bad_request", str(exc))
+            return
+        try:
+            specs = load_schema(settings.settings_schema_file)
+            if path == "/settings/schema":
+                self._json(200, schema_document(specs))
+                return
+            if settings.config_file is None:
+                self._error("unavailable", "this API was started without a config file path")
+                return
+            self._json(200, values_document(specs, settings.config_file, settings.config_root))
+        except SettingsUnavailable as exc:
+            self._error("unavailable", str(exc))
+
+    def _validate_settings(self) -> None:
+        """POST /settings/validate with {"changes": [...]}: 200 settings-draft-v1, the verdict
+        on the draft. Nothing is written, journaled or applied."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        settings = self.server.settings
+        try:
+            changes = parse_draft(body)
+        except BadDraft as exc:
+            self._error("bad_request", str(exc))
+            return
+        if settings.config_file is None:
+            self._error("unavailable", "this API was started without a config file path")
+            return
+        try:
+            self._json(200, draft_document(load_schema(settings.settings_schema_file), changes,
+                                           settings.config_file, settings.config_root))
+        except SettingsUnavailable as exc:
+            self._error("unavailable", str(exc))
 
     def _account(self) -> None:
         """GET /account: the bot's latest broker read of positions and open orders."""

@@ -48,11 +48,18 @@ All simulation numbers live in `config/replay.toml`, one comment per key (tested
 unknown keys are refused. The bot never reads this file.
 
 Slippage per fill = max(price x `slippage_percent` / 100, `slippage_min_usd`), always against
-us.
+us. `measured_slippage_file` (empty: none) replaces `slippage_percent` with the stop slippage
+measured from the bot's own stopped trades (`python -m tickr.research slippage`,
+`docs/research.md`); a missing file or one with fewer than `measured_slippage_min_trades`
+measured trades is refused.
 
 **History.** The strategy gets the same shape of input as live: `bars` = the last
 `history_sessions` sessions of the symbol plus today's completed bars (oldest first), and the
 same sessions in `prior_sessions`. Indicators therefore warm up as they do live.
+
+**Sizing.** The strategy sizes on the bot's own planned loss and notional cap, read from
+`--config` (`config/bot.toml [risk]`) and given as `SymbolContext.sizing`, as live. A strategy
+file carries no sizing values of its own (owner 2026-11-15).
 
 **Synthetic quote.** Recorded bars carry no bid/ask. With `synthesize_quote = true` the
 strategy receives, after each completed bar, a quote around its close:

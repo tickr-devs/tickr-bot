@@ -9,8 +9,10 @@ The file names, besides `[strategy]`:
   bar of the regular session (`block` names it, the other keys are its values);
 - `[entry]`: the entry block (how the entry price window is set);
 - `[stop]`: the stop block (where the broker stop sits);
-- `[[exit]]`: one table per exit block; any one firing on an open position answers EXIT;
-- `[sizing]`: notional and planned loss per position.
+- `[[exit]]`: one table per exit block; any one firing on an open position answers EXIT.
+
+The planned loss and notional cap per position are the platform's (`SymbolContext.sizing`,
+config/bot.toml [risk]), never the file's.
 
 Signals are decided on the last bar only, so a signal can fire again after an exit (re-entry);
 the platform's own rules (symbol pause after a loss, slots, daily loss ceiling, last entry
@@ -24,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_FLOOR, Decimal
+from decimal import Decimal
 from typing import Any
 
 from tickr.calendar import ny_date_of
@@ -233,13 +235,7 @@ class Liquidity:
     max_session_dollar_volume_usd: Decimal
 
 
-@dataclass(frozen=True)
-class Sizing:
-    max_position_notional_usd: Decimal
-    planned_loss_usd: Decimal
-
-
-SECTIONS = {"strategy", "liquidity", "signal", "entry", "stop", "exit", "sizing"}
+SECTIONS = {"strategy", "liquidity", "signal", "entry", "stop", "exit"}
 
 
 class Composed:
@@ -247,11 +243,10 @@ class Composed:
 
     def __init__(self, name: str, version: str, liquidity: Liquidity,
                  signals: list[tuple[str, SignalBlock]], entry: MarketableWindow,
-                 stop: PercentBelowEntry, exits: list[tuple[str, TrailingPercent]],
-                 sizing: Sizing) -> None:
+                 stop: PercentBelowEntry, exits: list[tuple[str, TrailingPercent]]) -> None:
         self.name, self.version = name, version
         self.liquidity, self.signals, self.entry = liquidity, signals, entry
-        self.stop_block, self.exits, self.sizing = stop, exits, sizing
+        self.stop_block, self.exits = stop, exits
         # When no fill time is known (replay): the first bar seen with each position.
         self._held: dict[str, tuple[Decimal, datetime]] = {}
 
@@ -315,23 +310,8 @@ class Composed:
         risk = entry_high - stop + (quote.ask - quote.bid)
         checks.append(v1._check("sizing_risk_per_share", risk, ">", ZERO,
                                 "entry_high - stop + spread"))
-        checks.extend(v1.sizing_inputs(entry_high, self.sizing.planned_loss_usd,
-                                       self.sizing.max_position_notional_usd,
-                                       context.loss_budget_usd))
-        planned = self.sizing.planned_loss_usd
-        if context.loss_budget_usd is not None and context.loss_budget_usd < planned:
-            planned = max(context.loss_budget_usd, ZERO)
-            checks.append(v1._check("daily_loss_budget_usd", planned, "<",
-                                    self.sizing.planned_loss_usd,
-                                    "sized down to the room the daily loss ceiling leaves"))
-        by_loss = (planned / risk).to_integral_value(rounding=ROUND_FLOOR)
-        by_notional = (self.sizing.max_position_notional_usd / entry_high).to_integral_value(
-            rounding=ROUND_FLOOR)
-        quantity = min(by_loss, by_notional)
-        checks.append(v1._check("quantity", quantity, ">=", ONE,
-                                f"min(floor({planned} / (entry_high - stop + spread)) = "
-                                f"{by_loss}, floor(notional cap / entry_high) = {by_notional})"))
-        if not checks[-1].passed:
+        quantity = v1.size(checks, context, entry_high, risk, "(entry_high - stop + spread)")
+        if quantity is None:
             return self._decide(context, Verdict.IGNORE, checks, **levels)
         return self._decide(context, Verdict.ENTER, checks, entry_low=entry_low,
                             entry_high=entry_high, stop=stop, quantity=quantity,
@@ -368,11 +348,9 @@ def create(values: Mapping[str, Any]) -> Composed:
         "max_session_dollar_volume_usd": v1._positive}))
     if liquidity.min_session_dollar_volume_usd >= liquidity.max_session_dollar_volume_usd:
         raise ValueError("[liquidity] the dollar volume floor must be below its ceiling")
-    sizing = Sizing(**_keys("[sizing]", values["sizing"], {
-        "max_position_notional_usd": v1._positive, "planned_loss_usd": v1._positive}))
     return Composed(head["name"], head["version"], liquidity,
                     _many("signal", values["signal"], SIGNALS),
                     _one("[entry]", values["entry"], ENTRIES),
                     _one("[stop]", values["stop"], STOPS),
-                    _many("exit", values["exit"], EXITS), sizing)
+                    _many("exit", values["exit"], EXITS))
 

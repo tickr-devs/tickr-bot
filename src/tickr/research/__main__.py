@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -13,11 +14,11 @@ from pathlib import Path
 from tickr import config as bot_config
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import ConfigError
-from tickr.replay.__main__ import session_clock, strategy_factory
+from tickr.replay.__main__ import platform_sizing, session_clock, strategy_factory
 from tickr.replay.bars import load_bars
 from tickr.replay.errors import ReplayError
 from tickr.replay.settings import load_settings
-from tickr.research import compare, observer_report, refusals, report
+from tickr.research import compare, observer_report, refusals, report, slippage
 from tickr.research.errors import ResearchError
 from tickr.research.latency import latency_report
 from tickr.research.outcomes import outcomes
@@ -89,6 +90,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--strategy", help="NAME or NAME:VERSION to keep")
     p.add_argument("--settings", type=Path, required=True, help="research TOML (time zone)")
     p.add_argument("--out", type=Path, required=True, help="output directory")
+
+    p = sub.add_parser("slippage", help="stopped trades: planned against realized loss, per day")
+    p.add_argument("--database", type=Path, required=True, help="the bot's database (read only)")
+    p.add_argument("--environment", help="keep only trades of runs in this environment")
+    p.add_argument("--settings", type=Path, required=True, help="research TOML (time zone)")
+    p.add_argument("--out", type=Path, required=True, help="output directory")
     return parser
 
 
@@ -126,6 +133,12 @@ def _run(args: argparse.Namespace) -> dict:
         rows = refusals.table(_filter(load_records(args.decisions), args.strategy),
                               settings.session_timezone)
         return report.write_refusals(rows, args.out, settings.output_decimal_places)
+    if args.command == "slippage":
+        settings = load_research_settings(args.settings)
+        trades = slippage.stopped_trades(args.database, settings.session_timezone,
+                                         args.environment)
+        return report.write_slippage(trades, args.environment, args.out,
+                                     settings.output_decimal_places)
     replay_settings = load_settings(args.replay_settings)
     clock_for = session_clock(args.config)
     places = replay_settings.output_decimal_places
@@ -144,7 +157,8 @@ def _run(args: argparse.Namespace) -> dict:
                                         replay_settings, clock_for)
         return report.write_observer_report(result, args.out, places)
     factory = strategy_factory(args.strategy, args.values)
-    records = compare.decide(factory, load_bars(args.bars), replay_settings, clock_for)
+    records = compare.decide(factory, load_bars(args.bars), replay_settings, clock_for,
+                             platform_sizing(args.config))
     args.out.mkdir(parents=True, exist_ok=True)
     write_records(args.out / "decisions.jsonl", records)
     verdicts: dict[str, int] = {}
@@ -163,6 +177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ConfigError,
         CalendarRefused,
         OSError,
+        sqlite3.Error,
         tomllib.TOMLDecodeError,
     ) as exc:
         print(f"research refused: {exc}", file=sys.stderr)

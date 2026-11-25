@@ -30,10 +30,11 @@ Rule order:
    distance (ask - invalidation) at least max(`minimum_stop_spreads` spreads,
    `minimum_stop_percent` percent of ask), cost rule on the round trip (2 x spread)
    against ATR and against per-share risk (top of window - stop), quantity at least 1
-   share: min(floor(`planned_loss_usd` / sizing risk), floor(`max_position_notional_usd` /
-   top of window)), where sizing risk = top of window - stop + spread + slippage reserve
-   on both legs. ENTER carries it in `Decision.quantity`. Then ENTER with entry window
-   [trigger, trigger + extension], stop = invalidation.
+   share: min(floor(planned loss / sizing risk), floor(notional cap / top of window)), with
+   the planned loss and the notional cap the platform's (`SymbolContext.sizing`, from
+   config/bot.toml [risk]; none given = refused), where sizing risk = top of window - stop +
+   spread + slippage reserve on both legs. ENTER carries it in `Decision.quantity`. Then
+   ENTER with entry window [trigger, trigger + extension], stop = invalidation.
 
 The spread and session dollar-volume rules ([liquidity]) are also `quote_liquidity` and
 `session_liquidity`, which discovery applies to the active strategy's candidates (the platform
@@ -141,7 +142,6 @@ _SCHEMA: dict[str, dict[str, Callable[[Any], Any]]] = {
         "slippage_reserve_atr": _non_negative,
     },
     "liquidity": {"max_spread_ratio": _positive, "min_dollar_volume_usd": _positive},
-    "sizing": {"planned_loss_usd": _positive, "max_position_notional_usd": _positive},
 }
 
 
@@ -170,8 +170,6 @@ class Settings:
     slippage_reserve_atr: Decimal
     max_spread_ratio: Decimal
     min_dollar_volume_usd: Decimal
-    planned_loss_usd: Decimal
-    max_position_notional_usd: Decimal
 
     @property
     def required_bars(self) -> int:
@@ -257,6 +255,34 @@ def sizing_inputs(price: Decimal, planned_loss_usd: Decimal, notional_cap_usd: D
         checks.append(_check("daily_loss_room_usd", max(loss_budget_usd, ZERO), ">=", ZERO,
                              "room the daily loss ceiling leaves"))
     return checks
+
+
+def size(checks: list[Check], context: SymbolContext, price: Decimal, risk: Decimal,
+         risk_label: str) -> Decimal | None:
+    """Whole shares within the platform's planned loss and notional cap
+    (`context.sizing`, owner decision 2026-11-15): min(floor(planned loss / `risk`),
+    floor(notional cap / `price`)). Near the daily loss ceiling the planned loss shrinks to the
+    room the platform leaves (`context.loss_budget_usd`). Appends its checks to `checks` and
+    returns the quantity, or None when sizing failed (no limits given, or below 1 share)."""
+    limits = context.sizing
+    if limits is None:
+        checks.append(_flag("planned_loss_limit_usd", False,
+                            "the platform gave no sizing limits (config/bot.toml [risk])"))
+        return None
+    checks.extend(sizing_inputs(price, limits.planned_loss_usd, limits.notional_cap_usd,
+                                context.loss_budget_usd))
+    planned = limits.planned_loss_usd
+    if context.loss_budget_usd is not None and context.loss_budget_usd < planned:
+        planned = max(context.loss_budget_usd, ZERO)
+        checks.append(_check("daily_loss_budget_usd", planned, "<", limits.planned_loss_usd,
+                             "sized down to the room the daily loss ceiling leaves"))
+    by_loss = (planned / risk).to_integral_value(rounding=ROUND_FLOOR)
+    by_notional = (limits.notional_cap_usd / price).to_integral_value(rounding=ROUND_FLOOR)
+    quantity = min(by_loss, by_notional)
+    checks.append(_check("quantity", quantity, ">=", ONE,
+                         f"min(floor(planned loss {planned} / {risk_label}) = {by_loss}, "
+                         f"floor(notional cap / entry_high) = {by_notional})"))
+    return quantity if checks[-1].passed else None
 
 
 def spread_check(quote: Quote, max_spread_ratio: Decimal) -> Check:
@@ -451,31 +477,9 @@ class PriceActionV1:
                 "entry_high - stop + spread + 2 legs x slippage reserve",
             )
         )
-        # Quantity: whole shares within the planned loss and the notional cap. Near the
-        # platform's daily ceiling the planned loss shrinks to the room it leaves.
-        checks.extend(sizing_inputs(entry_high, s.planned_loss_usd, s.max_position_notional_usd,
-                                    context.loss_budget_usd))
-        planned_loss = s.planned_loss_usd
-        if context.loss_budget_usd is not None and context.loss_budget_usd < planned_loss:
-            planned_loss = max(context.loss_budget_usd, ZERO)
-            checks.append(_check("daily_loss_budget_usd", planned_loss, "<", s.planned_loss_usd,
-                                 "sized down to the room the daily loss ceiling leaves"))
-        by_loss = (planned_loss / sizing_risk).to_integral_value(rounding=ROUND_FLOOR)
-        by_notional = (s.max_position_notional_usd / entry_high).to_integral_value(
-            rounding=ROUND_FLOOR
-        )
-        quantity = min(by_loss, by_notional)
-        checks.append(
-            _check(
-                "quantity",
-                quantity,
-                ">=",
-                ONE,
-                f"min(floor(planned loss {planned_loss} / risk) = {by_loss}, "
-                f"floor(notional cap / entry_high) = {by_notional})",
-            )
-        )
-        if not checks[-1].passed:
+        # Quantity: whole shares within the platform's planned loss and notional cap.
+        quantity = size(checks, context, entry_high, sizing_risk, "risk")
+        if quantity is None:
             return ignore()
         return self._decide(
             context,

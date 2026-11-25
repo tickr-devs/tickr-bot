@@ -40,9 +40,3 @@ max_spread_ratio = 0.015
 min_dollar_volume_usd = 5000000
 # Minimum previous session close, USD (the history test's universe floor). Read by volume_shock_v1.
 min_previous_close_usd = 10
-
-[sizing]
-# Planned loss per trade the quantity is sized for, USD; must not exceed config/bot.toml [risk]. Read by strategy.simple.
-planned_loss_usd = 50
-# Maximum position notional, USD (quantity x top of entry window); must not exceed config/bot.toml [risk]. Read by strategy.simple.
-max_position_notional_usd = 1000

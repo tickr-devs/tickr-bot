@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,7 @@ COMMENTED_TOML = [
     ROOT / "config" / "replay.toml",
     ROOT / "config" / "backtest.toml",
     ROOT / "config" / "demo.toml",
+    ROOT / "config" / "settings_schema.toml",
     *sorted((ROOT / "strategies").glob("*/strategy.toml")),
 ]
 
@@ -51,6 +53,42 @@ COMMENTED_TOML = [
                          ids=lambda p: str(p.relative_to(ROOT)))
 def test_every_key_is_commented(path: Path):
     assert config.uncommented_keys(path.read_text("utf-8")) == []
+
+
+# The planned loss and the notional cap per trade live only in bot.toml [risk] (owner
+# 2026-11-15, backlog T2/T3): no other file may set them again, under any name they had.
+SIZING_KEYS = {"planned_loss_usd", "max_position_notional_usd", "position_notional_cap_usd"}
+SIZING_HOME = {(BOT, ("risk", "planned_loss_usd")), (BOT, ("risk", "position_notional_cap_usd"))}
+
+
+def _sizing_keys(table: object, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    """Every key path in a parsed TOML document that is a sizing key or a [sizing] table."""
+    if isinstance(table, dict):
+        items = list(table.items())
+    elif isinstance(table, list):
+        items = list(enumerate(table))
+    else:
+        return []
+    found: list[tuple[str, ...]] = []
+    for key, value in items:
+        here = (*path, str(key))
+        if key in SIZING_KEYS or key == "sizing":
+            found.append(here)
+        found.extend(_sizing_keys(value, here))
+    return found
+
+
+def test_sizing_limits_live_only_in_the_bot_risk_table():
+    found = {(path, keys) for path in COMMENTED_TOML + [ROOT / "config" / "research.toml"]
+             for keys in _sizing_keys(tomllib.loads(path.read_text("utf-8")))}
+    assert found == SIZING_HOME
+
+
+def test_a_strategy_sizing_key_that_reappears_is_detected():
+    text = "[liquidity]\nmax_spread_ratio = 1\n\n[sizing]\nplanned_loss_usd = 50\n"
+    assert _sizing_keys(tomllib.loads(text)) == [("sizing",), ("sizing", "planned_loss_usd")]
+    text = "[entry]\nmax_position_notional_usd = 1000\n"
+    assert _sizing_keys(tomllib.loads(text)) == [("entry", "max_position_notional_usd")]
 
 
 def test_uncommented_key_is_detected():
@@ -64,7 +102,6 @@ def test_hash_inside_string_is_not_a_comment():
 
 
 def test_environments_have_identical_keys():
-    import tomllib
     envs = tomllib.loads(BOT.read_text("utf-8"))["environments"]
     key_sets = {name: set(table) for name, table in envs.items()}
     assert len({frozenset(k) for k in key_sets.values()}) == 1, key_sets

@@ -5,7 +5,9 @@ Two views of the same simulated trades (all `simulated`):
    trade with a bootstrap confidence interval that resamples whole days (trades of one day are
    correlated): an interval above 0 is evidence of an edge under these fill assumptions, one
    that contains 0 is not. The same for the window before the hold-out (the last
-   `holdout_percent` of sessions) and for the hold-out alone.
+   `holdout_percent` of the data's calendar sessions, counted with the sessions that had no
+   candidate, so every setting compared on the same data splits on the same date) and for the
+   hold-out alone.
 2. The bot: trades taken in entry order through the live money checks (`risk.sizing.check_size`,
    `risk.daily.check_daily` with the day's net realized loss, decisions 2026-11-14) and
    `max_open_positions`. USD = (exit - entry) x the strategy's quantity, gross: commissions and
@@ -223,7 +225,9 @@ def _plain(value: Any, places: int) -> Any:
 
 def build(result: ReplayResult, pool: Sequence[PoolEntry], caps: Sequence[CapRecord],
           traded_days: int, skipped: Sequence[dict[str, str]], cfg: Config,
-          settings: BacktestSettings) -> dict[str, Any]:
+          settings: BacktestSettings, calendar_sessions: Sequence[date]) -> dict[str, Any]:
+    """`calendar_sessions`: every completed session of the data window, oldest first, with or
+    without candidates; the hold-out splits on them, never on the pool's days."""
     trades = result.trades
     summary = summarize(result)
     causes: dict[str, int] = defaultdict(int)
@@ -250,7 +254,7 @@ def build(result: ReplayResult, pool: Sequence[PoolEntry], caps: Sequence[CapRec
             "total_usd": sum((t.pnl_usd or ZERO for t in trades), ZERO),
         },
         "bot": bot_view(trades, cfg),
-        "holdout": _holdout(trades, sessions, settings),
+        "holdout": _holdout(trades, calendar_sessions, settings),
         "by_month": breakdown(trades, lambda t: t.session_date.strftime("%Y-%m")),
         "by_setup": breakdown(trades, lambda t: t.setup or "none"),
         "by_exit": breakdown(trades, lambda t: t.exit_reason.value),
@@ -266,7 +270,7 @@ def _holdout(trades: Sequence[SimulatedTrade], sessions: Sequence[date],
     start = holdout_start(sessions, settings.holdout_percent)
     if start is None:
         return None
-    return {"starts": start.isoformat(),
+    return {"starts": start.isoformat(), "calendar_sessions": len(sessions),
             "before": period([t for t in trades if t.session_date < start], settings),
             "holdout": period([t for t in trades if t.session_date >= start], settings)}
 
@@ -354,9 +358,9 @@ class LastSessions:
 def write_report(result: ReplayResult, pool: Sequence[PoolEntry], caps: Sequence[CapRecord],
                  traded_days: int,
                  skipped: Sequence[dict[str, str]], cfg: Config, settings: BacktestSettings,
-                 replay_settings: ReplaySettings, out: Path,
+                 replay_settings: ReplaySettings, out: Path, calendar_sessions: Sequence[date],
                  recent: LastSessions | None = None) -> str:
-    data = build(result, pool, caps, traded_days, skipped, cfg, settings)
+    data = build(result, pool, caps, traded_days, skipped, cfg, settings, calendar_sessions)
     if recent is not None:
         data["last_sessions"] = {"requested": recent.requested,
                                  "first": recent.first.isoformat(),

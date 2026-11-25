@@ -75,7 +75,9 @@ completed sessions bring:
 1. Daily bars of every universe symbol for the new sessions (and the one before, for its close),
    as their own `daily/n<last day>-<chunk>.jsonl` files. The universe is the folder's own.
 2. The new sessions' pool days (same gainer rule as `select`), appended to `pool.csv` and
-   `pool_cap.csv`.
+   `pool_cap.csv` (one row per session, also without candidates). The last completed session
+   is kept in `last_session.txt`, apart from the last pool day, so a session without
+   candidates is fetched once.
 3. Minute bars only for the sessions the new pool days need (each day and `history_sessions`
    before it) that the symbol's minute file holds no bar for, merged into that file.
 4. Pool days older than the window are dropped, with minute files no pool day uses any more.
@@ -93,7 +95,8 @@ the pool only after the next `fetch-all`.
 ## How a pool day is replayed
 
 - Skipped (with cause) when the symbol lacks bars on the day or on any of the `history_sessions`
-  sessions before it, or its run is incomplete: live, the bot refuses a symbol with incomplete
+  sessions before it, or a fetch run holding the day or one of those sessions is incomplete
+  (`FETCH_INCOMPLETE` names each such session and its cause, e.g. PAGE_LIMIT): live, the bot refuses a symbol with incomplete
   history. Also skipped when the daily (forward-adjusted) to M1 (unadjusted) price scale differs
   between the previous session and the day by more than `split_tolerance_percent`: a split
   between them would make the gate's change meaningless. When the replay engine refuses a
@@ -116,7 +119,9 @@ the pool only after the next `fetch-all`.
   are correlated (`bootstrap_samples`, `bootstrap_seed`,
   `confidence_percent`). An interval above 0 is evidence of an edge under these assumptions; an
   interval containing 0 is not. The same is reported for the last `holdout_percent` of sessions
-  (hold-out) and for the sessions before it.
+  (hold-out) and for the sessions before it. The split counts every calendar session of the data
+  window, with or without candidates, and is fixed before any symbol is chosen, so every setting
+  compared on the same data splits on the same date.
 - **Bot limits**: trades in entry order, at most bot.toml `max_open_positions` open, each through
   the live money checks: `risk.sizing.check_size` (planned loss and notional caps at the window
   top and the stop) and `risk.daily.check_daily` (net realized loss of the day + planned loss of

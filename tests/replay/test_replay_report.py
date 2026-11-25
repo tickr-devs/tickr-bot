@@ -33,7 +33,7 @@ def two_trades(settings, scripted):
             5: {"verdict": Verdict.EXIT},
         }
     )
-    return replay(lambda: strategy, {"ABC": series("10:00", rows)}, settings, CLOCK)
+    return replay(lambda: strategy, {"ABC": series("10:00", rows)}, settings, CLOCK, None)
 
 
 def test_summary_in_r_and_percent(settings, scripted):
@@ -51,7 +51,7 @@ def test_summary_in_r_and_percent(settings, scripted):
 
 def test_empty_summary_has_no_averages(settings, scripted):
     strategy = scripted({})
-    result = replay(lambda: strategy, {"ABC": series("10:00", [FLAT])}, settings, CLOCK)
+    result = replay(lambda: strategy, {"ABC": series("10:00", [FLAT])}, settings, CLOCK, None)
     summary = summarize(result)
     assert summary.trades == 0 and summary.average_r is None and summary.total_r == 0
 

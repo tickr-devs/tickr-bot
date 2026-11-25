@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from tickr.types import Bar, Quote
 
 if TYPE_CHECKING:
+    from tickr.config import RiskConfig
     from tickr.data.movers import Mover
 
 
@@ -96,6 +97,22 @@ class PositionView:
 
 
 @dataclass(frozen=True)
+class SizingLimits:
+    """The platform's per-trade sizing limits, given to every strategy with its input (owner
+    decision 2026-11-15, backlog T2/T3): they live only in `config/bot.toml [risk]`, never in a
+    strategy's own file, so the bot, the observers, replay and backtest all size on one value."""
+
+    planned_loss_usd: Decimal
+    """Planned loss per trade the quantity is sized for, USD (`[risk] planned_loss_usd`)."""
+    notional_cap_usd: Decimal
+    """Most notional one position may hold, USD (`[risk] position_notional_cap_usd`)."""
+
+    @classmethod
+    def of(cls, risk: RiskConfig) -> SizingLimits:
+        return cls(risk.planned_loss_usd, risk.position_notional_cap_usd)
+
+
+@dataclass(frozen=True)
 class SymbolContext:
     """Inputs for one evaluation. `bars` are completed M1 bars of the current NY session
     plus history, oldest first; the forming bar is never included."""
@@ -114,6 +131,9 @@ class SymbolContext:
     """The regular open of the current session when the platform proved that `bars` hold every
     bar of the session from it (its read reached back that far); None = not proven. Minutes
     without trades have no bar, so the first session bar may start after the open."""
+    sizing: SizingLimits | None = None
+    """The platform's sizing limits (`config/bot.toml [risk]`); None = not given, and a
+    strategy then refuses to size an entry (never a default of its own)."""
 
 
 class Liquidity(Protocol):

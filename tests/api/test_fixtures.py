@@ -126,6 +126,7 @@ from tickr.replay.engine import ExitReason
 from tickr.research.records import Admission
 from tickr.runtime.alert_routing import Routing
 from tickr.runtime.alerts import AlertKind
+from tickr.settings_schema import Applies, Cause, Compare, Kind, Loosens, Unit
 from tickr.strategy.base import Verdict
 
 from .samples import T0, account, entry, status
@@ -280,6 +281,46 @@ def documents() -> dict[str, object]:
             ConfigSectionV1("run", (
                 ConfigKeyV1("maintain_keep_sessions", "0", "Closed sessions kept "
                             "uncompressed."),)),)),
+        # Settings API (S4): a platform protection limit, a strategy switch, one rule.
+        "settings-schema-v1": contract.SettingsSchemaV1((
+            contract.SettingSpecV1(
+                "platform", "risk.max_daily_loss_usd", Kind.DECIMAL, Unit.USD, "risk.daily_loss",
+                "Daily loss ceiling.", "Límite de pérdida diaria.", Applies.AT_ONCE,
+                Loosens.RAISE, True, False, Decimal("0"), False, None, Decimal("1")),
+            contract.SettingSpecV1(
+                "price-action-v3", "indicators.refuse_when_relative_volume_unavailable",
+                Kind.BOOL, Unit.SWITCH, "strategy.indicators",
+                "Refuse a symbol whose volume history is missing.",
+                "Rechazar un símbolo sin historial de volumen.", Applies.WHEN_FLAT,
+                Loosens.NEVER, False, False, None, True, None, None)), (
+            contract.SettingRuleV1(
+                "platform", "daily_room_below_ceiling", "risk.min_daily_room_usd",
+                Compare.BELOW, "risk.max_daily_loss_usd",
+                "The smallest daily room must be below the daily loss ceiling.",
+                "El margen diario mínimo debe ser inferior al límite de pérdida diaria."),)),
+        "settings-values-v1": contract.SettingsValuesV1((
+            contract.SettingsFileV1("platform", "config/bot.toml", "9" * 64),
+            contract.SettingsFileV1("price-action-v3", "strategies/price-action-v3/strategy.toml",
+                                    "a" * 64)), (
+            contract.SettingValueV1("platform", "risk.max_daily_loss_usd", "50"),
+            contract.SettingValueV1("platform", "risk.max_entry_rest_bars", None),
+            contract.SettingValueV1("price-action-v3",
+                                    "indicators.refuse_when_relative_volume_unavailable",
+                                    "true"))),
+        # A loosening raise (next session, Face ID) and a tightening cut (at once).
+        "settings-draft-v1": contract.SettingsDraftV1(True, (), (
+            contract.SettingChangeV1("platform", "risk.max_daily_loss_usd", "50", "60", True,
+                                     Applies.NEXT_SESSION, True, False),
+            contract.SettingChangeV1("platform", "risk.max_open_positions", "2", "1", True,
+                                     Applies.AT_ONCE, False, False))),
+        "settings-draft-v1.refused": contract.SettingsDraftV1(False, (
+            contract.SettingRefusalV1("platform", "risk.min_daily_room_usd", Cause.RULE_BROKEN,
+                                      "daily_room_below_ceiling: risk.min_daily_room_usd 60 "
+                                      "must be < risk.max_daily_loss_usd 50"),
+            contract.SettingRefusalV1("platform", "risk.max_open_positions", Cause.WRONG_TYPE,
+                                      "expected int as TOML text, got '1.5'")), (
+            contract.SettingChangeV1("platform", "risk.min_daily_room_usd", "10", "60", True,
+                                     Applies.AT_ONCE, False, False),)),
         "settings-v1": SettingsV1(
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
             RiskSettings(Decimal("50"), Decimal("2500"), Decimal("300"), 1, Decimal("5"),

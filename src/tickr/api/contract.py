@@ -46,6 +46,12 @@ from tickr.replay.engine import ExitReason
 from tickr.research.records import Admission, DecisionRecord
 from tickr.risk.causes import ENGINE_REFUSED, AdmissionCause
 from tickr.risk.ticks import round_to_tick
+from tickr.settings_schema import Applies as SettingApplies
+from tickr.settings_schema import Cause as SettingCause
+from tickr.settings_schema import Compare as SettingCompare
+from tickr.settings_schema import Kind as SettingKind
+from tickr.settings_schema import Loosens as SettingLoosens
+from tickr.settings_schema import Unit as SettingUnit
 from tickr.strategy.base import Check, Decision, Role, Verdict
 
 API_VERSION = 1
@@ -886,6 +892,125 @@ class ConfigV1:
     valid: bool
     error: str | None
     sections: tuple[ConfigSectionV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+# ---------------------------------------------------------------- owner settings (S4, read-only)
+
+
+@dataclass(frozen=True)
+class SettingSpecV1:
+    """One owner setting of the settings schema (tickr/settings_schema.py and
+    config/settings_schema.toml). `owner` is `platform` (config/bot.toml) or a strategy folder;
+    `key` is the dotted `table.key` inside that owner's file. `applies` is when a change that
+    does not loosen protection takes effect; `loosens` is the direction that loosens it (such a
+    change waits for the next session and needs Face ID); `needs_face_id` is true when some
+    change of it does. Bounds and step are in the setting's unit; null when it has none."""
+
+    owner: str
+    key: str
+    kind: SettingKind
+    unit: SettingUnit
+    group: str
+    description_en: str
+    description_es: str
+    applies: SettingApplies
+    loosens: SettingLoosens
+    needs_face_id: bool
+    requires_retraining: bool
+    minimum: Decimal | None
+    minimum_inclusive: bool
+    maximum: Decimal | None
+    step: Decimal | None
+
+
+@dataclass(frozen=True)
+class SettingRuleV1:
+    """A rule across two keys of one owner's file: `left` `compare` `right`."""
+
+    owner: str
+    name: str
+    left: str
+    compare: SettingCompare
+    right: str
+    description_en: str
+    description_es: str
+
+
+@dataclass(frozen=True)
+class SettingsSchemaV1:
+    """GET /settings/schema: every owner setting and every rule across settings, read-only."""
+
+    settings: tuple[SettingSpecV1, ...]
+    rules: tuple[SettingRuleV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class SettingsFileV1:
+    """One owner's file as it is on disk now: its path relative to the bot's folder and its
+    SHA-256."""
+
+    owner: str
+    file: str
+    digest: str
+
+
+@dataclass(frozen=True)
+class SettingValueV1:
+    """A schema setting's value in its owner's file now, as TOML text; null when the file has
+    no such key."""
+
+    owner: str
+    key: str
+    value: str | None
+
+
+@dataclass(frozen=True)
+class SettingsValuesV1:
+    """GET /settings/values: the present value of every schema setting, read from the files on
+    disk now (the running bot may still use older ones until it restarts)."""
+
+    files: tuple[SettingsFileV1, ...]
+    values: tuple[SettingValueV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class SettingRefusalV1:
+    """Why one key of a draft is refused (settings_schema.Cause)."""
+
+    owner: str
+    key: str
+    cause: SettingCause
+    detail: str
+
+
+@dataclass(frozen=True)
+class SettingChangeV1:
+    """What one draft key would do, against the value on disk now: `applies` when it would take
+    effect, `needs_face_id` when it loosens protection, `requires_retraining` when it applies
+    only with a newly trained model. `changed` false: the draft repeats the present value."""
+
+    owner: str
+    key: str
+    current: str
+    draft: str
+    changed: bool
+    applies: SettingApplies
+    needs_face_id: bool
+    requires_retraining: bool
+
+
+@dataclass(frozen=True)
+class SettingsDraftV1:
+    """POST /settings/validate: the verdict on a draft. Nothing is written or applied. `valid`
+    is true when there is no refusal; `changes` lists every draft key whose value is of the
+    setting's kind and has a present value."""
+
+    valid: bool
+    refusals: tuple[SettingRefusalV1, ...]
+    changes: tuple[SettingChangeV1, ...]
     api_version: int = _const(API_VERSION)
 
 
@@ -2706,6 +2831,9 @@ SCHEMA_TYPES: dict[str, type] = {
     "chart-v1": ChartV1,
     "settings-v1": SettingsV1,
     "config-v1": ConfigV1,
+    "settings-schema-v1": SettingsSchemaV1,
+    "settings-values-v1": SettingsValuesV1,
+    "settings-draft-v1": SettingsDraftV1,
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
     "system-v1": SystemV1,

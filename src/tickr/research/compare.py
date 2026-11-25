@@ -30,7 +30,14 @@ from tickr.replay.engine import M1, replay
 from tickr.replay.settings import ReplaySettings
 from tickr.research.errors import ResearchError
 from tickr.research.records import Admission, DecisionRecord
-from tickr.strategy.base import Decision, Role, Strategy, SymbolContext, Verdict
+from tickr.strategy.base import (
+    Decision,
+    Role,
+    SizingLimits,
+    Strategy,
+    SymbolContext,
+    Verdict,
+)
 from tickr.types import Bar
 
 LEVELS = ("setup", "trigger", "invalidation", "entry_low", "entry_high", "stop", "quantity")
@@ -66,10 +73,13 @@ def decide(
     bars_by_symbol: Mapping[str, Sequence[Bar]],
     settings: ReplaySettings,
     clock_for: ClockFor,
+    sizing: SizingLimits,
 ) -> tuple[DecisionRecord, ...]:
-    """Every decision of the strategy over the bars, in replay order (symbol, then time)."""
+    """Every decision of the strategy over the bars, in replay order (symbol, then time),
+    sized on the platform's limits (`sizing`)."""
     sink: list[DecisionRecord] = []
-    replay(lambda: _Recorder(create_strategy(), sink), bars_by_symbol, settings, clock_for)
+    replay(lambda: _Recorder(create_strategy(), sink), bars_by_symbol, settings, clock_for,
+           sizing)
     return tuple(sink)
 
 

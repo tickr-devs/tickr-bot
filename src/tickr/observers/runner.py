@@ -88,7 +88,8 @@ def _contract_problem(observer: LoadedStrategy, symbol: str, decision: object) -
 def freeze(context: SymbolContext, at: datetime, max_quote_age: timedelta,
            max_clock_skew: timedelta) -> SymbolContext:
     """An immutable copy for the worker: tuples of bars, no position, no daily loss budget
-    (that room is the active strategy's; an observer sizes as if it traded alone), and no
+    (that room is the active strategy's; an observer sizes as if it traded alone, on the same
+    platform sizing limits as the active strategy, `context.sizing`), and no
     quote whose times entry admission would refuse at `at` (stale, from the future, naive)."""
     quote = usable_quote(context.quote, at, max_quote_age, max_clock_skew)
     return replace(
@@ -159,7 +160,7 @@ class _Encoder:
             sent_prior) == len(prior) and all(
             len(a) == len(b) and _same(a, b) for a, b in zip(sent_prior, prior, strict=True))
         message = ("eval", symbol, at, context.quote, None if same_prior else prior, base, tail,
-                   tuple(stale), context.session_open)
+                   tuple(stale), context.session_open, context.sizing)
 
         def commit() -> None:
             for name in stale:
@@ -220,7 +221,7 @@ class _Worker:
             send(("done", events))
 
     def _handle(self, item: tuple[Any, ...], events: list[tuple[Any, ...]]) -> None:
-        _, symbol, at, quote, prior, base, tail, forget, session_open = item
+        _, symbol, at, quote, prior, base, tail, forget, session_open, sizing = item
         for name in forget:
             self._bars.pop(name, None)
             self._prior.pop(name, None)
@@ -234,7 +235,7 @@ class _Worker:
         if prior is not None:
             self._prior[symbol] = prior
         context = SymbolContext(symbol, tuple(bars), self._prior.get(symbol, ()), quote,
-                                session_open=session_open)
+                                session_open=session_open, sizing=sizing)
         self._evaluate(context, at, events)
 
     def _off(self, observer: LoadedStrategy, at: datetime, cause: str,
