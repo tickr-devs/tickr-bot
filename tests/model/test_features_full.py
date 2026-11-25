@@ -4,8 +4,10 @@ the training's whole-day `l1feat.assemble` on the same training-format inputs.""
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
 import shutil
+import sys
 
 import model_bars as synthetic
 import model_inputs as inputs
@@ -19,6 +21,7 @@ from tickr.model.features import full
 HISTORY_DAYS = 6  # the table code needs at least 5 earlier days (MINH) for the hist group
 DAY = "2024-03-06"  # a day of the open archive: no date rule of the training is touched
 LIVE_DAY = "2026-12-02"  # after l1labels.HARD_LAST: the live date rule applies
+LIVE_MINUTE = 400  # 10:40 New York
 LIVE_FIRST = "2026-08-15"  # a Benzinga file may not span the sealed window SEAL (it refuses)
 SYMBOLS = ["SPY", "QQQ"] + [f"T{i:03d}" for i in range(12)]
 TICK_MINUTES = range(300, 420)  # table minutes with tick rows (09:00 .. 10:59)
@@ -102,27 +105,71 @@ def test_a_minute_with_cut_inputs_equals_the_whole_day(setup, whole_day, minute)
         assert np.array_equal(a, b, equal_nan=True), c
 
 
-def test_a_live_day_runs_with_the_live_date_rule(tmp_path):
+@pytest.fixture(scope="module")
+def live(tmp_path_factory):
     days = synthetic.market(HISTORY_DAYS + 1, last=LIVE_DAY)
     today, bars = days[-1]
     state = features.history(days[:-1], {}, today, None)
-    given = _inputs(tmp_path / "x", today, LIVE_FIRST)
-    labels = full.full_code().labels
-    kept = labels.HARD_LAST
-    got = full.minute_rows_full(synthetic.cut(bars, today, 400), today, 400, state, None, given)
-    assert labels.HARD_LAST == kept < today
+    given = _inputs(tmp_path_factory.mktemp("live") / "x", today, LIVE_FIRST)
+    return today, synthetic.cut(bars, today, LIVE_MINUTE), state, given
+
+
+def test_the_live_replacement_is_declared_and_checked():
+    code = full.full_code()
+    assert code.labels.HARD_LAST == "9999-12-31" and code.labels.SEAL == ("2026-07-01",
+                                                                         "2026-08-14")
+    assert code.labels._TICKR_LIVEPATCH == tuple(n for n, _, _ in full.LIVEPATCH)
+    for module in (code.feat, sys.modules["l1bz"], sys.modules["l1fl"]):
+        assert module.L is code.labels
+    pinned = (features.PINNED_DIR / "l1labels.py").read_text("utf-8")
+    assert pinned.count("HARD_LAST = '2026-11-19'") == 1  # the pinned bytes are untouched
+    with pytest.raises(ModelRefused) as exc:
+        full.live_text(pinned.replace("HARD_LAST = '2026-11-19'", "HARD_LAST = '2026-11-20'"))
+    assert exc.value.cause == "table_code_replacement"
+    with pytest.raises(ModelRefused):
+        full.live_text(pinned + "\nHARD_LAST = '2026-11-19'\n")
+
+
+def test_a_live_day_with_the_replacement_has_news_values(live):
+    today, bars, state, given = live
+    got = full.minute_rows_full(bars, today, LIVE_MINUTE, state, None, given)
+    assert len(got) > 0
     assert got["bz_n1d"].notna().all() and got["nw_n"].notna().all()
 
 
-def test_a_benzinga_file_past_a_live_day_refuses(tmp_path):
+def test_a_live_day_without_the_replacement_is_the_training_s_sealed_day(live, monkeypatch):
+    """The other behaviour: the unpatched pinned l1labels on a live day gives every bz and nw_*
+    value missing (and refuses a Benzinga file named past 2026-11-19)."""
+    today, bars, state, given = live
+    code = full.full_code()
+    path = features.PINNED_DIR / "l1labels.py"
+    spec = importlib.util.spec_from_file_location("l1labels_unpatched", path)
+    plain = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plain)
+    assert plain.HARD_LAST == "2026-11-19"
+    for module in (code.feat, sys.modules["l1bz"], sys.modules["l1fl"]):
+        monkeypatch.setattr(module, "L", plain)
+    with pytest.raises(ModelRefused) as exc:
+        full.minute_rows_full(bars, today, LIVE_MINUTE, state, None, given)
+    assert "sealed_date" in exc.value.detail
+    folder = given.benzinga.parent / "bz-old-names"
+    folder.mkdir()
+    for f in given.benzinga.iterdir():
+        shutil.copy(f, folder / f.name.replace(today, "2026-11-19"))
+    old = full.FullInputs(given.tick_file, given.reference, folder, given.fl_facts)
+    got = full.minute_rows_full(bars, today, LIVE_MINUTE, state, None, old)
+    names = full.full_groups()["bz"] + ["nw_n", "nw_3d", "nw_min", "nw_any", "nw_rk"]
+    assert len(got) > 0 and got[names].isna().all().all()
+
+
+def test_a_benzinga_file_across_the_sealed_window_refuses(tmp_path):
     days = synthetic.market(HISTORY_DAYS + 1, last=LIVE_DAY)
     today, bars = days[-1]
     state = features.history(days[:-1], {}, today, None)
-    given = _inputs(tmp_path / "x", today, LIVE_FIRST)
-    for f in given.benzinga.iterdir():
-        f.rename(f.with_name(f.name.replace(today, "2026-12-31")))
+    given = _inputs(tmp_path / "x", today, "2026-08-14")
     with pytest.raises(ModelRefused) as exc:
-        full.minute_rows_full(synthetic.cut(bars, today, 400), today, 400, state, None, given)
+        full.minute_rows_full(synthetic.cut(bars, today, LIVE_MINUTE), today, LIVE_MINUTE,
+                              state, None, given)
     assert exc.value.cause == "feature_code_refused" and "sealed_date" in exc.value.detail
 
 

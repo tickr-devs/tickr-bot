@@ -45,18 +45,22 @@ reports timed after it are dropped from the files that hold the day; the referen
 the day is cut at the same mark. Files dated by day stay whole. Bars after m are refused, as in
 `minute_rows`.
 
-SEALED DATES. The training treats every date after `l1labels.HARD_LAST` (2026-11-19, the last day
-of the research archive) as sealed: the bz group and the five nw_* columns are missing on such a
-day and a Benzinga file whose name reaches past it refuses. A live day is after it by nature, and
-the data of a live day is the bot's present, not a held-out future; the prefix rule above keeps
-everything after the minute out. So for a day after HARD_LAST the bot runs the training code with
-HARD_LAST moved to that day (LIVE_LAST_RULE): a declared runtime replacement, made under the
-module lock and undone after the call. The sealed window SEAL (2026-07-01 .. 2026-08-14) is kept
-unchanged: the training's values for a live day are then the training's own (a split factor
-over the window, an earnings history that spans it, stay missing as in training). For a day on
-or before HARD_LAST nothing is replaced. Benzinga files must then be named up to the day itself
-(`<kind>-<first>_<day>.jsonl.gz` for the running month), and the calendar ends 2026-12-31: a
-later day refuses (`unknown_trading_day`) until a new pinned calendar arrives.
+SEALED DATES: ONE DECLARED REPLACEMENT, NEEDS CODEX'S YES. The training treats every date after
+`l1labels.HARD_LAST` (2026-11-19, the last day of the research archive) as sealed. Run unchanged
+on a live day, all 13 bz columns and the five nw_* columns are missing, a Benzinga file whose name
+reaches past 2026-11-19 refuses (`sealed_date`) and `l1fl.facts` refuses a fact filed after it. A
+live day is after it by nature; its data is the bot's present, not a held-out future, and the
+prefix rule above keeps everything after the minute out. So the bot loads `l1labels` from the
+pinned text with the replacements of LIVEPATCH, applied the way `l1feat.modules` applies TKPATCH
+(each old text exactly once, the result checked against L1LABELS_LIVE_MD5), and registers it under
+its own name so that `l1feat`, `l1bz` and `l1fl` import it. Nothing else changes. On a day on or
+before 2026-11-19 every value is the training's (only refusals of files named past that date
+go). The sealed window SEAL (2026-07-01 .. 2026-08-14) is kept: a Benzinga file may not span it,
+and a split factor or an earnings history that spans it stays missing, as in training (on the
+latest training days er_next was missing on every row for that reason; live it stays missing until
+the four reports it uses all lie after the window). The calendar ends 2026-12-31: a later day
+refuses (`unknown_trading_day`) until a new pinned calendar arrives; no replacement is declared
+for it.
 """
 
 from __future__ import annotations
@@ -99,7 +103,14 @@ COMPUTABLE_GROUPS = ("bars", "bz", "company", "cross", "fl", "hist", "lists", "m
 # the names joined by newlines (the trainer's feature_list_md5).
 GROUP_MAP_SHA256 = "15b8237c72e7d30d5bfa9332f80a0199ed3957becaaebbb9e6ca8524ae93a772"
 FEATURE_LIST_MD5 = "098e7eb91329bdaf66505b9501961256"
-LIVE_LAST_RULE = "a day after l1labels.HARD_LAST runs with HARD_LAST = that day; SEAL unchanged"
+# The live declared replacement in the pinned l1labels.py (needs Codex's yes, see the docstring):
+# (name, exact old text, new text). '9999-12-31' is the date no day reaches: no archive end.
+LIVEPATCH = (
+    ("the research archive's last day is not a live bound: no day after it is sealed",
+     "HARD_LAST = '2026-11-19'", "HARD_LAST = '9999-12-31'"),
+)
+# md5 of the pinned l1labels.py text with LIVEPATCH applied (the module the bot runs).
+L1LABELS_LIVE_MD5 = "4b29a03929c77d15ee81e283f856ad03"
 
 _CODE: dict[str, Any] = {}
 
@@ -140,6 +151,35 @@ def _tk_text(l1feat: Any) -> str:
     return new
 
 
+def live_text(src: str, patch: tuple = LIVEPATCH) -> str:
+    """`src` with every declared replacement applied, each old text exactly once."""
+    new = src
+    for name, old, replacement in patch:
+        if src.count(old) != 1 or new.count(old) != 1:
+            raise ModelRefused("table_code_replacement", name)
+        new = new.replace(old, replacement)
+    return new
+
+
+def _load_live_labels() -> Any:
+    """The pinned l1labels.py run from its LIVEPATCH text, registered as `l1labels` (its file
+    name stays the pinned file's, where its calendar lies beside it)."""
+    import importlib.util
+
+    path = base.PINNED_DIR / "l1labels.py"
+    text = live_text(path.read_text("utf-8"))
+    if hashlib.md5(text.encode("utf-8")).hexdigest() != L1LABELS_LIVE_MD5:
+        raise ModelRefused("table_code_replacement", "l1labels.py with LIVEPATCH")
+    spec = importlib.util.spec_from_loader("l1labels", loader=None, origin=str(path))
+    module = importlib.util.module_from_spec(spec)
+    module.__file__ = str(path)
+    module._TICKR_LIVEPATCH = tuple(name for name, _, _ in LIVEPATCH)
+    # the pinned text with LIVEPATCH, md5-checked above
+    exec(compile(text, str(path), "exec"), module.__dict__)
+    sys.modules["l1labels"] = module
+    return module
+
+
 def full_code() -> SimpleNamespace:
     """The pinned feature builder, imported once after every check: the table code's checks
     (`tickr.model.features.table_code`), every file of FULL_PINS, wm2tk_l1.py = TKPATCH applied
@@ -154,6 +194,11 @@ def full_code() -> SimpleNamespace:
         if differ:
             raise ModelRefused("table_code_md5", ", ".join(differ))
         with _training_refusals():
+            labels = sys.modules.get("l1labels")
+            if labels is None:
+                labels = _load_live_labels()
+            elif getattr(labels, "_TICKR_LIVEPATCH", None) is None:
+                raise ModelRefused("table_code_shadowed", "l1labels imported without LIVEPATCH")
             import l1feat  # type: ignore[import-not-found]
             import wm2ref16  # type: ignore[import-not-found]
             import wm2tk_l1  # type: ignore[import-not-found]
@@ -166,7 +211,9 @@ def full_code() -> SimpleNamespace:
                 raise ModelRefused("table_code_shadowed", f"{name} imported from {where}")
         if Path(wm2tk_l1.__file__).read_text("utf-8") != _tk_text(l1feat):
             raise ModelRefused("table_code_replacement", "wm2tk_l1.py is not TKPATCH on wm2tk.py")
-        labels = sys.modules["l1labels"]
+        if any(getattr(m, "L", labels) is not labels for m in (l1feat, sys.modules["l1bz"],
+                                                               sys.modules["l1fl"])):
+            raise ModelRefused("table_code_shadowed", "a module holds another l1labels")
         if (l1feat.PIN["wm2ref16.py"] != FULL_PINS["wm2ref16.py"]
                 or any(labels.PIN[k] != base.PINS[k] for k in ("wide.py", "wm.py", "wm2tk.py"))):
             raise ModelRefused("table_code_md5", "the builder's own pins differ from the copies")
@@ -201,18 +248,6 @@ def full_features() -> list[str]:
     return list(full_code().names)
 
 
-@contextlib.contextmanager
-def _live_last(labels: Any, day: str) -> Iterator[None]:
-    """LIVE_LAST_RULE, under the module lock: HARD_LAST moved to a day after it, then undone."""
-    kept = labels.HARD_LAST
-    if day > kept:
-        labels.HARD_LAST = day
-    try:
-        yield
-    finally:
-        labels.HARD_LAST = kept
-
-
 def minute_rows_full(rows: Any, day: str, minute: int, state: base.DayState,
                      types: set[str] | None, inputs: FullInputs) -> Any:
     """The rows of `minute` of `day` with all 191 features: the table rows of the minute from
@@ -235,8 +270,7 @@ def minute_rows_full(rows: Any, day: str, minute: int, state: base.DayState,
     with base._LOCK:
         work = tempfile.mkdtemp(prefix="tickr-l1feat-")
         try:
-            with (_training_refusals(), _live_last(code.labels, day),
-                  contextlib.redirect_stdout(io.StringIO())):
+            with _training_refusals(), contextlib.redirect_stdout(io.StringIO()):
                 cut = code.feat.cut_inputs(day, minute, str(inputs.tick_file),
                                            str(inputs.benzinga), work, str(inputs.reference))
                 out, _ = code.feat.assemble(t, prev, day, cut[0], cut[2], cut[1],
