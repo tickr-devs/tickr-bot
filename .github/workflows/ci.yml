@@ -75,7 +75,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - if: needs.python-changes.outputs.python == 'true'
-        run: uv sync --frozen --extra dev --extra webull
+        run: uv sync --frozen --extra dev --extra webull --extra model
       - if: needs.python-changes.outputs.python == 'true'
         run: uv run --no-sync ruff check .
       # One pytest process per core (pytest-xdist): the suite's tests share no state.

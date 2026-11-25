@@ -757,6 +757,18 @@ backtest_stop_distance_edges_percent = [1, 2, 4, 8]
 # stop exit until the session end, both measured from the entry, increasing; read by advisor.backtest_evidence.
 backtest_excursion_edges_r = [0, 0.5, 1, 2, 3]
 
+[model]
+# Trained model switch (backlog R24..R26): true = the trained model decides entries; false = it is not loaded and the
+# active strategy above decides as before. Must stay false until the live feed and the decision path are merged (config
+# load refuses true until then); read by config.load and tickr.model.bundle.
+enabled = false
+# Folder of model bundles, relative to [run] data_dir; one subfolder <name>-<version> per bundle with manifest.json and
+# one LightGBM file per head (docs: tickr.model.bundle); read by tickr.model.bundle.
+bundles_dir = "models"
+# Bundle folder name <name>-<version> under bundles_dir that the bot loads when enabled; empty = none chosen; read by
+# tickr.model.bundle.
+bundle = ""
+
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new
 # entry (fence disk-low); keep it well above zero, since the bot needs room to write its status, journal and database
