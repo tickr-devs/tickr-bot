@@ -16,7 +16,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -72,7 +72,8 @@ class Watch:
         self.now = now
         self._alerted: set[str] = set()  # fences alerted while they stay set
         self._stream_lost: set[str] = set()  # trades alerted for a stream-lost exit
-        self._backup_day: date | None = None
+        self._backup_day: date | None = None  # day whose backup is published and verified
+        self._backup_retry_at: datetime | None = None  # no attempt before this after a failure
         self._ceiling_day: date | None = None  # day the daily ceiling was alerted
         self._fees_alerted: set[str] = set()  # orders alerted for unknown fees
         # Fee corrections recorded before this run were alerted by the run that made them.
@@ -170,11 +171,17 @@ class Watch:
     # --- backup ----------------------------------------------------------------------------
 
     def backup_daily(self) -> None:
-        """One verified backup per New York date; older ones removed once it is verified."""
-        day = self.now().astimezone(NEW_YORK).date()
+        """One verified backup per New York date; older ones removed once it is verified.
+
+        The day counts as done only after its backup is published under the final name (or
+        found there) and the older ones are removed; a failed attempt is journaled and tried
+        again `[run] backup_retry_seconds` later the same day, never left to the next one."""
+        now = self.now()
+        day = now.astimezone(NEW_YORK).date()
         if self._backup_day == day:
             return
-        self._backup_day = day
+        if self._backup_retry_at is not None and now < self._backup_retry_at:
+            return
         folder = self.config.root / self.config.run.data_dir / self.config.run.backups_dir
         target = folder / f"{BACKUP_PREFIX}{day.isoformat()}{BACKUP_SUFFIX}"
         # Written under a temporary name and verified before it takes the final name, so a
@@ -195,9 +202,14 @@ class Watch:
             for old in _older_backups(folder, target):
                 old.unlink()
         except (OSError, RuntimeError, sqlite3.Error) as exc:
+            self._backup_retry_at = now + timedelta(
+                seconds=float(self.config.run.backup_retry_seconds))
             with store.transaction():
                 store.append(BACKUP_FAILED, {"error": type(exc).__name__, "detail": str(exc)},
                              run_id=self.engine.run_id)
+            return
+        self._backup_day = day
+        self._backup_retry_at = None
 
 
 def _older_backups(folder: Path, keep: Path) -> list[Path]:

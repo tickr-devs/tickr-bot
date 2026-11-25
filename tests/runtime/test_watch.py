@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CFG = load_baseline()
 MONDAY_11 = datetime(2026, 11, 16, 11, 0, tzinfo=NEW_YORK)
 AFTER = float(CFG.alerts.fence_alert_after_seconds)
+RETRY = timedelta(seconds=float(CFG.run.backup_retry_seconds))
 
 
 class Recorder:
@@ -135,6 +136,55 @@ def test_backup_failure_is_journaled_and_keeps_the_old_one(tmp_path):
     assert row.body["error"] == "OSError"
 
 
+def test_failed_backup_is_retried_the_same_day_after_the_delay(tmp_path):
+    """A transient failure must not cost the day's backup (review 2026-11-24 section 8)."""
+    rig = Rig(tmp_path)
+    folder = tmp_path / CFG.run.data_dir / CFG.run.backups_dir
+    folder.mkdir(parents=True)
+    real = rig.store.backup
+
+    def broken(target):
+        raise OSError("disk busy")
+
+    rig.store.backup = broken
+    rig.watch.backup_daily()
+    rig.store.backup = real
+    rig.now += RETRY - timedelta(seconds=1)
+    rig.watch.backup_daily()  # still inside the delay: no new attempt
+    assert list(folder.iterdir()) == []
+    rig.now += timedelta(seconds=1)
+    rig.watch.backup_daily()
+    assert sorted(p.name for p in folder.iterdir()) == ["tickr-2026-11-16.sqlite3"]
+    assert len(rig.store.journal(BACKUP_FAILED)) == 1
+    assert len(rig.store.journal(BACKUP)) == 1
+    rig.now += RETRY
+    rig.watch.backup_daily()  # done for the day
+    assert len(rig.store.journal(BACKUP)) == 1
+
+
+def test_failed_cleanup_is_retried_and_the_day_is_done_only_after_it(tmp_path, monkeypatch):
+    rig = Rig(tmp_path)
+    folder = tmp_path / CFG.run.data_dir / CFG.run.backups_dir
+    folder.mkdir(parents=True)
+    old = folder / "tickr-2026-11-13.sqlite3"
+    old.write_bytes(b"old")
+    real_unlink = Path.unlink
+
+    def refuse_old(self, missing_ok=False):
+        if self == old:
+            raise PermissionError("read-only")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse_old)
+    rig.watch.backup_daily()
+    assert sorted(p.name for p in folder.iterdir()) == [old.name, "tickr-2026-11-16.sqlite3"]
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    rig.now += RETRY
+    rig.watch.backup_daily()  # the published backup is kept, only the old one goes
+    assert sorted(p.name for p in folder.iterdir()) == ["tickr-2026-11-16.sqlite3"]
+    assert len(rig.store.journal(BACKUP)) == 1
+
+
 class NeverCancels(FakeBroker):
     def cancel(self, cid):
         pass
@@ -176,12 +226,12 @@ def test_failed_verification_never_leaves_a_final_name_or_deletes_the_old(tmp_pa
     def vacuum_fails(target):
         raise sqlite3.OperationalError("database or disk is full")
 
-    rig.watch._backup_day = None
+    rig.now += RETRY
     rig.store.backup = vacuum_fails
     rig.watch.backup_daily()  # never raises into the loop
     assert [r.body["error"] for r in rig.store.journal(BACKUP_FAILED)] == [
         "RuntimeError", "OperationalError"]
-    rig.watch._backup_day = None
+    rig.now += RETRY
     rig.store.backup = real
     rig.watch.backup_daily()
     assert sorted(p.name for p in folder.iterdir()) == ["tickr-2026-11-16.sqlite3"]

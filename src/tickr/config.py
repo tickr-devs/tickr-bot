@@ -72,6 +72,7 @@ class RunConfig:
     database_busy_timeout_seconds: Decimal
     code_version_timeout_seconds: Decimal
     backups_dir: str
+    backup_retry_seconds: Decimal
     maintain_keep_sessions: int
     maintain_archive_max_age_days: int
 
@@ -639,6 +640,9 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                           "or a number of days")
     if run.code_version_timeout_seconds <= 0:
         raise ConfigError("[run] code_version_timeout_seconds must be above 0")
+    if run.backup_retry_seconds <= 0:
+        # 0 would try (and journal backup-failed) on every loop pass while the disk fails.
+        raise ConfigError("[run] backup_retry_seconds must be above 0")
     md: MarketDataConfig = built["market_data"]
     if (md.profile_refresh_seconds <= 0 or md.profile_refresh_gainer_move_percent <= 0
             or md.profile_max_requests_per_round < 1 or md.profile_reserve_requests < 0):

@@ -14,6 +14,9 @@ database_busy_timeout_seconds = 5
 code_version_timeout_seconds = 5
 # Daily verified database backup folder, relative to data_dir; one file per NY date, only the latest kept (spec 10); read by runtime.watch.
 backups_dir = "backups"
+# Seconds after a failed daily backup attempt before the bot tries again the same New York day (a transient disk or
+# lock error must not cost the day's backup; review 2026-11-24 section 8); read by runtime.watch.
+backup_retry_seconds = 300
 # Closed sessions whose capture and decision folders `tickr maintain` leaves uncompressed (today is never touched);
 # older finished days are gzipped in place; read by maintain.
 maintain_keep_sessions = 20
