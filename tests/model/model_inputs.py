@@ -1,6 +1,8 @@
 """Synthetic non-bar inputs in the training's file formats, for the 191-feature tests: a tick
 table in the schema of the frozen converter wm2tick v11 (sym, m and 61 value columns), a prepared
-reference folder with its manifest, a Benzinga folder and an fl facts file."""
+reference folder with its manifest, a Benzinga folder and an fl facts file; the training's own
+modules imported the research way, the snapshot as of a minute cut by the training's own
+`cut_inputs`, and the bot calendar's day."""
 
 from __future__ import annotations
 
@@ -9,9 +11,16 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+
+from tickr.calendar import NEW_YORK, MarketDay, SessionCalendar
+from tickr.model import features
+from tickr.model.features import full
+
+CALENDAR_DIR = Path(__file__).parents[2] / "config" / "calendar"
 
 # The 61 value columns of wm2tick v11 (c1c1ead1) in its order; tn and qn are BIGINT, the rest
 # DOUBLE (read from a `local` run of the converter on a two-stock day).
@@ -146,3 +155,44 @@ def fl_facts(path: Path, day: str, symbols: list[str]) -> Path:
         body += f"{s},{i + 1},2023-06-30,{filed},{known},{usd!r},{share!r},1,10-K\n"
     path.write_text(head + body)
     return path
+
+
+def research() -> SimpleNamespace:
+    """The pinned builder imported the way the training and the research tools import it: by
+    its module names, from the pinned folder (the table code puts it on sys.path)."""
+    w = features.table_code()
+    import l1feat  # type: ignore[import-not-found]
+    import l1labels  # type: ignore[import-not-found]
+    import wm2ref16  # type: ignore[import-not-found]
+    import wm2tk_l1  # type: ignore[import-not-found]
+
+    settings = l1feat.settings(str(features.PINNED_DIR / full.SETTINGS_FILE))
+    return SimpleNamespace(feat=l1feat, labels=l1labels, ref=wm2ref16, tk=wm2tk_l1, w=w,
+                           settings=settings)
+
+
+def asof(day: str, minute: int, given: full.FullInputs, work: Path) -> full.FullInputs:
+    """The snapshot of `given` as of the mark of `minute`: the training's own `cut_inputs`."""
+    import contextlib
+    import io
+
+    work.mkdir()
+    with contextlib.redirect_stdout(io.StringIO()):
+        tk, bz, ref, _ = research().feat.cut_inputs(day, minute, str(given.tick_file),
+                                                    str(given.benzinga), str(work),
+                                                    str(given.reference))
+    return full.FullInputs(Path(tk), Path(ref), Path(bz), given.fl_facts)
+
+
+def market_day(day: str) -> MarketDay:
+    """The bot calendar's day; a day before its coverage (the open archive) is built with the
+    standard hours, for the parity tests only."""
+    d = datetime.date.fromisoformat(day)
+    calendar = SessionCalendar.load(CALENDAR_DIR)
+    if any(a <= d <= b for a, b in calendar.coverage):
+        return calendar.day(d)
+
+    def at(h: int, m: int = 0) -> datetime.datetime:
+        return datetime.datetime(d.year, d.month, d.day, h, m, tzinfo=NEW_YORK)
+
+    return MarketDay(d, at(4), at(9, 30), at(16), at(20), False, "test: open archive day")

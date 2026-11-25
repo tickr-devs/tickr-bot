@@ -12,7 +12,8 @@ A bundle is one folder `<[run] data_dir>/<[model] bundles_dir>/<name>-<version>/
       "features": ["m", "sess", "c", ...],
       "feature_list_md5": "<md5 of the names joined by newlines, as l1train records it>",
       "heads": {"h30e": {"file": "h30e.txt", "sha256": "<hex>", "trees": 812}, ...},
-      "training": {...}
+      "training": {...},
+      "live_availability": {"er_next": "<statement>", ...}
     }
 
 `training` is a free record (train cutoff, label version, data digests) kept for the journal and
@@ -27,6 +28,10 @@ is a ModelRefused with one cause:
 - `feature_code_differs`: the bundle was built by other feature code than the pinned copy the bot
   runs (`tickr.model.features.PINS`), so its features would not mean the same thing live;
 - `feature_list`: names twice, or a digest that does not match the list;
+- `live_availability_undisclosed`: the bundle uses a feature of AVAILABILITY_MAY_DIFFER but its
+  manifest does not carry, for exactly those of its features, a statement that the feature's
+  availability live may differ from training (`live_availability`, feature -> non-empty text;
+  optional for a bundle that uses none of them);
 - `feature_not_live`: a feature the bot cannot compute live yet (only the groups of
   `tickr.model.features.LIVE_GROUPS` are served);
 - `head_features` / `head_trees`: a model file disagrees with the manifest.
@@ -53,6 +58,12 @@ MANIFEST = "manifest.json"
 SCHEMA = 1
 KEYS = frozenset({"schema", "name", "version", "lightgbm", "feature_code", "features",
                   "feature_list_md5", "heads", "training"})
+AVAILABILITY_KEY = "live_availability"
+# Features whose availability live may differ from training (Codex 108 point 4): er_next (its
+# report history across the sealed window stays missing, live and in training) and the shares
+# features whose split factor the sealed window can leave missing and whose shares grid the live
+# feed may refresh differently (wm2ref16: so_log, mcap, si_pct, si_chg).
+AVAILABILITY_MAY_DIFFER = ("er_next", "so_log", "mcap", "si_pct", "si_chg")
 HEAD_KEYS = frozenset({"file", "sha256", "trees"})
 _NAME = re.compile(r"[a-z0-9][a-z0-9._]*")  # no "-": the folder is <name>-<version>
 _VERSION = re.compile(r"[a-z0-9][a-z0-9._-]*")
@@ -76,6 +87,7 @@ class Bundle:
     features: tuple[str, ...]
     heads: tuple[Head, ...]
     training: dict[str, Any]
+    live_availability: dict[str, str]
 
     @property
     def identity(self) -> str:
@@ -108,8 +120,9 @@ def _manifest(folder: Path) -> dict[str, Any]:
         raise ModelRefused("manifest_unreadable", "not an object")
     if data.get("schema") != SCHEMA:
         raise ModelRefused("manifest_schema", repr(data.get("schema")))
-    if set(data) != KEYS:
-        extra, missing = sorted(set(data) - KEYS), sorted(KEYS - set(data))
+    if not KEYS <= set(data) <= KEYS | {AVAILABILITY_KEY}:
+        extra = sorted(set(data) - KEYS - {AVAILABILITY_KEY})
+        missing = sorted(KEYS - set(data))
         raise ModelRefused("manifest_keys", f"unknown {extra}, missing {missing}")
     return data
 
@@ -142,6 +155,7 @@ def open_bundle(folder: Path | str) -> Bundle:
         raise ModelRefused("feature_list", "a name twice")
     if data["feature_list_md5"] != feature_list_md5(names):
         raise ModelRefused("feature_list", "digest differs from the list")
+    disclosed = _live_availability(data, names)
     live = set(features.live_features())
     not_live = [n for n in names if n not in live]
     if not_live:
@@ -171,7 +185,18 @@ def open_bundle(folder: Path | str) -> Bundle:
     if not isinstance(training, dict):
         raise ModelRefused("manifest_keys", "training is not an object")
     return Bundle(folder, name, version, _text(data, "lightgbm"), tuple(names), tuple(heads),
-                  training)
+                  training, disclosed)
+
+
+def _live_availability(data: dict[str, Any], names: list[str]) -> dict[str, str]:
+    """The disclosure that live availability may differ, for exactly the bundle's features of
+    AVAILABILITY_MAY_DIFFER (Codex 108 point 4)."""
+    need = sorted(n for n in names if n in AVAILABILITY_MAY_DIFFER)
+    given = data.get(AVAILABILITY_KEY, {})
+    if (not isinstance(given, dict) or sorted(given) != need
+            or not all(isinstance(v, str) and v.strip() for v in given.values())):
+        raise ModelRefused("live_availability_undisclosed", ", ".join(need) or "none needed")
+    return dict(given)
 
 
 class Scorer:

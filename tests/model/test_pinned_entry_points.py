@@ -10,8 +10,10 @@ from pathlib import Path
 
 import model_bars as synthetic
 import model_inputs as inputs
+import pytest
 
 from tickr.model import features
+from tickr.model.errors import ModelRefused
 from tickr.model.features import full
 
 SRC = Path(full.__file__).parents[2]  # src/tickr
@@ -32,7 +34,7 @@ ENTRY = {
     "published",
     "build",
 }
-HOLDERS = {"feat", "labels", "ref", "tk"}  # fields of the bot's namespace of pinned modules
+HOLDERS = {"feat", "labels", "bz", "fl", "tk2", "ref", "tk"}  # fields of a live context's code
 
 
 def _bot_files():
@@ -74,7 +76,9 @@ def test_the_scan_sees_a_call_when_there_is_one():
     assert sorted(_calls_into_pinned(tree)) == ["build", "facts", "test"]
 
 
-def test_minute_rows_full_runs_with_every_entry_point_raising(monkeypatch, tmp_path):
+def test_a_live_minute_never_touches_the_research_modules(monkeypatch, tmp_path):
+    """The live context runs its own private modules: every entry point of the research imports
+    raises, and the context's own entry points are refusals."""
     days = synthetic.market(7, last="2024-03-06")
     today, bars = days[-1]
     state = features.history(days[:-1], {}, today, None)
@@ -82,12 +86,12 @@ def test_minute_rows_full_runs_with_every_entry_point_raising(monkeypatch, tmp_p
     root = tmp_path / "x"
     root.mkdir()
     given = full.FullInputs(
-        tick_file=inputs.tick_file(root / "tk.parquet", symbols, range(300, 420)),
-        reference=inputs.reference(root / "ref", today, symbols, [340]),
-        benzinga=inputs.benzinga(root / "bz", today, symbols, [340], "2023-01-02"),
+        tick_file=inputs.tick_file(root / "tk.parquet", symbols, range(300, 340)),
+        reference=inputs.reference(root / "ref", today, symbols, [330]),
+        benzinga=inputs.benzinga(root / "bz", today, symbols, [330], "2023-01-02"),
         fl_facts=inputs.fl_facts(root / "fl.csv", today, symbols),
     )
-    full.full_code()  # imports the pinned modules
+    inputs.research()  # imports the pinned modules the research way
 
     def boom(*_a, **_k):
         raise AssertionError("a pinned entry point was reached")
@@ -100,5 +104,13 @@ def test_minute_rows_full_runs_with_every_entry_point_raising(monkeypatch, tmp_p
                 monkeypatch.setattr(module, name, boom)
                 patched += 1
     assert patched >= 6
-    got = full.minute_rows_full(synthetic.cut(bars, today, 340), today, 340, state, None, given)
+    ctx = full.live_context(inputs.market_day(today))
+    for holder in HOLDERS:
+        module = getattr(ctx.code, holder)
+        for name in ENTRY:
+            if hasattr(module, name):
+                with pytest.raises(ModelRefused) as exc:
+                    getattr(module, name)()
+                assert exc.value.cause == "outside_live_context"
+    got = ctx.minute_rows(synthetic.cut(bars, today, 340), 340, state, None, given)
     assert len(got) > 0

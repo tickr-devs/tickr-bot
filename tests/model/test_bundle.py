@@ -128,6 +128,36 @@ def test_a_feature_the_bot_cannot_compute_live_is_refused(tmp_path, rows):
     assert refused(folder) == "feature_not_live"
 
 
+DISCLOSED = "live availability may differ from training: shares grid and sealed-window history"
+
+
+@pytest.mark.parametrize("given", [
+    None,  # no disclosure
+    {},  # empty
+    {"er_next": DISCLOSED},  # not every feature of the bundle that needs it
+    {"er_next": DISCLOSED, "so_log": " "},  # an empty statement
+    {"er_next": DISCLOSED, "so_log": DISCLOSED, "mcap": DISCLOSED},  # one the bundle lacks
+])
+def test_an_availability_feature_without_its_disclosure_is_refused(tmp_path, rows, given):
+    rows = rows.assign(er_next=0.0, so_log=0.0)
+    extra = {} if given is None else {B.AVAILABILITY_KEY: given}
+    folder = write_bundle(tmp_path, rows, names=[*FEATURES, "er_next", "so_log"], **extra)
+    assert refused(folder) == "live_availability_undisclosed"
+
+
+def test_a_disclosed_availability_feature_passes_to_the_live_check(tmp_path, rows):
+    rows = rows.assign(er_next=0.0, so_log=0.0)
+    folder = write_bundle(tmp_path, rows, names=[*FEATURES, "er_next", "so_log"],
+                          live_availability={"er_next": DISCLOSED, "so_log": DISCLOSED})
+    assert refused(folder) == "feature_not_live"  # disclosed; the groups are not live yet
+
+
+def test_a_bundle_of_live_features_needs_no_disclosure(tmp_path, rows):
+    assert B.open_bundle(write_bundle(tmp_path, rows)).live_availability == {}
+    folder = write_bundle(tmp_path / "x", rows, live_availability={"er_next": DISCLOSED})
+    assert refused(folder) == "live_availability_undisclosed"
+
+
 def test_a_feature_list_digest_that_does_not_match_is_refused(tmp_path, rows):
     folder = write_bundle(tmp_path, rows)
     rewrite(folder, feature_list_md5="0" * 32)
