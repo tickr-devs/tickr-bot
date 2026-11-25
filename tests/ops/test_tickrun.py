@@ -492,6 +492,7 @@ def _s3_release(fake):
         ),
         "MINE": {},
         "L": threading.Lock(),
+        "CLK": threading.Lock(),
         "say": lambda *a: said.append(" ".join(str(x) for x in a)),
     }
     exec(compile(ast.Module(body=picked, type_ignores=[]), str(RUNNER), "exec"), ns)
