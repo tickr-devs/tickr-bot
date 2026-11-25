@@ -22,7 +22,7 @@ from tickr.runtime.alert_routing import (
     group,
     routing_path,
 )
-from tickr.runtime.alerts import AlertKind, telegram_on
+from tickr.runtime.alerts import AlertKind
 from tickr.runtime.preflight import CheckName, record_path
 
 # The preflight checks each channel needs to pass; push has no delivery in the bot yet.
@@ -37,28 +37,27 @@ NEEDS: dict[RouteChannel, tuple[str, ...]] = {
 class AlertsSettings:
     routing: RoutingStore  # [alerts] routing_file under data_dir, the one writer
     preflight_record: Path  # [runtime] preflight_result_file under data_dir
-    telegram_on: bool = False  # the owner set the Telegram variable names in [alerts]
 
     @classmethod
     def from_config(cls, config: Config) -> AlertsSettings:
-        return cls(RoutingStore(routing_path(config)), record_path(config),
-                   telegram_on(config.alerts))
+        return cls(RoutingStore(routing_path(config)), record_path(config))
 
 
-def _channels(record: Path, telegram: bool) -> tuple[api.AlertChannelV1, ...]:
+def _channels(record: Path) -> tuple[api.AlertChannelV1, ...]:
     morning, cause = morning_check(record)
     passed = {} if morning is None else {c.name: c.passed for c in morning.checks}
     rows = []
     for channel in RouteChannel:
         needs = NEEDS.get(channel)
-        if channel is RouteChannel.TELEGRAM and not telegram:
-            rows.append(api.AlertChannelV1(channel, False, api.AlertChannelCause.NOT_CONFIGURED))
-        elif needs is None:
+        if needs is None:
             rows.append(api.AlertChannelV1(channel, False, api.AlertChannelCause.NOT_BUILT))
         elif morning is None:
             missing = (api.AlertChannelCause.NO_PREFLIGHT if cause == NO_PREFLIGHT
                        else api.AlertChannelCause.PREFLIGHT_UNREADABLE)
             rows.append(api.AlertChannelV1(channel, False, missing))
+        elif channel is RouteChannel.TELEGRAM and needs[0] not in passed:
+            # The check exists only once a Telegram variable is set (runtime/preflight.py).
+            rows.append(api.AlertChannelV1(channel, False, api.AlertChannelCause.NOT_CONFIGURED))
         elif all(passed.get(name) is True for name in needs):
             rows.append(api.AlertChannelV1(channel, True, None))
         else:
@@ -79,5 +78,5 @@ def _kinds(routing: Routing) -> tuple[api.AlertKindV1, ...]:
 def alerts_document(settings: AlertsSettings, routing: Routing | None = None) -> api.AlertsV1:
     """The settings now; `routing` when the caller just wrote it."""
     routing = settings.routing.read() if routing is None else routing
-    channels = _channels(settings.preflight_record, settings.telegram_on)
+    channels = _channels(settings.preflight_record)
     return api.AlertsV1(channels, _kinds(routing), routing.cause)

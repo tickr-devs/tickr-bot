@@ -377,19 +377,16 @@ def test_old_config_key_name_is_reported_in_the_journal(config_path):
     assert "[api] watching_check_decimal_places -> check_decimal_places" in body
 
 
-def test_telegram_off_passes_and_on_checks_presence_only(config_path, tmp_path):
-    result = _run(config_path, _ready(config_path))
-    check = next(c for c in result.checks if c.name.value == "alert-telegram")
-    assert check.passed and "off" in check.detail
-    on = tmp_path / "bot.toml"
-    on.write_text(config_path.read_text()
-                  .replace('telegram_token_variable = ""', 'telegram_token_variable = "TG_T"')
-                  .replace('telegram_chat_variable = ""', 'telegram_chat_variable = "TG_C"'))
-    environ = _ready(on)
-    refused = _run(on, environ)
+def test_telegram_check_exists_only_once_set_up_and_checks_presence_only(config_path):
+    cfg = config_module.load(config_path).alerts
+    names = {c.name.value for c in _run(config_path, _ready(config_path)).checks}
+    assert "alert-telegram" not in names  # off: neither variable set
+    environ = _ready(config_path)
+    environ[cfg.bot_token_variable] = CANARY
+    refused = _run(config_path, environ)
     assert refused.cause is PreflightCause.ALERT_TELEGRAM_MISSING
-    assert "TG_T, TG_C" in refused.summary()
-    environ.update({"TG_T": CANARY, "TG_C": CANARY})
-    ok = _run(on, environ)
+    assert cfg.chat_id_variable in refused.summary() and CANARY not in refused.summary()
+    environ[cfg.chat_id_variable] = CANARY
+    ok = _run(config_path, environ)
     assert ok.cause is None and CANARY not in ok.summary()
-    assert _run(on, environ, platform=LINUX).cause is None  # Telegram is the channel off the Mac
+    assert _run(config_path, environ, platform=LINUX).cause is None  # the channel off the Mac

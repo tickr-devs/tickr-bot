@@ -143,8 +143,9 @@ All checks are reported; the first failure is the recorded cause.
    (03:30 Mac time on Monday with the default `[runtime] preflight_start_local`). Without it
    preflight fails with `alert-recipient-missing` and the bot job does not start the bot.
    Optional, to be told away from the Mac: Telegram. Create a bot with @BotFather, put its token
-   and your chat id in this file under any names, and set those names in
-   `[alerts] telegram_token_variable` and `telegram_chat_variable` (both empty = off). Preflight
+   and your chat id in this file under any names, under the names in
+   `[alerts] bot_token_variable` and `chat_id_variable` (`TICKR_TELEGRAM_BOT_TOKEN`, `TICKR_TELEGRAM_CHAT_ID`;
+   neither set = off). Preflight
    then fails with `alert-telegram-missing` if either is not set. Critical alerts always go to it;
    the rest follow the routing in the app (channel `telegram`).
 3. Data and token folders: `mkdir -p data && mkdir -m 700 data/webull-token-sandbox`

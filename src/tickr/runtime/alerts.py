@@ -16,9 +16,9 @@ The iMessage recipient is personal data: Tickr code only knows the NAME of the e
 variable that holds it (`[alerts] imessage_recipient_variable`) and checks its presence; the
 AppleScript reads the value itself (`system attribute`), so it is never in Python, argv or logs.
 The Telegram bot token and chat id are the same: only the variable NAMES are configuration
-(`[alerts] telegram_token_variable`, `telegram_chat_variable`); the values are read from the
+(`[alerts] bot_token_variable`, `chat_id_variable`); the values are read from the
 environment at the moment of one send and never stored, logged or put in an error text. The
-channel is off while the names are empty.
+channel is off while neither variable is set.
 """
 
 from __future__ import annotations
@@ -301,17 +301,19 @@ def _open(request: urllib.request.Request, timeout: float) -> Any:
     return _OPENER.open(request, timeout=timeout)
 
 
-def telegram_on(config: AlertsConfig) -> bool:
-    """Whether the owner configured the Telegram channel (both variable names set)."""
-    return bool(config.telegram_token_variable and config.telegram_chat_variable)
+def telegram_on(config: AlertsConfig, environ: Mapping[str, str]) -> bool:
+    """Whether the owner set up Telegram: either variable is present (presence only). Neither
+    present = the channel is off; one alone is a half setup that preflight refuses."""
+    return any(environ.get(name) for name in (config.bot_token_variable, config.chat_id_variable)
+               if name)
 
 
 def telegram_missing(config: AlertsConfig, environ: Mapping[str, str]) -> list[str]:
     """NAMES of the Telegram variables not set (empty when it is off or complete). Presence
     only: the values are compared with "" and never stored, printed or returned."""
-    if not telegram_on(config):
+    if not telegram_on(config, environ):
         return []
-    return [name for name in (config.telegram_token_variable, config.telegram_chat_variable)
+    return [name for name in (config.bot_token_variable, config.chat_id_variable)
             if not environ.get(name)]
 
 
@@ -331,8 +333,8 @@ class TelegramNotifier:
         missing = telegram_missing(self._config, self._environ)
         if missing:
             raise NotifyError("telegram-missing: " + ", ".join(missing) + " not set")
-        token = self._environ[self._config.telegram_token_variable]
-        body = json.dumps({"chat_id": self._environ[self._config.telegram_chat_variable],
+        token = self._environ[self._config.bot_token_variable]
+        body = json.dumps({"chat_id": self._environ[self._config.chat_id_variable],
                            "text": f"{title}\n{text}"}).encode()
         url = f"{TELEGRAM_SCHEME}://{self._config.telegram_host}/bot{token}/{TELEGRAM_METHOD}"
         request = urllib.request.Request(url, data=body, method="POST",
@@ -466,7 +468,7 @@ def default_notifier(config: AlertsConfig, platform: str = sys.platform,
                      environ: Mapping[str, str] = os.environ,
                      feed: Path | None = None) -> Notifier | None:
     """The channels for this machine (on a Mac the notification and iMessage; Telegram on any
-    machine once its variable names are configured; and, given its path, the alerts feed
+    machine once one of its variables is set; and, given its path, the alerts feed
     file), all in the background: the Tickr app, osascript and the network can each take
     seconds, and the bot's loop must not wait for them. None where there are none (CI, Linux
     without Telegram)."""
@@ -474,7 +476,7 @@ def default_notifier(config: AlertsConfig, platform: str = sys.platform,
     if platform == DARWIN:
         background += [(MACOS, mac_notifier(config)),
                        (IMESSAGE, IMessageNotifier(config, environ))]
-    if telegram_on(config):
+    if telegram_on(config, environ):
         background.append((TELEGRAM, TelegramNotifier(config, environ)))
     if not background:
         return None

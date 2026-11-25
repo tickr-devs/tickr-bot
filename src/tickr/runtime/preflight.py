@@ -14,8 +14,8 @@ Checks, all reported, the first failure is the single cause:
 4b. this machine has an alert channel (`alerts.default_notifier`): today only macOS
    (notification and iMessage through osascript). Elsewhere (a Linux server, a container) the
    bot would run with no way to reach the owner, so the start is refused;
-4c'. when `[alerts] telegram_*_variable` name variables (Telegram on), both are present
-   (presence only; off passes), and on a machine that is not a Mac Telegram alone is the channel.
+4c'. when Telegram is set up (`[alerts] bot_token_variable` or `chat_id_variable` present), both
+   are present (presence only; neither = off, no check); off the Mac Telegram is then the channel;
 4c. the iMessage recipient variable (`[alerts] imessage_recipient_variable`) present, the same
    way: it is personal data;
 5. broker token folder present;
@@ -307,22 +307,24 @@ def _check_credentials(cfg: config_module.Config, environ: Mapping[str, str]) ->
     return Check(CheckName.CREDENTIALS, True, "set: " + ", ".join(names))
 
 
-def _check_alert_telegram(cfg: config_module.Config, environ: Mapping[str, str]) -> Check:
-    # Presence only: the bot token and the chat id are secrets. Off (names empty) passes.
-    if not telegram_on(cfg.alerts):
-        return Check(CheckName.ALERT_TELEGRAM, True, "off: no Telegram variable names in [alerts]")
+def _check_alert_telegram(cfg: config_module.Config,
+                          environ: Mapping[str, str]) -> tuple[Check, ...]:
+    """The check exists only once Telegram is set up (either variable present)."""
+    # Presence only: the bot token and the chat id are secrets.
+    if not telegram_on(cfg.alerts, environ):
+        return ()
     missing = telegram_missing(cfg.alerts, environ)
     if missing:
-        return Check(CheckName.ALERT_TELEGRAM, False,
-                     "not set: " + ", ".join(missing) + " (Telegram bot token and chat id); "
-                     + ENV_FILE_HINT, PreflightCause.ALERT_TELEGRAM_MISSING)
-    return Check(CheckName.ALERT_TELEGRAM, True,
-                 f"set: {cfg.alerts.telegram_token_variable}, {cfg.alerts.telegram_chat_variable}")
+        return (Check(CheckName.ALERT_TELEGRAM, False,
+                      "not set: " + ", ".join(missing) + " (Telegram bot token and chat id); "
+                      + ENV_FILE_HINT, PreflightCause.ALERT_TELEGRAM_MISSING),)
+    return (Check(CheckName.ALERT_TELEGRAM, True,
+                  f"set: {cfg.alerts.bot_token_variable}, {cfg.alerts.chat_id_variable}"),)
 
 
 def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str],
                            platform: str) -> Check:
-    if platform != DARWIN and telegram_on(cfg.alerts):
+    if platform != DARWIN and telegram_on(cfg.alerts, environ):
         # iMessage is a Mac channel; Telegram is this machine's channel.
         return Check(CheckName.ALERT_RECIPIENT, True,
                      f"not used on platform {platform!r} (Telegram is the channel)")
@@ -430,7 +432,7 @@ def run_preflight(
     checks = (config_check, _check_code_version(cfg, environ), disk, calendar,
               _check_credentials(cfg, environ),
               _check_alert_channel(cfg, platform, environ),
-              _check_alert_recipient(cfg, environ, platform), _check_alert_telegram(cfg, environ),
+              _check_alert_recipient(cfg, environ, platform), *_check_alert_telegram(cfg, environ),
               _check_token_dir(cfg), _check_stop_marker(cfg), _check_database(cfg),
               _check_strategy(cfg))
     blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED

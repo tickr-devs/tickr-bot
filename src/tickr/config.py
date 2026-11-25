@@ -446,8 +446,8 @@ class AlertsConfig:
     mac_app_timeout_seconds: Decimal
     feed_file: str
     routing_file: str
-    telegram_token_variable: str
-    telegram_chat_variable: str
+    bot_token_variable: str
+    chat_id_variable: str
     telegram_host: str
 
 
@@ -861,12 +861,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if not built["alerts"].feed_file.strip():
         raise ConfigError("[alerts] feed_file must name a file")
     alerts_cfg = built["alerts"]
-    if bool(alerts_cfg.telegram_token_variable.strip()) != bool(
-            alerts_cfg.telegram_chat_variable.strip()):
-        raise ConfigError("[alerts] telegram_token_variable and telegram_chat_variable must "
-                          "both be set (Telegram on) or both be empty (off)")
-    if alerts_cfg.telegram_token_variable and not alerts_cfg.telegram_host.strip():
-        raise ConfigError("[alerts] telegram_host must name a host while Telegram is on")
+    if bool(alerts_cfg.bot_token_variable.strip()) != bool(alerts_cfg.chat_id_variable.strip()):
+        raise ConfigError("[alerts] bot_token_variable and chat_id_variable must both name a "
+                          "variable or both be empty")
+    if alerts_cfg.bot_token_variable and not alerts_cfg.telegram_host.strip():
+        raise ConfigError("[alerts] telegram_host must name a host while Telegram has variables")
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:
         raise ConfigError("[strategy] the active strategy cannot also be an observer")
@@ -987,8 +986,8 @@ def credential_variables(config: Config) -> frozenset[str]:
     names = {config.advisor.api_key_variable, config.alerts.imessage_recipient_variable,
              config.massive.api_key_variable, config.massive.files_key_id_variable,
              config.massive.files_secret_variable}
-    names |= {name for name in (config.alerts.telegram_token_variable,
-                                config.alerts.telegram_chat_variable) if name}
+    names |= {name for name in (config.alerts.bot_token_variable,
+                                config.alerts.chat_id_variable) if name}
     for env in config.environments.values():
         names |= {env.app_key_variable, env.app_secret_variable, env.account_variable}
     return frozenset(names)

@@ -961,11 +961,12 @@ feed_file = "alerts.jsonl"
 # relative to [run] data_dir written by PUT /alerts/routing; a preference, never a trading setting. Missing or
 # unreadable = every kind on every channel; critical kinds are always on; read by runtime.alert_routing.
 routing_file = "alert-routing.json"
-# Telegram alerts, so the owner is told away from the Mac. NAMES of the environment variables holding the bot token (from
-# @BotFather) and the owner's chat id; the values are secrets and personal data, set only in the owner's env file, never
-# here; presence checked by preflight. Both empty = the Telegram channel is off (no number to decide); read by runtime.alerts.
-telegram_token_variable = ""
-telegram_chat_variable = ""
+# Telegram alerts, so the owner is told away from the Mac. NAMES of the environment variables holding the Telegram bot
+# token (from @BotFather) and the owner's chat id; the values are secrets and personal data, set only in the owner's env
+# file, never here. Neither variable set = the Telegram channel is off; one without the other fails preflight
+# (alert-telegram-missing); read by runtime.alerts and preflight.
+bot_token_variable = "TICKR_TELEGRAM_BOT_TOKEN"
+chat_id_variable = "TICKR_TELEGRAM_CHAT_ID"
 # Host of the Telegram Bot API, reached over HTTPS only; read by runtime.alerts.
 telegram_host = "api.telegram.org"
 

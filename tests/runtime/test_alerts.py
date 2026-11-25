@@ -44,7 +44,7 @@ CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_s
                       imessage_recipient_variable="TICKR_TEST_TO", mac_app="",
                       mac_app_timeout_seconds=Decimal(2), feed_file="alerts.jsonl",
                       routing_file="alert-routing.json",
-                      telegram_token_variable="", telegram_chat_variable="",
+                      bot_token_variable="", chat_id_variable="",
                       telegram_host="api.telegram.org")
 T0 = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
 
@@ -489,8 +489,8 @@ def test_missing_app_falls_back_to_osascript_end_to_end(tmp_path):
     assert [argv[0] for argv in calls] == [OSASCRIPT]
 
 
-TG = replace(CONFIG, telegram_token_variable="TICKR_TEST_TG_TOKEN",
-             telegram_chat_variable="TICKR_TEST_TG_CHAT")
+TG = replace(CONFIG, bot_token_variable="TICKR_TEST_TG_TOKEN",
+             chat_id_variable="TICKR_TEST_TG_CHAT")
 TG_ENV = {"TICKR_TEST_TG_TOKEN": "token-canary", "TICKR_TEST_TG_CHAT": "chat-canary"}
 
 
@@ -520,10 +520,12 @@ def _inline(target):
     return thread
 
 
-def test_telegram_is_off_while_the_names_are_empty():
-    assert telegram_on(CONFIG) is False
-    assert telegram_missing(CONFIG, {}) == []
-    assert default_notifier(CONFIG, "linux", TG_ENV) is None  # no channel at all off the Mac
+def test_telegram_is_off_while_no_variable_is_set():
+    assert telegram_on(CONFIG, TG_ENV) is False
+    assert telegram_on(TG, {}) is False  # names set, nothing in the environment
+    assert telegram_missing(TG, {}) == []
+    assert default_notifier(CONFIG, "linux", TG_ENV) is None
+    assert default_notifier(TG, "linux", {}) is None  # no channel at all off the Mac
 
 
 def test_telegram_channel_joins_on_any_platform_when_configured():
