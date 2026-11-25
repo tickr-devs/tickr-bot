@@ -112,6 +112,21 @@ def test_real_demo_file_loads_and_is_commented():
     assert api.demo_port not in (0, api.port, api.remote_port)
 
 
+def test_every_fall_on_the_demo_day_ends_below_its_base():
+    """A fall on the demo day is a stop-out (or a loser drifting), and the stop is placed from the
+    noisy tape, which is seeded by the day: a fall that ends above the base can stay above the
+    stop on some dates, and the day is then not flat at the clock (KXTR on 2026-11-25)."""
+    scenario = load(ROOT / "config" / "demo.toml")
+    for plan in scenario.today:
+        level = plan.base
+        for first, _last, price, _volume in plan.legs:
+            if first >= scenario.clock:  # the live loop starts a fresh simulated exchange
+                break
+            if price < level:
+                assert price < plan.base, (plan.symbol, price, plan.base)
+            level = price
+
+
 def test_live_until_must_follow_the_clock(tmp_path):
     path = tmp_path / "demo.toml"
     path.write_text((ROOT / "config" / "demo.toml").read_text("utf-8").replace(

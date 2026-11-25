@@ -89,7 +89,7 @@ chart_daily_wick = "0.015"
 # the demo goes live.
 today = [
   # Breakout at the open, bought, then collapses through its stop: a loss.
-  { symbol = "KXTR", base = "20.00", volume = "3000", screener = "GAINERS", legs = [["09:30", "09:45", "24.50", "30000"], ["10:00", "10:02", "21.00", "30000"]] },
+  { symbol = "KXTR", base = "20.00", volume = "3000", screener = "GAINERS", legs = [["09:30", "09:45", "24.50", "30000"], ["10:00", "10:02", "18.80", "30000"]] },
   # Breakout that keeps climbing; the operator's flatten command at 10:24 takes a small win.
   { symbol = "VLNQ", base = "30.00", volume = "4000", screener = "GAINERS", legs = [["10:05", "10:20", "34.50", "30000"], ["10:20", "10:50", "35.60", "6000"]] },
   # Stopped out, then breaks out again inside the 30-minute pause after a loss: refused, see "why".
