@@ -1,6 +1,6 @@
 """The apps' translations of the bot's codes (apps/scripts/kit_api_strings.py and
-kit_reason_strings.py) stay in step with the bot: every fence kind, entry-block cause, gate
-reason and fence reason the bot can send has a translated case, a sentence names only values the
+kit_reason_strings.py) stay in step with the bot: every fence kind, entry-block cause, alert kind,
+gate reason and fence reason the bot can send has a translated case, a sentence names only values the
 bot sends, and the committed Swift and catalog match the generators."""
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from tickr.api.contract import OWN_TRADE_OPEN, BotState, NotReachedCause
 from tickr.data.discovery import Cause
 from tickr.engine.core import Fence
 from tickr.risk.causes import AdmissionCause
+from tickr.runtime.alerts import AlertKind
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "apps" / "scripts" / "kit_api_strings.py"
@@ -70,6 +71,10 @@ def test_every_discovery_cause_and_spike_rule_is_translated():
 
 def test_every_not_reached_cause_is_translated():
     assert load().codes("NotReachedCause") == {c.value for c in NotReachedCause}
+
+
+def test_every_alert_kind_is_translated():
+    assert load().codes("AlertKindCode") == {kind.value for kind in AlertKind}
 
 
 def test_every_entry_block_cause_is_translated():
