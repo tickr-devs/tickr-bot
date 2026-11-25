@@ -232,11 +232,19 @@ if S3:
                 return None
             raise
 
-    def cdel(dt):
+    # delete my claim only while it still has my etag (S3 checks If-Match in the same request).
+    # True: deleted or already gone; False: another machine's claim stands there now.
+    def cdel(dt, etag):
         try:
-            s3().delete_object(Bucket=ob, Key=f"{CPRE}/{dt}.json")
-        except Exception as e:
-            print("claim delete failed", dt, type(e).__name__, flush=True)
+            s3().delete_object(Bucket=ob, Key=f"{CPRE}/{dt}.json", IfMatch=etag)
+            return True
+        except botocore.exceptions.ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code in ("PreconditionFailed", "412", "ConditionalRequestConflict", "409"):
+                return False
+            if code in ("404", "NoSuchKey", "NotFound"):
+                return True
+            raise
 else:
     # local test mode: the same rules on files (exclusive create; the etag is the file's
     # modification time)
@@ -291,11 +299,16 @@ else:
         except FileNotFoundError:
             return None
 
-    def cdel(dt):
-        try:
-            os.remove(os.path.join(CD, dt + ".json"))
-        except OSError:
-            pass
+    def cdel(dt, etag):
+        f = os.path.join(CD, dt + ".json")
+        with CL:
+            try:
+                if str(os.stat(f).st_mtime_ns) != etag:
+                    return False
+                os.remove(f)
+            except FileNotFoundError:
+                pass
+            return True
 
 
 def done(dt):
@@ -330,19 +343,20 @@ def claim(dt):
 
 
 def release(dt):
-    """Give a day back. The claim object is deleted only while it still carries my mark: a
-    machine that was slow and lost the day must not delete the new holder's claim."""
+    """Give a day back. The claim object is deleted only while it still carries my mark, checked
+    by the store in the delete itself: a machine that was slow and lost the day must not delete
+    the new holder's claim. A mismatch is a refusal: logged, the claim left alone."""
     with L:
         had = MINE.pop(dt, None)
     if not had:
         return
     try:
-        c = cget(dt)
+        gone = cdel(dt, had)
     except Exception as e:
-        print("claim read failed", dt, type(e).__name__, flush=True)
+        print("claim delete failed", dt, type(e).__name__, flush=True)
         return
-    if c and c[0] == had:
-        cdel(dt)
+    if not gone:
+        say("REFUSED: claim delete of", dt, "(another machine holds it now: left in place)")
 
 
 def refresher():

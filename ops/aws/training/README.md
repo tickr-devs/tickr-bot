@@ -111,10 +111,13 @@ The boot wrapper (`user-data.sh`) runs the job script and:
   (with several machines, exit 0 must mean the whole job is done, not only this machine's share:
   setting 0 stops every machine of the group);
 - on SIGTERM gives the job 90 s to save, then SIGKILL;
-- on any other exit counts it in `jobs/<job>/failures`, powers off, and the group starts a fresh
+- on any other exit, and when the job script cannot be fetched from the bucket, counts it in
+  `jobs/<job>/failures`, powers off, and the group starts a fresh
   machine; after `job_max_failures` (3) failed runs it sets the group to 0 (the counter is shared
   by all machines of a group);
-- if the machine setup itself fails (packages, AWS CLI), it tries to set the group to 0 and powers
+- installs the AWS CLI and uv only at the versions pinned in the `installers` variable, and
+  only when the downloaded file has the pinned sha256;
+- if the machine setup itself fails (packages, AWS CLI, a checksum), it tries to set the group to 0 and powers
   off at once instead of idling 24 hours. The scheduled "desired 0" covers every case where the
   machine cannot stop the group itself.
 
