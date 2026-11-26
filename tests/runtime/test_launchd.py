@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from baseline import mac_text
 
 from tickr import config as config_module
 from tickr.runtime import launchd
@@ -386,6 +387,7 @@ def test_bot_job_sources_its_own_env_file(config_path, repo, tmp_path):
     """POST /commands/start-bot kickstarts this job without any credential variable
     (api/botstart.py): safe, because the job never takes the caller's environment; its own
     shell sources the env file before anything else."""
+    config_path.write_text(mac_text(config_path.read_text("utf-8")), "utf-8")
     bot = _render(config_path, repo, tmp_path / "out")["local.tickr.bot.plist"]
     args = bot["ProgramArguments"]
     assert args[2].startswith('set -a; . "$0"; set +a;') and args[3] == str(PATHS.env_file)

@@ -99,6 +99,12 @@ mounts only `bot.toml` over the image's copy. Production only, later: the owner 
 file (`[environments.production] authorization_file`) and its mount in `compose.yaml` (step 7
 below); not needed in Sandbox.
 
+Never copy the Mac's alert routing file (`<data_dir>/alert-routing.json`, `[alerts]
+routing_file`) to the server. A file with `mac` or `imessage` cells is unusable there: every kind
+goes to every channel and PUT /alerts/routing is refused until the file is deleted
+(docs/api.md, "routing_cause"). On the server the routing starts with no file and the owner sets
+it from the apps.
+
 The exact SSM copy for a release `<commit>`, as root on the server (the files' contents come from
 the commit in the owner's checkout; never send the env file or any secret this way):
 
@@ -217,8 +223,8 @@ data disk, written to `limits.env` as `TICKR_DATA_HOST`), `tickr`. `limits.env` 
 `TICKR_BOT_EXIT_TIMEOUT` = `[runtime] bot_exit_timeout_seconds` and the nightly fetch's
 folders (`nightly_fetch_out`, `nightly_fetch_seed`); every unit loads it and
 compose.yaml reads it as the bot's `stop_grace_period`, so the number lives only in `bot.toml`
-(for a hand-run compose command: `set -a; . /srv/tickr/etc/limits.env; set +a`). `[runtime] watchdog_restart_command` (a launchctl call
-today) must be set for the server before the watchdog's restart can work (cutover, below).
+(for a hand-run compose command: `set -a; . /srv/tickr/etc/limits.env; set +a`). `config/bot.toml` holds the server's values
+(cutover, below), so the server runs the commit's file as it is.
 
 `deploy-server.sh COMMIT [ETC [DATA]]` (on the server `/srv/tickr/bin/deploy-server.sh`,
 "Server files") installs the rendered files. It needs no clone and no host Python. It
@@ -330,16 +336,23 @@ systemd, so the restart goes through a request file on the data folder:
 The watchdog's `restarted` journal line on the server means "request written", not "bot
 started": check the unit's status for the restart itself.
 
-**Cutover steps (the server move release).** In the server's `bot.toml` (and in
-`config/bot.toml` in that release), set:
+**Cutover (the server move release).** `config/bot.toml` itself holds the server's values, so
+the server's `/srv/tickr/etc/bot.toml` is the commit's file with no hand edit, and merging that
+change ends hosting on the Mac (its launchd jobs no longer work with it):
 
-```toml
-watchdog_restart_command = ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml", "request-restart", "--cause", "watchdog"]
-```
+- `[runtime] watchdog_restart_command = ["python", "-m", "tickr.runtime", "--config",
+  "/app/config/bot.toml", "request-restart", "--cause", "watchdog"]`;
+- `[api] start_bot_command = []`: Start answers `503` on the server. The request file would
+  start a stopped bot, but its unit force-recreates a running one, and the API container (no host
+  pid namespace) cannot see the bot's live pid in its lock file, so the guard Start relies on is
+  blind there;
+- `[api] system_services = "none"` with `sleep_check_command = []` (no launchd, no caffeinate);
+- `[api] training_progress_file = "training-progress.json"` under the data folder (no training
+  job runs on the server: "no training job is reporting");
+- `[alerts] mac_app = ""`.
 
 Then run `deploy-server.sh` (creates `/srv/tickr/data/control`, installs and starts the path
-unit) and check `systemctl status tickr-bot-restart.path` shows it active (waiting). Until that
-release, `config/bot.toml` keeps the Mac's `launchctl` command.
+unit) and check `systemctl status tickr-bot-restart.path` shows it active (waiting).
 
 ### Hand-written timers (example, superseded by `render-systemd`)
 

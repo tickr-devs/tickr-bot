@@ -587,10 +587,14 @@ settings_schema_file = "config/settings_schema.toml"
 observer_trades_max_rows = 100
 # Latest journal rows GET /journal returns (oldest first; `last_seq` is the newest row's number); read by the api server.
 journal_rows = 40
-# Command POST /commands/start-bot runs to start the bot job through launchd ("{uid}" = this user's id); kickstart
-# without -k never restarts a job that is already running. Empty = start-bot answers 503 (no launchd: Docker, the
-# demo); read by the api server.
-start_bot_command = ["/bin/launchctl", "kickstart", "gui/{uid}/local.tickr.bot"]
+# Command POST /commands/start-bot runs to start the bot job ("{uid}" = this user's id); on a Mac launchd's
+# `launchctl kickstart gui/{uid}/local.tickr.bot` (without -k it never restarts a job that is already running).
+# Empty = start-bot answers 503 (no launchd: the server's Docker, the demo); read by the api server.
+# Server (2026-11-26 cutover): empty. The server's only start path, the restart request file
+# (`request-restart`, docs/deploy-server.md), force-recreates the bot container, so it would restart a running bot,
+# and the API container (no host pid namespace) cannot see the bot's live pid in its lock file: Start is off on the
+# server until that is solved; the timers start the bot.
+start_bot_command = []
 # Seconds POST /commands/start-bot waits for start_bot_command to return before answering 503; read by the api server.
 start_bot_timeout_seconds = 10
 # Newest AI advisor runs GET /advisor returns (folders under [advisor] proposals_dir, newest first; its
@@ -631,11 +635,13 @@ trade_whatif_outside_session_only = true
 next_session_search_days = 10
 # Machine services GET /system reports under `host`: "mac" (the launchd watchdog's journal and restarts, and
 # caffeinate's no-sleep hold read with sleep_check_command) or "none" (a machine without them: `host` is null with a
-# cause); read by the api server.
-system_services = "mac"
+# cause); read by the api server. Server (2026-11-26 cutover): "none", the Linux server has neither launchd nor
+# caffeinate.
+system_services = "none"
 # Command GET /system runs to list the Mac's power assertions (its output is parsed for caffeinate's no-sleep holds,
-# nothing else is kept); used only when system_services = "mac"; read by the api server.
-sleep_check_command = ["/usr/bin/pmset", "-g", "assertions"]
+# nothing else is kept; on a Mac `["/usr/bin/pmset", "-g", "assertions"]`); used only when system_services = "mac",
+# where it must name a command; empty = none (the server: system_services = "none"); read by the api server.
+sleep_check_command = []
 # Seconds GET /system waits for sleep_check_command before reporting the hold as unknown; read by the api server.
 sleep_check_timeout_seconds = 2
 # Newest watchdog restart records GET /system returns (newest first; the apps show a few and the rest on demand);
@@ -644,8 +650,10 @@ system_restart_rows = 50
 # Training progress file a model training job writes (training-progress-v1, docs/api.md "GET /system"): relative to
 # data_dir, or an absolute or ~/ path outside the release (research jobs never write into it); missing = no job
 # reporting; read by the api server.
-# Owner 2026-11-19: the research folder on the Mac, where the training scripts write it.
-training_progress_file = "~/Development/Trading/.scratch/massive/results/feat/wide/training-progress.json"
+# Owner 2026-11-19 set the research folder on the Mac (~/Development/Trading/.scratch/massive/results/feat/wide/
+# training-progress.json), where the training scripts write it. Server (2026-11-26 cutover): no training job runs
+# there, so a file under data_dir that nothing writes: GET /system reports "no training job is reporting".
+training_progress_file = "training-progress.json"
 # Folder, relative to data_dir, where the API keeps the built answers of past days (GET /flow, /watching, /symbols,
 # /movers, /observers, /skipped; one folder per environment and NY date), so a past day picked in the apps shows at
 # once; rebuilt whenever an input file, the config or the code changes; read and written by the api server
@@ -1144,8 +1152,12 @@ watchdog_relaunch_seconds = 300
 # by watchdog-started, so it cannot either); read by runtime.watchdog.
 watchdog_restart_before_flatten_seconds = 300
 # Command the watchdog runs to start the bot job (the same job the schedule starts: preflight, then the supervised bot);
-# "{uid}" is replaced by the user id; kickstart without -k never touches a running job; read by runtime.watchdog.
-watchdog_restart_command = ["/bin/launchctl", "kickstart", "gui/{uid}/local.tickr.bot"]
+# "{uid}" is replaced by the user id; read by runtime.watchdog. On a Mac launchd's
+# `launchctl kickstart gui/{uid}/local.tickr.bot` (without -k it never touches a running job). Server (2026-11-26
+# cutover): `request-restart` inside the watchdog's container writes server_restart_request_file and the host unit
+# tickr-bot-restart restarts the bot container once (docs/deploy-server.md, "Bot restart on the server"); the cause
+# word "watchdog" is logged by that unit.
+watchdog_restart_command = ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml", "request-restart", "--cause", "watchdog"]
 # Seconds the watchdog waits for the restart command to return before calling the attempt failed; read by runtime.watchdog.
 watchdog_restart_timeout_seconds = 10
 # Record of the watchdog's one restart a day (New York date), relative to data_dir; written before the command runs and
@@ -1198,9 +1210,10 @@ fence_alert_after_seconds = 30
 # NAME of the environment variable holding the owner's iMessage address (phone number or Apple ID email); the value is
 # personal data, set only in the owner's env file, never here; presence checked by preflight; read by runtime.alerts.
 imessage_recipient_variable = "TICKR_IMESSAGE_TO"
-# The Tickr Mac app that shows the Mac notification with its own icon (path to the .app; empty = none). When it is
-# missing, not allowed to notify or fails, the notification goes through osascript instead; read by runtime.alerts.
-mac_app = "/Applications/Tickr.app"
+# The Tickr Mac app that shows the Mac notification with its own icon (path to the .app, on a Mac
+# "/Applications/Tickr.app"; empty = none). When it is missing, not allowed to notify or fails, the notification goes
+# through osascript instead; read by runtime.alerts (macOS only). Server (2026-11-26 cutover): empty, no Mac app.
+mac_app = ""
 # Seconds to wait for the Tickr app to hand the notification over before osascript shows it instead (the alert is sent
 # on a background thread, so the bot's loop does not wait for it); read by runtime.alerts.
 mac_app_timeout_seconds = 2

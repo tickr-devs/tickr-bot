@@ -3,21 +3,34 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
+from baseline import write_mac
 
 from tickr import config
+from tickr.api.server import settings_from_config
 from tickr.runtime.alerts import Alerter
 
 from .test_remote import (  # noqa: F401 - fixtures
     PHONE,
+    REMOTE,
     local_api,
     paired,
     remote,
     remote_api,
-    remote_settings,
+    with_remote_hosts,
 )
 from .test_server import ROOT, request
 from .test_start_bot import Runner
+
+
+@pytest.fixture
+def remote_settings(tmp_path):
+    """test_remote's settings on a host that has a start command (the Mac's), so start-bot is
+    accepted and its alert can be checked; the shipped server config has none."""
+    cfg = with_remote_hosts(config.load(write_mac(tmp_path / "bot.toml"), root=tmp_path), REMOTE)
+    return replace(settings_from_config(cfg), port=0, remote_port=0)
 
 
 class Recorder:

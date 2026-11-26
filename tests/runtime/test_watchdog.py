@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from baseline import mac_text
 
 from tickr import config as config_module
 from tickr.api import contract
@@ -404,8 +405,9 @@ def test_restart_decision_table(cfg, tmp_path, case, expected, started):
     assert bool(runs.calls) is started
     if started:
         ((command, timeout),) = runs.calls
-        assert command == ["/bin/launchctl", "kickstart",
-                           f"gui/{os.getuid()}/local.tickr.bot"]
+        # The shipped (server) command: the restart request inside the watchdog's container.
+        assert command == ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
+                           "request-restart", "--cause", "watchdog"]
         assert timeout == cfg.runtime.watchdog_restart_timeout_seconds
         assert watchdog.restarted_on(record) == date(2026, 11, 16)
 
@@ -430,8 +432,7 @@ def test_restart_happens_once_a_day_and_is_recorded_before_the_command(cfg, tmp_
     again.bot_check(now + timedelta(seconds=120))
     assert seen == [date(2026, 11, 16)] and kinds(recorder) == ["bot-down-with-open-trade"]
     lines = [r for r in records(tmp_path / "watchdog.jsonl") if r["record"] == watchdog.RESTART]
-    assert [(r["started"], r["command"][-1]) for r in lines] == [
-        (True, "gui/{uid}/local.tickr.bot")]
+    assert [(r["started"], r["command"][-1]) for r in lines] == [(True, "watchdog")]
 
 
 @pytest.mark.parametrize("result,cause", [(1, "restart command exited 1"),
@@ -501,7 +502,10 @@ def test_after_a_restart_a_flat_broker_and_running_bot_are_quiet(cfg, tmp_path):
 
 
 def test_restart_command_names_the_bot_job_label(config_path):
+    """On the Mac: launchd's kickstart of the bot job, with this user's id."""
+    config_path.write_text(mac_text(config_path.read_text("utf-8")), "utf-8")
     cfg = config_module.load(config_path)
+    assert watchdog.restart_command(cfg)[2] == f"gui/{os.getuid()}/local.tickr.bot"
     template = (cfg.root / "ops" / "launchd" / "local.tickr.bot.plist.template").read_text()
     label = cfg.runtime.watchdog_restart_command[-1].rsplit("/", 1)[1]
     assert f"<key>Label</key>\n  <string>{label}</string>" in template

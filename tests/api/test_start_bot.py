@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
+from baseline import write_mac
 
 from tickr import config
 from tickr.api import contract
@@ -24,7 +25,8 @@ from .test_server import ROOT, Clock, doc, request, schema
 
 @pytest.fixture
 def settings(tmp_path):
-    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    """The API on the Mac (launchd's kickstart): the shipped config is the server's."""
+    cfg = config.load(write_mac(tmp_path / "bot.toml"), root=tmp_path)
     return replace(settings_from_config(cfg), port=0)
 
 
@@ -60,7 +62,14 @@ def _start(server, runner: Runner, body=None):
     return resp, doc(payload)
 
 
-def test_shipped_command_is_launchd_kickstart_of_the_bot_job_with_this_uid(settings):
+def test_shipped_server_config_has_no_start_command(tmp_path):
+    """The server's API cannot start the bot safely (docs/deploy-server.md, cutover): Start
+    answers 503 there."""
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    assert settings_from_config(cfg).start.command == ()
+
+
+def test_mac_command_is_launchd_kickstart_of_the_bot_job_with_this_uid(settings):
     command = settings.start.command
     assert command[:2] == ("/bin/launchctl", "kickstart")
     assert "-k" not in command  # never restarts a running job

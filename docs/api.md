@@ -1749,8 +1749,9 @@ preconditions to every command.
 #### Start-bot
 
 `POST /commands/start-bot` is the one command the bot does not read: a stopped bot cannot.
-The API runs `[api] start_bot_command` (shipped: `launchctl kickstart gui/<uid>/local.tickr.bot`,
-without `-k`, so a job that already runs is never restarted) and answers `202 bot-start-v1`
+The API runs `[api] start_bot_command` (on a Mac: `launchctl kickstart gui/<uid>/local.tickr.bot`,
+without `-k`, so a job that already runs is never restarted; shipped empty since the server
+cutover, docs/deploy-server.md) and answers `202 bot-start-v1`
 (`requested_at`, `stop_marker_cleared`) when it exits 0. The bot job then runs exactly as a
 scheduled start: preflight first, which may still refuse (no session today, token, disk);
 follow `GET /status` and the job log. Nothing runs inside the API process, and nothing talks
@@ -1773,8 +1774,8 @@ to the broker.
   runs. Removing it is written to the API log (`api.log` under launchd) with the time.
 - Starts run one at a time across both listeners, under their own lock, so a slow start
   command never holds back a queued command such as emergency or flatten.
-- `503 unavailable` without running anything when `start_bot_command` is empty (Docker, the
-  demo, which sets it empty so it can never start the real bot job).
+- `503 unavailable` without running anything when `start_bot_command` is empty (the server's
+  Docker, the demo, which sets it empty so it can never start the real bot job).
 - An `Idempotency-Key` is checked for its form only: a repeat is harmless.
 
 Stopping stays `POST /commands/stop-bot`: the bot drains itself and is refused while any trade

@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from baseline import write_mac
 
 from tickr import config
 from tickr.api import contract
@@ -49,10 +50,26 @@ PMSET = "\n".join([
 
 @pytest.fixture
 def cfg(tmp_path, monkeypatch):
-    # The shipped training file is under ~/: keep it inside the test's folder.
-    monkeypatch.setenv("HOME", str(tmp_path))
+    """The API on the Mac (launchd's watchdog, caffeinate): the shipped config is the
+    server's, whose `host` is none (test_shipped_server_config_reports_no_host)."""
+    monkeypatch.setenv("HOME", str(tmp_path))  # a ~/ training file stays in the test's folder
     shutil.copytree(ROOT / "config" / "calendar", tmp_path / "config" / "calendar")
-    return config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    return config.load(write_mac(tmp_path / "bot.toml"), root=tmp_path)
+
+
+def test_shipped_server_config_reports_no_host(tmp_path):
+    shutil.copytree(ROOT / "config" / "calendar", tmp_path / "config" / "calendar")
+    shipped = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    assert shipped.api.system_services == "none" and shipped.api.sleep_check_command == ()
+    settings = SystemSettings.from_config(shipped)
+    assert settings.training_progress == tmp_path / "data" / "training-progress.json"
+    document = system_document(settings, _response(None), runner=_no_runner)
+    assert document.host is None and document.host_cause == NO_HOST
+    assert document.training is None and document.training_cause == NO_TRAINING
+
+
+def _no_runner(command, timeout):
+    raise AssertionError(f"the server's API ran {command}")
 
 
 def _response(written: contract.StatusV1 | None, now=T0, cause=None) -> contract.StatusResponseV1:
@@ -272,7 +289,8 @@ def test_a_machine_without_host_services_reports_none(tmp_path):
 
 def test_unknown_system_services_is_a_config_error(tmp_path):
     text = (ROOT / "config" / "bot.toml").read_text("utf-8").replace(
-        'system_services = "mac"', 'system_services = "linux"')
+        'system_services = "none"', 'system_services = "linux"')
+    assert 'system_services = "linux"' in text
     path = tmp_path / "bot.toml"
     path.write_text(text, "utf-8")
     with pytest.raises(config.ConfigError, match="system_services"):

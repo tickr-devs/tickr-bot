@@ -119,3 +119,18 @@ def test_request_restart_command_refuses_without_the_control_folder(config_path,
     assert main(["--config", str(config_path), "request-restart", "--cause", "watchdog"]) == 1
     row = json.loads(capsys.readouterr().out.strip())
     assert row["requested"] is False and row["cause"] == "control-folder-missing"
+
+
+def test_the_shipped_watchdog_restart_command_is_this_request(config_path, capsys):
+    """config/bot.toml holds the server's command (the cutover): `python -m tickr.runtime`
+    with the bot.toml compose mounts in every container, then request-restart."""
+    cfg = config_module.load(config_path)
+    command = list(cfg.runtime.watchdog_restart_command)
+    assert command[:5] == ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml"]
+    compose = (Path(__file__).resolve().parents[2] / "ops/docker/compose.yaml").read_text("utf-8")
+    assert "target: /app/config/bot.toml" in compose
+    path = cfg.root / cfg.run.data_dir / "control" / "restart-request"
+    path.parent.mkdir(parents=True)
+    assert main(["--config", str(config_path), *command[5:]]) == 0
+    assert json.loads(capsys.readouterr().out.strip())["requested"] is True
+    assert json.loads(path.read_text("utf-8"))["cause"] == "watchdog"

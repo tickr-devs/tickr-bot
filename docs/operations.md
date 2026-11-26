@@ -152,8 +152,8 @@ All checks are reported; the first failure is the recorded cause.
    with an Apple ID, then, after loading the env file as above, run
    `.venv/bin/python -m tickr.runtime alert preflight-failed "test"` once. You should get a
    notification on the Mac and an iMessage on the phone. The Mac notification comes from the
-   Tickr app, with its icon, when the app is at `[alerts] mac_app` (default
-   `/Applications/Tickr.app`: in Xcode, Product > Archive, then Distribute App > Copy App, and
+   Tickr app, with its icon, when the app is at `[alerts] mac_app` (on a Mac
+   `/Applications/Tickr.app`, shipped empty since the server cutover: in Xcode, Product > Archive, then Distribute App > Copy App, and
    put it there under that name). Open it once and allow notifications when it asks. When the
    app is missing, notifications for it are off, or it fails, the same notification comes from
    `osascript` instead, under "Script Editor" (allow those in System Settings > Notifications
@@ -965,8 +965,9 @@ recovers (no live pid, or a status file not yet rewritten); if the next check is
 From `[runtime] watchdog_restart_before_flatten_seconds` before the flatten time (300 s:
 15:40 ET on a normal day, 12:40 ET on a half day) until its last check, a watchdog bot check
 that finds the bot down while its database shows an open trade starts the bot job once:
-`[runtime] watchdog_restart_command`, by default `launchctl kickstart gui/<uid>/local.tickr.bot`
-(without `-k`, so a job launchd still sees running is left alone). That is the same job the
+`[runtime] watchdog_restart_command`, on a Mac `launchctl kickstart gui/<uid>/local.tickr.bot`
+(without `-k`, so a job launchd still sees running is left alone; shipped since the server
+cutover: the server's restart request, docs/deploy-server.md "Bot restart on the server"). That is the same job the
 schedule starts: preflight again (a failure alerts `bot-did-not-start`), the supervisor, the
 single-instance lock, then the normal startup: recovery, reconciliation, the stop verified.
 Config refuses a restart time at or before the last entry time, so the restarted bot can never
