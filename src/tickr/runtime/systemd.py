@@ -2,11 +2,11 @@
 
 The counterpart of `launchd.py`: the same jobs, the same `[runtime]` times and weekdays, the same
 validation (`launchd.schedule`, `launchd.check_timings`). The units run `docker compose` with the
-services and profiles of `ops/docker/compose.yaml` (docs/deploy-server.md): the API always on;
-preflight, bot, watchdog and nightly fetch as scheduled jobs. Nothing is installed by this code:
-it writes the
-units, the timers, `ports.env` and `limits.env` into an output folder;
-`ops/systemd/deploy-server.sh` installs
+services and profiles of the server's copy of `ops/docker/compose.yaml`, a host file named by its
+absolute path (`/srv/tickr/etc/compose.yaml`, docs/deploy-server.md; the server has no clone):
+the API always on; preflight, bot, watchdog and nightly fetch as scheduled jobs. Nothing is
+installed by this code: it writes the units, the timers, `ports.env` and `limits.env` into an
+output folder; `ops/systemd/deploy-server.sh` runs it inside the release image and installs
 them, and only when the bot is flat.
 
 Secrets: a job unit names the env file by path (`TICKR_ENV_FILE_HOST=`, mounted read-only into
@@ -17,7 +17,7 @@ rendered here).
 Bot restart on request: `tickr-bot-restart.path` watches the request file the watchdog's restart
 command writes inside its container (runtime/restartrequest.py) at the same place under the host
 data folder, and `tickr-bot-restart.service` restarts the compose service `bot` once, with the
-bot's own `stop_grace_period` read from compose.yaml here (`bot_stop_grace`), never a number of
+bot's own `stop_grace_period` read from that compose.yaml here (`bot_stop_grace`), never a number of
 its own.
 
 Times are wall-clock times in a zone the caller names (an IANA name): the server's own zone is
@@ -38,7 +38,6 @@ from tickr.runtime import launchd, restartrequest
 SERVICE_SUFFIX = ".service.template"
 TIMER_SUFFIX = ".timer.template"
 PATH_SUFFIX = ".path.template"
-COMPOSE_FILE = Path("ops") / "docker" / "compose.yaml"
 BOT_SERVICE = "bot"
 PORTS_ENV = "ports.env"
 COMPOSE_ENV = "limits.env"
@@ -48,19 +47,25 @@ _WEEK_ORDER = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 # A value written into a unit unquoted: no whitespace, quote, backslash, `$` or `%` (systemd
 # expands them), so nothing in it can change what the unit runs.
 _SAFE = re.compile(r"^[A-Za-z0-9._/@+:=,-]+$")
+# An image reference compose runs: a repository and a tag (`<registry>/tickr-bot:<commit>` on
+# the server), never a bare name, which Docker would read as `:latest`.
+_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._/:-]*:[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 
 
 @dataclass(frozen=True)
 class Paths:
-    """Server names that go into the units: absolute `repo` (the clone with ops/docker),
-    `config_host`, `env_file` and `data` (host paths compose mounts into the containers; `data`
-    is the data folder, [run] data_dir in the containers), and the service account `user`."""
+    """Server names that go into the units: absolute `compose` (the host's compose.yaml every
+    unit runs), `config_host`, `env_file` and `data` (host paths compose mounts into the
+    containers; `data` is the data folder, [run] data_dir in the containers), the service
+    account `user`, and `image`, the image reference every compose service runs (TICKR_IMAGE in
+    limits.env)."""
 
-    repo: Path
+    compose: Path
     config_host: Path
     env_file: Path
     data: Path
     user: str
+    image: str
 
 
 def _safe(name: str, value: str) -> str:
@@ -74,6 +79,13 @@ def _calendar(at: launchd.LocalTime, weekdays: tuple[int, ...], zone: str) -> st
     days = {_WEEKDAYS[day] for day in weekdays}
     names = ",".join(day for day in _WEEK_ORDER if day in days)
     return f"{names} *-*-* {at.hour:02d}:{at.minute:02d}:00 {zone}"
+
+
+def check_image(image: str) -> str:
+    if not _IMAGE.match(image):
+        raise ConfigError(f"image {image!r} is not a repository and tag "
+                          "(for example <registry>/tickr-bot:<commit>)")
+    return _safe("image", image)
 
 
 def check_zone(zone: str) -> str:
@@ -133,26 +145,28 @@ def bot_stop_grace(compose_text: str, compose_values: Mapping[str, str]) -> int:
     return int(seconds.group(1))
 
 
-def values(config: Config, paths: Paths, zone: str) -> dict[str, str]:
-    """Placeholder values for the templates."""
+def values(config: Config, paths: Paths, zone: str, compose_text: str) -> dict[str, str]:
+    """Placeholder values for the templates. `compose_text` is the text of `paths.compose` (the
+    caller reads it): the source of the bot's stop grace."""
     runtime = config.runtime
     sched = launchd.schedule(runtime)
-    for name in ("repo", "config_host", "env_file", "data"):
+    for name in ("compose", "config_host", "env_file", "data"):
         if not Path(getattr(paths, name)).is_absolute():
             raise ConfigError(f"systemd path {name} must be absolute, got {getattr(paths, name)}")
     zone = check_zone(zone)
     data = _safe("data", str(paths.data))
+    image = check_image(paths.image)
     request = _safe("server_restart_request_file",
                     str(paths.data / restartrequest.relative_request_file(config)))
-    grace = bot_stop_grace((config.root / COMPOSE_FILE).read_text("utf-8"),
-                           compose_values(config, data))
+    grace = bot_stop_grace(compose_text, compose_values(config, data, image))
     return {
-        "REPO": _safe("repo", str(paths.repo)),
+        "COMPOSE": _safe("compose", str(paths.compose)),
         "CONFIG_HOST": _safe("config", str(paths.config_host)),
         "ENV_FILE": _safe("env_file", str(paths.env_file)),
         "COMPOSE_ENV": _safe("config", str(paths.config_host.parent / COMPOSE_ENV)),
         "USER": _safe("user", paths.user),
         "DATA_HOST": data,
+        "IMAGE": image,
         "RESTART_REQUEST": request,
         "RESTART_TAKEN": request + restartrequest.TAKEN_SUFFIX,
         "BOT_STOP_GRACE": str(grace),
@@ -169,20 +183,21 @@ def ports_env(config: Config) -> str:
             f"TICKR_API_REMOTE_PORT={config.api.remote_port}\n")
 
 
-def compose_values(config: Config, data_host: str) -> dict[str, str]:
+def compose_values(config: Config, data_host: str, image: str) -> dict[str, str]:
     """The values compose.yaml interpolates: from [runtime] (the bot's stop_grace_period is its
-    exit timeout; the nightly fetch's folders) and the host data folder."""
+    exit timeout; the nightly fetch's folders), the host data folder and the image."""
     runtime = config.runtime
     return {"TICKR_BOT_EXIT_TIMEOUT": str(runtime.bot_exit_timeout_seconds),
             "TICKR_NIGHTLY_OUT": _safe("nightly_fetch_out", runtime.nightly_fetch_out),
             "TICKR_NIGHTLY_SEED": _safe("nightly_fetch_seed", runtime.nightly_fetch_seed),
-            "TICKR_DATA_HOST": _safe("data", data_host)}
+            "TICKR_DATA_HOST": _safe("data", data_host),
+            "TICKR_IMAGE": check_image(image)}
 
 
-def compose_env(config: Config, data_host: str) -> str:
+def compose_env(config: Config, data_host: str, image: str) -> str:
     """`limits.env` text: `compose_values`, one NAME=value line each."""
     return "".join(f"{name}={value}\n"
-                   for name, value in compose_values(config, data_host).items())
+                   for name, value in compose_values(config, data_host, image).items())
 
 
 def render_all(config: Config, template_dir: Path, out_dir: Path,
@@ -202,5 +217,5 @@ def render_all(config: Config, template_dir: Path, out_dir: Path,
     ports = out_dir / PORTS_ENV
     ports.write_text(ports_env(config), "utf-8")
     compose = out_dir / COMPOSE_ENV
-    compose.write_text(compose_env(config, filled["DATA_HOST"]), "utf-8")
+    compose.write_text(compose_env(config, filled["DATA_HOST"], filled["IMAGE"]), "utf-8")
     return [*written, ports, compose]

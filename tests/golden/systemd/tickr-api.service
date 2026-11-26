@@ -12,11 +12,10 @@ After=docker.service
 Type=oneshot
 RemainAfterExit=yes
 User=tickr
-WorkingDirectory=/srv/tickr/repo
 EnvironmentFile=/srv/tickr/etc/limits.env
 Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml
-ExecStart=/usr/bin/docker compose -f ops/docker/compose.yaml up -d api
-ExecStop=/usr/bin/docker compose -f ops/docker/compose.yaml stop api
+ExecStart=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml up -d api
+ExecStop=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml stop api
 
 [Install]
 WantedBy=multi-user.target

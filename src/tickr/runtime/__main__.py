@@ -73,10 +73,11 @@ from tickr.store import DATABASE_FILE
 TITLE = "Tickr"
 TEMPLATE_DIR = Path("ops") / "launchd"
 SYSTEMD_TEMPLATE_DIR = Path("ops") / "systemd"
-# The server's file layout (docs/deploy-server.md): the clone, the folder of the config and
-# ports.env, and the env file the secrets unit writes (a path only, never read here).
-SERVER_REPO = Path("/srv/tickr/repo")
+# The server's file layout (docs/deploy-server.md): no clone; the folder of bot.toml,
+# compose.yaml and ports.env, and the env file the secrets unit writes (a path only, never read
+# here).
 SERVER_ETC = Path("/srv/tickr/etc")
+SERVER_COMPOSE = SERVER_ETC / "compose.yaml"
 SERVER_ENV_FILE = Path("/run/tickr/env")
 SERVER_DATA = Path("/srv/tickr/data")
 SERVER_CONFIG = "bot.toml"
@@ -358,9 +359,15 @@ def _render_systemd(args: argparse.Namespace) -> int:
     cfg = config_module.load(args.config)
     launchd.check_timings(cfg)
     launchd.check_lab_folder(cfg)
-    paths = systemd.Paths(repo=args.repo, config_host=args.etc / SERVER_CONFIG,
-                          env_file=args.env_file, data=args.data, user=args.user)
-    filled = systemd.values(cfg, paths, args.timezone)
+    paths = systemd.Paths(compose=args.compose, config_host=args.etc / SERVER_CONFIG,
+                          env_file=args.env_file, data=args.data, user=args.user,
+                          image=args.image)
+    try:
+        compose_text = args.compose.read_text("utf-8")
+    except OSError as exc:
+        raise config_module.ConfigError(
+            f"cannot read the compose file {args.compose}: {type(exc).__name__}") from exc
+    filled = systemd.values(cfg, paths, args.timezone, compose_text)
     for path in systemd.render_all(cfg, cfg.root / SYSTEMD_TEMPLATE_DIR, args.out, filled):
         print(path)
     return 0
@@ -486,7 +493,9 @@ def main(argv: list[str] | None = None) -> int:
     units = sub.add_parser("render-systemd", help="write systemd units for a Linux server")
     units.add_argument("--out", type=Path, required=True,
                        help="output folder: the units, the timers and ports.env")
-    units.add_argument("--repo", type=Path, default=SERVER_REPO, help="clone with ops/docker")
+    units.add_argument("--compose", type=Path, default=SERVER_COMPOSE,
+                       help="absolute host path of the compose.yaml the units run (read here "
+                            "for the bot's stop grace)")
     units.add_argument("--etc", type=Path, default=SERVER_ETC,
                        help="server folder of bot.toml (and of ports.env once installed)")
     units.add_argument("--env-file", type=Path, default=SERVER_ENV_FILE,
@@ -494,6 +503,9 @@ def main(argv: list[str] | None = None) -> int:
     units.add_argument("--data", type=Path, default=SERVER_DATA,
                        help="host data folder compose mounts as the containers' data folder")
     units.add_argument("--user", default=SERVER_USER, help="service account of the units")
+    units.add_argument("--image", required=True,
+                       help="image reference every compose service runs (TICKR_IMAGE in "
+                            "limits.env): the release image <registry>/tickr-bot:<commit>")
     units.add_argument("--timezone", default=SERVER_ZONE, help="IANA zone of the [runtime] times")
     request = sub.add_parser(REQUEST_RESTART,
                              help="server: ask the host to restart the bot container once")

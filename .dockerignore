@@ -6,6 +6,12 @@
 !config/
 !strategies/
 !ops/docker/entrypoint.sh
+# The unit templates (deploy-server.sh runs render-systemd inside the release image) and the
+# deploy script itself, so the server takes it from the image it deploys.
+!ops/systemd/*.template
+!ops/systemd/deploy-server.sh
+# Its own compose.yaml: deploy-server.sh refuses a host copy that differs from it.
+!ops/docker/compose.yaml
 **/__pycache__
 **/*.pyc
 **/*.egg-info
