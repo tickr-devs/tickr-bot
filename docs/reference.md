@@ -137,6 +137,7 @@ alert. See "Preflight checks" in [operations.md](operations.md#preflight-checks)
 | `credentials-missing` | A broker key variable is not set. | Set the named variable (the message names it, never its value). |
 | `alert-recipient-missing` | The variable holding the iMessage recipient is not set. | Set the named variable. |
 | `alert-channel-missing` | No alert channel is working. | Fix the notification setup. |
+| `alert-telegram-missing` | Only one of the two Telegram variables is set (bot token or chat id). | Set both named variables, or neither to turn Telegram off. |
 | `token-dir-missing` | The folder for the broker token does not exist. | Create it. |
 | `token-dir-open` | The token folder can be read by other users. | Restrict its permissions. |
 | `token-unusable` | The broker token is missing, expired or rejected. | Renew it and confirm it in the Webull app (see the `token-needs-confirmation` alert). |
