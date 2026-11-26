@@ -10,8 +10,12 @@
   Exit 0 all clear, 1 something alerted, 2 config invalid, 3 no session today.
 - `broker-flat`: one read-only broker read of positions and open orders (JSON), the proof
   `release` and `rollback` require just before they switch.
+- `require-flat`: `broker-flat` plus the database's open trades; exit 0 only when flat (the
+  server deploy's gate, ops/systemd/deploy-server.sh).
 - `alert <kind> <text>`: show one alert (used to test notifications on the Mac).
 - `render-launchd`: write filled-in plists from ops/launchd into a folder; installs nothing.
+- `render-systemd`: write the systemd units and timers from ops/systemd (Linux server); installs
+  nothing.
 - `release [--commit REF]` / `rollback`: switch what the launchd jobs run to a pinned release
   (runtime/release.py); refused unless the bot is flat.
 
@@ -37,7 +41,7 @@ from tickr import config as config_module
 from tickr.api import contract
 from tickr.broker.base import Broker, BrokerError
 from tickr.calendar import CalendarRefused
-from tickr.runtime import launchd, watchdog
+from tickr.runtime import launchd, systemd, watchdog
 from tickr.runtime import release as release_module
 from tickr.runtime.alert_routing import routing_path, skipped_by
 from tickr.runtime.alerts import (
@@ -62,9 +66,20 @@ from tickr.runtime.preflight import (
 )
 from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
 from tickr.runtime.supervisor import supervise
+from tickr.store import DATABASE_FILE
 
 TITLE = "Tickr"
 TEMPLATE_DIR = Path("ops") / "launchd"
+SYSTEMD_TEMPLATE_DIR = Path("ops") / "systemd"
+# The server's file layout (docs/deploy-server.md): the clone, the folder of the config and
+# ports.env, and the env file the secrets unit writes (a path only, never read here).
+SERVER_REPO = Path("/srv/tickr/repo")
+SERVER_ETC = Path("/srv/tickr/etc")
+SERVER_ENV_FILE = Path("/run/tickr/env")
+SERVER_CONFIG = "bot.toml"
+SERVER_USER = "tickr"
+# The zone of the [runtime] times: the exchange's.
+SERVER_ZONE = "America/New_York"
 
 
 def _emit(record: str, body: dict[str, object]) -> None:
@@ -336,15 +351,25 @@ def _render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _render_systemd(args: argparse.Namespace) -> int:
+    cfg = config_module.load(args.config)
+    launchd.check_timings(cfg)
+    launchd.check_lab_folder(cfg)
+    paths = systemd.Paths(repo=args.repo, config_host=args.etc / SERVER_CONFIG,
+                          env_file=args.env_file, user=args.user)
+    filled = systemd.values(cfg, paths, args.timezone)
+    for path in systemd.render_all(cfg, cfg.root / SYSTEMD_TEMPLATE_DIR, args.out, filled):
+        print(path)
+    return 0
+
+
 # Replaced in tests: the broker factory of `broker-flat`; it is only ever held through
 # watchdog.ReadOnlyBroker (positions and open orders, nothing that sends).
 FLAT_BROKER: Callable[[config_module.Config, Callable[[], None]], Broker] = _webull_broker
 
 
-def _broker_flat(config_path: Path) -> int:
-    """One read-only broker read for `release`: the symbols of every position and open order,
-    or the cause the read failed. Exit 0 when read (flat or not), 1 when the read failed."""
-    cfg = config_module.load(config_path)
+def _flat_read(cfg: config_module.Config) -> tuple[dict[str, object], int]:
+    """One read-only broker read: the body of the `broker-flat` record and its exit code."""
 
     def pending() -> None:
         _emit("token-pending", {"wait_seconds": cfg.environment.token_check_duration_seconds})
@@ -354,14 +379,40 @@ def _broker_flat(config_path: Path) -> int:
         positions = sorted(p.symbol for p in broker.positions())
         orders = sorted(o.symbol for o in broker.open_orders())
     except BrokerError as exc:  # typed causes: names only, no values
-        _emit(release_module.BROKER_FLAT, {"error": str(exc) or type(exc).__name__})
-        return int(ExitCode.FAILED)
+        return {"error": str(exc) or type(exc).__name__}, int(ExitCode.FAILED)
     except Exception as exc:  # noqa: BLE001 - any failed read refuses; the type is the cause
-        _emit(release_module.BROKER_FLAT, {"error": type(exc).__name__})
-        return int(ExitCode.FAILED)
-    _emit(release_module.BROKER_FLAT, {"error": None, "positions": positions,
-                                       "open_orders": orders})
-    return 0
+        return {"error": type(exc).__name__}, int(ExitCode.FAILED)
+    return {"error": None, "positions": positions, "open_orders": orders}, 0
+
+
+def _broker_flat(config_path: Path) -> int:
+    """One read-only broker read for `release`: the symbols of every position and open order,
+    or the cause the read failed. Exit 0 when read (flat or not), 1 when the read failed."""
+    body, code = _flat_read(config_module.load(config_path))
+    _emit(release_module.BROKER_FLAT, body)
+    return code
+
+
+REQUIRE_FLAT = "require-flat"
+
+
+def _require_flat(config_path: Path) -> int:
+    """The server deploy's gate: exit 0 only when a fresh broker read (the same read as
+    `broker-flat`) shows no position and no open order and the database has no open trade.
+    Any failed read, any position, order or open trade: exit 1 with the one cause."""
+    cfg = config_module.load(config_path)
+    body, _ = _flat_read(cfg)
+    cause: str | None = None
+    if body["error"]:
+        cause = f"broker read failed: {body['error']}"
+    elif body["positions"] or body["open_orders"]:
+        cause = f"not flat: positions {body['positions']}, open orders {body['open_orders']}"
+    else:
+        count = watchdog.open_trades(cfg.root / cfg.run.data_dir / DATABASE_FILE)
+        if count:
+            cause = f"not flat: the database has {count} open trade(s)"
+    _emit(REQUIRE_FLAT, {"flat": cause is None, "cause": cause})
+    return 0 if cause is None else int(ExitCode.FAILED)
 
 
 # Replaced in tests: the command runner of `release` and `rollback`.
@@ -396,6 +447,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("watchdog", help="read-only end-of-day checks, separate from the bot")
     sub.add_parser(release_module.BROKER_FLAT,
                    help="read positions and open orders once (read-only), for release")
+    sub.add_parser(REQUIRE_FLAT, help="exit 0 only when the broker and the database show flat")
     run = sub.add_parser("run-bot", help="preflight, then run the bot command after --")
     run.add_argument("bot_command", nargs=argparse.REMAINDER)
     alert = sub.add_parser("alert", help="show one alert")
@@ -409,6 +461,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="absolute path of the credentials file sourced by the jobs")
     render.add_argument("--log-dir", type=Path, required=True, help="absolute log folder")
     render.add_argument("--out", type=Path, required=True, help="output folder")
+    units = sub.add_parser("render-systemd", help="write systemd units for a Linux server")
+    units.add_argument("--out", type=Path, required=True,
+                       help="output folder: the units, the timers and ports.env")
+    units.add_argument("--repo", type=Path, default=SERVER_REPO, help="clone with ops/docker")
+    units.add_argument("--etc", type=Path, default=SERVER_ETC,
+                       help="server folder of bot.toml (and of ports.env once installed)")
+    units.add_argument("--env-file", type=Path, default=SERVER_ENV_FILE,
+                       help="host path of the credentials file compose mounts (path only)")
+    units.add_argument("--user", default=SERVER_USER, help="service account of the units")
+    units.add_argument("--timezone", default=SERVER_ZONE, help="IANA zone of the [runtime] times")
     for name, text in (("release", "run a commit of origin/main from now on (flat only)"),
                        ("rollback", "run the previous release again (flat only)")):
         cmd = sub.add_parser(name, help=text)
@@ -430,11 +492,15 @@ def main(argv: list[str] | None = None) -> int:
             return _watchdog(args.config)
         if args.command == release_module.BROKER_FLAT:
             return _broker_flat(args.config)
+        if args.command == REQUIRE_FLAT:
+            return _require_flat(args.config)
         if args.command == "alert":
             _alert(args.config, None, AlertKind(args.kind), args.text)
             return 0
         if args.command == "render-launchd":
             return _render(args)
+        if args.command == "render-systemd":
+            return _render_systemd(args)
         if args.command in ("release", "rollback"):
             return _release(args)
     except config_module.ConfigError as exc:

@@ -35,6 +35,20 @@
         }
       ]
     },
+    "mode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "close_and_stop",
+            "leave_open"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "schema_version": {
       "type": "integer",
       "const": 1

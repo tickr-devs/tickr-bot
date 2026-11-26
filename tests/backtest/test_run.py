@@ -27,6 +27,10 @@ TODAY = date(2026, 11, 13)
 SETTINGS = replace(load_settings(ROOT / "config" / "backtest.toml"), workers=1)
 
 
+def _replay_settings():
+    return load_replay(ROOT / "config" / "replay.toml", cfg().market_data.history_sessions)
+
+
 class Spy:
     name, version = "spy", "1"
 
@@ -121,7 +125,7 @@ def test_run_end_to_end(tmp_path):
             PoolEntry(TODAY, 4, "SPLIT", Decimal(20), Decimal(20), Decimal(50), Decimal(10**8))]
     write_pool(pool, out / "pool.csv")
     write_caps([CapRecord(TODAY, 4, 4)], out / "pool_cap.csv")
-    run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
+    run_backtest(cfg(), SETTINGS, _replay_settings(), out, results,
                  "tickr.strategy.price_action_v1",
                  ROOT / "strategies" / "price-action-v1" / "strategy.toml")
     with open(results / "trades.csv") as handle:
@@ -217,7 +221,7 @@ def test_a_bar_the_engine_refuses_skips_only_its_day(tmp_path):
                 PoolEntry(TODAY, 2, "BAD", Decimal(29), Decimal(29), Decimal(50), Decimal(10**8))],
                out / "pool.csv")
     write_caps([CapRecord(first, 1, 1), CapRecord(TODAY, 2, 2)], out / "pool_cap.csv")
-    run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
+    run_backtest(cfg(), SETTINGS, _replay_settings(), out, results,
                  "tickr.strategy.price_action_v1",
                  ROOT / "strategies" / "price-action-v1" / "strategy.toml")
     with open(results / "skipped.csv") as handle:
@@ -240,7 +244,7 @@ def test_run_last_sessions_reports_its_window(tmp_path):
                 PoolEntry(TODAY, 1, "ABCD", Decimal(20), Decimal(29), Decimal(50),
                           Decimal(10**8))], out / "pool.csv")
     write_caps([CapRecord(old, 1, 1), CapRecord(TODAY, 1, 1)], out / "pool_cap.csv")
-    run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
+    run_backtest(cfg(), SETTINGS, _replay_settings(), out, results,
                  "tickr.strategy.price_action_v1",
                  ROOT / "strategies" / "price-action-v1" / "strategy.toml", 3)
     report = json.loads((results / "report.json").read_text())
@@ -305,7 +309,7 @@ def test_the_holdout_splits_on_every_session_not_only_those_with_candidates(tmp_
     write_caps(sorted([CapRecord(d, 0, 0) for d in quiet]
                       + [CapRecord(PRIOR[0], 1, 1), CapRecord(TODAY, 1, 1)],
                       key=lambda c: c.session_date), out / "pool_cap.csv")
-    run_backtest(cfg(), SETTINGS, load_replay(ROOT / "config" / "replay.toml"), out, results,
+    run_backtest(cfg(), SETTINGS, _replay_settings(), out, results,
                  "tickr.strategy.price_action_v1",
                  ROOT / "strategies" / "price-action-v1" / "strategy.toml")
     holdout = json.loads((results / "report.json").read_text())["holdout"]

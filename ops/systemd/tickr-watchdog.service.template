@@ -1,0 +1,18 @@
+# Tickr watchdog job: separate from the bot, read-only broker checks (compose service
+# `watchdog`, profile jobs, restart: "no"). Started by its timer at the configured time.
+# The env file is the path {{ENV_FILE}} on the host, written by tickr-secrets.service; only its
+# path is named here, never a value.
+# Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
+[Unit]
+Description=Tickr watchdog
+Requires=docker.service tickr-secrets.service
+After=docker.service tickr-secrets.service
+
+[Service]
+Type=oneshot
+User={{USER}}
+WorkingDirectory={{REPO}}
+EnvironmentFile={{COMPOSE_ENV}}
+Environment=TICKR_CONFIG_HOST={{CONFIG_HOST}}
+Environment=TICKR_ENV_FILE_HOST={{ENV_FILE}}
+ExecStart=/usr/bin/docker compose -f ops/docker/compose.yaml --profile jobs up -d watchdog

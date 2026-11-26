@@ -143,6 +143,8 @@ switched on by `[observers] ignition` in `config/bot.toml` ("" = off). Unlike th
 observers it does not run in the observer process and is not a `Strategy`: its signal comes from
 the screener rows discovery already reads every minute, so it costs no extra request.
 
+Switched off on 2026-11-25 by the owner (`ignition = ""` in `config/bot.toml`); the code and folder stay until R28.
+
 - **Signal** (on each discovery pass, universe symbols only, 09:35 to 30 minutes before the
   close): the row's price is the day's high, at least `min_rise_percent` above the lowest price
   of the last `low_window_minutes` (sampled prices, or a new day low seen in a row), that low

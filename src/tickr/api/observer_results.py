@@ -69,13 +69,15 @@ class SimulationPaths:
     replay_settings: Path  # config/replay.toml
     calendar: Path  # folder of the session calendar files
     session: SessionConfig
+    history_sessions: int  # [market_data] history_sessions, the replay history depth
 
     @classmethod
     def from_config(cls, config: Config) -> SimulationPaths:
         data = config.root / config.run.data_dir
         return cls(data / config.market_data.capture_dir / config.environment_name,
                    config.root / config.api.replay_settings_file,
-                   (config.root / config.session.calendar_file).parent, config.session)
+                   (config.root / config.session.calendar_file).parent, config.session,
+                   config.market_data.history_sessions)
 
 
 def stamp(path: Path) -> _Stamp:
@@ -217,7 +219,7 @@ def load_calendar(paths: SimulationPaths) -> SessionCalendar:
 
 def replay_inputs(paths: SimulationPaths) -> tuple[ReplaySettings, ClockFor]:
     try:
-        settings = load_settings(paths.replay_settings)
+        settings = load_settings(paths.replay_settings, paths.history_sessions)
     except ReplayError as exc:
         raise NoInputs(f"replay settings unreadable: {exc}") from exc
     except OSError as exc:

@@ -4,12 +4,13 @@ stdlib only. Binds a loopback address and refuses any request whose Host (or Ori
 is not in the configured allowlist, which blocks DNS rebinding and cross-site requests from a
 browser. Remote access (the phone, through an HTTPS proxy on this Mac such as `tailscale serve`)
 has its own loopback listener, `[api] remote_port`: every request there must carry the paired
-bearer token whatever its Host, and its Host must be one of the names in
-`[api] remote_hosts_file`. Whether a token is needed is decided by the listener a request
+bearer token of a paired device whatever its Host, and its Host must be one of the names in
+`[api] remote_hosts_file`. Several devices can be paired, each with its own token, revoked one by
+one (api/devices.py). Whether a token is needed is decided by the listener a request
 arrives on, never by a header the caller chooses.
 The one exception is POST /pair there: the phone redeems the one-time pairing code `pair` left
-in the pairing link, once and before it expires, for a new token. The server keeps only SHA-256
-digests of the code and the token.
+in the pairing link, once and before it expires, for a new device token. The server keeps only
+SHA-256 digests of the code and the tokens.
 Commands additionally require `Content-Type: application/json`, which a cross-site form
 cannot send without a CORS preflight, and this server answers no preflight.
 
@@ -43,7 +44,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import contract, flow, settled, symbols, trade_whatif
+from tickr.api import contract, devices, flow, settled, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.alerts import AlertsSettings, alerts_document
@@ -101,6 +102,7 @@ WARM_ERRORS = (HistoryUnavailable, CaptureError, RecordFileError, ObserverError,
 COMMAND_SOURCE = "api"
 JSON_TYPE = "application/json"
 ENTRY_STOP_STATES = {"on": CommandKind.ENTRY_STOP_ON, "off": CommandKind.ENTRY_STOP_OFF}
+STOP_MODES = {m.value: m for m in contract.StopMode}  # POST /commands/stop-bot {"mode": ...}
 COMMAND_ROUTES = {
     "/commands/entry-stop": None,  # kind comes from the body
     "/commands/cancel-own-orders": CommandKind.CANCEL_OWN_ORDERS,
@@ -135,7 +137,8 @@ class ApiSettings:
     remote_hosts: tuple[str, ...]  # read from remote_hosts_path at start; empty = remote off
     remote_hosts_path: Path
     remote_port: int
-    token_hash_path: Path
+    token_hash_path: Path  # the single phone token's hash before devices: migrated, then gone
+    devices_path: Path  # the paired devices: name, token SHA-256, created and last-used time
     simulator_token_hash_path: Path  # the Simulator's own token (`pair-simulator`), beside it
     simulator_token_path: Path  # the Simulator's token itself, 0600, for the app to read
     token_bytes: int
@@ -276,6 +279,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         remote_hosts_path=remote_hosts_path,
         remote_port=api.remote_port,
         token_hash_path=data / api.remote_token_hash_file,
+        devices_path=data / api.remote_devices_file,
         simulator_token_hash_path=data / api.remote_simulator_token_hash_file,
         simulator_token_path=data / api.remote_simulator_token_file,
         token_bytes=api.remote_token_bytes,
@@ -678,8 +682,8 @@ class ApiServer(ThreadingHTTPServer):
         return symbols.movers_document(day, self._discovery(day, today),
                                        symbols.mover_rules(toml), records)
 
-    def enqueue(self, kind: CommandKind, symbol: str | None = None,
-                key: str | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
+    def enqueue(self, kind: CommandKind, symbol: str | None = None, key: str | None = None,
+                mode: contract.StopMode | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
         """Queue one command. With an Idempotency-Key already seen within its lifetime the
         first answer comes back as stored bytes and nothing is queued; the same key for a
         different command is a conflict. The command file is written before the key, so a
@@ -687,7 +691,9 @@ class ApiServer(ThreadingHTTPServer):
         was not queued (every command is idempotent in its effect on the bot)."""
         with self.inbox_lock:
             now = self.clock()
-            request = {"kind": kind.value, "symbol": symbol}
+            request: dict[str, Any] = {"kind": kind.value, "symbol": symbol}
+            if mode is not None:  # absent without one, so a key stored before modes still matches
+                request["mode"] = mode.value
             if key is not None:
                 stored = self._remembered(key, now)
                 if stored is not None:
@@ -699,7 +705,7 @@ class ApiServer(ThreadingHTTPServer):
                 return ErrorV1("too_many_pending",
                                f"{self.settings.max_pending_commands} commands are already "
                                "waiting for the bot")
-            command = contract.new_command(kind, now, COMMAND_SOURCE, symbol)
+            command = contract.new_command(kind, now, COMMAND_SOURCE, symbol, mode)
             contract.write_command(self.settings.inbox, command)
             state = self.status_response()
             warning = None
@@ -905,20 +911,61 @@ class Handler(BaseHTTPRequestHandler):
                 and not any(self.headers.get(name) is not None for name in FORWARDING_HEADERS))
 
     def _authorized(self, host: str) -> bool:
-        """A remote request must present the token paired for its Host: the phone's on the
+        """A remote request must present a token paired for its Host: a paired device's on the
         Tailscale names, the Simulator's on this port's loopback address only, so a copy of the
         Simulator's token (kept in a file on this Mac) opens nothing from the tailnet. The token
         is never logged or echoed."""
+        if host not in self.server.settings.remote_hosts:
+            return self._simulator_authorized()
         challenge = {"WWW-Authenticate": "Bearer"}
         settings = self.server.settings
-        simulator = host not in settings.remote_hosts
-        path = settings.simulator_token_hash_path if simulator else settings.token_hash_path
+        header = self.headers.get("Authorization") or ""
+        with self.server.pair_lock, _pairing_lock(settings):
+            try:
+                paired: tuple[devices.Device, ...] | Exception = load_devices(settings)
+            except (OSError, devices.DeviceFileError) as exc:
+                paired = exc
+            device = None
+            if isinstance(paired, tuple) and header.startswith(BEARER):
+                device = devices.match(paired, header[len(BEARER):])
+            if isinstance(paired, tuple) and device is not None:
+                marked = devices.used(paired, device.name, self.server.clock())
+                try:
+                    if marked is not None:
+                        _write_private(settings.devices_path, devices.render(marked))
+                except OSError as exc:  # the request is still the device's: only the time is lost
+                    sys.stderr.write(f"api: last-used time of device {device.name!r} not "
+                                     f"recorded ({type(exc).__name__})\n")
+        if not isinstance(paired, tuple):
+            self._device_list_unreadable(paired)
+            return False
+        if not paired:
+            self._error("unauthorized", "nothing is paired here; run `python -m tickr.api "
+                        "pair`", challenge)
+            return False
+        if not header.startswith(BEARER):
+            self._error("unauthorized", "a bearer token is required", challenge)
+            return False
+        if device is None:
+            self._error("unauthorized", "the bearer token is not the paired one", challenge)
+            return False
+        return True
+
+    def _device_list_unreadable(self, exc: Exception) -> None:
+        """503 for a device list that cannot be read. The cause and the log name the exception's
+        type only: its text carries the local path of the file, which never leaves this Mac."""
+        kind = type(exc).__name__
+        sys.stderr.write(f"api: the paired devices are unreadable ({kind})\n")
+        self._error("unavailable", f"device_list_unreadable:{kind}")
+
+    def _simulator_authorized(self) -> bool:
+        challenge = {"WWW-Authenticate": "Bearer"}
+        path = self.server.settings.simulator_token_hash_path
         try:
             expected = path.read_text("ascii").strip()
         except FileNotFoundError:
-            command = "pair-simulator" if simulator else "pair"
-            self._error("unauthorized", f"nothing is paired here; run `python -m tickr.api "
-                        f"{command}`", challenge)
+            self._error("unauthorized", "nothing is paired here; run `python -m tickr.api "
+                        "pair-simulator`", challenge)
             return False
         except (OSError, UnicodeDecodeError) as exc:
             self._error("unavailable",
@@ -928,7 +975,7 @@ class Handler(BaseHTTPRequestHandler):
         if not header.startswith(BEARER):
             self._error("unauthorized", "a bearer token is required", challenge)
             return False
-        presented = hashlib.sha256(header[len(BEARER):].encode("utf-8")).hexdigest()
+        presented = devices.digest(header[len(BEARER):])
         if not hmac.compare_digest(presented, expected):
             self._error("unauthorized", "the bearer token is not the paired one", challenge)
             return False
@@ -1067,7 +1114,7 @@ class Handler(BaseHTTPRequestHandler):
             if body is None:
                 return
             kind = COMMAND_ROUTES[path]
-            symbol = None
+            symbol, mode = None, None
             if kind is None:
                 if set(body) != {"state"} or body["state"] not in ENTRY_STOP_STATES:
                     self._error("bad_request", 'body must be exactly {"state": "on"} or '
@@ -1082,10 +1129,17 @@ class Handler(BaseHTTPRequestHandler):
                                 "with the ticker in upper case")
                     return
                 symbol = body["symbol"]
+            elif kind is CommandKind.STOP_BOT and body:
+                # Only the two modes: anything else is a client bug, never a guess.
+                if set(body) != {"mode"} or body["mode"] not in STOP_MODES:
+                    self._error("bad_request", 'body must be {}, {"mode": "close_and_stop"} '
+                                'or {"mode": "leave_open"}')
+                    return
+                mode = STOP_MODES[body["mode"]]
             elif body:
                 self._error("bad_request", "body must be an empty JSON object {}")
                 return
-            result = self.server.enqueue(kind, symbol, key)
+            result = self.server.enqueue(kind, symbol, key, mode)
             if isinstance(result, ErrorV1):
                 self._error(result.error, result.cause)
             elif isinstance(result, bytes):
@@ -1174,8 +1228,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _redeem(self) -> None:
         """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`
-        left in the pairing link buys one new bearer token, 200 paired-v1. The code is burnt on
-        success and when found expired; a wrong code changes nothing. Neither the code nor the
+        left in the pairing link buys one new bearer token, 200 paired-v1, for the device named
+        at `pair` (added, or its earlier token replaced). The code is burnt on success and when
+        found expired; a wrong code changes nothing. Neither the code nor the
         token is ever logged or echoed in an error."""
         body = self._read_json_body()
         if body is None:
@@ -1188,9 +1243,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 waiting = json.loads(settings.pairing_code_path.read_text("ascii"))
                 digest = waiting["sha256"]
+                name = waiting["name"]
                 expires_at = contract.parse_time(waiting["expires_at"])
                 if not isinstance(digest, str):
                     raise TypeError("sha256")
+                if not isinstance(name, str) or not devices.valid_name(name):
+                    raise ValueError("name")
             except FileNotFoundError:
                 self._error("unauthorized", "no pairing is waiting; run `python -m tickr.api "
                             "pair` on the Mac")
@@ -1209,9 +1267,15 @@ class Handler(BaseHTTPRequestHandler):
             if not hmac.compare_digest(presented, digest):
                 self._error("unauthorized", "the pairing code is not the waiting one")
                 return
+            try:
+                paired = load_devices(settings)
+            except (OSError, devices.DeviceFileError) as exc:
+                self._device_list_unreadable(exc)
+                return
             token = secrets.token_urlsafe(settings.token_bytes)
-            _write_private(settings.token_hash_path,
-                           hashlib.sha256(token.encode("utf-8")).hexdigest() + "\n")
+            device = devices.Device(name, devices.digest(token), self.server.clock(), None)
+            _write_private(settings.devices_path,
+                           devices.render(devices.with_device(paired, device)))
             settings.pairing_code_path.unlink(missing_ok=True)
             settings.pairing_path.unlink(missing_ok=True)
         self._json(200, PairedV1(token=token))
@@ -1590,14 +1654,18 @@ def unpair_simulator(settings: ApiSettings) -> None:
         settings.simulator_token_path.unlink(missing_ok=True)
 
 
-def pair(settings: ApiSettings, now: datetime | None = None) -> Path:
-    """Start a new pairing: revoke the current phone token (its hash file is deleted, so the
-    old phone stops working at once), make a one-time pairing code that expires after
-    `[api] remote_pairing_code_ttl_seconds`, keep only its SHA-256, and leave the pairing link
-    with the code in a 0600 file for the owner to move to the phone. The phone redeems the code
-    once at POST /pair for its token, so a copy of the link left anywhere is worthless after
-    that or after expiry. Nothing secret is printed or logged. Returns the link file's path.
-    """
+def pair(settings: ApiSettings, name: str, now: datetime | None = None) -> Path:
+    """Start pairing the device `name`: make a one-time pairing code that expires after
+    `[api] remote_pairing_code_ttl_seconds`, keep only its SHA-256 with the name, and leave the
+    pairing link with the code in a 0600 file for the owner to move to the device. The device
+    redeems the code once at POST /pair for its token, so a copy of the link left anywhere is
+    worthless after that or after expiry. Other paired devices keep working; a device already
+    paired under `name` keeps its token until the new code is redeemed, which replaces it. A new
+    `pair` replaces a code still waiting. Nothing secret is printed or logged. Returns the link
+    file's path."""
+    if not devices.valid_name(name):
+        raise ValueError(f"device name {name!r}: letters, digits, space, dot, dash and underscore "
+                         "only, starting and ending with a letter or digit")
     if not settings.remote_hosts:
         raise ConfigError(f"no remote host: write the Tailscale name of this Mac into "
                           f"{settings.remote_hosts_path} first")
@@ -1606,9 +1674,53 @@ def pair(settings: ApiSettings, now: datetime | None = None) -> Path:
     expires_at = now + timedelta(seconds=settings.pairing_code_ttl_seconds)
     address = f"https://{settings.remote_hosts[0]}"
     with _pairing_lock(settings):
-        settings.token_hash_path.unlink(missing_ok=True)
         _write_private(settings.pairing_code_path, json.dumps({
-            "sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "sha256": devices.digest(code),
+            "name": name,
             "expires_at": contract.format_time(expires_at)}) + "\n")
         _write_private(settings.pairing_path, pairing_link(address, code) + "\n")
     return settings.pairing_path
+
+
+def load_devices(settings: ApiSettings) -> tuple[devices.Device, ...]:
+    """The paired devices; the caller holds the pairing lock. The single phone token of before
+    (`token_hash_path`) is migrated here, once, as the device "default": the device list is
+    written first, then the old file goes, so a crash in between leaves the same token in both
+    and the next read only finishes the deletion. An old file whose token the list does not hold
+    is refused, never merged by guess. Raises DeviceFileError or OSError."""
+    try:
+        text: str | None = settings.devices_path.read_text("ascii")
+    except FileNotFoundError:
+        text = None
+    except UnicodeDecodeError as exc:
+        raise devices.DeviceFileError(f"not ASCII ({type(exc).__name__})") from exc
+    paired = () if text is None else devices.parse(text)
+    if not settings.token_hash_path.exists():
+        return paired
+    legacy = devices.legacy_device(settings.token_hash_path)
+    if text is None:
+        text = devices.render((legacy,))
+        _write_private(settings.devices_path, text)
+        paired = devices.parse(text)  # as stored: times to the millisecond
+    elif not any(d.sha256 == legacy.sha256 for d in paired):
+        raise devices.DeviceFileError(f"{settings.token_hash_path.name} holds a token the device "
+                                      "list does not: delete one of the two by hand")
+    settings.token_hash_path.unlink()
+    return paired
+
+
+def list_devices(settings: ApiSettings) -> tuple[devices.Device, ...]:
+    """The paired devices, for `python -m tickr.api devices` (migrating an old single token)."""
+    with _pairing_lock(settings):
+        return load_devices(settings)
+
+
+def revoke_device(settings: ApiSettings, name: str) -> bool:
+    """Revoke one device's token: the api server refuses it from the next request on; the other
+    devices keep working. False when no device has that name (nothing changes)."""
+    with _pairing_lock(settings):
+        kept = devices.without(load_devices(settings), name)
+        if kept is None:
+            return False
+        _write_private(settings.devices_path, devices.render(kept))
+        return True

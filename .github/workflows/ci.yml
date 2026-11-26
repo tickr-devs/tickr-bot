@@ -114,3 +114,6 @@ jobs:
         env:
           TICKR_CONFIG_HOST: /srv/tickr/etc/bot.toml
           TICKR_ENV_FILE_HOST: /srv/tickr/etc/env
+          TICKR_BOT_EXIT_TIMEOUT: "1"
+          TICKR_NIGHTLY_OUT: data/nightly
+          TICKR_NIGHTLY_SEED: data/nightly-seed

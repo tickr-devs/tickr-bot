@@ -104,6 +104,34 @@ def _status(path: Path) -> int:
     return 0
 
 
+def _diagnostics(args: argparse.Namespace) -> int:
+    """Write the secret-free diagnostics bundle (see `tickr.diagnostics`). Read-only; safe
+    while the bot runs."""
+    import contextlib
+    import io
+
+    from tickr import diagnostics
+
+    cfg = config_module.load(args.config)
+    days = cfg.run.diagnostics_days if args.days is None else args.days
+    try:
+        version = _code_version(cfg)
+    except CodeVersionUnknown as exc:
+        version = f"unknown: {exc}"
+    status = io.StringIO()
+    with contextlib.redirect_stdout(status):
+        _status(args.config)
+    try:
+        entries = diagnostics.build(cfg, args.config, args.out, now=NOW(), days=days,
+                                    version=version, status_text=status.getvalue())
+    except diagnostics.DiagnosticsRefused as exc:
+        raise ManualRefused(str(exc)) from exc
+    for entry in entries:
+        print(f"{entry['bytes']:>10}  {entry['path']}")
+    print(f"wrote {args.out} ({len(entries)} files)")
+    return 0
+
+
 def _webull_broker(cfg: config_module.Config) -> Broker:
     from tickr.broker.webull import broker_from_config  # optional dependency
     from tickr.runtime.alerts import token_pending_text
@@ -510,6 +538,104 @@ def _probe_quote_sources(args: argparse.Namespace) -> int:
     return code
 
 
+def _probe_prev_day(args: argparse.Namespace) -> int:
+    """Read-only, overnight (docs/manual-trade.md): when the previous session's Massive day
+    files and splits appear before the 04:00 ET start. Exit 0 at the window's end, 3 refused."""
+    from tickr.model import prevday_probe
+    from tickr.model.errors import ModelRefused
+
+    cfg = config_module.load(args.config)
+    if args.summary:
+        prevday_probe.summary(cfg, print)
+        return 0
+    try:
+        calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+        return prevday_probe.run(cfg, calendar, now=NOW, sleep=SLEEP, out=print)
+    except (ModelRefused, CalendarRefused) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+
+
+def _probe_feed_arrival(args: argparse.Namespace) -> int:
+    """Read-only measurement for one trading day (tickr.model.arrival): Massive minute bars and
+    the Webull lists with their receipt times, into a compressed capture. No orders, no model.
+    Exit 0 recorded, 3 refused, 1 the stream failed."""
+    import threading
+
+    from tickr.model import arrival
+    from tickr.model.errors import ModelRefused
+
+    cfg = config_module.load(args.config)
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    try:
+        day = calendar.day(ny_date_of(NOW()))
+        arrival.capture_folder(cfg, day.ny_date.isoformat())
+        arrival.credential(cfg.massive.api_key_variable)
+    except (CalendarRefused, ModelRefused) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+    _, market = PROBE_ADAPTERS(cfg)
+    stop = threading.Event()
+    previous = {sig: signal.signal(sig, lambda *_: stop.set())
+                for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        return arrival.record(cfg, day, market, stop, print)
+    except ModelRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _report_feed_arrival(args: argparse.Namespace) -> int:
+    """Read-only: the arrival report of one day from its captures and the day's flat file
+    (fetched from Massive's flat files, or the given path). Exit 0 printed, 3 refused."""
+    from tickr.model import arrival, massive
+    from tickr.model.errors import ModelRefused
+
+    cfg = config_module.load(args.config)
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    try:
+        day = calendar.day(datetime.strptime(args.day, "%Y-%m-%d").date())
+        paths = args.capture or arrival.day_captures(cfg, args.day)
+        if not paths:
+            raise ModelRefused("capture_missing", args.day)
+        flat_path = args.flat_file or massive.History(cfg).fetch(args.day)
+        flat = massive.read_day_file(Path(flat_path).read_bytes(), args.day)
+        result = arrival.report(arrival.read_captures(paths), flat, day,
+                                cfg.massive.arrival_report_points_seconds)
+    except (CalendarRefused, ModelRefused, ValueError, OSError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+    for line in arrival.render(result):
+        print(line)
+    return 0
+
+
+def _compare_stream_day(args: argparse.Namespace) -> int:
+    """Read-only: a stream-built day file against the day's published flat file (fetched from
+    Massive's flat files, or the given path). Report only. Exit 0 printed, 3 refused."""
+    from tickr.model import massive, streamday
+    from tickr.model.errors import ModelRefused
+
+    cfg = config_module.load(args.config)
+    calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
+    try:
+        day = calendar.day(datetime.strptime(args.day, "%Y-%m-%d").date())
+        built = streamday.read(cfg, args.day, args.stream_file)
+        flat_path = args.flat_file or massive.History(cfg).fetch(args.day)
+        flat = massive.read_day_file(Path(flat_path).read_bytes(), args.day)
+        result = streamday.compare(built, flat, day,
+                                   cfg.massive.arrival_report_points_seconds[-1])
+    except (CalendarRefused, ModelRefused, ValueError, OSError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 3
+    for line in streamday.render(result):
+        print(line)
+    return 0
+
+
 def _check_quote(args: argparse.Namespace) -> int:
     """Read-only: one snapshot quote through the probes' market-data path, and whether its age
     passes the check `probe-replace-stop` applies. Sends no orders. Exit 0 fresh, 3 not."""
@@ -905,9 +1031,37 @@ def main(argv: list[str] | None = None) -> int:
                              "extended snapshot, top of book and newest trades, with the age "
                              "of each; sends no orders")
     sources.add_argument("symbols", nargs="+")
+    prev_day = sub.add_parser("probe-prev-day", help="read-only, overnight ([probe] "
+                              "prev_day_*): when the previous session's Massive day files and "
+                              "splits appear before the 04:00 ET start; sends no orders")
+    prev_day.add_argument("--summary", action="store_true", help="print the first-available "
+                          "times over every captured night; sends no request")
+    sub.add_parser("probe-feed-arrival", help="read-only measurement for today, 04:00-20:00 "
+                   "ET: Massive minute bars and the Webull lists with their receipt times into "
+                   "a compressed capture (docs/operations.md); no orders, no model")
+    arrival_report = sub.add_parser("report-feed-arrival", help="read-only: the arrival "
+                                    "report of a day's captures against its flat file")
+    arrival_report.add_argument("day", help="New York date, YYYY-MM-DD")
+    arrival_report.add_argument("--capture", type=Path, action="append",
+                                help="capture file (repeatable; default: all of the day's)")
+    arrival_report.add_argument("--flat-file", type=Path,
+                                help="the day's minute_aggs file (default: fetched from Massive)")
+    stream_day = sub.add_parser("compare-stream-day", help="read-only: a stream-built day "
+                                "file against the day's published minute_aggs file")
+    stream_day.add_argument("day", help="New York date, YYYY-MM-DD")
+    stream_day.add_argument("--stream-file", type=Path,
+                            help="stream-built day file (default: [massive] stream_day_dir)")
+    stream_day.add_argument("--flat-file", type=Path,
+                            help="the day's minute_aggs file (default: fetched from Massive)")
     explain_parser = sub.add_parser("explain", help="read-only: the latest decision recorded "
                                     "today for a symbol, with every check")
     explain_parser.add_argument("symbol")
+    diag = sub.add_parser("diagnostics", help="read-only: a zip of config, recent logs and "
+                          "alerts, database row counts and status, with no secrets "
+                          "(docs/operations.md)")
+    diag.add_argument("--out", type=Path, required=True, help="the zip to write (must not exist)")
+    diag.add_argument("--days", type=int, default=None,
+                      help="days of logs and alerts; default [run] diagnostics_days")
     maint = sub.add_parser("maintain", help="with the bot stopped: gzip finished days' capture "
                            "and decision files, prune caches and old archives, checkpoint the "
                            "database (dry run by default)")
@@ -920,6 +1074,9 @@ def main(argv: list[str] | None = None) -> int:
     resolve.add_argument("order_id", help="the client order id the order-conflict, "
                          "order-missing or status-unknown fence names")
     sub.add_parser("clear-stop", help="allow starts again after an operator stop-bot command")
+    sub.add_parser("probe-news-delay", help="read-only, runs until Ctrl-C: polls Massive news, "
+                   "Benzinga news and earnings and records each record's receipt time "
+                   "(docs/operations.md)")
     demo_parser = sub.add_parser("demo", help="a made-up trading day in its own folder "
                                  "(config/demo.toml) served on [api] demo_port; never talks to "
                                  "Webull")
@@ -951,12 +1108,22 @@ def main(argv: list[str] | None = None) -> int:
             return _probe_attached_stop(args)
         if args.command == "probe-trailing":
             return _probe_trailing(args)
+        if args.command == "probe-feed-arrival":
+            return _probe_feed_arrival(args)
+        if args.command == "report-feed-arrival":
+            return _report_feed_arrival(args)
+        if args.command == "compare-stream-day":
+            return _compare_stream_day(args)
         if args.command == "check-quote":
             return _check_quote(args)
         if args.command == "probe-quote-sources":
             return _probe_quote_sources(args)
+        if args.command == "probe-prev-day":
+            return _probe_prev_day(args)
         if args.command == "explain":
             return _explain(args)
+        if args.command == "diagnostics":
+            return _diagnostics(args)
         if args.command == "maintain":
             return _maintain(args)
         if args.command == "clear-fence":
@@ -969,6 +1136,9 @@ def main(argv: list[str] | None = None) -> int:
             return _check_config(args.config)
         if args.command == "status":
             return _status(args.config)
+        if args.command == "probe-news-delay":
+            from tickr.model import newsprobe
+            return newsprobe.main(config_module.load(args.config))
         if args.command == "demo":
             from tickr.demo.run import main as demo_main
             repo = config_module.load(args.config).root

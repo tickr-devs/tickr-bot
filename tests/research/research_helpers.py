@@ -57,7 +57,7 @@ def research_settings() -> ResearchSettings:
 
 
 def replay_settings() -> ReplaySettings:
-    return load_settings(HERE / "replay_settings.toml")
+    return load_settings(HERE / "replay_settings.toml", 2)
 
 
 def d(value: str | None) -> Decimal | None:
