@@ -232,6 +232,15 @@ if S3:
                 return None
             raise
 
+    def cread(dt):  # (etag, holder) of the claim as stored now, or None when there is none
+        try:
+            r = s3().get_object(Bucket=ob, Key=f"{CPRE}/{dt}.json")
+        except botocore.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise
+        return r["ETag"], json.loads(r["Body"].read()).get("by")
+
     # delete my claim only while it still has my etag (S3 checks If-Match in the same request).
     # True: deleted or already gone; False: another machine's claim stands there now.
     def cdel(dt, etag):
@@ -298,6 +307,14 @@ else:
             return str(st.st_mtime_ns), time.time() - st.st_mtime
         except FileNotFoundError:
             return None
+
+    def cread(dt):
+        f = os.path.join(CD, dt + ".json")
+        with CL:
+            try:
+                return str(os.stat(f).st_mtime_ns), open(f).read()
+            except FileNotFoundError:
+                return None
 
     def cdel(dt, etag):
         f = os.path.join(CD, dt + ".json")
@@ -391,7 +408,16 @@ def refresher():
                     e2 = cput(dt, e)
                 except Exception as x:
                     print("claim refresh failed", dt, type(x).__name__, flush=True)
-                    continue
+                    # The write may have landed with its answer lost: the stored etag is then
+                    # new and a release with the old one would be refused, leaving the claim to
+                    # block the day until it goes stale. Read the claim back (never write it
+                    # again): mine -> keep its stored etag; another holder or none -> lost.
+                    try:
+                        c = cread(dt)
+                    except Exception as y:  # unknown: keep what MINE has
+                        print("claim read-back failed", dt, type(y).__name__, flush=True)
+                        continue
+                    e2 = c[0] if c and c[1] == ME else None
                 with L:
                     if e2:
                         MINE[dt] = e2

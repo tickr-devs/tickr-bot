@@ -21,7 +21,7 @@ from tickr.risk.daily import check_daily
 from tickr.risk.sizing import check_size
 from tickr.risk.timers import TradingWindow, WindowKind, trading_windows, window_at
 from tickr.strategy.base import Decision, Verdict
-from tickr.types import Quote
+from tickr.types import Bar, Quote
 
 C = AdmissionCause
 
@@ -54,6 +54,12 @@ class AdmissionLimits:
     """Longest a resting limit entry (`Decision.rest_bars`) may work, in bars."""
     extended_hours_strategies: frozenset[str]
     """Strategies whose ENTER may be admitted outside the regular session."""
+    collar_bar_ratio: Decimal
+    """Farthest the final limit may be from the last completed bar's close, as a ratio of that
+    close (`[risk] entry_collar_bar_ratio`); 0 = off."""
+    collar_quote_ratio: Decimal
+    """Farthest the final limit may be from the previous quote's ask, as a ratio of that ask
+    (`[risk] entry_collar_quote_ratio`); 0 = off."""
 
     @classmethod
     def from_config(cls, config: Config) -> AdmissionLimits:
@@ -76,6 +82,8 @@ class AdmissionLimits:
                 if risk.symbol_cooldown_after_loss_enabled else None),
             max_entry_rest_bars=risk.max_entry_rest_bars,
             extended_hours_strategies=frozenset(config.strategy.extended_hours_strategies),
+            collar_bar_ratio=risk.entry_collar_bar_ratio,
+            collar_quote_ratio=risk.entry_collar_quote_ratio,
         )
 
 
@@ -139,6 +147,12 @@ class AdmissionInputs:
     setup_valid: bool
     """The setup is still valid at `now` (the strategy's latest evaluation still says ENTER)."""
     quote: Quote | None
+    last_bar: Bar | None
+    """The last completed M1 bar of the decision's symbol (the decision bar); None = unknown.
+    Read only by the price collar."""
+    previous_quote: Quote | None
+    """The stream quote of the decision's symbol before `quote`; None = unknown. Read only by
+    the price collar."""
     realized_loss_today_usd: Decimal | None
     """Net realized loss today (wins offset losses) as a non-negative amount; None = unknown."""
     open_reservations_usd: Decimal | None
@@ -307,8 +321,8 @@ def _check_cooldown(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | Non
 
 
 def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
-    """Check 5: the decision and its order prices, then the quote."""
-    return _check_decision(i, lim) or _check_quote(i, lim)
+    """Check 5: the decision and its order prices, then the quote, then the price collar."""
+    return _check_decision(i, lim) or _check_quote(i, lim) or _check_collar(i, lim)
 
 
 def _check_decision(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
@@ -404,6 +418,66 @@ def _check_quote(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     if not (d.entry_low <= q.ask <= i.limit_price):
         return _refuse(C.PRICE_OUTSIDE_WINDOW,
                        f"ask {q.ask} outside {d.entry_low}..limit {i.limit_price}")
+    return None
+
+
+def collar_distance(price: Decimal, reference: Decimal) -> Decimal:
+    """|price - reference| / reference: how far an entry price is from a reference price, as a
+    ratio of the reference (the price collar's measure; `tickr.research collar` uses it too)."""
+    return abs(price - reference) / reference
+
+
+def _collar_references(i: AdmissionInputs,
+                       lim: AdmissionLimits) -> tuple[Decimal, Decimal] | str:
+    """(last completed bar's close, previous quote's ask), or why either is not usable. The
+    previous quote may be no older than the window's quote age limit, the one `_check_quote`
+    holds the current quote to."""
+    d, bar, prev, q = i.decision, i.last_bar, i.previous_quote, i.quote
+    assert q is not None  # `_check_quote` passed
+    if bar is None:
+        return "no last completed bar"
+    if bar.symbol != d.symbol:
+        return f"bar {bar.symbol} for decision {d.symbol}"
+    if not (isinstance(bar.close, Decimal) and bar.close.is_finite() and bar.close > 0):
+        return f"bar close {bar.close} not a price"
+    if not _aware(bar.start) or bar.start >= i.now:
+        return f"bar start {bar.start!r} not an aware time before now"
+    if prev is None:
+        return "no previous quote"
+    if prev.symbol != d.symbol:
+        return f"previous quote {prev.symbol} for decision {d.symbol}"
+    if not (isinstance(prev.ask, Decimal) and prev.ask.is_finite() and prev.ask > 0):
+        return f"previous ask {prev.ask} not a price"
+    if not _aware(prev.provider_time) or prev.provider_time > q.provider_time:
+        return "previous quote time not an aware time at or before the quote's"
+    window = _window(i, lim)
+    max_age, _, _ = window_limits(window, lim)
+    age = Decimal(str((i.now - prev.provider_time).total_seconds()))
+    if age > max_age:
+        return f"previous quote {age} s old > {max_age} s ({window.kind})"
+    return bar.close, prev.ask
+
+
+def _check_collar(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Check 5, last part (backlog T10): the final limit price may not be implausibly far from
+    the last completed bar's close or from the previous quote's ask. Each side is off at 0;
+    while either is on, both references are needed and a refusal records both distances.
+    Entries only: exits and stops never pass admission."""
+    bar_max, quote_max = lim.collar_bar_ratio, lim.collar_quote_ratio
+    if bar_max == 0 and quote_max == 0:
+        return None
+    assert i.limit_price is not None  # `_check_decision` passed
+    found = _collar_references(i, lim)
+    if isinstance(found, str):
+        return _refuse(C.PRICE_COLLAR_UNKNOWN, found)
+    close, ask = found
+    bar_distance = collar_distance(i.limit_price, close)
+    quote_distance = collar_distance(i.limit_price, ask)
+    if (bar_max > 0 and bar_distance > bar_max) or (quote_max > 0 and quote_distance > quote_max):
+        return _refuse(C.PRICE_COLLAR_BREACH,
+                       f"limit {i.limit_price} is {bar_distance:.4f} from bar close {close} "
+                       f"(max {bar_max}) and {quote_distance:.4f} from previous ask {ask} "
+                       f"(max {quote_max})")
     return None
 
 

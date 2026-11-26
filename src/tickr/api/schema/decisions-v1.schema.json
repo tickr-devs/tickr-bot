@@ -188,6 +188,8 @@
                       "QUOTE_STALE",
                       "SPREAD_TOO_WIDE",
                       "PRICE_OUTSIDE_WINDOW",
+                      "PRICE_COLLAR_UNKNOWN",
+                      "PRICE_COLLAR_BREACH",
                       "QUANTITY_BELOW_ONE",
                       "QUANTITY_NOT_WHOLE",
                       "NOTIONAL_OVER_CAP",

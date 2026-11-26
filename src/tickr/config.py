@@ -101,6 +101,8 @@ class RiskConfig:
     symbol_cooldown_minutes_after_loss: int
     max_entry_rest_bars: int
     entry_snapshot_interval_seconds: Decimal
+    entry_collar_bar_ratio: Decimal
+    entry_collar_quote_ratio: Decimal
 
 
 @dataclass(frozen=True)
@@ -212,6 +214,8 @@ class ProbeConfig:
     paging_send_interval_seconds: int
     open_orders_paging_orders: int
     open_orders_end_margin_minutes: int
+    trade_events_minutes: int
+    trade_events_reconnect_seconds: int
     prev_day_window_start: str
     prev_day_window_end: str
     prev_day_poll_seconds: int
@@ -395,6 +399,17 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class ExitChaseConfig:
+    """Limit-exit chase before a market exit (backlog X3; tickr.engine.chase)."""
+
+    enabled: bool
+    ticks_through_bid: int
+    reprice_seconds: Decimal
+    max_reprices: int
+    max_worse_atr: Decimal
+
+
+@dataclass(frozen=True)
 class MassiveConfig:
     api_host: str
     stream_host: str
@@ -488,6 +503,7 @@ class EnvironmentConfig:
     mqtt_host: str
     mqtt_port: int
     events_host: str
+    events_port: int
     app_key_variable: str
     app_secret_variable: str
     account_variable: str
@@ -527,6 +543,7 @@ class Config:
     advisor: AdvisorConfig
     model: ModelConfig
     massive: MassiveConfig
+    exit_chase: ExitChaseConfig
     trailing_stop: TrailingStopConfig
     environments: dict[str, EnvironmentConfig]
     root: Path
@@ -559,6 +576,7 @@ _SECTIONS: dict[str, type] = {
     "advisor": AdvisorConfig,
     "model": ModelConfig,
     "massive": MassiveConfig,
+    "exit_chase": ExitChaseConfig,
     "trailing_stop": TrailingStopConfig,
 }
 
@@ -783,6 +801,15 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[massive] arrival_flush_seconds and arrival_loop_seconds must be above "
                           "0, arrival_tail_seconds at least 0, arrival_report_points_seconds "
                           "rising and not below 0")
+    chase: ExitChaseConfig = built["exit_chase"]
+    if (chase.ticks_through_bid < 0 or chase.reprice_seconds <= 0 or chase.max_reprices < 0
+            or chase.max_worse_atr <= 0):
+        raise ConfigError("[exit_chase] ticks_through_bid and max_reprices must be at least 0, "
+                          "reprice_seconds and max_worse_atr above 0")
+    if chase.enabled:
+        raise ConfigError("[exit_chase] enabled must stay false: the chase is not wired to a "
+                          "live bid and ATR yet (backlog X3), and its numbers are old-tracker "
+                          "proposals the owner has not reconfirmed")
     risk: RiskConfig = built["risk"]
     if risk.symbol_cooldown_minutes_after_loss < 1:
         raise ConfigError("[risk] symbol_cooldown_minutes_after_loss must be at least 1; to "
@@ -834,6 +861,9 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[risk] max_entry_rest_bars must be at least 1")
     if risk.entry_snapshot_interval_seconds <= 0:
         raise ConfigError("[risk] entry_snapshot_interval_seconds must be above 0")
+    if risk.entry_collar_bar_ratio < 0 or risk.entry_collar_quote_ratio < 0:
+        raise ConfigError("[risk] entry_collar_bar_ratio and entry_collar_quote_ratio must be "
+                          "at least 0 (0 = that side of the collar off)")
     if not 0 <= risk.min_daily_room_usd < risk.max_daily_loss_usd:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
     if risk.buying_power_max_age_seconds <= 0:

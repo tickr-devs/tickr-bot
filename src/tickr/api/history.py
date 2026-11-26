@@ -21,6 +21,7 @@ from typing import Any
 
 from tickr.api import contract as api
 from tickr.api.after import AfterSettings, Closes, trade_after
+from tickr.api.causes import safe_cause
 from tickr.api.cleanday import JournalFold, clean_days
 from tickr.api.performance import performance
 from tickr.api.settled import DayBarsIndex
@@ -139,7 +140,7 @@ def _parsed(row: Any) -> tuple[datetime, dict[str, Any]]:
         return datetime.fromisoformat(row["at_utc"]), json.loads(row["body"])
     except (ValueError, TypeError) as exc:
         raise MalformedJournal(f"journal row {row['seq']} ({row['kind']} {row['key']}): "
-                               f"{type(exc).__name__}: {exc}") from exc
+                               f"{type(exc).__name__}") from exc
 
 
 def _observed(row: Any, body: dict[str, Any]) -> tuple[Decimal, str]:
@@ -147,7 +148,7 @@ def _observed(row: Any, body: dict[str, Any]) -> tuple[Decimal, str]:
         return Decimal(str(body["filled_quantity"])), str(body["state"])
     except (KeyError, ArithmeticError) as exc:
         raise MalformedJournal(f"journal row {row['seq']} ({row['kind']} {row['key']}): "
-                               f"{type(exc).__name__}: {exc}") from exc
+                               f"{type(exc).__name__}") from exc
 
 
 def fill_times(store: Store, orders: list[OrderRow]) -> FillTimes:
@@ -440,12 +441,12 @@ class History:
         try:
             store = Store.open_readonly(self.paths.database)
         except sqlite3.Error as exc:
-            raise HistoryUnavailable(f"database unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"database unreadable ({type(exc).__name__})") from exc
         try:
             version = store.schema_version
         except sqlite3.Error as exc:
             store.close()
-            raise HistoryUnavailable(f"database unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"database unreadable ({type(exc).__name__})") from exc
         if version != len(MIGRATIONS):
             store.close()
             raise HistoryUnavailable(
@@ -492,7 +493,7 @@ class History:
                                             times.first_fill, times.stop_confirmed, closed))
             return tuple(found)
         except sqlite3.Error as exc:
-            raise HistoryUnavailable(f"database unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"database unreadable ({type(exc).__name__})") from exc
         finally:
             store.close()
 
@@ -513,7 +514,7 @@ class History:
                 "SELECT started_at FROM runs WHERE environment = ?", (self.paths.environment,))}
             return trades, runs
         except sqlite3.Error as exc:
-            raise HistoryUnavailable(f"database unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"database unreadable ({type(exc).__name__})") from exc
         finally:
             store.close()
 
@@ -525,7 +526,7 @@ class History:
         try:
             entry, cause = entry_send(store, trade.trade_id)
         except MalformedJournal as exc:
-            entry, cause = NO_ENTRY, f"journal unreadable: {exc}"
+            entry, cause = NO_ENTRY, f"journal unreadable: {safe_cause(exc)}"
         try:
             strategy = trade_strategy(store, trade.trade_id)
         except MalformedJournal:
@@ -556,7 +557,7 @@ class History:
             # Today's file may be half way through a line the bot is writing.
             return self.captured_bars.by_symbol(path, open_tail=day == today)
         except (CaptureError, OSError) as exc:
-            raise HistoryUnavailable(f"capture file unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"capture file unreadable ({type(exc).__name__})") from exc
 
     def _bars_on(self, day: date, today: date) -> dict[str, tuple[Bar, ...]]:
         """Each symbol's captured bars that start on New York date `day`. A day's capture file
@@ -594,7 +595,7 @@ class History:
         try:
             return self.bars_index.symbols(day, path, lambda: self._bars_v1_on(day, today))
         except (OSError, ValueError) as exc:
-            raise HistoryUnavailable(f"bars index unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"bars index unreadable ({type(exc).__name__})") from exc
 
     def _bars_of(self, symbol: str, day: date, today: date) -> list[api.BarV1]:
         path = self._indexed(day, today)
@@ -604,7 +605,7 @@ class History:
         try:
             return self.bars_index.bars(day, path, lambda: self._bars_v1_on(day, today), symbol)
         except (OSError, ValueError) as exc:
-            raise HistoryUnavailable(f"bars index unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"bars index unreadable ({type(exc).__name__})") from exc
 
     # ------------------------------------------------------------ answers
 
@@ -631,7 +632,7 @@ class History:
                 return clean_days(store, self.paths.environment, dates, today, calendar,
                                   self.paths.reconcile_max_gap_seconds, self._fold)
         except sqlite3.Error as exc:
-            raise HistoryUnavailable(f"database unreadable: {exc}") from exc
+            raise HistoryUnavailable(f"database unreadable ({type(exc).__name__})") from exc
         finally:
             if store is not None:
                 store.close()

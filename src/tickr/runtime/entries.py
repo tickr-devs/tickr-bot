@@ -48,7 +48,7 @@ from tickr.risk.admission import (
 from tickr.risk.causes import ENGINE_REFUSED
 from tickr.risk.ticks import round_to_tick
 from tickr.strategy.base import Decision, Role, Verdict
-from tickr.types import Quote
+from tickr.types import Bar, Quote
 
 ZERO = Decimal(0)
 # A strategy's partial EXIT the engine did not take (trade not open, entry still working, an
@@ -384,7 +384,9 @@ class EntryDesk:
 
     # --- admission -------------------------------------------------------------------------
 
-    def _inputs(self, decision: Decision, quote: Quote | None, now: datetime) -> AdmissionInputs:
+    def _inputs(self, decision: Decision, quote: Quote | None, now: datetime, *,
+                last_bar: Bar | None = None,
+                previous_quote: Quote | None = None) -> AdmissionInputs:
         engine = self.engine
         fences = [name.split(":", 1)[0] for name in engine.fences()]
         own_positions, working = own_exposure(engine, decision.symbol)
@@ -416,6 +418,8 @@ class EntryDesk:
             stop_price=stop,
             setup_valid=True,  # the decision was made from the latest bar and this quote
             quote=quote,
+            last_bar=last_bar,
+            previous_quote=previous_quote,
             realized_loss_today_usd=realized_loss_today(engine, now),
             open_reservations_usd=self._reservations(),
             buying_power=self._buying_power(),
@@ -426,12 +430,16 @@ class EntryDesk:
     # --- the one entry point ---------------------------------------------------------------
 
     def on_decision(self, decision: Decision, *, bar_start: datetime, quote: Quote | None,
-                    now: datetime) -> DecisionRecord:
-        """Act on one decision of the active strategy and record it."""
+                    now: datetime, last_bar: Bar | None = None,
+                    previous_quote: Quote | None = None) -> DecisionRecord:
+        """Act on one decision of the active strategy and record it. `last_bar` (the decision
+        bar) and `previous_quote` (the stream quote before `quote`) are the price collar's
+        references; None refuses an entry while the collar is on."""
         admission = RecordAdmission.NOT_APPLICABLE
         cause: str | None = None
         if decision.verdict is Verdict.ENTER:
-            inputs = self._inputs(decision, quote, now)
+            inputs = self._inputs(decision, quote, now, last_bar=last_bar,
+                                  previous_quote=previous_quote)
             # The balance is read only for an entry every other check admits.
             refused = refusal_before_buying_power(inputs, self.limits)
             if refused is None:

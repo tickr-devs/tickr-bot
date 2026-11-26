@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any
 
 from tickr.api import contract
+from tickr.api.causes import safe_cause
 from tickr.api.contract import (
     ChartBarV1,
     ChartInterval,
@@ -305,15 +306,17 @@ class Chart:
                     read_at, bars, pending = self._daily_or_pending(source, symbol, interval,
                                                                     RANGE_MONTHS[span], now)
             except RateLimited as exc:
-                raise ChartRefused("rate_limited", f"chart read budget: {exc}",
+                raise ChartRefused("rate_limited", f"chart read budget: {safe_cause(exc)}",
                                    getattr(exc, "retry_after_seconds", None)) from None
             except DelayedData as exc:
-                raise ChartRefused("unavailable", f"market data is delayed: {exc}") from None
+                raise ChartRefused("unavailable",
+                                   f"market data is delayed: {safe_cause(exc)}") from None
             except (MarketDataError, BrokerError) as exc:
-                raise ChartRefused("unavailable", f"market data read failed: "
-                                   f"{type(exc).__name__}: {exc}") from None
+                raise ChartRefused("unavailable",
+                                   f"market data read failed: "
+                                   f"{type(exc).__name__}: {safe_cause(exc)}") from None
             except CalendarRefused as exc:
-                raise ChartRefused("unavailable", f"calendar: {exc}") from None
+                raise ChartRefused("unavailable", f"calendar: {safe_cause(exc)}") from None
         cause = None if bars or pending else (f"no {interval.value} bars from {source.provider} "
                                               f"for {symbol} in range {span.value}")
         return ChartV1(symbol, interval, span, source.provider, read_at, cause, tuple(bars),
