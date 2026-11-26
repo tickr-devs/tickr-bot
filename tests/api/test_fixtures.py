@@ -186,6 +186,30 @@ def documents() -> dict[str, object]:
         "status-response-v1": _response(status(), Decimal("2.000"), False),
         "status-response-v1.minimal": _response(minimal, Decimal("0.250"), False),
         "status-response-v1.stale": _response(status(), Decimal("42.500"), True),
+        # A close_and_stop in progress: exit requests sent, one trade not closed yet.
+        "status-response-v1.closing": _response(status(stop_progress=contract.StopProgress(
+            "5d2a7c9e-1b3f-4a6d-8e0c-7f9b2d4a6c8e", contract.StopMode.CLOSE_AND_STOP,
+            contract.StopStep.CLOSING_POSITIONS, T0, 1)), Decimal("2.000"), False),
+        # Stopped with a position left open (mode leave_open): the last status the bot wrote,
+        # stale now, still lists the position as of the last broker read.
+        "status-response-v1.stopped-left-open": _response(status(
+            bot_state=BotState.STOPPED, entry_block=contract.EntryBlock(
+                "bot_stopped", "The bot is stopped."),
+            recent_commands=(contract.CommandRecord(
+                "6e3b8d0f-2c4a-4b7e-9f1d-8a0c3e5b7d9f", CommandKind.STOP_BOT, T0, T0,
+                contract.CommandOutcome.DONE, "1 trade(s) left open: nothing closes them; "
+                "their broker stops are DAY orders"),),
+            stop_progress=contract.StopProgress(
+                "6e3b8d0f-2c4a-4b7e-9f1d-8a0c3e5b7d9f", contract.StopMode.LEAVE_OPEN,
+                contract.StopStep.STOPPED, T0, 1)), Decimal("3600.000"), True),
+        # Cancel entry: one entry working at the broker with nothing filled yet (2026-11-26).
+        "status-response-v1.working-entry": _response(status(working_entries=(
+            contract.WorkingEntry("KLMN", Decimal("15"), Decimal("9.02"), Decimal("8.78"),
+                                  Decimal("3.60"), EntrySend(
+                                      "ap-0002-e", T0, T0 + timedelta(milliseconds=2),
+                                      contract.SendOutcome.ACKNOWLEDGED,
+                                      contract.SendOutcome.ACKNOWLEDGED, 1, None),
+                                  None, False),)), Decimal("2.000"), False),
         "status-response-v1.unavailable": _response(
             None, None, False, "the bot has not written a status file"),
         "command-accepted-v1": CommandAcceptedV1(command=command, warning=None),
@@ -196,6 +220,10 @@ def documents() -> dict[str, object]:
         "command-accepted-v1.warning": CommandAcceptedV1(
             command=command, warning="the bot does not look alive; the command runs only if "
                                      "the bot reads it before it expires"),
+        # Stop bot with open positions: close them first, then stop (backlog V4).
+        "command-accepted-v1.stop-close-and-stop": CommandAcceptedV1(
+            command=CommandV1("5d2a7c9e-1b3f-4a6d-8e0c-7f9b2d4a6c8e", CommandKind.STOP_BOT,
+                              T0, "api", mode=contract.StopMode.CLOSE_AND_STOP), warning=None),
         "command-accepted-v1.flatten-symbol": CommandAcceptedV1(
             command=CommandV1("8b1e4d2c-6a3f-4e9b-8c7d-2f1a0b9c8d7e", CommandKind.FLATTEN,
                               T0, "api", "ABCD"), warning=None),

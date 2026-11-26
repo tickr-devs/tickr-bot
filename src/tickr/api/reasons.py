@@ -233,6 +233,11 @@ _REFUSAL = {
     "PRICE_OUTSIDE_WINDOW": _shapes(
         ("", r"ask (?P<ask>" + _NUM + r") outside (?P<entry_low>" + _NUM + r")\.\.limit "
          r"(?P<limit>" + _NUM + r")")),
+    "PRICE_COLLAR_BREACH": _shapes(
+        ("", r"limit (?P<limit>" + _NUM + r") is (?P<bar_distance>" + _NUM + r") from bar close "
+         r"(?P<bar_close>" + _NUM + r") \(max (?P<bar_max>" + _NUM + r")\) and (?P<quote_distance>"
+         + _NUM + r") from previous ask (?P<previous_ask>" + _NUM + r") \(max (?P<quote_max>"
+         + _NUM + r")\)")),
     "QUANTITY_NOT_WHOLE": _shapes(
         ("", r"quantity (?P<quantity>" + _NUM + r") is not a whole number of shares")),
     "QUANTITY_BELOW_ONE": _shapes(
@@ -431,9 +436,6 @@ _PROSE = _shapes(
     ("cached_history_refused", r"cached prior sessions refused: (?P<detail>.+)"),
     ("cached_history_empty", r"cached prior sessions hold no bar of (?P<symbol>\S+)"),
     ("cached_history_overlaps", r"cached prior sessions overlap the day's bars"),
-    ("history_sessions_differ",
-     r"replay settings history_sessions (?P<replay>[0-9]+) differ from \[market_data\] "
-     r"history_sessions (?P<bot>[0-9]+): the version would not see the history the bot cached"),
     ("simulation_failed", r"simulation failed: (?P<error>\w+): (?P<detail>.*)"),
     ("strategy_without_module",
      r"(?P<folder>\S+): no module for strategy '(?P<strategy>[^']*)' in strategy_modules"),
@@ -637,7 +639,26 @@ _PROSE = _shapes(
     ("close_in_progress", r"a close is in progress; send stop-bot again after it completes"),
     ("trades_still_open", r"(?P<count>[0-9]+) trade\(s\) open or entering; flatten first \(or "
                           r"send emergency\), then stop-bot"),
+    # a stop-bot with a mode (backlog V4)
+    ("stop_already_running", r"a close-and-stop is already running \((?P<command>\S+)\)"),
+    ("trades_left_open", r"(?P<count>[0-9]+) trade\(s\) left open: nothing closes them; their "
+                         r"broker stops are DAY orders"),
+    ("stop_close_refused", r"closing order refused for (?P<trades>.+): the bot places their "
+                           r"stop again; look in the Webull app"),
+    ("stop_close_not_filled", r"closing order not filled for (?P<trades>.+): it is still working "
+                              r"at the broker and its shares are not under a stop; look in the "
+                              r"Webull app"),
+    ("stop_close_not_sent", r"close not sent for (?P<trades>.+) outside the regular session: "
+                            r"nothing was sent and the stop stays"),
+    ("stop_close_failed", r"close held for (?P<trades>.+) \((?P<fences>[a-z, -]+)\): look in the "
+                          r"Webull app"),
+    ("stop_close_kept", r"the bot keeps running and entry-stop stays on"),
+    ("stop_new_trade", r"trade\(s\) (?P<trades>.+) opened during close-and-stop: the bot keeps "
+                       r"running and the closes already asked go on; send stop-bot again"),
+    ("stop_interrupted", r"close-and-stop interrupted by a restart: the bot keeps running and "
+                         r"entry-stop stays on; send stop-bot again"),
     ("no_open_position", r"no open position in (?P<symbol>\S+)"),
+    ("no_working_entry", r"no working entry in (?P<symbol>\S+)"),
     ("close_refused_before", r"closing order refused before for (?P<trades>.+): look in the "
                              r"Webull app, then clear the fence"),
     ("close_held_outside_session",

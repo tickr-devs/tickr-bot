@@ -1,0 +1,16 @@
+# Tickr bot restart request watch: starts tickr-bot-restart.service when the request file
+# exists. The watchdog's restart command writes it from inside its container (`python -m
+# tickr.runtime request-restart`, [runtime] server_restart_request_file under the data folder,
+# mounted from {{DATA_HOST}}). The service renames the file first, so one request restarts the
+# bot once.
+# Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
+[Unit]
+Description=Tickr bot restart request watch
+RequiresMountsFor={{DATA_HOST}}
+
+[Path]
+PathExists={{RESTART_REQUEST}}
+Unit=tickr-bot-restart.service
+
+[Install]
+WantedBy=multi-user.target

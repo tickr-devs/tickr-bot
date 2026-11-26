@@ -10,8 +10,6 @@ slippage_min_usd = 0.01
 entry_wait_bars = 1
 # Decimal places for prices, R and percent in CSV and summary outputs; read by replay/report.py.
 output_decimal_places = 4
-# Prior sessions of the same symbol passed to the strategy as history (in bars and prior_sessions); read by replay/engine.py.
-history_sessions = 5
 # true = give the strategy a synthetic quote around each completed bar's close (bars carry no bid/ask); read by replay/engine.py.
 synthesize_quote = true
 # Synthetic quote spread (ask - bid), percent of the bar close; ask = close + spread/2, bid = close - spread/2; read by replay/engine.py.

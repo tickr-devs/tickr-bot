@@ -3,7 +3,8 @@
 The file has one table `[research]` with exactly the keys in `KEYS`. Missing or unknown keys,
 wrong types and out-of-range values are refused with a `ResearchSettingsError`. The what-if
 simulation does not use this file: it shares `config/replay.toml` with the replay tool so both
-make the same fill assumptions.
+make the same fill assumptions. Output rounding (`output_decimal_places`) has one home too,
+`config/replay.toml`, and the research reports read it from there.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tickr.research.errors import ResearchSettingsError
 
-KEYS = frozenset({"horizons_minutes", "atr_period", "session_timezone", "output_decimal_places"})
+KEYS = frozenset({"horizons_minutes", "atr_period", "session_timezone", "calibration_buckets"})
 
 
 @dataclass(frozen=True)
@@ -27,8 +28,8 @@ class ResearchSettings:
     """Wilder ATR length in M1 bars used to express moves in ATR."""
     session_timezone: ZoneInfo
     """Exchange time zone: a horizon never crosses the decision's session date in it."""
-    output_decimal_places: int
-    """Decimal places for prices, ATR and percent in the outputs."""
+    calibration_buckets: int
+    """Equal-width probability buckets of the calibration table (10 = tenths)."""
 
 
 def _int(key: str, raw: Any, minimum: int) -> int:
@@ -66,7 +67,7 @@ def settings_from_mapping(data: dict[str, Any]) -> ResearchSettings:
         horizons_minutes=horizons,
         atr_period=_int("atr_period", table["atr_period"], 1),
         session_timezone=zone,
-        output_decimal_places=_int("output_decimal_places", table["output_decimal_places"], 0),
+        calibration_buckets=_int("calibration_buckets", table["calibration_buckets"], 1),
     )
 
 

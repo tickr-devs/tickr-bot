@@ -154,7 +154,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         cfg = config.load(args.config)
         settings = load_settings(args.settings)
-        replay_settings = load_replay_settings(args.replay_settings)
+        replay_settings = load_replay_settings(
+            args.replay_settings, cfg.market_data.history_sessions)
         out: Path = args.out
         if args.step == "run":
             from tickr.backtest.run import run_backtest

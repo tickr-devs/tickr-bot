@@ -26,8 +26,8 @@ The API still binds loopback only. The iPhone reaches it through an HTTPS proxy 
 [Tailscale](https://tailscale.com) `serve`, which is reachable only from devices signed in to the
 owner's tailnet (home Wi-Fi or cellular) and terminates TLS with a certificate for the Mac's
 tailnet name. The proxy points at a second loopback port, `[api] remote_port`, opened only when
-`[api] remote_hosts_file` names a host. Every request on that port must carry the paired token, whatever its
-`Host` header says, except `POST /pair`, which redeems a one-time pairing code for that token; the
+`[api] remote_hosts_file` names a host. Every request on that port must carry a paired device's token, whatever
+its `Host` header says, except `POST /pair`, which redeems a one-time pairing code for a token; the
 local port never accepts the remote name. Whether a token is needed is
 decided by the port a request arrives on, never by a header the caller chooses.
 
@@ -39,26 +39,63 @@ decided by the port a request arrives on, never by a header the caller chooses.
 3. Write that name, one per line, into this Mac's `[api] remote_hosts_file` under `data_dir`
    (`echo mac.tailnet-name.ts.net > data/remote-hosts.txt`) and restart the API. The name belongs
    to this machine, so it lives with its data, never in the shared `config/bot.toml`.
-4. `python -m tickr.api --config config/bot.toml pair` revokes the current phone token at once and
-   leaves a pairing link with a one-time code in a file readable by you only
-   (`[api] remote_pairing_file` under `data_dir`); nothing secret is printed. With the API running,
-   AirDrop that file to the iPhone and open it, or paste the link in Settings › Pair with Mac,
-   within `[api] remote_pairing_code_ttl_seconds`. The phone redeems the code once at `POST /pair`
-   for its token; the API then deletes the link file. A copy of the link left anywhere (Files,
-   iCloud Drive, a clipboard) is worthless after that or after expiry. The Mac keeps only SHA-256
-   digests: of the waiting code (`[api] remote_pairing_code_file`, with its expiry) and of the
-   token (`[api] remote_token_hash_file`).
+4. `python -m tickr.api --config config/bot.toml pair --name iPhone` leaves a pairing link with a
+   one-time code for the device `iPhone` in a file readable by you only (`[api] remote_pairing_file`
+   under `data_dir`); nothing secret is printed. With the API running, AirDrop that file to the
+   iPhone and open it, or paste the link in Settings › Pair with Mac, within
+   `[api] remote_pairing_code_ttl_seconds`. The phone redeems the code once at `POST /pair` for its
+   token; the API then deletes the link file. A copy of the link left anywhere (Files, iCloud
+   Drive, a clipboard) is worthless after that or after expiry. The Mac keeps only SHA-256
+   digests: of the waiting code (`[api] remote_pairing_code_file`, with its expiry and the device
+   name) and of each device's token (`[api] remote_devices_file`).
+
+### Paired devices
+
+Several devices can be paired, each with its own token. The device list
+(`[api] remote_devices_file`, 0600) holds each device's name, its token's SHA-256, when it was
+paired and when it last made an authenticated request (to the minute, so a busy phone does not
+rewrite the file on every request); never a token.
+
+- `pair --name <device>` adds a device once its code is redeemed; the devices already paired keep
+  working. Pairing a name again replaces that device's token when the new code is redeemed (the
+  old one works until then). A name is letters, digits, space, dot, dash and underscore, starting
+  and ending with a letter or digit. A new `pair` replaces a code still waiting.
+- `devices` lists the paired devices: name, paired time, last-used time.
+- `revoke --name <device>` revokes one device: its next request gets `401`; the others keep working.
+
+A token is checked against every paired device's digest with a constant-time compare and no early
+exit, so the time to refuse does not depend on the token. The phone paired before several devices
+existed keeps working: its single hash file (`[api] remote_token_hash_file`) is moved once into the
+device list as the device `default` (paired at the file's time) and deleted, by the API on the
+next request or by `devices`. If both files exist with different tokens, the API refuses (`503`)
+until one is deleted by hand. The iOS Simulator's token (below) is separate and not a device.
+
+**Rolling back to a build without devices.** The migration leaves `remote_devices_file` holding the
+old token's digest as device `default` and **deletes** `remote_token_hash_file`; a `.tmp` sibling
+may remain only after a crash mid-write. An older build reads only `remote_token_hash_file`, so
+after a downgrade every phone gets `401 nothing is paired here` until one of these is done:
+
+- Recreate the old file from one device's digest, so that device keeps working (only one can:
+  the old build knows a single token). Without printing anything, with the API stopped, from the
+  repository folder (`data` is `[run] data_dir`; pick the device by name):
+  `python3 -c 'import json,os;d=json.load(open("data/remote-devices.json"))["devices"];h=[x["sha256"] for x in d if x["name"]=="iPhone"][0];f=os.open("data/remote-token.sha256",os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.write(f,(h+"\n").encode());os.close(f)'`
+  Leave `remote-devices.json` in place: upgrading again finds the same digest in the list and
+  only deletes the old file.
+- Or re-pair the phone with the old build's `pair` (it writes a new `remote_token_hash_file`).
+  Before upgrading again, delete `remote-devices.json`, so the new token migrates as `default`;
+  with both files holding different tokens the new build answers `503` until one is deleted.
 
 Rules on the remote port: `Host` must be one of the names in `remote_hosts_file` (no port when 443, else
 `name:port`), else `403 forbidden_host`; `Authorization: Bearer <token>` is required, else
 `401 unauthorized` with `WWW-Authenticate: Bearer`; an `Origin`, if sent, must be `https://<host>`.
-An unreadable token hash file answers `503 unavailable`. The local port (the Mac app, the status
+An unreadable device list (or old token hash file) answers `503 unavailable`. The local port (the Mac app, the status
 page) needs no token, as before: any process on this Mac can use it.
 
 `POST /pair` (remote port only; the local port answers `404`): the same `Host` and `Origin` rules,
 no token, body exactly `{"code": "<code from the link>"}`. `200` with `paired-v1`
-(`{"token": "...", "api_version": 1}`) once: the code is burnt, a new token's SHA-256 replaces the
-stored one, and the link file is deleted. `401 unauthorized` when no pairing is waiting, the code
+(`{"token": "...", "api_version": 1}`) once: the code is burnt, the new token's SHA-256 is stored
+for the device named at `pair` (added, or replacing that device's earlier token), and the link file
+is deleted. `401 unauthorized` when no pairing is waiting, the code
 is wrong (nothing changes) or it has expired (the code and the link file are deleted); `400` for
 any other body; `503` when the code file is unreadable. Neither the code nor the token appears in
 an error or the log. A missing or empty `remote_hosts_file` (the default) turns remote access off; an unreadable
@@ -146,10 +183,10 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/symbols?date=<YYYY-MM-DD>` | `200` `symbols-v1`: every symbol the bot looked at that date (default today), with the furthest pipeline stage it reached and where and why it stands now (see GET /symbols below). |
 | GET | `/movers?date=<YYYY-MM-DD>` | `200` `movers-v1`: the fast movers of that date (default today), newest bar first, with the active strategy's thresholds (see GET /movers below). |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
-| POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
+| POST | `/commands/cancel-own-orders` | Body `{}` (every working entry) or `{"symbol": "<TICKER>"}` (only that symbol's, the apps' Cancel entry). `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
-| POST | `/commands/stop-bot` | Body `{}`. Graceful stop that sticks. `202` `command-accepted-v1`. |
-| POST | `/commands/emergency` | Body `{}`. Entry-stop on, cancel own orders, flatten all. `202` `command-accepted-v1`. |
+| POST | `/commands/stop-bot` | Body `{}`, `{"mode": "close_and_stop"}` or `{"mode": "leave_open"}` (what to do with open positions, see stop-bot below). Graceful stop that sticks. `202` `command-accepted-v1`. |
+| POST | `/commands/emergency` | Body `{}`. Entry-stop on, cancel own orders, flatten all. The apps' "Close all" button. `202` `command-accepted-v1`. |
 | POST | `/commands/start-bot` | Body `{}`. Starts the bot job through launchd (not a bot command, see "Start-bot"). `202` `bot-start-v1`; `409 conflict` while a fresh status says the bot is starting, running or stopping, or a live process holds the bot's lock; `503 unavailable` when no start command is configured, the stop marker cannot be removed, or the command fails. |
 
 Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1, "cause_codes": [...]}`
@@ -271,7 +308,7 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
   `run_without_report`, `version_never_started`, `run_file_unreadable` {file, error},
   `calendar_file_unreadable` {detail}, `no_bars_for_symbol_on` {symbol, day},
   `no_cached_history` {symbol, day}, `cached_history_refused` {detail}, `cached_history_empty`
-  {symbol}, `cached_history_overlaps`, `history_sessions_differ` {replay, bot},
+  {symbol}, `cached_history_overlaps`,
   `simulation_failed` {error, detail}, `strategy_without_module` {folder, strategy},
   `module_not_importable` {folder, module, detail}, `module_without_create` {folder, module},
   `values_refused` {folder, module, detail}, `identity_differs` {folder}, `no_history_need`
@@ -333,7 +370,10 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
   loader's codes above, and any other as `advisor_refused` {detail} (the whole text; also the
   code of a run that was not refused, whose `cause` repeats the advisor's no-change reason);
 - operator commands: `command_after_stop` {command}, `close_in_progress`, `trades_still_open`
-  {count}, `no_open_position` {symbol}, `close_refused_before` {trades},
+  {count}, a stop-bot's mode `stop_already_running` {command}, `trades_left_open` {count},
+  `stop_close_refused` {trades}, `stop_close_not_filled` {trades}, `stop_close_not_sent`
+  {trades}, `stop_close_failed` {trades, fences}, `stop_close_kept`, `stop_new_trade` {trades},
+  `stop_interrupted`, `no_open_position` {symbol}, `close_refused_before` {trades},
   `close_held_outside_session` {trades}, `close_not_sent_now` (with the close refusal's values),
   `nothing_open`, `entry_cancels_requested` {count}, `step_done`, `steps_done` {steps},
   `steps_not_run` {steps}, `every_step_ran`, a refused command file's
@@ -353,6 +393,15 @@ the planned loss of every open trade, and `daily_room_usd` = `[risk] max_daily_l
 realized - reserved (may be negative). Entries are refused while the room is below
 `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot tracks;
 `position` is its first element or `null`, kept for older clients.
+
+`working_entries` (added after version 1 shipped, 2026-11-26; a reader takes a status without it
+as empty) lists every own trade whose entry order is working with nothing filled yet, oldest
+first: `symbol`, `quantity` (the shares asked for), `limit_price`, `stop_price` (the stop placed
+once it fills), `planned_loss_usd` (1 R if it fills), `entry` and `entry_cause` as on a
+position, and `cancel_requested` (the bot asked the broker to cancel it: an operator
+cancel-own-orders, or the entry's own rest or the session's end). A fill of any part makes it a
+`positions` row instead; a cancel the broker confirms (a broker read shows it cancelled)
+removes it. It is the bot's records, as `positions` are.
 
 Fill prices and fees come from the bot's own records: once an order is finished, the loop
 records its fees (`fees[].actual_value`) from Detail, else the order history, and, where the
@@ -999,8 +1048,7 @@ Code: `src/tickr/api/trade_whatif.py`.
   `result_gross_usd`: their sums; USD is null when a trade has no quantity. Gross: slippage in,
   commissions and fees out.
 - When it cannot be computed (unreadable or unknown folder, no module, a version that needs more
-  history than the bot caches, replay.toml `history_sessions` differing from
-  `[market_data] history_sessions`, no captured bars for the symbol that day, no or empty cached
+  history than the bot caches, no captured bars for the symbol that day, no or empty cached
   prior sessions, a refused simulation, a version that raises) `cause` says why, `signals` and the sums are null and `trades`
   is empty. Paths in a cause are relative to the repo.
 
@@ -1298,6 +1346,8 @@ decision file keeps the text):
   `DECISION_INVALID` `{stop, entry_low, entry_high}`; `ORDER_PRICES_INVALID` `{limit, entry_low,
   entry_high}` or `{stop, limit}`; `QUOTE_SYMBOL_MISMATCH` `{quote_symbol, symbol}`;
   `QUOTE_INVALID` `{bid, ask}`; `PRICE_OUTSIDE_WINDOW` `{ask, entry_low, limit}`;
+  `PRICE_COLLAR_BREACH` `{limit, bar_distance, bar_close, bar_max, quote_distance, previous_ask,
+  quote_max}` (distances and maxima as ratios, a maximum of 0 is off);
   `QUANTITY_NOT_WHOLE` `{quantity}`; `QUANTITY_BELOW_ONE` `{quantity, maximum}`;
   `NOTIONAL_OVER_CAP` `{notional, cap}`; `PLANNED_LOSS_OVER_LIMIT` `{planned_loss, limit}`;
   `DAILY_MONEY_UNKNOWN` `{missing}`; `DAILY_CEILING` `{room, ceiling, realized, reserved,
@@ -1516,8 +1566,18 @@ The server never relies on anything the client checked (Face ID on the phone is 
 only): the remote port needs the paired token for every request, and the bot applies its own
 preconditions to every command.
 
-`command.symbol` is the ticker of a flatten of one position, otherwise `null`.
+`command.symbol` is the ticker of a flatten of one position, otherwise `null`. `command.mode`
+(added after version 1 shipped) is a stop-bot's mode, `close_and_stop` or `leave_open`, otherwise
+`null`; a reader takes a command without the key as `null`.
 
+- **cancel-own-orders**: asks the broker to cancel every own working entry order, or only
+  those of `symbol` (the apps' Cancel entry); never a stop or a closing order. Each cancel is
+  one send through the engine's cancel path; whether it took is what the next broker read
+  shows (`working_entries`), never assumed. A part that filled first stays a position under its
+  stop. With `symbol`, refused when no entry of it is working ("no working entry in XYZ");
+  `{"symbol": null}`, a lower-case ticker or any other key is `400`. A bot older than this
+  reads the command as a cancel of every working entry, so the bot and the API are released
+  together.
 - **flatten**: every open trade, or only the trades of `symbol`, gets an exit request through
   the normal exit path. Refused when `symbol` has no open position ("no open position in
   XYZ"), while a closing order of a chosen trade was refused before (fence
@@ -1546,6 +1606,67 @@ preconditions to every command.
   request that a later start would carry out without anyone asking. Commands the bot reads
   after an obeyed stop-bot, in the same pass, are refused ("read after stop-bot <id>: the bot
   is stopping"), never recorded done.
+  **Modes** (backlog V4, owner 2026-11-18). With trades open, the body says what to do with
+  them; without a mode the rules above stand unchanged. With nothing open a mode changes
+  nothing: the stop is obeyed at once.
+  - `{"mode": "close_and_stop"}`: in one journal write the bot asks every open trade to exit
+    through the flatten path (exit cause `operator-flatten`; the engine records each closing
+    order before its one send and never resends it), turns entry-stop on (cause `operator
+    command <id>`, so no new trade opens while closing; it stays on after the stop, like the
+    emergency's) and journals the step `closing_positions`; then it cancels working entries.
+    Refused with nothing changed when that flatten is refused (cause `flatten: <the flatten's
+    cause>`). It runs in the bot, pass after pass, whatever the app does (closing the app or
+    losing the connection changes nothing). Once no own trade is open: `positions_closed`,
+    then the stop exactly as without a mode (marker, command `done` with cause `null`,
+    `stopping`, drain, `stopped`). It ends `refused`, the bot running on with entry-stop on,
+    as soon as a trade it began with holds an operator fence on itself or one of its orders,
+    the engine's point of no further close without the operator. The cause says, one
+    `; `-joined part per kind of fence, what is then true at the broker: `exit-refused`
+    ("closing order refused for <trades>: the bot places their stop again; look in the Webull
+    app"), `exit-not-filled` after `[orders] max_exit_seconds` ("closing order not filled for
+    <trades>: it is still working at the broker and its shares are not under a stop; look in
+    the Webull app"), `market-closed` at the session's close-order cutoff ("close not sent for
+    <trades> outside the regular session: nothing was sent and the stop stays"), any other
+    operator fence (`cancel-failed`, `replace-unresolved`, ...: "close held for <trades>
+    (<fences>): look in the Webull app"), then "the bot keeps running and entry-stop stays on".
+    A failed close is never resent. It also ends `refused` as soon as a trade it did not begin
+    with is open ("trade(s) <trades> opened during close-and-stop: the bot keeps running and
+    the closes already asked go on; send stop-bot again"). It has no time-out of its own: every
+    close ends in a fill or one of those fences, and a close held by a condition that clears
+    itself (a broker read, a Detail read, a quantity mismatch) is waited on as the session
+    flatten waits on it, under that condition's own alert. Exit requests already made stay and
+    finish on their own. A
+    restart in the middle never resumes it: the restarted bot records it `refused` ("close-and-
+    stop interrupted by a restart: the bot keeps running and entry-stop stays on; send stop-bot
+    again") and runs on.
+    While it runs, every other stop-bot is refused ("a close-and-stop is already running
+    (<id>)"), and so is entry-stop off (the same cause), so no new trade opens while closing.
+  - `{"mode": "leave_open"}`: stops at once without closing anything: the marker, the command
+    `done` with cause "N trade(s) left open: nothing closes them; their broker stops are DAY
+    orders", then the drain as on SIGTERM (it still cancels a working entry and keeps any fill
+    under a broker stop). Refused while a close is in progress (cause as above). Nothing closes
+    those positions afterwards: the stopped bot does not flatten, and the watchdog never sends
+    an order (it holds read-only broker access) and never starts a bot while the stop marker
+    exists (`watchdog-restart-refused`); it still alerts `bot-down-with-open-trade` and, after
+    the flatten time, `watchdog-not-flat`. The broker stops are DAY orders and expire at the
+    close.
+
+  Progress: `status.stop_progress` (added after version 1 shipped; `null` while none) is the
+  stop-bot this run obeyed or is carrying out: `{command_id, mode, step, since, open_trades}`,
+  `step` one of `closing_positions`, `positions_closed`, `stopping`, `stopped` (in that
+  order; a stop without closes starts at `stopping`), `since` when the step began and
+  `open_trades` the bot's own trades not closed at the status time. Each step is also a
+  journal row `stop-progress` keyed by the command id. A refused close_and_stop clears it;
+  its record in `recent_commands` says why. The command's record appears in
+  `recent_commands` when it is done or refused, not before.
+
+  **"Bot stopped, N positions open"**: the last status a stopped bot wrote stays served (`stale`
+  grows with its age): `bot_state` `stopped`, `stop_progress` with `step` `stopped`, and
+  `positions`, the bot's own positions as its records last agreed with the broker
+  (`freshness.last_broker_read_at`). The broker's own list, which also shows manual
+  positions, is `GET /account` `positions` as of its `read_at`, with `matches_records`.
+  Neither is refreshed while the bot is stopped: show their time, never a guess.
+
   The launchd bot job has `KeepAlive` false, so launchd does not restart it today, but its
   calendar start (`[runtime] bot_start_local` on `launch_weekdays`) would start it the next
   trading day. The marker stops that: while it exists preflight fails with cause
@@ -1554,7 +1675,8 @@ preconditions to every command.
   again: `tickr clear-stop`, then wait for the next scheduled start or
   `launchctl kickstart gui/$(id -u)/local.tickr.bot`. `tickr resume` and `tickr exit`
   still work while the marker exists.
-- **emergency**: three steps in this order, each the existing handler and each journaled as a
+- **emergency**: the apps' "Close all" (the positions header, backlog V4). Three steps in this
+  order, each the existing handler and each journaled as a
   `command-step` row: entry-stop on (the same fence as `/commands/entry-stop`, survives
   restarts), cancel own orders (working entry orders only), flatten all (exit cause
   `operator-emergency`). A step that refuses does not stop the others; the command is `done`
@@ -1650,3 +1772,6 @@ again).
 - Emergency steps are journaled one by one (`command-step`, keyed by `command_id`) and the
   command record comes last, so a command read again after a crash finishes only its missing
   steps.
+- A stop-bot's steps are journaled as `stop-progress` rows (keyed by `command_id`); a
+  close_and_stop is carried out by `Service.carry_out_stop` on every loop pass, and one whose
+  latest step is before `stopping` with no command record is recorded refused at startup.

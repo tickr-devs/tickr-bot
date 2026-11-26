@@ -24,6 +24,12 @@ maintain_keep_sessions = 20
 # kept; `tickr maintain --apply` deletes older ones. 0 = never delete (owner 2026-11-16: keep
 # everything, docs/decisions.md); read by maintain.
 maintain_archive_max_age_days = 0
+# Days, counted back from now, of log files and alerts a `tickr diagnostics` bundle carries unless --days says otherwise;
+# read by diagnostics.
+diagnostics_days = 7
+# Folder under data_dir whose *.log files (and rotated *.log.N) `tickr diagnostics` copies when changed within the
+# window; a plain folder name; read by diagnostics.
+diagnostics_logs_dir = "logs"
 
 [strategy]
 # Active strategy name = folder under strategies/; its decisions may reach the safety layer.
@@ -91,6 +97,17 @@ max_entry_rest_bars = 10
 # requests a minute (20), and only while a working entry's stream quote is too old; they share the snapshot route
 # budget with discovery, whose pass stops early on a refusal and keeps its previous candidates; read by runtime.entries.
 entry_snapshot_interval_seconds = 3
+# Price collar on an entry (backlog T10): an entry whose final limit price is further than this ratio from the close
+# of the last completed M1 bar, |limit - close| / close, is refused (PRICE_COLLAR_BREACH). 0 = off. Shipped off: no
+# measured number yet; the owner picks one from `python -m tickr.research collar` over captured days (docs/research.md).
+# While either side is on, an entry needs both references, the bar and the previous quote (PRICE_COLLAR_UNKNOWN
+# otherwise), and the refusal records both distances. Blocks entries only, never an exit or a stop; read by safety.
+entry_collar_bar_ratio = 0
+# Price collar, the quote side: refused when the final limit price is further than this ratio from the ask of the
+# stream quote before the current one, |limit - previous ask| / previous ask; that quote may be no older than
+# max_quote_age_seconds (PRICE_COLLAR_UNKNOWN otherwise). 0 = off, shipped off like the bar side (no measured number
+# yet); read by safety.
+entry_collar_quote_ratio = 0
 
 [session]
 # Market time zone for all session times; read by the calendar and the scheduler.
@@ -398,6 +415,27 @@ open_orders_paging_orders = 90
 # Probe H2d: least minutes left in the extended session when the probe starts (placing, reading and cancelling 90 orders
 # takes about 20 min); read by tickr.engine.paging_probe.
 open_orders_end_margin_minutes = 30
+# Probe M3 (tickr probe-trade-events, read only): minutes the account's gRPC trade events are recorded when no
+# --minutes is given; how long the owner watches (one bot trade or one manual Sandbox order), not a market fact; read by
+# the probe-trade-events command.
+trade_events_minutes = 10
+# Probe M3: seconds before the probe subscribes again after the event stream ended or failed with a gRPC code the SDK
+# itself resubscribes on (SDK 3.0.3 DefaultSubscribeRetryPolicy: fixed delay 5000 ms); read by
+# tickr.engine.trade_events_probe.
+trade_events_reconnect_seconds = 5
+# Probe prev-day (tickr probe-prev-day): start of the overnight window, New York time HH:MM, in which it records when the
+# previous session's Massive files and splits become available before the bot's 04:00 ET start; read by
+# tickr.model.prevday_probe.
+prev_day_window_start = "23:00"
+# Probe prev-day: end of that window, New York time HH:MM (an end at or before the start is on the next day); read by
+# tickr.model.prevday_probe.
+prev_day_window_end = "06:00"
+# Probe prev-day: seconds between two rounds of checks (one HEAD per day file, one splits listing); the measurement's
+# own pacing, not a guard: no decision of the bot depends on it; read by tickr.model.prevday_probe.
+prev_day_poll_seconds = 120
+# Probe prev-day: key prefixes of the trades and quotes day files in [massive] files_bucket (<prefix>/YYYY/MM/
+# YYYY-MM-DD.csv.gz, the training's tick sources), checked by HEAD only; read by tickr.model.prevday_probe.
+prev_day_tick_prefixes = ["us_stocks_sip/trades_v1", "us_stocks_sip/quotes_v1"]
 
 [api]
 # Local API bind address; loopback only; read by the api server.
@@ -410,8 +448,10 @@ allowed_hosts = ["127.0.0.1", "localhost"]
 remote_hosts_file = "remote-hosts.txt"
 # Second loopback port, for remote access only: every request on it must carry the paired bearer token whatever its Host, and `tailscale serve` points here, never at `port`; read by the api server.
 remote_port = 8767
-# File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m tickr.api pair`, never the token itself; read by the api server.
+# File that held the SHA-256 (hex) of the one paired phone's bearer token before several devices could be paired, relative to data_dir; no longer written: when found, the api server and `python -m tickr.api devices` move it once into remote_devices_file as the device "default" (so that phone keeps working) and delete it.
 remote_token_hash_file = "remote-token.sha256"
+# File listing the paired devices of the remote port (JSON: name, SHA-256 hex of the device's bearer token, created and last-used time to the minute), relative to data_dir, written 0600 and never holding a token; a device is added by `python -m tickr.api pair --name <device>` once its code is redeemed, listed by `devices` and revoked one by one by `revoke --name <device>`; read and written by the api server (last-used time) and those commands.
+remote_devices_file = "remote-devices.json"
 # File holding the SHA-256 (hex) of the iOS Simulator's own bearer token, relative to data_dir: a second token beside the phone's, so pairing one never revokes the other; written by `python -m tickr.api pair-simulator`, never the token itself; read by the api server, which then also answers the remote port on its loopback Host (host:remote_port) for the Simulator, and accepts that token there only; `unpair-simulator` deletes it.
 remote_simulator_token_hash_file = "remote-simulator-token.sha256"
 # File where `pair-simulator` leaves the Simulator's bearer token itself with the address it opens (JSON: address from host and remote_port, token), relative to data_dir, written 0600 and never printed, for a Simulator build of the iOS app on this Mac to read at launch (TICKR_SIMULATOR_TOKEN_FILE in apps/ios/Config/Local.xcconfig); deleted by `unpair-simulator`; read by the iOS app in the Simulator only.
@@ -726,8 +766,9 @@ forget_symbol_seconds = 600
 history_sends_per_pass = 30
 # Screener-signal observer folder under strategies/ (observers.ignition: paper trades only, signal from the screener rows,
 # exit on the L1 stream's observer tier and the discovery snapshots; records in <decisions_dir>/<environment>/<NY
-# date>/ignition.jsonl); "" = off; read by cli (run) and runtime.market.
-ignition = "early-thin-ignition-v1"
+# date>/ignition.jsonl); "" = off; read by cli (run) and runtime.market. Off since 2026-11-25 (owner: it spent Webull request
+# budget on paper trades nobody uses after the re-scope to trading the model; the code stays until R28).
+ignition = ""
 
 [advisor]
 # NAME of the environment variable holding the Anthropic API key (the SDK reads it itself; only ANTHROPIC_API_KEY works);
@@ -762,6 +803,26 @@ backtest_stop_distance_edges_percent = [1, 2, 4, 8]
 # stop exit until the session end, both measured from the entry, increasing; read by advisor.backtest_evidence.
 backtest_excursion_edges_r = [0, 0.5, 1, 2, 3]
 
+[trailing_stop]
+# Stop tightening by replace (backlog T1): the broker stop of an open position only moves up toward the price, to the
+# best price since entry minus atr_multiple ATR, and to at least the fill price once the best price reached
+# breakeven_after_r R above it. Values provisional (old tracker #153-34, Q10). Nothing in the trading loop reads this
+# table yet; computed by tickr.risk.trailing.
+# Switch: true = the bot replaces its stops by this rule. Must stay false until the loop integration is merged after
+# the Webull replace check (docs/webull-facts.md F5); config load refuses true until then; read by config.load.
+enabled = false
+# Trail distance below the best price since entry, in ATR (the ATR of completed bars, USD per share); provisional
+# starting value from docs/backlog.md T1 ("best price since entry minus 1.5 ATR"); read by tickr.risk.trailing.
+atr_multiple = 1.5
+# Break-even step: once the best price since entry reached fill + this many R (R = fill - initial stop, USD per share),
+# the stop is at least the fill price; R; provisional starting value from docs/backlog.md T1 ("at least the fill price
+# after +1.0 R"); read by tickr.risk.trailing.
+breakeven_after_r = 1.0
+# Smallest tightening worth one replace request, USD per share: a new stop less than this above the current one is
+# not sent. 0 = no minimum step (off) until the owner sets a measured value; the loop PR measures it from the replace
+# request budget; at least 0; read by tickr.risk.trailing.
+min_move_usd = 0
+
 [model]
 # Trained model switch (backlog R24..R26): true = the trained model decides entries; false = it is not loaded and the
 # active strategy above decides as before. Must stay false until the live feed and the decision path are merged (config
@@ -773,6 +834,27 @@ bundles_dir = "models"
 # Bundle folder name <name>-<version> under bundles_dir that the bot loads when enabled; empty = none chosen; read by
 # tickr.model.bundle.
 bundle = ""
+
+[exit_chase]
+# Limit-exit chase before a market exit (backlog X3): a close is sent as a SELL LIMIT priced through the bid,
+# re-priced by cancel-then-place (each cancel confirmed by a Detail read before the next order), and after the last
+# price a MARKET in the regular session (outside it: no MARKET, an alert and the stop rules). Read by tickr.engine.
+# Every number below is an old-tracker proposal (old Q22, Q110), not an owner decision: reconfirm before enabling.
+# Chase switch: false = every close is one MARKET order as before; config load refuses true until the chase is
+# wired to a live bid and ATR; read by tickr.engine.core.
+enabled = false
+# Ticks below the bid each chase price is set, count (one tick: 0.01 USD at or above 1 USD, 0.0001 below); old-tracker
+# proposal, reconfirm; read by tickr.engine.chase.
+ticks_through_bid = 1
+# Seconds a chase order works before it is cancelled and placed again at the new bid; old-tracker proposal,
+# reconfirm; read by tickr.engine.core.
+reprice_seconds = 10
+# Re-prices after the first chase order, count (0 = one LIMIT, then the market exit); old-tracker proposal,
+# reconfirm; read by tickr.engine.chase.
+max_reprices = 6
+# Worst chase price, in multiples of the symbol's ATR (USD per share) below the bid when the chase started: a price
+# below it ends the chase; old-tracker proposal, reconfirm; read by tickr.engine.chase.
+max_worse_atr = 0.5
 
 [massive]
 # Market data vendor of the model's inputs (owner 2026-11-20: the model's features come live from Massive, the same
@@ -826,6 +908,54 @@ stream_reconnect_seconds = 5
 # Calendar days searched back from today for the history sessions (20 sessions span about 28 calendar days with weekends
 # and holidays; a search that finds fewer refuses); read by tickr.model.massive.
 calendar_lookback_days = 60
+# Path of Massive's general news listing on api_host, the training's own fetch of the nw_* news (owner's fetch_ref2.py
+# and reftopup.py: GET /v2/reference/news); read by tickr.model.newsprobe.
+massive_news_path = "/v2/reference/news"
+# Path of Massive's Benzinga news listing on api_host, the training's own fetch (bzfetch.py: GET /benzinga/v2/news);
+# read by tickr.model.newsprobe (`tickr probe-news-delay`).
+benzinga_news_path = "/benzinga/v2/news"
+# Path of Massive's Benzinga earnings listing on api_host, the training's own fetch (bzfetch.py: GET
+# /benzinga/v1/earnings); read by tickr.model.newsprobe.
+benzinga_earnings_path = "/benzinga/v1/earnings"
+# Seconds between the starts of two polls of `tickr probe-news-delay`: the probe's own pacing, not a feature lag; an
+# arrival is timed between the previous poll and the receipt, so this bounds the precision; read by
+# tickr.model.newsprobe.
+news_probe_poll_seconds = 15
+# Seconds back from now of the published window each news poll (Benzinga and general news) lists: an article that
+# first appears more than this after its published time is never seen by the probe (one day: about 1,000 Benzinga
+# articles, one or two pages); read by tickr.model.newsprobe.
+news_probe_news_lookback_seconds = 86400
+# Calendar days back from today (New York) of the report dates each Benzinga earnings poll lists; a revision of an older
+# report is not seen; read by tickr.model.newsprobe.
+news_probe_earnings_lookback_days = 7
+# Folder, relative to [run] data_dir, of the probe's records (one JSON-lines file per New York day); read by
+# tickr.model.newsprobe.
+news_probe_dir = "massive/news-probe"
+# Folder, relative to [run] data_dir, of the feed-arrival captures of `tickr probe-feed-arrival` (one sub-folder per New
+# York date, one gzip JSONL file per run): every Massive minute bar and the Webull lists with their receipt times, for
+# measurement only; read by tickr.model.arrival.
+arrival_dir = "massive/arrival"
+# Seconds between two flushes of the open capture to disk (a crash loses at most this much); a convenience pace of the
+# recorder, no decision depends on it; read by tickr.model.arrival.
+arrival_flush_seconds = 5
+# Seconds of the recorder's main loop between two checks for a due Webull list round and for the end of the day; a
+# convenience pace, the rounds keep the bot's own cadence ([market_data] discovery_interval_seconds in the regular
+# session, screener_record_seconds outside it); read by tickr.model.arrival.
+arrival_loop_seconds = 1
+# Seconds the recorder keeps listening after the calendar's extended close, for the last minute's bars and their
+# corrections, before it ends by itself; a convenience span of the measurement, not a measured value; read by
+# tickr.model.arrival.
+arrival_tail_seconds = 300
+# Seconds after a minute's end at which `tickr report-feed-arrival` counts what had arrived (columns of the report:
+# 5 is the label's entry offset). REPORT ONLY: no guard, wait or freshness limit reads these; read by
+# tickr.model.arrival.
+arrival_report_points_seconds = [1, 2, 5, 10, 15, 30, 60]
+# Folder, relative to [run] data_dir, of the stream-built day files (`<date>.csv.gz` in the flat file's columns plus each
+# row's first and last receipt and correction count, `<date>.gaps.json` the day's connection gaps), written from the
+# day's feed-arrival captures when the recorder reaches the calendar's extended close, for `tickr compare-stream-day`
+# (can a stream-built previous session replace the published file at 04:00?); measurement only; read by
+# tickr.model.streamday.
+stream_day_dir = "massive/stream_days"
 
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new
@@ -911,6 +1041,12 @@ watchdog_restart_file = "watchdog-restart.json"
 # time above, so its startup cancels that entry and protects any fill; written before the command runs and never removed;
 # separate from watchdog_restart_file, so the flatten restart stays available; read by runtime.watchdog.
 watchdog_entry_restart_file = "watchdog-entry-restart.json"
+# Server only (docs/deploy-server.md): the restart request file, relative to data_dir. On the server the watchdog's
+# restart command (`python -m tickr.runtime request-restart`, inside its container) writes it atomically with the request
+# time (UTC) and cause; the host unit tickr-bot-restart.path watches the same file under the server's data folder and
+# tickr-bot-restart.service restarts the bot container once. Its folder must already exist (deploy-server.sh creates
+# it); read by runtime.restartrequest and runtime.systemd.
+server_restart_request_file = "control/restart-request"
 # Seconds one loop pass may spend on market upkeep and the strategy before an evaluation-slow journal row (the next
 # Detail read waits for it; keep it near [orders] detail_poll_seconds). Discovery runs on its own thread and is not part
 # of it: its duration is the `seconds` of each discovery journal row; read by runtime.service.
@@ -1031,8 +1167,10 @@ http_port = 443
 mqtt_host = "data-api.sandbox.webull.com"
 # MQTT port (TLS); read by the market-data stream.
 mqtt_port = 1883
-# gRPC order-event host (not used in v1); read by the host allowlist.
+# gRPC order-event host (the bot does not subscribe; only probe M3 does); read by the host allowlist and the trade-events probe.
 events_host = "events-api.sandbox.webull.com"
+# gRPC order-event port (docs/webull-facts.md: gRPC 443); read by the trade-events probe (probe M3).
+events_port = 443
 # Name of the env variable holding the app key; read by the broker adapter (presence only elsewhere).
 app_key_variable = "WEBULL_SANDBOX_APP_KEY"
 # Name of the env variable holding the app secret; read by the broker adapter (presence only elsewhere).
@@ -1082,8 +1220,10 @@ http_port = 443
 mqtt_host = "data-api.webull.com"
 # MQTT port (TLS); read by the market-data stream.
 mqtt_port = 1883
-# gRPC order-event host (not used in v1); read by the host allowlist.
+# gRPC order-event host (the bot does not subscribe; only probe M3 does); read by the host allowlist and the trade-events probe.
 events_host = "events-api.webull.com"
+# gRPC order-event port (docs/webull-facts.md: gRPC 443); read by the trade-events probe (probe M3).
+events_port = 443
 # Name of the env variable holding the app key; read by the broker adapter (presence only elsewhere).
 app_key_variable = "WEBULL_APP_KEY"
 # Name of the env variable holding the app secret; read by the broker adapter (presence only elsewhere).

@@ -192,7 +192,8 @@ def test_skipped_rows_carry_prices_after_and_the_whatif_simulation(cfg):  # noqa
         (1, Decimal("12.05"), Decimal("0.05"), None),
         (5, Decimal("11.75"), Decimal("-0.25"), None),
         (60, None, None, "the bars end at 2026-11-16T15:59:00.000Z")]
-    settings = load_settings(cfg.root / cfg.api.replay_settings_file)
+    settings = load_settings(cfg.root / cfg.api.replay_settings_file,
+                             cfg.market_data.history_sessions)
     clock = calendar_clock(SessionCalendar.load(CALENDAR), cfg.session)
     bars = [b for (s, _), b in sorted(read_captured_bars(path).bars.items()) if s == "ABCD"]
     expected = simulate_one(refused, bars, settings, clock)

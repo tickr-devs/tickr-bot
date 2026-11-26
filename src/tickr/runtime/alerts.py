@@ -330,6 +330,16 @@ class TelegramNotifier:
         self._opener = opener
 
     def notify(self, title: str, text: str) -> None:
+        try:
+            self._send(title, text)
+        except NotifyError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a Telegram failure never breaks the caller
+            # Only the type: the message or the traceback of an unexpected error may hold the
+            # request address (with the token) or the chat id. `from None` drops the chain.
+            raise NotifyError(f"telegram failed: {type(exc).__name__}") from None
+
+    def _send(self, title: str, text: str) -> None:
         missing = telegram_missing(self._config, self._environ)
         if missing:
             raise NotifyError("telegram-missing: " + ", ".join(missing) + " not set")

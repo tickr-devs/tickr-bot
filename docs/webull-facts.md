@@ -3,6 +3,7 @@
 What we know about Webull OpenAPI, with the source of each fact. Ported from the old `Trading` project (2026-11-14).
 Sources: **SDK** = webull-openapi-python-sdk 3.0.3 source; **docs** = developer.webull.com (as read on the date given); **probe** = observed on our Sandbox account.
 A fact marked UNPROVEN must not be relied on by trading code until a probe proves it.
+Questions for Webull support that these facts leave open: `docs/webull-questions.md`.
 
 ## Hosts, credentials, auth
 - Production hosts (SDK): `api.webull.com`, `data-api.webull.com`, `events-api.webull.com`. Sandbox hosts (docs): `api.sandbox.webull.com`, `data-api.sandbox.webull.com`, `events-api.sandbox.webull.com`. Ports: HTTPS 443, MQTT 1883 (TLS), gRPC 443. Probe: only allowlisted hosts were contacted.
@@ -225,6 +226,8 @@ UNPROVEN, to be answered by the Monday probe (`tickr probe-replace-stop`, docs/m
 
 How Tickr uses it now: only the manual `probe-replace-stop` command. Trading code does not replace orders until this section records a probe.
 
+The limit-exit chase (`[exit_chase]`, `tickr.engine.chase`, backlog X3, shipped off) therefore re-prices by cancel-then-place: the working chase LIMIT SELL is cancelled, and the next one is placed only after a Detail read shows the cancel took (or the order finished). It starts only when the trade has no live stop and no other close working, because a closing SELL while a stop reserves the shares is unproven; otherwise it refuses (`stop-resting`, `close-working`) and the close is one MARKET as before. Probe that would lift this (regular session, Sandbox): with a STOP_LOSS SELL for N shares working on a position of N, place a SELL LIMIT for N (refused, and which code, or accepted); then on a position of N + M, with the stop on N, a SELL LIMIT for M. A proven replace of a LIMIT SELL (F5 above, with a LIMIT order) would let the chase re-price without the cancel gap.
+
 ## F7 — stops outside the regular session (probed 2026-11-16 19:06 ET, Sandbox, post-market, `tickr probe-extended SOFI`)
 
 - Every stop is refused outside the regular session, at PLACE, with HTTP 417 and nothing working afterwards (Detail read):
@@ -303,6 +306,43 @@ Probe `tickr probe-attached-stop SOFI`, 2026-11-17 15:18–15:20 UTC (evidence
 How Tickr uses it now: only the probe (`WebullBroker.place_combo`; tests/test_invariants.py
 names the one sender). The engine sends no combo yet. An entry path that uses it is new work,
 with its own review.
+
+## M3 trade events — gRPC order and position events (SDK reading 2026-11-25; NOT probed yet)
+
+From SDK 3.0.3 (`webull/trade/trade_events_client.py`, `trade/events/*`), read, not run:
+- One server-streaming gRPC call `/grpc.trade.event.EventService/Subscribe` on `events_host`
+  (`events-api.sandbox.webull.com` / `events-api.webull.com`), port 443, TLS. Request
+  `SubscribeRequest{subscribeType, timestamp ms, contentType, payload, accounts[]}`; the SDK sends
+  `subscribeType` 7 (ORDER_STATUS_CHANGED 1 | POSITION_STATUS_CHANGED 2 | OPTION_STATUS_CHANGED 4)
+  and our account id in `accounts`.
+- Signed in gRPC metadata only: App Key, HMAC-SHA256 signature over the request's SHA-256, nonce
+  and timestamp (`trade/events/signature_composer.py`). No token: the token folder is not read.
+- Responses `SubscribeResponse{eventType, subscribeType, contentType, payload, requestId,
+  timestamp}`. Control `eventType`s: SubscribeSuccess 0, Ping 1, AuthError 2, NumOfConnExceed 3,
+  SubscribeExpired 4; anything else is a trade event whose `payload` is text (JSON when
+  `contentType` is `application/json`). `types.py` names EVENT_TYPE_ORDER 1024,
+  EVENT_TYPE_POSITION 1028, EVENT_TYPE_OPTION 1032; the payload's fields are not documented in
+  the SDK.
+- The SDK's client resubscribes forever, 5 s apart, after gRPC UNAVAILABLE, INTERNAL or UNKNOWN or
+  a closed stream, and prints the request, signature and metadata to stdout (KD-3). Tickr never
+  constructs it: probe M3's `SdkTradeEventsSource` (broker/webull.py) sends the same signed
+  request through the SDK's stub and signer, once per connection, and leaves resubscribing to the
+  probe.
+
+Open questions (probe `tickr probe-trade-events`, docs/manual-trade.md):
+- E1 latency vs polling: seconds an event arrives before the Detail / open-orders poll (or the
+  bot's `order-observed` row) that sees the same change, for accepted, partly filled, filled,
+  cancelled.
+- E2 missed events: does every change polling sees come as an event? Does a payload name the
+  order by `client_order_id`?
+- E3 reconnect: how often the stream ends and with which code; does a new subscription work at
+  once, and are events lost or repeated across it? NumOfConnExceed: how many subscriptions per
+  App Key?
+- E4 ordering: do one order's events arrive in the order of its changes (and position events
+  after the fill)?
+- E5 the payload's shape per event type (raw bodies in `events.jsonl`).
+
+How Tickr uses it now: nothing; the engine keeps polling until E1-E4 are answered.
 
 ## Known SDK defects (3.0.3)
 - KD-1: streaming `SnapshotResult.close` is filled from `open`. Never use it.

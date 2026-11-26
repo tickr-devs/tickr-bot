@@ -25,6 +25,7 @@ from decimal import Decimal
 from typing import Any
 
 from tickr.api import contract as api
+from tickr.api.causes import safe_cause
 from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.engine.core import Fence
 from tickr.store import Store
@@ -92,7 +93,8 @@ def _read(row: Any) -> tuple[datetime, dict[str, Any]]:
             raise ValueError("no UTC offset or not an object")
         return at, body
     except (ValueError, TypeError) as exc:
-        raise _Unreadable(f"journal row {row['seq']} ({row['kind']}): {exc}") from exc
+        raise _Unreadable(f"journal row {row['seq']} ({row['kind']}): "
+                          f"{type(exc).__name__}") from exc
 
 
 class JournalFold:
@@ -134,7 +136,7 @@ class JournalFold:
                 self._add(row)
                 self.last_seq, self.last_at = row["seq"], row["at_utc"]
         except _Unreadable as exc:
-            self.unreadable = str(exc)
+            self.unreadable = safe_cause(exc)
 
     def _add(self, row: Any) -> None:
         at, body = _read(row)
@@ -185,7 +187,7 @@ def _gap(day: date, times: list[datetime], calendar: SessionCalendar | None,
     try:
         session = calendar.day(day)
     except CalendarRefused as exc:
-        return f"calendar: {exc}"
+        return f"calendar: {safe_cause(exc)}"
     start, end = session.regular_open, session.regular_close
     before = [t for t in times if t <= start]
     after = [t for t in times if t >= end]

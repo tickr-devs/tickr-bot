@@ -1,0 +1,59 @@
+name: server-image
+# Builds the release image of the bot server from each commit on main that changes what the
+# image holds, and pushes it to the account's registry (ops/aws/bot/image.tf) tagged with the
+# commit. Signs in to AWS with GitHub's OIDC token for the role in the repository variable
+# AWS_IMAGE_PUSH_ROLE; no AWS key is stored here. Until that variable is set (the owner applies
+# ops/aws/bot first), the job is skipped. Pull requests never push: ci.yml's docker-image job
+# builds them.
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - src/**
+      - config/**
+      - strategies/**
+      - ops/docker/**
+      - .github/workflows/server-image.yml
+  workflow_dispatch:
+concurrency:
+  group: server-image-${{ github.sha }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+  id-token: write
+env:
+  # Same uid and gid as the server's tickr account (ops/aws/bot variable service_uid).
+  TICKR_UID: "1500"
+  TICKR_GID: "1500"
+  AWS_REGION: us-east-1
+  REPOSITORY: tickr-bot
+jobs:
+  server-image-push:
+    if: vars.AWS_IMAGE_PUSH_ROLE != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_IMAGE_PUSH_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@7290e214a610b32bc0eef81748948b6d466a8783 # v2.2.0
+      - name: Build and push the image tagged with this commit
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          image="$REGISTRY/$REPOSITORY:$GITHUB_SHA"
+          # Tags are immutable: a re-run for a commit already pushed has nothing to do.
+          if aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "$REPOSITORY:$GITHUB_SHA already pushed"
+            exit 0
+          fi
+          docker build \
+            --build-arg TICKR_UID="$TICKR_UID" --build-arg TICKR_GID="$TICKR_GID" \
+            --build-arg TICKR_CODE_VERSION="$GITHUB_SHA" -t "$image" .
+          docker push "$image"
