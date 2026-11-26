@@ -26,8 +26,8 @@ The API still binds loopback only. The iPhone reaches it through an HTTPS proxy 
 [Tailscale](https://tailscale.com) `serve`, which is reachable only from devices signed in to the
 owner's tailnet (home Wi-Fi or cellular) and terminates TLS with a certificate for the Mac's
 tailnet name. The proxy points at a second loopback port, `[api] remote_port`, opened only when
-`[api] remote_hosts_file` names a host. Every request on that port must carry the paired token, whatever its
-`Host` header says, except `POST /pair`, which redeems a one-time pairing code for that token; the
+`[api] remote_hosts_file` names a host. Every request on that port must carry a paired device's token, whatever
+its `Host` header says, except `POST /pair`, which redeems a one-time pairing code for a token; the
 local port never accepts the remote name. Whether a token is needed is
 decided by the port a request arrives on, never by a header the caller chooses.
 
@@ -39,26 +39,63 @@ decided by the port a request arrives on, never by a header the caller chooses.
 3. Write that name, one per line, into this Mac's `[api] remote_hosts_file` under `data_dir`
    (`echo mac.tailnet-name.ts.net > data/remote-hosts.txt`) and restart the API. The name belongs
    to this machine, so it lives with its data, never in the shared `config/bot.toml`.
-4. `python -m tickr.api --config config/bot.toml pair` revokes the current phone token at once and
-   leaves a pairing link with a one-time code in a file readable by you only
-   (`[api] remote_pairing_file` under `data_dir`); nothing secret is printed. With the API running,
-   AirDrop that file to the iPhone and open it, or paste the link in Settings › Pair with Mac,
-   within `[api] remote_pairing_code_ttl_seconds`. The phone redeems the code once at `POST /pair`
-   for its token; the API then deletes the link file. A copy of the link left anywhere (Files,
-   iCloud Drive, a clipboard) is worthless after that or after expiry. The Mac keeps only SHA-256
-   digests: of the waiting code (`[api] remote_pairing_code_file`, with its expiry) and of the
-   token (`[api] remote_token_hash_file`).
+4. `python -m tickr.api --config config/bot.toml pair --name iPhone` leaves a pairing link with a
+   one-time code for the device `iPhone` in a file readable by you only (`[api] remote_pairing_file`
+   under `data_dir`); nothing secret is printed. With the API running, AirDrop that file to the
+   iPhone and open it, or paste the link in Settings › Pair with Mac, within
+   `[api] remote_pairing_code_ttl_seconds`. The phone redeems the code once at `POST /pair` for its
+   token; the API then deletes the link file. A copy of the link left anywhere (Files, iCloud
+   Drive, a clipboard) is worthless after that or after expiry. The Mac keeps only SHA-256
+   digests: of the waiting code (`[api] remote_pairing_code_file`, with its expiry and the device
+   name) and of each device's token (`[api] remote_devices_file`).
+
+### Paired devices
+
+Several devices can be paired, each with its own token. The device list
+(`[api] remote_devices_file`, 0600) holds each device's name, its token's SHA-256, when it was
+paired and when it last made an authenticated request (to the minute, so a busy phone does not
+rewrite the file on every request); never a token.
+
+- `pair --name <device>` adds a device once its code is redeemed; the devices already paired keep
+  working. Pairing a name again replaces that device's token when the new code is redeemed (the
+  old one works until then). A name is letters, digits, space, dot, dash and underscore, starting
+  and ending with a letter or digit. A new `pair` replaces a code still waiting.
+- `devices` lists the paired devices: name, paired time, last-used time.
+- `revoke --name <device>` revokes one device: its next request gets `401`; the others keep working.
+
+A token is checked against every paired device's digest with a constant-time compare and no early
+exit, so the time to refuse does not depend on the token. The phone paired before several devices
+existed keeps working: its single hash file (`[api] remote_token_hash_file`) is moved once into the
+device list as the device `default` (paired at the file's time) and deleted, by the API on the
+next request or by `devices`. If both files exist with different tokens, the API refuses (`503`)
+until one is deleted by hand. The iOS Simulator's token (below) is separate and not a device.
+
+**Rolling back to a build without devices.** The migration leaves `remote_devices_file` holding the
+old token's digest as device `default` and **deletes** `remote_token_hash_file`; a `.tmp` sibling
+may remain only after a crash mid-write. An older build reads only `remote_token_hash_file`, so
+after a downgrade every phone gets `401 nothing is paired here` until one of these is done:
+
+- Recreate the old file from one device's digest, so that device keeps working (only one can:
+  the old build knows a single token). Without printing anything, with the API stopped, from the
+  repository folder (`data` is `[run] data_dir`; pick the device by name):
+  `python3 -c 'import json,os;d=json.load(open("data/remote-devices.json"))["devices"];h=[x["sha256"] for x in d if x["name"]=="iPhone"][0];f=os.open("data/remote-token.sha256",os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.write(f,(h+"\n").encode());os.close(f)'`
+  Leave `remote-devices.json` in place: upgrading again finds the same digest in the list and
+  only deletes the old file.
+- Or re-pair the phone with the old build's `pair` (it writes a new `remote_token_hash_file`).
+  Before upgrading again, delete `remote-devices.json`, so the new token migrates as `default`;
+  with both files holding different tokens the new build answers `503` until one is deleted.
 
 Rules on the remote port: `Host` must be one of the names in `remote_hosts_file` (no port when 443, else
 `name:port`), else `403 forbidden_host`; `Authorization: Bearer <token>` is required, else
 `401 unauthorized` with `WWW-Authenticate: Bearer`; an `Origin`, if sent, must be `https://<host>`.
-An unreadable token hash file answers `503 unavailable`. The local port (the Mac app, the status
+An unreadable device list (or old token hash file) answers `503 unavailable`. The local port (the Mac app, the status
 page) needs no token, as before: any process on this Mac can use it.
 
 `POST /pair` (remote port only; the local port answers `404`): the same `Host` and `Origin` rules,
 no token, body exactly `{"code": "<code from the link>"}`. `200` with `paired-v1`
-(`{"token": "...", "api_version": 1}`) once: the code is burnt, a new token's SHA-256 replaces the
-stored one, and the link file is deleted. `401 unauthorized` when no pairing is waiting, the code
+(`{"token": "...", "api_version": 1}`) once: the code is burnt, the new token's SHA-256 is stored
+for the device named at `pair` (added, or replacing that device's earlier token), and the link file
+is deleted. `401 unauthorized` when no pairing is waiting, the code
 is wrong (nothing changes) or it has expired (the code and the link file are deleted); `400` for
 any other body; `503` when the code file is unreadable. Neither the code nor the token appears in
 an error or the log. A missing or empty `remote_hosts_file` (the default) turns remote access off; an unreadable

@@ -429,8 +429,10 @@ allowed_hosts = ["127.0.0.1", "localhost"]
 remote_hosts_file = "remote-hosts.txt"
 # Second loopback port, for remote access only: every request on it must carry the paired bearer token whatever its Host, and `tailscale serve` points here, never at `port`; read by the api server.
 remote_port = 8767
-# File holding the SHA-256 (hex) of the paired phone's bearer token, relative to data_dir; written by `python -m tickr.api pair`, never the token itself; read by the api server.
+# File that held the SHA-256 (hex) of the one paired phone's bearer token before several devices could be paired, relative to data_dir; no longer written: when found, the api server and `python -m tickr.api devices` move it once into remote_devices_file as the device "default" (so that phone keeps working) and delete it.
 remote_token_hash_file = "remote-token.sha256"
+# File listing the paired devices of the remote port (JSON: name, SHA-256 hex of the device's bearer token, created and last-used time to the minute), relative to data_dir, written 0600 and never holding a token; a device is added by `python -m tickr.api pair --name <device>` once its code is redeemed, listed by `devices` and revoked one by one by `revoke --name <device>`; read and written by the api server (last-used time) and those commands.
+remote_devices_file = "remote-devices.json"
 # File holding the SHA-256 (hex) of the iOS Simulator's own bearer token, relative to data_dir: a second token beside the phone's, so pairing one never revokes the other; written by `python -m tickr.api pair-simulator`, never the token itself; read by the api server, which then also answers the remote port on its loopback Host (host:remote_port) for the Simulator, and accepts that token there only; `unpair-simulator` deletes it.
 remote_simulator_token_hash_file = "remote-simulator-token.sha256"
 # File where `pair-simulator` leaves the Simulator's bearer token itself with the address it opens (JSON: address from host and remote_port, token), relative to data_dir, written 0600 and never printed, for a Simulator build of the iOS app on this Mac to read at launch (TICKR_SIMULATOR_TOKEN_FILE in apps/ios/Config/Local.xcconfig); deleted by `unpair-simulator`; read by the iOS app in the Simulator only.

@@ -18,13 +18,16 @@ import pytest
 
 from tickr import config
 from tickr.api import __main__ as api_main
-from tickr.api import contract
+from tickr.api import contract, devices
+from tickr.api.devices import DeviceFileError
 from tickr.api.server import (
     GET_ROUTES,
+    list_devices,
     make_remote_server,
     make_server,
     pair,
     pair_simulator,
+    revoke_device,
     settings_from_config,
     unpair_simulator,
 )
@@ -35,6 +38,7 @@ from .test_server import ROOT, Clock, doc, request, schema
 
 REMOTE = "mac.example-tailnet.ts.net"
 NOW = T0 + timedelta(seconds=2)  # the servers' clock in these tests
+PHONE = "iPhone"  # the device name the owner pairs the phone under
 
 
 def with_remote_hosts(cfg, *names):
@@ -88,10 +92,10 @@ def redeem(server, code, **kwargs):
     return remote(server, "POST", "/pair", body={"code": code}, **kwargs)
 
 
-def paired(server, settings):
-    """Pair as the owner and the phone would: `pair`, then redeem the link's code. Returns the
+def paired(server, settings, name=PHONE):
+    """Pair as the owner and the device would: `pair`, then redeem the link's code. Returns the
     token."""
-    resp, payload = redeem(server, link_code(pair(settings, now=NOW)))
+    resp, payload = redeem(server, link_code(pair(settings, name, now=NOW)))
     assert resp.status == 200, payload
     return doc(payload)["token"]
 
@@ -142,7 +146,7 @@ def test_remote_refused_before_pairing(remote_api):
 
 
 def test_pairing_stores_only_the_hashes(remote_api, remote_settings):
-    link_file = pair(remote_settings, now=NOW)
+    link_file = pair(remote_settings, PHONE, now=NOW)
     code = link_code(link_file)
     waiting = json.loads(remote_settings.pairing_code_path.read_text("ascii"))
     assert waiting["sha256"] == hashlib.sha256(code.encode()).hexdigest()
@@ -154,16 +158,20 @@ def test_pairing_stores_only_the_hashes(remote_api, remote_settings):
     assert errors(schema("paired-v1"), doc(payload)) == []
     token = doc(payload)["token"]
     assert token != code and len(token) >= remote_settings.token_bytes
-    stored = remote_settings.token_hash_path.read_text("ascii").strip()
-    assert stored == hashlib.sha256(token.encode()).hexdigest()
-    assert stat.S_IMODE(remote_settings.token_hash_path.stat().st_mode) == 0o600
+    stored = json.loads(remote_settings.devices_path.read_text("ascii"))["devices"]
+    assert [d["name"] for d in stored] == [PHONE]
+    assert stored[0]["sha256"] == hashlib.sha256(token.encode()).hexdigest()
+    assert stored[0]["created_at"] == contract.format_time(NOW)
+    assert stored[0]["last_used_at"] is None
+    assert token not in remote_settings.devices_path.read_text("ascii")
+    assert stat.S_IMODE(remote_settings.devices_path.stat().st_mode) == 0o600
     assert resp.getheader("Cache-Control") == "no-store"
 
 
 def test_pairing_needs_a_remote_host(tmp_path):
     cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
     with pytest.raises(config.ConfigError, match="no remote host"):
-        pair(settings_from_config(cfg))
+        pair(settings_from_config(cfg), PHONE)
 
 
 def test_paired_token_reads_status_and_queues_commands(remote_api, remote_settings):
@@ -215,7 +223,7 @@ def test_local_port_needs_no_token(local_api, remote_api):
 @pytest.mark.parametrize("path,body", [("/status", None), ("/commands/flatten", {})])
 def test_remote_port_with_a_local_host_header_is_refused(remote_api, remote_settings, path, body):
     """A caller cannot skip the token by sending a loopback Host through the proxy."""
-    pair(remote_settings, now=NOW)
+    pair(remote_settings, PHONE, now=NOW)
     for host in (f"127.0.0.1:{remote_api.server_port}", "localhost", "127.0.0.1"):
         resp, payload = request(remote_api, "POST" if body is not None else "GET", path, body,
                                 host=host)
@@ -247,7 +255,7 @@ def test_unreadable_hash_file_refuses_with_a_cause(remote_api, remote_settings):
 
 
 def test_pairing_link_file_is_private_and_removed_when_redeemed(remote_api, remote_settings):
-    link_file = pair(remote_settings, now=NOW)
+    link_file = pair(remote_settings, PHONE, now=NOW)
     assert stat.S_IMODE(link_file.stat().st_mode) == 0o600
     code = link_code(link_file)
     resp, payload = redeem(remote_api, "wrong")
@@ -260,7 +268,7 @@ def test_pairing_link_file_is_private_and_removed_when_redeemed(remote_api, remo
 def test_a_pairing_code_buys_one_token_only(remote_api, remote_settings):
     """A copy of the link left anywhere (Files, iCloud Drive, a clipboard) is worthless once
     the phone has paired: the code is burnt and is never itself a token."""
-    code = link_code(pair(remote_settings, now=NOW))
+    code = link_code(pair(remote_settings, PHONE, now=NOW))
     token = doc(redeem(remote_api, code)[1])["token"]
     resp, payload = redeem(remote_api, code)
     assert resp.status == 401 and doc(payload)["error"] == "unauthorized"
@@ -269,7 +277,7 @@ def test_a_pairing_code_buys_one_token_only(remote_api, remote_settings):
 
 
 def test_an_expired_pairing_code_is_refused_and_burnt(local_api, remote_settings):
-    code = link_code(pair(remote_settings, now=T0 + timedelta(seconds=2)))
+    code = link_code(pair(remote_settings, PHONE, now=T0 + timedelta(seconds=2)))
     late = T0 + timedelta(seconds=2 + remote_settings.pairing_code_ttl_seconds)
     server = _serve(make_remote_server(local_api))
     server.clock = Clock(late)
@@ -278,28 +286,154 @@ def test_an_expired_pairing_code_is_refused_and_burnt(local_api, remote_settings
         assert resp.status == 401 and "expired" in doc(payload)["cause"]
         assert not remote_settings.pairing_code_path.exists()
         assert not remote_settings.pairing_path.exists()
-        assert not remote_settings.token_hash_path.exists()
+        assert not remote_settings.devices_path.exists()
     finally:
         server.shutdown()
         server.server_close()
 
 
-def test_pair_revokes_the_current_token_at_once(remote_api, remote_settings):
+def test_pairing_a_device_again_keeps_its_token_until_the_code_is_redeemed(remote_api,
+                                                                          remote_settings):
     token = paired(remote_api, remote_settings)
-    pair(remote_settings, now=NOW)
+    code = link_code(pair(remote_settings, PHONE, now=NOW))
+    assert remote(remote_api, "GET", "/status", token=token)[0].status == 200
+    new = doc(redeem(remote_api, code)[1])["token"]
     assert remote(remote_api, "GET", "/status", token=token)[0].status == 401
+    assert remote(remote_api, "GET", "/status", token=new)[0].status == 200
+    assert [d.name for d in list_devices(remote_settings)] == [PHONE]
+
+
+def test_two_devices_both_authenticate_and_revoking_one_keeps_the_other(remote_api,
+                                                                        remote_settings):
+    phone = paired(remote_api, remote_settings)
+    mac = paired(remote_api, remote_settings, "Mac")
+    assert remote(remote_api, "GET", "/status", token=phone)[0].status == 200
+    assert remote(remote_api, "GET", "/status", token=mac)[0].status == 200
+    assert [d.name for d in list_devices(remote_settings)] == [PHONE, "Mac"]
+    assert revoke_device(remote_settings, PHONE)
+    resp, payload = remote(remote_api, "GET", "/status", token=phone)
+    assert resp.status == 401 and doc(payload)["error"] == "unauthorized"
+    assert remote(remote_api, "GET", "/status", token=mac)[0].status == 200
+    assert not revoke_device(remote_settings, PHONE)
+    assert [d.name for d in list_devices(remote_settings)] == ["Mac"]
+
+
+def test_a_device_records_when_it_was_last_used_to_the_minute(local_api, remote_settings):
+    server = _serve(make_remote_server(local_api))
+    try:
+        token = paired(server, remote_settings)
+        used_at = NOW + timedelta(minutes=3, seconds=17)
+        server.clock = Clock(used_at)
+        assert remote(server, "GET", "/status", token=token)[0].status == 200
+        (device,) = list_devices(remote_settings)
+        assert device.last_used_at == used_at.replace(second=0, microsecond=0)
+        assert device.created_at == NOW
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_old_single_token_file_migrates_as_device_default(remote_api, remote_settings):
+    """A phone paired before several devices existed keeps working: its hash file becomes the
+    device "default" on the first request, and the old file goes."""
+    token = "a-token-paired-before-devices"
+    remote_settings.token_hash_path.parent.mkdir(parents=True, exist_ok=True)
+    remote_settings.token_hash_path.write_text(hashlib.sha256(token.encode()).hexdigest() + "\n")
+    assert remote(remote_api, "GET", "/status", token="wrong")[0].status == 401
+    assert remote(remote_api, "GET", "/status", token=token)[0].status == 200
+    assert not remote_settings.token_hash_path.exists()
+    assert [d.name for d in list_devices(remote_settings)] == ["default"]
+    other = paired(remote_api, remote_settings)
+    assert remote(remote_api, "GET", "/status", token=token)[0].status == 200
+    assert remote(remote_api, "GET", "/status", token=other)[0].status == 200
+
+
+def test_migration_finishes_after_a_crash_and_refuses_a_different_old_token(remote_settings):
+    remote_settings.token_hash_path.parent.mkdir(parents=True, exist_ok=True)
+    remote_settings.token_hash_path.write_text(hashlib.sha256(b"old").hexdigest())
+    (device,) = list_devices(remote_settings)
+    remote_settings.token_hash_path.write_text(hashlib.sha256(b"old").hexdigest())
+    assert list_devices(remote_settings) == (device,)  # a crash before the delete: finished
+    assert not remote_settings.token_hash_path.exists()
+    remote_settings.token_hash_path.write_text(hashlib.sha256(b"other").hexdigest())
+    with pytest.raises(DeviceFileError, match="delete one of the two"):
+        list_devices(remote_settings)
+
+
+def test_a_wrong_token_is_compared_against_every_device_in_constant_time(monkeypatch):
+    """No early exit: every stored digest goes through hmac.compare_digest, so the time to
+    refuse depends neither on the token nor on which device it is closest to."""
+    stored = tuple(devices.Device(f"d{i}", hashlib.sha256(str(i).encode()).hexdigest(), NOW,
+                                  None) for i in range(3))
+    seen = []
+    real = devices.hmac.compare_digest
+    monkeypatch.setattr(devices.hmac, "compare_digest",
+                        lambda a, b: seen.append(b) or real(a, b))
+    assert devices.match(stored, "wrong") is None
+    assert devices.match(stored, "0") == stored[0]
+    assert seen == [d.sha256 for d in stored] * 2
+
+
+@pytest.mark.parametrize("text", ['{"devices": [{"name": "x"}]}', "[]", "{",
+                                  '{"devices": [], "x": 1}', "\xff"])
+def test_an_unreadable_device_list_refuses_with_a_cause(remote_api, remote_settings, text):
+    remote_settings.devices_path.parent.mkdir(parents=True, exist_ok=True)
+    remote_settings.devices_path.write_text(text, "latin-1")
+    resp, payload = remote(remote_api, "GET", "/status", token="x")
+    assert resp.status == 503
+    assert "unreadable" in doc(payload)["cause"]
+
+
+@pytest.mark.parametrize("fails", [
+    PermissionError(13, "Permission denied", "/secret-dir/devices-file.json"),
+    OSError(5, "Input/output error", "/secret-dir/devices-file.json"),
+])
+def test_an_unreadable_device_file_never_leaks_its_path(remote_api, remote_settings,
+                                                        monkeypatch, fails):
+    remote_settings.devices_path.parent.mkdir(parents=True, exist_ok=True)
+    remote_settings.devices_path.write_text("{}", "ascii")
+    real = type(remote_settings.devices_path).read_text
+
+    def read_text(self, *args, **kwargs):
+        if self == remote_settings.devices_path:
+            raise fails
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(remote_settings.devices_path), "read_text", read_text)
+    resp, payload = remote(remote_api, "GET", "/status")  # unauthenticated
+    assert resp.status == 503
+    body = payload.decode() if isinstance(payload, bytes) else str(payload)
+    assert doc(payload)["cause"] == f"device_list_unreadable:{type(fails).__name__}"
+    for leaked in ("/secret-dir", remote_settings.devices_path.name,
+                   str(remote_settings.devices_path.parent), "Permission denied"):
+        assert leaked not in body
+
+
+def test_a_device_list_that_is_a_directory_leaks_no_path_on_redeem(remote_api, remote_settings):
+    code = link_code(pair(remote_settings, PHONE, now=NOW))
+    remote_settings.devices_path.mkdir(parents=True)
+    resp, payload = redeem(remote_api, code)
+    assert resp.status == 503
+    assert doc(payload)["cause"] == "device_list_unreadable:IsADirectoryError"
+    assert str(remote_settings.devices_path.parent) not in payload.decode()
+
+
+@pytest.mark.parametrize("name", ["", " lead", "trail ", "a/b", "ü"])
+def test_a_device_name_must_be_plain(remote_settings, name):
+    with pytest.raises(ValueError, match="device name"):
+        pair(remote_settings, name, now=NOW)
 
 
 @pytest.mark.parametrize("body", [{}, {"code": ""}, {"code": 1}, {"code": "x", "token": "y"}])
 def test_pair_body_must_be_exactly_a_code(remote_api, remote_settings, body):
-    pair(remote_settings, now=NOW)
+    pair(remote_settings, PHONE, now=NOW)
     resp, payload = remote(remote_api, "POST", "/pair", body=body)
     assert resp.status == 400
     assert remote_settings.pairing_code_path.exists()
 
 
 def test_redeeming_needs_the_remote_host_and_origin(remote_api, remote_settings):
-    code = link_code(pair(remote_settings, now=NOW))
+    code = link_code(pair(remote_settings, PHONE, now=NOW))
     resp, _ = request(remote_api, "POST", "/pair", {"code": code},
                       host=f"127.0.0.1:{remote_api.server_port}")
     assert resp.status == 403
@@ -309,7 +443,7 @@ def test_redeeming_needs_the_remote_host_and_origin(remote_api, remote_settings)
 
 
 def test_the_local_port_has_no_pair_route(local_api, remote_settings):
-    code = link_code(pair(remote_settings, now=NOW))
+    code = link_code(pair(remote_settings, PHONE, now=NOW))
     resp, _ = request(local_api, "POST", "/pair", {"code": code})
     assert resp.status == 404
     assert remote_settings.pairing_code_path.exists()
@@ -334,7 +468,7 @@ def test_pairing_replaces_a_leftover_temp_file_with_wide_permissions(remote_sett
     leftover.parent.mkdir(parents=True, exist_ok=True)
     leftover.write_text("old")
     leftover.chmod(0o644)
-    pair(remote_settings, now=NOW)
+    pair(remote_settings, PHONE, now=NOW)
     assert stat.S_IMODE(remote_settings.pairing_code_path.stat().st_mode) == 0o600
 
 
@@ -345,7 +479,7 @@ def test_pair_command_never_prints_the_code(tmp_path, capsys, monkeypatch):
     for name in ("calendar",):
         (tmp_path / "config" / name).symlink_to(ROOT / "config" / name)
     with_remote_hosts(config.load(path), REMOTE)
-    assert api_main.main(["--config", str(path), "pair"]) == 0
+    assert api_main.main(["--config", str(path), "pair", "--name", PHONE]) == 0
     captured = capsys.readouterr()
     cfg = config.load(path)
     data = cfg.root / cfg.run.data_dir
@@ -358,6 +492,29 @@ def test_pair_command_never_prints_the_code(tmp_path, capsys, monkeypatch):
     assert str(data / cfg.api.remote_pairing_file) in captured.out
     stored = json.loads((data / cfg.api.remote_pairing_code_file).read_text())["sha256"]
     assert stored == hashlib.sha256(code.encode()).hexdigest()
+
+
+def test_devices_and_revoke_commands_list_and_revoke_without_printing_secrets(tmp_path, capsys):
+    path = tmp_path / "config" / "bot.toml"
+    path.parent.mkdir()
+    path.write_text((ROOT / "config" / "bot.toml").read_text("utf-8"), "utf-8")
+    (tmp_path / "config" / "calendar").symlink_to(ROOT / "config" / "calendar")
+    cfg = with_remote_hosts(config.load(path), REMOTE)
+    settings = settings_from_config(cfg)
+    token = "a-token-paired-before-devices"
+    settings.token_hash_path.write_text(hashlib.sha256(token.encode()).hexdigest())
+    assert api_main.main(["--config", str(path), "devices"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("default\tpaired ") and "last used never" in out
+    assert hashlib.sha256(token.encode()).hexdigest() not in out
+    assert api_main.main(["--config", str(path), "revoke", "--name", "Mac"]) == 1
+    assert api_main.main(["--config", str(path), "revoke", "--name", "default"]) == 0
+    assert list_devices(settings) == ()
+    assert api_main.main(["--config", str(path), "devices"]) == 0
+    assert "No device is paired" in capsys.readouterr().out
+    for args in (["pair"], ["revoke"], ["pair", "--name", "a/b"]):
+        with pytest.raises(SystemExit):
+            api_main.main(["--config", str(path), *args])
 
 
 def test_idempotency_key_does_not_replace_the_token(remote_api, remote_settings):
@@ -402,7 +559,7 @@ def _hold_pairing_lock(settings):
 def test_redeem_waits_for_the_pairing_lock(remote_api, remote_settings):
     """`pair` runs in another process: POST /pair waits while it holds the shared file lock, so
     the two never interleave."""
-    code = link_code(pair(remote_settings, now=NOW))
+    code = link_code(pair(remote_settings, PHONE, now=NOW))
     fd = _hold_pairing_lock(remote_settings)
     result = {}
     worker = threading.Thread(target=lambda: result.update(answer=redeem(remote_api, code)))
@@ -417,7 +574,7 @@ def test_redeem_waits_for_the_pairing_lock(remote_api, remote_settings):
 def test_pair_waits_for_the_pairing_lock(remote_settings):
     remote_settings.pairing_code_path.parent.mkdir(parents=True, exist_ok=True)
     fd = _hold_pairing_lock(remote_settings)
-    worker = threading.Thread(target=pair, args=(remote_settings,), kwargs={"now": NOW})
+    worker = threading.Thread(target=pair, args=(remote_settings, PHONE), kwargs={"now": NOW})
     worker.start()
     worker.join(0.3)
     assert worker.is_alive() and not remote_settings.pairing_code_path.exists()
