@@ -104,6 +104,34 @@ def _status(path: Path) -> int:
     return 0
 
 
+def _diagnostics(args: argparse.Namespace) -> int:
+    """Write the secret-free diagnostics bundle (see `tickr.diagnostics`). Read-only; safe
+    while the bot runs."""
+    import contextlib
+    import io
+
+    from tickr import diagnostics
+
+    cfg = config_module.load(args.config)
+    days = cfg.run.diagnostics_days if args.days is None else args.days
+    try:
+        version = _code_version(cfg)
+    except CodeVersionUnknown as exc:
+        version = f"unknown: {exc}"
+    status = io.StringIO()
+    with contextlib.redirect_stdout(status):
+        _status(args.config)
+    try:
+        entries = diagnostics.build(cfg, args.config, args.out, now=NOW(), days=days,
+                                    version=version, status_text=status.getvalue())
+    except diagnostics.DiagnosticsRefused as exc:
+        raise ManualRefused(str(exc)) from exc
+    for entry in entries:
+        print(f"{entry['bytes']:>10}  {entry['path']}")
+    print(f"wrote {args.out} ({len(entries)} files)")
+    return 0
+
+
 def _webull_broker(cfg: config_module.Config) -> Broker:
     from tickr.broker.webull import broker_from_config  # optional dependency
     from tickr.runtime.alerts import token_pending_text
@@ -1026,6 +1054,12 @@ def main(argv: list[str] | None = None) -> int:
     explain_parser = sub.add_parser("explain", help="read-only: the latest decision recorded "
                                     "today for a symbol, with every check")
     explain_parser.add_argument("symbol")
+    diag = sub.add_parser("diagnostics", help="read-only: a zip of config, recent logs and "
+                          "alerts, database row counts and status, with no secrets "
+                          "(docs/operations.md)")
+    diag.add_argument("--out", type=Path, required=True, help="the zip to write (must not exist)")
+    diag.add_argument("--days", type=int, default=None,
+                      help="days of logs and alerts; default [run] diagnostics_days")
     maint = sub.add_parser("maintain", help="with the bot stopped: gzip finished days' capture "
                            "and decision files, prune caches and old archives, checkpoint the "
                            "database (dry run by default)")
@@ -1086,6 +1120,8 @@ def main(argv: list[str] | None = None) -> int:
             return _probe_prev_day(args)
         if args.command == "explain":
             return _explain(args)
+        if args.command == "diagnostics":
+            return _diagnostics(args)
         if args.command == "maintain":
             return _maintain(args)
         if args.command == "clear-fence":

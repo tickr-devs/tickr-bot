@@ -24,6 +24,12 @@ maintain_keep_sessions = 20
 # kept; `tickr maintain --apply` deletes older ones. 0 = never delete (owner 2026-11-16: keep
 # everything, docs/decisions.md); read by maintain.
 maintain_archive_max_age_days = 0
+# Days, counted back from now, of log files and alerts a `tickr diagnostics` bundle carries unless --days says otherwise;
+# read by diagnostics.
+diagnostics_days = 7
+# Folder under data_dir whose *.log files (and rotated *.log.N) `tickr diagnostics` copies when changed within the
+# window; a plain folder name; read by diagnostics.
+diagnostics_logs_dir = "logs"
 
 [strategy]
 # Active strategy name = folder under strategies/; its decisions may reach the safety layer.

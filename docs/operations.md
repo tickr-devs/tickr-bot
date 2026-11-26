@@ -544,6 +544,28 @@ stopped, after the close or on a non-trading day:
   the sessions, or when the database is missing or has another schema. Exit 1 means one file
   failed to archive or delete: the run stopped there and what is left stays for the next run.
 
+## Diagnostics bundle: `tickr diagnostics`
+
+Read-only and safe while the bot runs. It writes one zip you can send on without reading it
+first:
+
+```sh
+tickr diagnostics --out ~/tickr-diagnostics.zip [--days N]     # --out must not exist yet
+```
+
+`--days` defaults to `[run] diagnostics_days` (7). The zip holds, from an explicit allow-list
+(`src/tickr/diagnostics.py`): `version.txt` (the code version), `config/<name>.toml` (the config in
+use and the repo's known config files next to it; no other file of that folder), `logs/*.log` and rotated `*.log.N` files from
+`<data_dir>/<[run] diagnostics_logs_dir>` changed in the last N days, `alerts.jsonl` (the feed
+lines of the last N days), `database.json` (schema version and the row count of each table, never
+a row), `status.txt` (what `tickr status` prints) and `manifest.json` (every file with its size).
+It never opens the environment, env files, the secrets file, token folders, authorization files,
+APNs keys, the account file, capture or decision files. On the Mac the launchd logs live in
+`~/Library/Logs/Tickr`, outside `data_dir`: copy `bot.log` into `data/logs/` first if the bundle
+should carry it, or send it separately. On the server see docs/deploy-server.md, "Diagnostics
+bundle". Preflight is not part of the bundle (it reads the environment); run `tickr status` or
+the preflight job as usual.
+
 ## The Mac must be awake
 
 launchd runs a calendar job missed during sleep when the Mac wakes, which may be after the open.

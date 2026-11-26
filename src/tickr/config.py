@@ -75,6 +75,8 @@ class RunConfig:
     backup_retry_seconds: Decimal
     maintain_keep_sessions: int
     maintain_archive_max_age_days: int
+    diagnostics_days: int
+    diagnostics_logs_dir: str
 
 
 @dataclass(frozen=True)
@@ -689,6 +691,12 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if run.maintain_archive_max_age_days < 0:
         raise ConfigError("[run] maintain_archive_max_age_days must be 0 (never delete archives) "
                           "or a number of days")
+    if run.diagnostics_days < 1:
+        raise ConfigError("[run] diagnostics_days must be at least 1")
+    if not PLAIN_FOLDER.match(run.diagnostics_logs_dir):
+        raise ConfigError("[run] diagnostics_logs_dir must be one plain folder name under "
+                          "data_dir (letters, digits, '_' and '-'), "
+                          f"not {run.diagnostics_logs_dir!r}")
     if run.code_version_timeout_seconds <= 0:
         raise ConfigError("[run] code_version_timeout_seconds must be above 0")
     if run.backup_retry_seconds <= 0:

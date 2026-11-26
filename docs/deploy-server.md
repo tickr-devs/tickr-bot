@@ -110,6 +110,30 @@ WantedBy=timers.target
 `tickr-preflight` uses `run --rm preflight` at 03:30 and `tickr-watchdog` uses
 `up -d watchdog` at 09:05, otherwise the same. The `User` must be in the `docker` group.
 
+## Diagnostics bundle
+
+When something is wrong and you cannot open files on the server, build the secret-free bundle
+(docs/operations.md, "Diagnostics bundle") inside the container, into the data volume, and copy
+it to your computer:
+
+```sh
+C="docker compose -f ops/docker/compose.yaml --profile jobs"
+$C run --rm preflight tickr diagnostics --out /app/data/diagnostics-$(date +%F).zip --days 7
+docker volume inspect <DATA_VOLUME_NAME> --format '{{ .Mountpoint }}'   # on the server
+scp <SERVER_USER>@<SERVER_HOST>:<VOLUME_MOUNTPOINT>/diagnostics-<DATE>.zip ~/Downloads/
+```
+
+The container's logs are Docker's, not files in the data volume, so the zip holds no
+`logs/` unless a job writes `*.log` into `<data_dir>/logs`. Add them separately (they are the
+bot's own output; never pipe `docker inspect` or the environment):
+
+```sh
+docker compose -f ops/docker/compose.yaml logs --since 168h bot > /srv/tickr/bot-logs.txt
+scp <SERVER_USER>@<SERVER_HOST>:/srv/tickr/bot-logs.txt ~/Downloads/
+```
+
+Delete the zip from the volume after copying it.
+
 ## Before real money
 
 - **Dedicated service account.** With `pid: host` the bot and watchdog containers see every
