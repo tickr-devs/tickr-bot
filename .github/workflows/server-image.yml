@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ vars.AWS_IMAGE_PUSH_ROLE }}
@@ -48,6 +48,11 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           image="$REGISTRY/$REPOSITORY:$GITHUB_SHA"
+          # Tags are immutable: a re-run for a commit already pushed has nothing to do.
+          if aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "$REPOSITORY:$GITHUB_SHA already pushed"
+            exit 0
+          fi
           docker build \
             --build-arg TICKR_UID="$TICKR_UID" --build-arg TICKR_GID="$TICKR_GID" \
             --build-arg TICKR_CODE_VERSION="$GITHUB_SHA" -t "$image" .
