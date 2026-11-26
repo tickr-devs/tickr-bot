@@ -86,6 +86,8 @@ class StreamInbox:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest: dict[str, Quote] = {}
+        # The quote each newest one replaced: the price collar's previous quote (backlog T10).
+        self._previous: dict[str, Quote] = {}
         self._events: deque[tuple[str, dict[str, Any]]] = deque()
         # When the transport last came up (connect or reconnect); None before the first.
         self._connected_at: datetime | None = None
@@ -95,6 +97,8 @@ class StreamInbox:
             previous = self._latest.get(quote.symbol)
             if previous is None or quote.provider_time >= previous.provider_time:
                 self._latest[quote.symbol] = quote
+                if previous is not None:
+                    self._previous[quote.symbol] = previous
 
     def on_transport(self, up: bool, at: datetime, detail: str) -> None:
         with self._lock:
@@ -120,6 +124,12 @@ class StreamInbox:
         with self._lock:
             return self._latest.get(symbol)
 
+    def latest_and_previous(self, symbol: str) -> tuple[Quote | None, Quote | None]:
+        """The newest quote of `symbol` and the one it replaced, read together (so a quote
+        arriving between two reads cannot pair a newest with the wrong previous)."""
+        with self._lock:
+            return self._latest.get(symbol), self._previous.get(symbol)
+
     def snapshot(self) -> dict[str, Quote]:
         """A copy of the newest quote of every symbol (for the quotes file thread)."""
         with self._lock:
@@ -134,6 +144,7 @@ class StreamInbox:
     def forget(self, symbol: str) -> None:
         with self._lock:
             self._latest.pop(symbol, None)
+            self._previous.pop(symbol, None)
 
     def last_receipt(self) -> datetime | None:
         with self._lock:

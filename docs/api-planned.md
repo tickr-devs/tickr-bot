@@ -44,6 +44,12 @@ Until then nothing below is built.
 
 ### Config `[trailing]` (proposed; values from the old tracker, provisional)
 
+Shipped instead as `[trailing_stop]` in `config/bot.toml` (off, refused on until the loop
+integration), computed by `tickr.risk.trailing`: `enabled`, `atr_multiple`, `breakeven_after_r`
+(the backlog's "at least the fill price after +1.0 R"; the stop trails from the start, there is
+no separate activation) and `min_move_usd`. The table below is the earlier proposal; the
+`status` object below still has to be aligned with it when the loop PR adds it.
+
 | Key | Unit | Meaning |
 |---|---|---|
 | `enabled` | bool | Trail the stop of the bot's own positions. |

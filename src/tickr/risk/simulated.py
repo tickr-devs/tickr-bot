@@ -135,6 +135,8 @@ class SimulatedBook:
             stop_price=None if decision.stop is None else round_to_tick(decision.stop),
             setup_valid=True,
             quote=None,
+            last_bar=None,
+            previous_quote=None,
             realized_loss_today_usd=max(-net, Decimal(0)),
             open_reservations_usd=sum((e.reserved_usd for e in live), Decimal(0)),
             buying_power=_NO_BUYING_POWER,

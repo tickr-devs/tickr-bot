@@ -11,8 +11,11 @@ format (`records.py`), through the observers (`docs/observers.md`).
 | `decide` + `diff` | What would another strategy version have decided over the same day? | (decisions) |
 | `observers` | How did the live observer versions do against the active one today? | `simulated` |
 | `latency` | How late do captured quotes arrive, by symbol and hour? What do stream notices say? | (measured) |
+| `collar` | How far is an entry price from the last completed bar's close and the previous quote's ask? | (measured) |
 | `refusals` | Per day and setup: which check refused first, which platform causes, how many entries? | (counts) |
+| `calibration` | Does a model answer of 0.7 come true 70% of the time? | `measured` |
 | `slippage` | How far below the planned stop did stops fill? Planned against realized loss per day? | `measured` |
+| `fill-quality` | Entry, exit and stop slippage, fees and fill delay of real fills; one record set or two side by side | `measured` |
 
 Live observers see only the symbols discovery kept, and discovery applies the active strategy's
 liquidity rules, so observer results are comparable only while the active strategy (and its
@@ -175,6 +178,41 @@ Latency = `receipt_time` minus `provider_time` in milliseconds, for quotes of `-
 A malformed line is refused with file, line and cause. A last line without its newline (a file
 the bot is still appending to) is left unread and counted in `partial_last_lines`.
 
+## collar: entry price distance for the price collar (T10)
+
+```
+python -m tickr.research collar --quotes data/capture/<env>/<NY date>/quotes.jsonl \
+  --bars data/capture/<env>/<NY date>/bars.jsonl \
+  [--decisions data/decisions/<NY date>/decisions.jsonl] \
+  [--replay-settings config/replay.toml] [--config config/bot.toml] --out out/collar
+```
+
+Measures what the price collar (`[risk] entry_collar_bar_ratio` and `entry_collar_quote_ratio`,
+spec section 7 check 5; shipped off at 0) would see, so the owner can pick its two numbers from
+data. Run it on the Mac over as many captured days as possible (pass several files to each
+flag, `.gz` archives included). Distance = |entry price - reference| / reference, the collar's
+own measure, as a ratio (0.02 = 2%).
+
+- Entry `quote`: every captured stream quote's ask (a marketable entry at that moment). Entry
+  `decision` (with `--decisions`): each recorded ENTER's final limit (`entry_high` rounded to the
+  tick), at the record's time. The live collar checks the limit, which is at or above the ask, so
+  read both.
+- Reference `bar`: the close of the symbol's last bar completed by then (start + 1 minute at or
+  before the quote's provider time or the decision time; a revised bar's last version).
+  Reference `quote`: the ask of the stream quote before it, as the bot's stream inbox keeps them
+  (a quote older than the newest one is skipped); for a decision, the quote before the newest one
+  received by then. The live collar refuses a previous quote older than the quote age limit;
+  the tool measures every pair as captured.
+- `collar.csv`: one row per entry kind, reference and symbol, plus `symbol = all`: `count`,
+  nearest-rank `p50`, `p90`, `p99`, `p99_9`, and `max`.
+- `collar_summary.json`: the `all` rows, `missing_reference` (entry prices with no completed bar
+  or no earlier quote: the bot refuses those as `PRICE_COLLAR_UNKNOWN` while the collar is on)
+  and `partial_last_lines`.
+
+A maximum just above the far tail (`p99_9` or `max` of the days measured) refuses only prices no
+captured day produced; a lower one also refuses real moves. Snapshot quotes are not read. A
+malformed line is refused with file, line and cause.
+
 ## refusals: per-day, per-setup refusal table
 
 ```
@@ -225,11 +263,69 @@ value, or fewer than `measured_slippage_min_trades` measured trades is refused, 
 by the fixed value. Not measured yet: how far the price traded through the stop (trade prints,
 `ticks/list`), and entry slippage.
 
+## calibration: "70 means 70" (R29)
+
+```
+python -m tickr.research calibration --answers answers.csv --settings config/research.toml \
+  --out out/calibration
+```
+
+Input: one CSV of stored model answers on months the model never saw (the caller picks the
+months; the tool cannot tell). Header row; `outcome` = 1 if the event the probabilities predict
+happened, else 0; every column named `p_<name>` is a probability in 0..1 (for example `p_layer1`,
+`p_layer2`); other columns are ignored. A blank probability cell means that layer gave no
+answer for the row and is skipped (counted). Nothing writes this file yet: the training job or
+the bot must export it. A bad value is refused with file and line, never clipped.
+
+Per probability column, a table of `calibration_buckets` equal buckets (10 = tenths; p = 1 goes
+in the last): count, mean predicted, observed rate and gap (observed - predicted). Outputs:
+`calibration.csv` and `calibration_summary.json` (per column: answers, skipped, base rate,
+Brier score, expected calibration error = count-weighted mean absolute gap). Report only: no
+pass/fail threshold exists until the owner chooses one.
+
+## fill-quality: real fills against the assumptions (M4)
+
+```
+python -m tickr.research fill-quality --database data/tickr.sqlite3 [--environment NAME] \
+  [--quotes capture/<day>/quotes.jsonl ...] [--label sandbox] \
+  [--compare-database other.sqlite3 [--compare-quotes ...] [--compare-environment NAME] \
+   [--compare-label production]] [--replay-settings config/replay.toml] [--config config/bot.toml] \
+  --settings config/research.toml --out out/fill-quality
+```
+
+Works on the records of any environment: the environment is only which database (and optional
+`--environment` filter on its runs) you point it at; the code never names one. Read only, over
+closed trades with a fill, days = New York date of the close. Positive = worse than the reference.
+
+- **Entry slippage**: fill - entry limit, and fill - ask of the last captured quote received at
+  or before the entry decision (the `order-intent` journal row) on the same day. Needs
+  `--quotes`; without a quote the trade has a `cause` and is left out of that figure. The quote's
+  age is in the trades CSV, never cut off.
+- **Exit and stop slippage**: stops are R5's measure (`slippage`), reused as is. A market exit is
+  its decision's bid - its fill (needs `--quotes`).
+- **Fees**: the broker's recorded fees on all filled orders of the trade, per trade and per share
+  filled. A trade with any unrecorded fee is counted in `trades_without_fees`, never as free.
+  The replay and the backtest are gross of fees (no fee model in config), so the fee "assumption"
+  is none and the compare file leaves it empty; fees are shown as measured.
+- **Fill delay**: `order-attempted` to the first `order-observed` row with fills (entry and
+  market exit; a resting stop's wait is not a delay). The bot polls, so this is an upper bound.
+
+Percent figures are share-weighted: sum(slip x shares) / sum(reference x shares) x 100. The
+`assumed` column of the compare file is the replay's `slippage_percent` (the measured one when
+`measured_slippage_file` is set) for the three quote and stop slippage figures.
+
+Outputs: `<label>/fill_quality_trades.csv`, `<label>/fill_quality_days.csv` (a row per day,
+then `all`), `fill_quality_compare.csv` (metric, assumed, a column per set, and `difference` =
+second minus first when two sets are given, e.g. Sandbox now against the assumptions, Production
+against Sandbox later) and `fill_quality_summary.json`.
+
 ## Settings
 
 `config/research.toml` `[research]` (one comment per key, tested; missing or unknown keys are
-refused): `horizons_minutes`, `atr_period`, `session_timezone`, `output_decimal_places`
-(`latency` reads only the last two).
-What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay.
+refused): `horizons_minutes`, `atr_period`, `session_timezone`
+(`latency` reads only the last), `calibration_buckets` (`calibration` reads it).
+What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay. Every
+report also rounds to its `output_decimal_places` (`--replay-settings` with `--config`, default
+`config/replay.toml`): that number has one home.
 
 Exit code 2 and `research refused: <cause>` on any bad input; nothing is guessed.

@@ -179,6 +179,23 @@ class CommandOutcome(StrEnum):
     REFUSED = "refused"
 
 
+class StopMode(StrEnum):
+    """What a stop-bot does with the bot's open positions (owner 2026-11-18, backlog V4). A
+    stop-bot without a mode keeps the old rule: refused while any trade is open."""
+
+    CLOSE_AND_STOP = "close_and_stop"  # close every own position (the flatten path), then stop
+    LEAVE_OPEN = "leave_open"  # stop at once; nothing (bot or watchdog) closes them later
+
+
+class StopStep(StrEnum):
+    """Where an obeyed or running stop-bot is (`StatusV1.stop_progress`)."""
+
+    CLOSING_POSITIONS = "closing_positions"  # close_and_stop: exit requests sent, not flat yet
+    POSITIONS_CLOSED = "positions_closed"  # close_and_stop: every own trade closed
+    STOPPING = "stopping"  # the stop marker is written and the command done; the bot drains
+    STOPPED = "stopped"  # the drain ended: the last status this run writes
+
+
 # ---------------------------------------------------------------- status written by the bot
 
 
@@ -259,6 +276,26 @@ class Position:
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
 
+
+@dataclass(frozen=True)
+class WorkingEntry:
+    """A trade whose entry order is working with nothing filled yet: the apps' Cancel entry row
+    (added after version 1 shipped). A fill of any part makes it a `Position` instead."""
+
+    symbol: str
+    quantity: Decimal  # shares the entry asks for
+    limit_price: Decimal  # the entry's limit
+    stop_price: Decimal  # the stop the bot places once it fills
+    planned_loss_usd: Decimal  # 1 R if it fills, as recorded when the trade was opened
+    entry: EntrySend
+    entry_cause: str | None  # why a field of `entry` is null; null when none is
+    # The bot asked the broker to cancel it (an operator cancel, or the entry's own rest or
+    # session end); it stays listed until a broker read shows it cancelled or filled.
+    cancel_requested: bool
+
+    entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
+
+
 @dataclass(frozen=True)
 class Trade:
     symbol: str
@@ -308,6 +345,19 @@ class CommandRecord:
     cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
+class StopProgress:
+    """A stop-bot the bot obeyed or is carrying out (added after version 1 shipped). The
+    command's own record appears in `recent_commands` once it is done or refused; a refused
+    close_and_stop leaves no progress (the bot keeps running)."""
+
+    command_id: str
+    mode: StopMode | None  # null: a stop-bot without a mode (obeyed only when flat)
+    step: StopStep
+    since: datetime  # when this step began
+    open_trades: int  # the bot's own trades not closed when the status was written
+
+
+@dataclass(frozen=True)
 class StatusV1:
     """Everything the status screen and the app show. Written by the bot, never by the API."""
 
@@ -343,6 +393,12 @@ class StatusV1:
     # the order rows round sub-dollar fill prices; null until a balance read made after the
     # last of today's trades closed. For the whole account, so it includes manual trades.
     result_today_broker_usd: Decimal | None = _added_later(None)
+    # Added after v1 shipped (2026-11-25, backlog V4): the stop-bot this run obeyed or is
+    # carrying out; null while none. Stays in the last status a stopped bot wrote.
+    stop_progress: StopProgress | None = _added_later(None)
+    # Added after v1 shipped (2026-11-26, Cancel entry): every own entry working at the broker
+    # with nothing filled yet, oldest first; a reader takes a status without it as none.
+    working_entries: tuple[WorkingEntry, ...] = _added_later(())
     schema_version: int = _const(STATUS_SCHEMA_VERSION)
 
 
@@ -437,7 +493,12 @@ class CommandV1:
     kind: CommandKind
     requested_at: datetime
     source: str
-    symbol: str | None = None  # flatten only: close just this symbol; null = everything
+    # flatten: close just this symbol; cancel-own-orders: cancel just this symbol's working
+    # entries (added 2026-11-26); null = everything; null for every other kind.
+    symbol: str | None = None
+    # stop-bot only (added after version 1 shipped, backlog V4): what to do with open
+    # positions; null = the old rule (refused while any trade is open).
+    mode: StopMode | None = _added_later(None)
     schema_version: int = _const(COMMAND_SCHEMA_VERSION)
 
 
@@ -3062,7 +3123,7 @@ def parse_json(text: str | bytes) -> Any:
     try:
         return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ContractError(f"not valid JSON: {exc}") from exc
+        raise ContractError(f"not valid JSON ({type(exc).__name__})") from exc
 
 
 def loads(cls: type, text: str | bytes) -> Any:
@@ -3197,9 +3258,9 @@ def read_account(path: Path | str) -> AccountV1:
 
 
 def new_command(kind: CommandKind, now: datetime, source: str,
-                symbol: str | None = None) -> CommandV1:
+                symbol: str | None = None, mode: StopMode | None = None) -> CommandV1:
     return CommandV1(command_id=str(uuid.uuid4()), kind=kind, requested_at=now, source=source,
-                     symbol=symbol)
+                     symbol=symbol, mode=mode)
 
 
 def write_command(inbox: Path | str, command: CommandV1) -> Path:
@@ -3238,7 +3299,9 @@ def read_commands(inbox: Path | str, now: datetime, max_age_seconds: Decimal) ->
         try:
             command: CommandV1 = loads(CommandV1, path.read_bytes())
         except (ContractError, OSError) as exc:
-            refused.append(InboxItem(path, None, f"unreadable command file: {exc}"))
+            refused.append(InboxItem(path, None, "unreadable command file: "
+                                           + (str(exc) if isinstance(exc, ContractError)
+                                              else type(exc).__name__)))
             continue
         age = seconds_between(command.requested_at, now)
         if path.name != f"{command.command_id}.json":

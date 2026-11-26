@@ -624,3 +624,20 @@ def test_flow_parses_only_what_was_appended_and_matches_a_full_read(tmp_path):
     path.write_text(source[: len(source) // 2], "utf-8")  # rewritten shorter: read anew
     assert reader.chips(path, open_tail=True) == flow.chips(
         flow.read_passes(path, open_tail=True), settings, 2)
+
+
+def test_a_capture_file_it_cannot_stat_is_a_503_without_its_path(api, cfg, monkeypatch):
+    _capture(cfg)
+    real = Path.stat
+
+    def stat(self, **kwargs):
+        if self.name == "screener.jsonl":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    resp, payload = request(api, "GET", "/flow")
+    assert resp.status == 503
+    assert doc(payload)["cause"].endswith("PermissionError")
+    for leaked in (str(cfg.root), "screener.jsonl", "Permission denied", "Errno"):
+        assert leaked not in payload.decode()

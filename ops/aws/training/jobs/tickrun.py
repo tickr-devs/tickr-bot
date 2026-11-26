@@ -232,6 +232,15 @@ if S3:
                 return None
             raise
 
+    def cread(dt):  # (etag, holder) of the claim as stored now, or None when there is none
+        try:
+            r = s3().get_object(Bucket=ob, Key=f"{CPRE}/{dt}.json")
+        except botocore.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise
+        return r["ETag"], json.loads(r["Body"].read()).get("by")
+
     # delete my claim only while it still has my etag (S3 checks If-Match in the same request).
     # True: deleted or already gone; False: another machine's claim stands there now.
     def cdel(dt, etag):
@@ -299,6 +308,14 @@ else:
         except FileNotFoundError:
             return None
 
+    def cread(dt):
+        f = os.path.join(CD, dt + ".json")
+        with CL:
+            try:
+                return str(os.stat(f).st_mtime_ns), open(f).read()
+            except FileNotFoundError:
+                return None
+
     def cdel(dt, etag):
         f = os.path.join(CD, dt + ".json")
         with CL:
@@ -318,6 +335,11 @@ def done(dt):
 # day -> etag of my claim; days whose claim another machine took (only the claim holder may
 # write a day's files)
 MINE = {}
+# CLK: one claim write at a time in this process. A refresh rewrites the claim and so changes
+# its etag; without this lock a release could send the etag read before that rewrite, the store
+# would refuse the delete as "another machine's claim", and the refreshed claim would be left
+# behind (it then blocks the day for RUN_CLAIM_MIN on every machine). Never taken while L is held.
+CLK = threading.Lock()
 LOST = set()
 HOLIDAYS = set()  # days with no source file, found by this run
 DONE_HERE = set()  # days this run converted or archived with success
@@ -335,26 +357,37 @@ def claim(dt):
                 say(
                     "took over the stale claim of", dt, "(not refreshed for %.0f min)" % (c[1] / 60)
                 )
-    if e:
-        with L:
+    if not e:
+        return False
+    with L:
+        stopped = ST["stop"]
+        if not stopped:
             MINE[dt] = e
             LOST.discard(dt)  # claimed again (the other holder died): an ordinary day again
-    return bool(e)
+    if stopped:  # taken while the stop ran: stop_now has not seen it, give it back here
+        try:
+            with CLK:
+                cdel(dt, e)
+        except Exception as x:
+            print("claim delete failed", dt, type(x).__name__, flush=True)
+        return False
+    return True
 
 
 def release(dt):
     """Give a day back. The claim object is deleted only while it still carries my mark, checked
     by the store in the delete itself: a machine that was slow and lost the day must not delete
     the new holder's claim. A mismatch is a refusal: logged, the claim left alone."""
-    with L:
-        had = MINE.pop(dt, None)
-    if not had:
-        return
-    try:
-        gone = cdel(dt, had)
-    except Exception as e:
-        print("claim delete failed", dt, type(e).__name__, flush=True)
-        return
+    with CLK:
+        with L:
+            had = MINE.pop(dt, None)
+        if not had:
+            return
+        try:
+            gone = cdel(dt, had)
+        except Exception as e:
+            print("claim delete failed", dt, type(e).__name__, flush=True)
+            return
     if not gone:
         say("REFUSED: claim delete of", dt, "(another machine holds it now: left in place)")
 
@@ -363,16 +396,29 @@ def refresher():
     while not ST.get("end"):
         time.sleep(min(CLAIM_SEC / 4, 300))
         with L:
-            mine = list(MINE.items())
-        for dt, e in mine:
-            try:
-                e2 = cput(dt, e)
-            except Exception as x:
-                print("claim refresh failed", dt, type(x).__name__, flush=True)
-                continue
+            mine = list(MINE)
+        for dt in mine:
             lost = False
-            with L:
-                if dt in MINE:
+            with CLK:  # the etag read, the rewrite and the new etag in MINE: one step
+                with L:
+                    e = MINE.get(dt)
+                if not e:  # released since the list was taken
+                    continue
+                try:
+                    e2 = cput(dt, e)
+                except Exception as x:
+                    print("claim refresh failed", dt, type(x).__name__, flush=True)
+                    # The write may have landed with its answer lost: the stored etag is then
+                    # new and a release with the old one would be refused, leaving the claim to
+                    # block the day until it goes stale. Read the claim back (never write it
+                    # again): mine -> keep its stored etag; another holder or none -> lost.
+                    try:
+                        c = cread(dt)
+                    except Exception as y:  # unknown: keep what MINE has
+                        print("claim read-back failed", dt, type(y).__name__, flush=True)
+                        continue
+                    e2 = c[0] if c and c[1] == ME else None
+                with L:
                     if e2:
                         MINE[dt] = e2
                     else:
@@ -614,6 +660,12 @@ def run1(w, dt, wd):
     )
     with L:
         PROCS[w] = (p, dt)
+        late = ST["stop"]
+    if late:  # started while the stop ran: stop_now has not seen it
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except Exception:
+            pass
     so, se = p.communicate()
     o = so + se
     with L:
@@ -750,7 +802,8 @@ def monitor():
 # no new day; converters are killed with their process groups; own claims are deleted so another
 # machine takes the days at once
 def stop_now(why):
-    ST["stop"] = True
+    with L:  # under L: claim() and run1() see the flag, or register before the lists below
+        ST["stop"] = True
     say("STOP:", why)
     with L:
         ps = [p for p, _ in PROCS.values()]

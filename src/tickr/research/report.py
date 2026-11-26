@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from tickr.replay.measured import FORMAT as MEASURED_FORMAT
+from tickr.research import calibration as cal
+from tickr.research import collar as col
+from tickr.research import fill_quality as fq
 from tickr.research import latency as lat
 from tickr.research import observer_report as orep
 from tickr.research import outcomes as oc
@@ -209,6 +212,24 @@ def write_latency(result: lat.LatencyReport, source: str, out_dir: Path,
     return _json(out_dir / "latency_summary.json", body, places)
 
 
+COLLAR_COLUMNS = ("entry", "reference", "symbol", "count",
+                  *col.PERCENTILE_NAMES, "max")
+
+
+def write_collar(result: col.CollarReport, out_dir: Path, places: int) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(out_dir / "collar.csv", COLLAR_COLUMNS,
+               ([*key, d.count, *d.percentiles, d.max] for key, d in result.rows.items()),
+               places)
+    overall = {f"{kind}/{reference}": {"count": d.count, **dict(zip(
+        col.PERCENTILE_NAMES, d.percentiles, strict=True)), "max": d.max}
+               for (kind, reference, group), d in result.rows.items() if group == col.OVERALL}
+    body = {"overall": overall,
+            "missing_reference": {f"{k}/{r}": n for (k, r), n in result.missing.items()},
+            "partial_last_lines": result.partial_last_lines}
+    return _json(out_dir / "collar_summary.json", body, places)
+
+
 REFUSAL_COLUMNS = ("day", "strategy", "version", "role", "setup", "kind", "name", "count")
 
 
@@ -252,3 +273,72 @@ def write_slippage(trades: Sequence[sl.StoppedTrade], environment: str | None, o
             "stop_slippage_usd": total.stop_slippage_usd,
             "stop_slippage_percent": total.stop_slippage_percent}
     return _json(out_dir / "slippage_summary.json", body, places)
+
+
+CALIBRATION_COLUMNS = ("column", "bucket", "low", "high", "count", "mean_predicted",
+                       "observed_rate", "gap")
+
+
+def write_calibration(reports: Sequence[cal.ColumnReport], out_dir: Path,
+                      places: int) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(out_dir / "calibration.csv", CALIBRATION_COLUMNS,
+               ([r.column, b.index, b.low, b.high, b.count, b.mean_predicted, b.observed_rate,
+                 b.gap] for r in reports for b in r.buckets), places)
+    body = {"columns": {r.column: {"answers": r.answers, "skipped_blank": r.skipped_blank,
+                                   "base_rate": r.base_rate, "brier": r.brier, "ece": r.ece}
+                        for r in reports}}
+    return _json(out_dir / "calibration_summary.json", body, places)
+
+
+FILL_TRADE_COLUMNS = (
+    "day", "trade_id", "symbol", "entry_shares", "entry_limit", "entry_fill",
+    "entry_vs_limit_usd", "entry_ask", "entry_vs_quote_usd", "entry_quote_age_s",
+    "entry_delay_s", "exit_shares", "exit_fill", "exit_bid", "exit_vs_quote_usd",
+    "exit_delay_s", "shares_filled", "fees_usd", "cause")
+# Compared figures and the replay setting that assumes them (absent: the replay assumes nothing).
+FILL_ASSUMED = {
+    "entry_slippage_vs_quote_percent": "slippage_percent",
+    "stop_slippage_percent": "slippage_percent",
+    "exit_slippage_vs_quote_percent": "slippage_percent",
+}
+FEES_ASSUMPTION = "none: the replay and the backtest are gross of fees (no fee model in config)"
+
+
+def write_fill_quality(sets: Sequence[tuple[str, Sequence[fq.TradeFill],
+                                            Sequence[sl.StoppedTrade]]],
+                       assumed: dict[str, Decimal], out_dir: Path, places: int) -> dict[str, Any]:
+    """Per set (label, trades, stopped trades): `<label>/fill_quality_trades.csv` and
+    `<label>/fill_quality_days.csv` (one row per day, then `all`); `fill_quality_compare.csv`
+    (metric, assumed, one column per set, and the second minus the first when there are two);
+    `fill_quality_summary.json`."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    overall = {}
+    for label, trades, stopped in sets:
+        folder = out_dir / label
+        folder.mkdir(exist_ok=True)
+        _write_csv(folder / "fill_quality_trades.csv", FILL_TRADE_COLUMNS,
+                   ([getattr(t, c) for c in FILL_TRADE_COLUMNS] for t in trades), places)
+        days = sorted({t.day for t in trades})
+        rows = [(d, fq.metrics(trades, stopped, d)) for d in [*days, None]]
+        columns = ("day", *rows[-1][1])
+        _write_csv(folder / "fill_quality_days.csv", columns,
+                   ([d if d is not None else "all", *m.values()] for d, m in rows), places)
+        overall[label] = rows[-1][1]
+    labels = list(overall)
+    names = list(overall[labels[0]])
+    header = ["metric", "assumed", *labels, *(["difference"] if len(labels) == 2 else [])]
+
+    def line(name: str) -> list[Any]:
+        values = [overall[label][name] for label in labels]
+        row = [name, assumed.get(FILL_ASSUMED.get(name, ""))]
+        row.extend(values)
+        if len(labels) == 2:
+            a, b = values
+            row.append(None if a is None or b is None else b - a)
+        return row
+
+    _write_csv(out_dir / "fill_quality_compare.csv", header, (line(n) for n in names), places)
+    body = {"sets": overall, "assumed": assumed, "fees_assumption": FEES_ASSUMPTION,
+            "difference": "second set minus first set" if len(labels) == 2 else None}
+    return _json(out_dir / "fill_quality_summary.json", body, places)

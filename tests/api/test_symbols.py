@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -273,3 +274,20 @@ def test_each_row_carries_the_time_of_its_last_check():
     assert rows["SPY"].state is contract.SymbolState.NOT_REACHED
     assert rows["SPY"].checked_at == checked_at and rows["ABCD"].checked_at == checked_at
     assert rows["THIN"].checked_at is None
+
+
+def test_a_discovery_file_it_cannot_stat_is_a_503_without_its_path(api, cfg, monkeypatch):
+    _discovery(cfg, _pass(0))
+    real = Path.stat
+
+    def stat(self, **kwargs):
+        if self.name == "discovery.jsonl":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    resp, payload = request(api, "GET", "/symbols")
+    assert resp.status == 503
+    for leaked in (str(cfg.root), "discovery.jsonl", "Permission denied", "Errno"):
+        assert leaked not in payload.decode()
+    assert "PermissionError" in doc(payload)["cause"]

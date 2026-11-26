@@ -76,7 +76,7 @@ def enter(low: str | None, high: str | None, stop: str | None) -> dict[str, Any]
 
 @pytest.fixture
 def settings() -> ReplaySettings:
-    return load_settings(HERE / "replay_settings.toml")
+    return load_settings(HERE / "replay_settings.toml", 2)
 
 
 @pytest.fixture

@@ -10,7 +10,8 @@ Layers, outermost first:
 - `SdkTransport` wraps `webull-openapi-python-sdk` (optional dependency group `webull`). It
   pins every request to the configured host, which must be on the allowlist; turns SDK
   retries off; removes the SDK's log handlers (KD-4); never constructs `TradeEventsClient`
-  (KD-3) and never imports the SDK's order enums (KD-5). It holds the account id and adds it
+  (KD-3; probe M3's `SdkTradeEventsSource` signs the same gRPC request itself) and never
+  imports the SDK's order enums (KD-5). It holds the account id and adds it
   to each request; nothing else in the process does.
 
 Known SDK defects KD-1 (streaming close) and KD-2 (tick request limits) concern market data,
@@ -33,7 +34,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -84,6 +85,7 @@ from tickr.types import (
     Position,
     Quote,
     Side,
+    Tradability,
 )
 
 log = logging.getLogger(__name__)
@@ -147,6 +149,9 @@ class Route(Enum):
     # Read only by `quote_sources` (probe Q1): which read is fresh outside the regular session.
     DEPTHS = ("GET", "/market-data/stocks/depths/list", False)
     TICKS = ("GET", "/market-data/stocks/ticks/list", False)
+    # One instrument's `trade_policy` and `forbid_reason` (SDK `get_trade_instrument_detail`,
+    # query `instrument_id` only, no account id); read only (backlog T8). Its body is UNPROVEN.
+    TRADE_INSTRUMENT = ("GET", "/trade/instrument", False)
 
     @property
     def method(self) -> str:
@@ -164,7 +169,7 @@ class Route(Enum):
 # Routes that are not account-scoped: the transport never adds the account id to them.
 ACCOUNT_FREE_ROUTES = frozenset(
     {Route.ACCOUNTS, Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS,
-     Route.PROFILES, Route.DEPTHS, Route.TICKS}
+     Route.PROFILES, Route.DEPTHS, Route.TICKS, Route.TRADE_INSTRUMENT}
 )
 # The only routes a market-data-only transport (the API's chart reads) may send.
 MARKET_DATA_ROUTES = frozenset(
@@ -820,6 +825,7 @@ class WebullBroker:
         history_max_pages: int,
         cash_activities_max_pages: int,
         wall: Callable[[], datetime] = lambda: datetime.now(UTC),
+        instrument_category: str | None = None,
     ) -> None:
         if open_orders_max_pages < 1:
             raise AdapterConfigError("open_orders_max_pages must be at least 1")
@@ -839,6 +845,9 @@ class WebullBroker:
         self._client_order_id_max_length = client_order_id_max_length
         self._clock = clock
         self._wall = wall
+        # The instrument category of profile and snapshot reads (`[market_data]
+        # screener_category`); None = tradability cannot be read.
+        self._category = instrument_category
 
     # -- plumbing -------------------------------------------------------------------------
 
@@ -879,6 +888,67 @@ class WebullBroker:
         if not response.ok:
             raise BrokerReadFailed(route.name, response.status, response.error_code)
         return response.body
+
+    # -- tradability (backlog T8, read only) ----------------------------------------------
+
+    def _require_category(self) -> str:
+        if self._category is None:
+            raise AdapterConfigError("no instrument category: tradability cannot be read")
+        return self._category
+
+    def tradability(self, symbol: str) -> Tradability:
+        """The symbol's profile `status` and its trade instrument's `trade_policy` and
+        `forbid_reason`: two reads, each sent once. A symbol with no profile row or several
+        (OPENW had two, probe M1) is refused, never resolved by guessing."""
+        rows = [p for p in read_profiles(self._read(Route.PROFILES, {
+            "symbols": symbol, "category": self._require_category()})).values()
+            if p.symbol == symbol]
+        if len(rows) != 1:
+            raise MalformedResponse(f"profiles: {len(rows)} instruments for {symbol}, need one")
+        row = rows[0]
+        policy, reason = read_trade_instrument(
+            self._read(Route.TRADE_INSTRUMENT, {"instrument_id": row.instrument_id}),
+            row.instrument_id)
+        return Tradability(symbol, row.fields.get(PROFILE_STATUS_KEY), policy, reason)
+
+    def can_read_tradability(self) -> bool:
+        """Check 7's question for the two reads `tradability` sends (one each route)."""
+        return all(self._budget.can_take(route.path) for route in TRADABILITY_ROUTES)
+
+    def tradability_sources(self, symbols: Sequence[str]) -> list[tuple[str, SourceRead]]:
+        """Probe T8, read only: the snapshot and the instrument profiles of `symbols` (one
+        request each), then the trade instrument of every profile row's instrument id, each
+        sent once and kept as answered (a refusal is evidence too). Returns (label, read)
+        pairs, the label naming the symbols or the instrument. Never used to trade."""
+        category = self._require_category()
+        joined = ",".join(symbols)
+        found: list[tuple[str, SourceRead]] = []
+
+        def read(label: str, name: str, route: Route, params: Mapping[str, Any]) -> Any:
+            try:
+                response = self._send(route, params)
+            except (RateLimited, BrokerReadFailed) as exc:
+                found.append((label, SourceRead(name, None, type(exc).__name__, None,
+                                                self._wall())))
+                return None
+            found.append((label, SourceRead(name, response.status, response.error_code,
+                                            response.body, self._wall())))
+            return response.body if response.ok else None
+
+        read(joined, SOURCE_SNAPSHOT, Route.SNAPSHOT, {"symbols": joined, "category": category})
+        body = read(joined, SOURCE_PROFILES, Route.PROFILES,
+                    {"symbols": joined, "category": category})
+        try:
+            rows = _unwrap_list(body, "profiles") if body is not None else []
+        except MalformedResponse:
+            rows = []
+        for row in rows:
+            iid = row.get("instrument_id") if isinstance(row, Mapping) else None
+            if iid is None:
+                continue
+            read(f"{row.get('symbol')} {iid}", SOURCE_TRADE_INSTRUMENT, Route.TRADE_INSTRUMENT,
+                 {"instrument_id": str(iid)})
+        return found
 
     # -- Broker protocol ------------------------------------------------------------------
 
@@ -1261,6 +1331,31 @@ def read_profiles(body: Any) -> dict[str, InstrumentProfile]:
     return profiles
 
 
+# Keys of the trade instrument read (SDK `TradePolicy` docs; the body is UNPROVEN: no answer has
+# been recorded yet, `tickr probe-tradability` records the first) and the profile's status.
+TRADE_POLICY_KEY = "trade_policy"
+FORBID_REASON_KEY = "forbid_reason"
+PROFILE_STATUS_KEY = "status"
+# The reads `WebullBroker.tradability` sends, one request each, in order.
+TRADABILITY_ROUTES = (Route.PROFILES, Route.TRADE_INSTRUMENT)
+
+
+def read_trade_instrument(body: Any, instrument_id: str) -> tuple[str, str | None]:
+    """A trade instrument body -> (trade_policy, forbid_reason or None). Read strictly as the
+    SDK names it, an object with `trade_policy`, because no answer has been recorded yet: any
+    other shape (a `data` wrapper included), a missing policy, or another instrument's answer is
+    refused, never guessed (the entry is then refused as TRADABILITY_UNKNOWN)."""
+    where = f"trade instrument {instrument_id}"
+    policy = _require(body, TRADE_POLICY_KEY, where)
+    named = _optional(body, "instrument_id")
+    if named is not None and str(named) != instrument_id:
+        raise MalformedResponse(f"{where}: answer names instrument {named}")
+    reason = _optional(body, FORBID_REASON_KEY)
+    if not isinstance(policy, str) or not (reason is None or isinstance(reason, str)):
+        raise MalformedResponse(f"{where}: trade_policy and forbid_reason must be strings")
+    return policy, reason
+
+
 def read_snapshot(body: Any, receipt_time: datetime) -> list[Quote]:
     """Snapshot body (bare array, recorded) -> quotes.
 
@@ -1396,6 +1491,8 @@ def _require_present(obj: Any, key: str, where: str) -> Any:
 
 # Probe Q1 (`tickr probe-quote-sources`): names of the reads and their fixed parameters.
 SOURCE_SNAPSHOT = "snapshot"
+SOURCE_PROFILES = "profiles"
+SOURCE_TRADE_INSTRUMENT = "trade-instrument"
 SOURCE_SNAPSHOT_EXTENDED = "snapshot-extended"
 SOURCE_DEPTH = "depth"
 SOURCE_TICKS = "ticks"
@@ -2428,6 +2525,134 @@ def tick_probe_stream_from_config(
 
 
 # --------------------------------------------------------------------------------------------
+# gRPC trade events (probe M3 only; the bot never subscribes, docs/webull-facts.md)
+# --------------------------------------------------------------------------------------------
+
+# What SDK 3.0.3's TradeEventsClient subscribes to: ORDER_STATUS_CHANGED 1 | POSITION_STATUS_
+# CHANGED 2 | OPTION_STATUS_CHANGED 4 (webull/trade/events/types.py), as its request sends.
+TRADE_EVENTS_SUBSCRIBE_TYPE = 7
+# The gRPC status codes after which SDK 3.0.3's DefaultSubscribeRetryPolicy subscribes again
+# (RetryOnGrpcStatusCondition); a stream the server simply closes is subscribed again too.
+TRADE_EVENTS_RESUBSCRIBE_CODES = frozenset({"UNAVAILABLE", "INTERNAL", "UNKNOWN"})
+TRADE_EVENTS_STREAM_CLOSED = "STREAM_CLOSED"
+ACCOUNT_MARK = "<account>"
+
+
+@dataclass(frozen=True)
+class TradeEventsSettings:
+    events_host: str
+    events_port: int
+    allowed_hosts: frozenset[str]
+    app_key_env: str
+    app_secret_env: str
+    account_id_env: str
+
+
+def trade_event_record(response: Any, event_names: Mapping[int, str],
+                       scrub: Callable[[str], str]) -> dict[str, Any]:
+    """One `SubscribeResponse` (SDK 3.0.3 events.proto: eventType, subscribeType, contentType,
+    payload, requestId, timestamp) as a JSON-safe record, every field as received except that
+    the account id is replaced by `<account>`. `event_name` is the SDK enum's name for the
+    control types (SubscribeSuccess 0, Ping 1, AuthError 2, NumOfConnExceed 3,
+    SubscribeExpired 4), None for any other type (the trade events themselves)."""
+    event_type = int(response.eventType)
+    return {"kind": "event", "event_type": event_type,
+            "event_name": event_names.get(event_type),
+            "subscribe_type": int(response.subscribeType),
+            "content_type": scrub(str(response.contentType)),
+            "payload": scrub(str(response.payload)),
+            "request_id": scrub(str(response.requestId)),
+            "timestamp": int(response.timestamp)}
+
+
+class SdkTradeEventsSource:
+    """Probe-only source of the account's gRPC trade events (`tickr probe-trade-events`).
+
+    It does not construct the SDK's `TradeEventsClient`, which prints the request's signature
+    and metadata (the App Key among them) to stdout (KD-3) and resubscribes forever on its own;
+    it sends the same signed `Subscribe` request through the SDK's own stub and signer. The
+    request is signed with the App Key and secret only (no token is read or written). Each
+    `connect` opens one stream with a deadline and yields its messages as records until the
+    stream ends, then one `ended` record: the gRPC code, the detail with the account id
+    removed, and whether the SDK would subscribe again. It never subscribes again itself:
+    the probe decides. It sends no order and reads nothing else."""
+
+    def __init__(self, settings: TradeEventsSettings) -> None:
+        if settings.events_host not in settings.allowed_hosts:
+            raise AdapterConfigError("events_host is not on the host allowlist")
+        self._target = f"{settings.events_host}:{settings.events_port}"
+        self._app_key = _read_credential(settings.app_key_env)
+        self._app_secret = _read_credential(settings.app_secret_env)
+        self._account_id = _read_credential(settings.account_id_env)
+        silence_sdk_loggers()
+        import webull.trade.events.events_pb2 as pb
+
+        silence_sdk_loggers()  # SDK modules attach handlers at import time
+        self._event_names = {int(number): str(name) for name, number in pb.EventType.items()}
+        self._lock = threading.Lock()
+        self._call: Any = None
+        self._closed = False
+
+    def _scrub(self, text: str) -> str:
+        return text.replace(self._account_id, ACCOUNT_MARK) if text else text
+
+    def _ended(self, code: str | None, detail: str) -> dict[str, Any]:
+        return {"kind": "ended", "code": code, "detail": self._scrub(detail),
+                "resubscribe": code in TRADE_EVENTS_RESUBSCRIBE_CODES
+                or code == TRADE_EVENTS_STREAM_CLOSED}
+
+    def connect(self, seconds: float) -> Iterator[dict[str, Any]]:
+        import grpc
+        import webull.trade.events.events_pb2 as pb
+        import webull.trade.events.events_pb2_grpc as pb_grpc
+        from webull.core.auth.algorithm import sha_hmac256_new
+        from webull.trade.events.signature_composer import calc_signature
+
+        silence_sdk_loggers()
+        request = pb.SubscribeRequest(subscribeType=TRADE_EVENTS_SUBSCRIBE_TYPE,
+                                      timestamp=int(time.time() * MILLISECONDS_PER_SECOND),
+                                      accounts=[self._account_id])
+        _signature, metadata = calc_signature(self._app_key, self._app_secret, request,
+                                              sha_hmac256_new)
+        try:
+            with grpc.secure_channel(self._target, grpc.ssl_channel_credentials()) as channel:
+                call = pb_grpc.EventServiceStub(channel).Subscribe(
+                    request=request, metadata=metadata, timeout=seconds)
+                with self._lock:
+                    if self._closed:
+                        call.cancel()
+                    self._call = call
+                for response in call:
+                    yield trade_event_record(response, self._event_names, self._scrub)
+        except grpc.RpcError as exc:
+            code = exc.code() if callable(getattr(exc, "code", None)) else None
+            detail = exc.details() if callable(getattr(exc, "details", None)) else None
+            yield self._ended(None if code is None else str(code.name), str(detail or ""))
+            return
+        except Exception as exc:  # noqa: BLE001 - anything else ends this stream
+            yield self._ended(None, type(exc).__name__)
+            return
+        finally:
+            with self._lock:
+                self._call = None
+        yield self._ended(TRADE_EVENTS_STREAM_CLOSED, "")
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            if self._call is not None:
+                self._call.cancel()
+
+
+def trade_events_source_from_config(config: Config) -> SdkTradeEventsSource:
+    env = config.environment
+    return SdkTradeEventsSource(TradeEventsSettings(
+        events_host=env.events_host, events_port=env.events_port, allowed_hosts=env.hosts,
+        app_key_env=env.app_key_variable, app_secret_env=env.app_secret_variable,
+        account_id_env=env.account_variable))
+
+
+# --------------------------------------------------------------------------------------------
 # SDK transport (the only code touching the Webull SDK; imported lazily)
 # --------------------------------------------------------------------------------------------
 
@@ -2838,6 +3063,7 @@ def broker_from_config(config: Config, transport: Transport | None = None,
         gate=lambda: trading_gate(config),
         history_max_pages=config.environment.history_max_pages,
         cash_activities_max_pages=config.environment.cash_activities_max_pages,
+        instrument_category=config.market_data.screener_category,
     )
 
 
