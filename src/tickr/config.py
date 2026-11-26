@@ -457,6 +457,7 @@ class MassiveConfig:
     arrival_tail_seconds: int
     arrival_report_points_seconds: tuple[Decimal, ...]
     stream_day_dir: str
+    revision_report_quantiles: tuple[Decimal, ...]
 
 
 @dataclass(frozen=True)
@@ -810,10 +811,12 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
             or massive.stream_max_message_bytes < 1 or massive.stream_reconnect_seconds <= 0
             or massive.stream_release_pause_seconds < 0 or massive.stream_ack_timeout_seconds < 0
             or massive.calendar_lookback_days < 1
+            or not all(0 < q < 1 for q in massive.revision_report_quantiles)
             or not massive.stock_types):
         raise ConfigError("[massive] timeouts, page sizes and the message limit must be at least "
                           "1, stream_reconnect_seconds above 0, stream_release_pause_seconds and "
-                          "stream_ack_timeout_seconds not below 0, stock_types not empty")
+                          "stream_ack_timeout_seconds not below 0, stock_types not empty, "
+                          "revision_report_quantiles each above 0 and below 1")
     if massive.tick_subscription not in ("symbols", "market") or massive.tick_page_limit < 1:
         raise ConfigError("[massive] tick_subscription must be \"symbols\" or \"market\", "
                           "tick_page_limit at least 1")

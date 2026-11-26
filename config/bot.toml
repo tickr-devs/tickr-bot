@@ -1040,6 +1040,10 @@ arrival_report_points_seconds = [1, 2, 5, 10, 15, 30, 60]
 # (can a stream-built previous session replace the published file at 04:00?); measurement only; read by
 # tickr.model.streamday.
 stream_day_dir = "massive/stream_days"
+# Quantiles (fractions, strictly increasing, each above 0 and below 1) the revision report prints of every observed
+# Benzinga delay (receipt - last_updated, receipt - report time, receipt - published); a description of the measured
+# distribution, never a guard (`--out` writes every value); read by tickr.model.revisions.
+revision_report_quantiles = [0.5, 0.9, 0.99]
 
 [runtime]
 # Minimum free disk space on the data_dir volume, megabytes; below it preflight fails and the running bot takes no new
