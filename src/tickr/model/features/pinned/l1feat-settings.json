@@ -1,0 +1,31 @@
+{
+ "_bz_lag_s": "seconds from an article's published time to the time it counts as known; initial value, to be replaced by the measured live delay (our receipt time minus published) before the final training; read by l1bz.News",
+ "bz_lag_s": 60,
+ "_bz_n60_s": "length of the window of bz_n60 in seconds (60 minutes); read by l1bz.News",
+ "bz_n60_s": 3600,
+ "_bz_n1d_s": "length of the window of bz_n1d, of bz_rk's numerator and of the four channel flags, in seconds (24 hours); read by l1bz.News",
+ "bz_n1d_s": 86400,
+ "_bz_n3d_s": "length of the window of bz_n3d in seconds (72 hours); read by l1bz.News",
+ "bz_n3d_s": 259200,
+ "_bz_hist_days": "prior trading days of the look-back of bz_min, bz_solo and of the mean in bz_rk; read by l1bz.News",
+ "bz_hist_days": 20,
+ "_bz_rk_floor": "floor of the mean daily article count in bz_rk, articles a day (0.05 = one article in 20 trading days), so that a stock with no article in the window and one today has its own value; read by l1bz.News",
+ "bz_rk_floor": 0.05,
+ "_bz_channels": "the four channel sets of the flags bz_c_earn, bz_c_anl, bz_c_deal, bz_c_mov, exact Benzinga channel names in lower case (spec ruling b9cf732e); read by l1bz.News",
+ "bz_channels": {
+  "earn": ["earnings", "earnings beats", "earnings misses", "guidance"],
+  "anl": ["analyst ratings", "price target", "upgrades", "downgrades", "initiation", "reiteration", "analyst color"],
+  "deal": ["m&a", "contracts", "fda", "dividends"],
+  "mov": ["movers", "trading ideas", "hot", "short ideas", "short sellers"]
+ },
+ "_er_surp_floor": "floor of |estimated EPS| in the denominator of er_surp, dollars a share (one cent); read by l1bz.Earnings",
+ "er_surp_floor": 0.01,
+ "_er_gap_reports": "number of the ticker's last reports whose gaps give the median in er_next, reports; read by l1bz.Earnings",
+ "er_gap_reports": 4,
+ "_er_min_reports": "fewest past reports for er_next (fewer = missing), reports; read by l1bz.Earnings",
+ "er_min_reports": 3,
+ "_fl_lag_days": "calendar days from a 10-K's filing date to the day its float fact counts as known; read by l1fl.facts",
+ "fl_lag_days": 3,
+ "_fl_forms": "SEC forms whose EntityPublicFloat fact is an annual fact of the fl group (annual report, its amendment, transition report; each known from its own filing date); read by l1fl.facts",
+ "fl_forms": ["10-K", "10-K/A", "10-KT"]
+}

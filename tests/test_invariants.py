@@ -228,6 +228,10 @@ NETWORK_IMPORTERS = {
                       "only",
     "demo/record.py": "`tickr demo --record`: reads the demo's own API on the loopback port it "
                       "opened itself (127.0.0.1, port 0), never another host",
+    "model/features/pinned/l1labels.py": "byte copy of the training's label builder (md5 "
+                                         "0a22137f, never edited): socket only for "
+                                         "gethostname() in its build claim files, which the "
+                                         "feature path never calls; no connection is opened",
 }
 
 

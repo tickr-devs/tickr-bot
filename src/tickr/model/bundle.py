@@ -12,7 +12,9 @@ A bundle is one folder `<[run] data_dir>/<[model] bundles_dir>/<name>-<version>/
       "features": ["m", "sess", "c", ...],
       "feature_list_md5": "<md5 of the names joined by newlines, as l1train records it>",
       "heads": {"h30e": {"file": "h30e.txt", "sha256": "<hex>", "trees": 812}, ...},
-      "training": {...}
+      "training": {...},
+      "live_availability": {"er_next": "<statement>", ...},
+      "session_policy": "full_days"
     }
 
 `training` is a free record (train cutoff, label version, data digests) kept for the journal and
@@ -27,6 +29,13 @@ is a ModelRefused with one cause:
 - `feature_code_differs`: the bundle was built by other feature code than the pinned copy the bot
   runs (`tickr.model.features.PINS`), so its features would not mean the same thing live;
 - `feature_list`: names twice, or a digest that does not match the list;
+- `live_availability_undisclosed`: the bundle uses a feature of AVAILABILITY_MAY_DIFFER but its
+  manifest does not carry, for exactly those of its features, a statement that the feature's
+  availability live may differ from training (`live_availability`, feature -> non-empty text;
+  optional for a bundle that uses none of them);
+- `manifest_session_policy`: `session_policy` (optional, what the live feature context does on a
+  half day, `tickr.model.features.full.SESSION_POLICIES`; absent = `full_days`, which refuses
+  half days because the training has none) is not one of them;
 - `feature_not_live`: a feature the bot cannot compute live yet (only the groups of
   `tickr.model.features.LIVE_GROUPS` are served);
 - `head_features` / `head_trees`: a model file disagrees with the manifest.
@@ -48,11 +57,31 @@ from typing import Any
 from tickr.config import Config
 from tickr.model import features
 from tickr.model.errors import ModelRefused
+from tickr.model.features import full
 
 MANIFEST = "manifest.json"
 SCHEMA = 1
 KEYS = frozenset({"schema", "name", "version", "lightgbm", "feature_code", "features",
                   "feature_list_md5", "heads", "training"})
+AVAILABILITY_KEY = "live_availability"
+SESSION_POLICY_KEY = "session_policy"
+OPTIONAL_KEYS = frozenset({AVAILABILITY_KEY, SESSION_POLICY_KEY})
+# Features whose availability live may differ from training (Codex 108 point 4): every column whose
+# missing value depends on the sealed window or on the date boundary in the pinned builder. l1bz:
+# the ten news columns (missing when their window touches a sealed date) and er_since, er_surp,
+# er_next (missing when a sealed date lies after the report used; er_next stays missing until the
+# reports it uses all lie after the window). wm2ref16: so_log, mcap, si_pct, si_chg (a split
+# factor across the window is missing; the live shares grid may also be refreshed differently).
+# l1feat: the five nw_* columns (missing when the 72-hour window touches a sealed date). l1fl: the
+# four fl_* columns (the facts file refuses a fact filed or ending on a sealed date, and leaves
+# the share missing when its bar day or split factor touches the window).
+AVAILABILITY_MAY_DIFFER = (
+    "bz_n60", "bz_n1d", "bz_n3d", "bz_min", "bz_rk", "bz_solo", "bz_c_earn", "bz_c_anl",
+    "bz_c_deal", "bz_c_mov", "er_since", "er_surp", "er_next",
+    "so_log", "mcap", "si_pct", "si_chg",
+    "nw_n", "nw_3d", "nw_min", "nw_any", "nw_rk",
+    "fl_share", "fl_logd", "fl_has", "fl_age",
+)
 HEAD_KEYS = frozenset({"file", "sha256", "trees"})
 _NAME = re.compile(r"[a-z0-9][a-z0-9._]*")  # no "-": the folder is <name>-<version>
 _VERSION = re.compile(r"[a-z0-9][a-z0-9._-]*")
@@ -76,6 +105,8 @@ class Bundle:
     features: tuple[str, ...]
     heads: tuple[Head, ...]
     training: dict[str, Any]
+    live_availability: dict[str, str]
+    session_policy: str
 
     @property
     def identity(self) -> str:
@@ -108,8 +139,9 @@ def _manifest(folder: Path) -> dict[str, Any]:
         raise ModelRefused("manifest_unreadable", "not an object")
     if data.get("schema") != SCHEMA:
         raise ModelRefused("manifest_schema", repr(data.get("schema")))
-    if set(data) != KEYS:
-        extra, missing = sorted(set(data) - KEYS), sorted(KEYS - set(data))
+    if not KEYS <= set(data) <= KEYS | OPTIONAL_KEYS:
+        extra = sorted(set(data) - KEYS - OPTIONAL_KEYS)
+        missing = sorted(KEYS - set(data))
         raise ModelRefused("manifest_keys", f"unknown {extra}, missing {missing}")
     return data
 
@@ -142,6 +174,10 @@ def open_bundle(folder: Path | str) -> Bundle:
         raise ModelRefused("feature_list", "a name twice")
     if data["feature_list_md5"] != feature_list_md5(names):
         raise ModelRefused("feature_list", "digest differs from the list")
+    disclosed = _live_availability(data, names)
+    policy = data.get(SESSION_POLICY_KEY, full.FULL_DAYS)
+    if policy not in full.SESSION_POLICIES:
+        raise ModelRefused("manifest_session_policy", repr(policy))
     live = set(features.live_features())
     not_live = [n for n in names if n not in live]
     if not_live:
@@ -171,7 +207,18 @@ def open_bundle(folder: Path | str) -> Bundle:
     if not isinstance(training, dict):
         raise ModelRefused("manifest_keys", "training is not an object")
     return Bundle(folder, name, version, _text(data, "lightgbm"), tuple(names), tuple(heads),
-                  training)
+                  training, disclosed, policy)
+
+
+def _live_availability(data: dict[str, Any], names: list[str]) -> dict[str, str]:
+    """The disclosure that live availability may differ, for exactly the bundle's features of
+    AVAILABILITY_MAY_DIFFER (Codex 108 point 4)."""
+    need = sorted(n for n in names if n in AVAILABILITY_MAY_DIFFER)
+    given = data.get(AVAILABILITY_KEY, {})
+    if (not isinstance(given, dict) or sorted(given) != need
+            or not all(isinstance(v, str) and v.strip() for v in given.values())):
+        raise ModelRefused("live_availability_undisclosed", ", ".join(need) or "none needed")
+    return dict(given)
 
 
 class Scorer:
