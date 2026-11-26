@@ -605,7 +605,10 @@ the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-t
 `watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`, `bot-down`,
 `disk-low`. Every alert goes to
 the Mac notification, to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4) and to
-the alerts feed below.
+the alerts feed below, unless the owner's routing turned its kind off on a channel (PUT
+/alerts/routing, file `[alerts] routing_file` under `data_dir`; docs/api.md, "Notification
+settings"). Critical kinds cannot be turned off, the feed always gets every alert, and deleting
+the routing file turns everything back on.
 The iMessage is sent on a background thread, so the bot's loop never waits for Messages.app; its
 result is journaled as its own `alert` record (`"channel": "imessage"`) once known. An alert
 counts as shown, for repeat suppression, when either channel delivered it.

@@ -78,7 +78,7 @@ def system_document(settings: SystemSettings, response: api.StatusResponseV1,
                     runner: Runner = run_command) -> api.SystemV1:
     """The System card at `response.served_at`, from the status the server just read."""
     status = response.status
-    morning, morning_cause = _morning_check(settings.preflight_record)
+    morning, morning_cause = morning_check(settings.preflight_record)
     training, training_cause = _training(settings.training_progress)
     mac = settings.host == SYSTEM_SERVICES_MAC
     host, host_cause = (_mac(settings, runner), None) if mac else (None, NO_HOST)
@@ -131,7 +131,7 @@ def _aware(text: object) -> datetime:
     return value
 
 
-def _morning_check(path: Path) -> tuple[api.MorningCheckV1 | None, str | None]:
+def morning_check(path: Path) -> tuple[api.MorningCheckV1 | None, str | None]:
     try:
         body = _read_json(path, RECORD_SCHEMA_VERSION)
         if body is None:

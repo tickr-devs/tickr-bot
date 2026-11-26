@@ -166,6 +166,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | POST | `/settings/validate` | Body `{"changes": [{"owner", "key", "value"}, ...]}`. `200` `settings-draft-v1`: typed refusals and, per key, when the change would apply and whether it needs Face ID. Writes and applies nothing. `400` for any other body, `503` as GET /settings/values. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
+| GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
+| PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "mac"\|"imessage"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
 | GET | `/advisor` | `200` `advisor-runs-v1`: the AI advisor's newest `[api] advisor_runs` runs with their proposals, ideas, hold-out verdicts and the owner's decision (read-only; see GET /advisor below). |
 | POST | `/advisor/decision` | Body `{"run": "<run id>", "verdict": "accepted"\|"rejected"}`. Records the owner's review of a proposal or idea (a note, nothing is deployed): `200` `advisor-runs-v1`; `404 not_found` without that run; `409 conflict` for a refused, no-change or unreadable run. Not a bot command. |
@@ -194,7 +196,7 @@ Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1, "cause_c
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
 `too_many_pending` 429, `rate_limited` 429 (GET /chart: its request budget is spent and cannot say when it refills),
 `conflict` 409 (an `Idempotency-Key` already used for another command; a Lab replay that cannot
-start now),
+start now; an alert routing write refused),
 `internal` 500, `unavailable` 503 (history cannot be read now: database of another schema
 version, unreadable capture file).
 
@@ -887,6 +889,40 @@ machine's own services follow under `host`, so a bot on a server keeps the rest 
     the bot runs.
 
 No part of this document is per user: a later bot or account identity is one more key.
+
+### Notification settings: GET /alerts and PUT /alerts/routing
+
+Which alert kinds go to which channel (backlog T14). Code: `src/tickr/api/alerts.py` and
+`src/tickr/runtime/alert_routing.py`. Alerts go through the channel interface of
+`runtime/alerts.py` (`Channels`); the routing only tells it which channels to skip for a kind.
+
+- `channels`: `mac` (the Mac notification), `imessage`, `push` (the iPhone app's push, not built
+  yet: always `configured` false, `cause` `not-built`). `configured` comes from the latest
+  preflight record's checks (`alert-channel` for `mac`; that and `alert-recipient` for
+  `imessage`); `cause` `no-preflight`, `preflight-unreadable` or `check-failed` when false.
+  The alerts feed file (`[alerts] feed_file`) is not a routable channel: it gets every alert.
+- `kinds`: every `AlertKind` value in code order, each with `group` (`critical`, `trading`,
+  `day`, `lab`), `locked` and `channels` `{mac, imessage, push}` (true: it goes there).
+  `locked` kinds need the owner now and are on everywhere whatever the file says: every kind an
+  alert-at-once fence raises (`runtime/watch.py` `ALERT_AT_ONCE`, which includes the operator
+  fences), plus unprotected position, unknown order status and order conflicts, foreign
+  exposure, failing broker reads, a lost stream with a position, not flat after the flatten,
+  every bot-down, crash, start and stop failure, preflight failed, the token waiting for
+  confirmation, every `watchdog-*` kind and `api-credentials-unexpected`.
+- `routing_cause`: null, or why the routing file cannot be used (then every kind goes to every
+  channel and writes are refused until the owner deletes the file).
+
+The routing file is `<data_dir>/<[alerts] routing_file>`, an owner preference about where to be
+told, never a trading setting: `{"schema_version": 1, "off": {"<kind>": ["<channel>", ...]}}`,
+holding only the cells turned off, written atomically by PUT /alerts/routing (the API is its
+only writer). Every process that alerts (bot, watchdog, the supervisor's alerts) reads it on
+each alert, so a change applies at the next alert. A missing file means every kind on every
+channel; a file out of shape (an unknown or locked kind, an unknown channel, another
+`schema_version`) is not used at all, never partly. An alert skipped on a channel is journaled
+with `routed_off` naming the channels skipped; when every channel this process has is skipped,
+its `delivery` is `routed-off` (not shown, so not a repeat either). `push` cells are stored and
+shown, and take effect once a push channel exists. On the remote port PUT needs the paired
+token like every other request.
 
 ### GET /journal (read-only)
 

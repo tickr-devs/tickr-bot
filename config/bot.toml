@@ -1093,6 +1093,10 @@ mac_app_timeout_seconds = 2
 # preflight, watchdog, API), relative to [run] data_dir; a Claude session on the Mac waits on it so the project learns
 # of an alert within seconds, not only the owner's phone (docs/operations.md "Alerts"); read by runtime.alerts.
 feed_file = "alerts.jsonl"
+# Owner's alert routing: which alert kinds go to which channel (Mac notification, iMessage, push), a JSON file
+# relative to [run] data_dir written by PUT /alerts/routing; a preference, never a trading setting. Missing or
+# unreadable = every kind on every channel; critical kinds are always on; read by runtime.alert_routing.
+routing_file = "alert-routing.json"
 
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API

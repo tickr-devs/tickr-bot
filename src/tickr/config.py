@@ -491,6 +491,7 @@ class AlertsConfig:
     mac_app: str
     mac_app_timeout_seconds: Decimal
     feed_file: str
+    routing_file: str
 
 
 @dataclass(frozen=True)
