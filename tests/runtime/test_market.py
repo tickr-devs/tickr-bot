@@ -1025,3 +1025,22 @@ def test_a_slow_or_failing_profile_route_never_delays_or_changes_the_collected_p
     assert rig.market.close(5)
     rig.market.tick()  # the failed round is not journaled: a read failure is an event
     assert rig.store.journal(CAPTURE_FAILED) == []
+
+
+def test_the_inbox_keeps_the_quote_the_newest_replaced():
+    """SYNTHETIC quotes: the price collar's previous quote (backlog T10)."""
+    inbox = StreamInbox()
+    at = datetime(2026, 11, 16, 10, 0, tzinfo=UTC)
+
+    def q(ask: str, seconds: int) -> Quote:
+        t = at + timedelta(seconds=seconds)
+        return Quote("ABC", D("9"), D(ask), D(1), D(1), t, t)
+
+    assert inbox.latest_and_previous("ABC") == (None, None)
+    inbox.on_quote(q("10.00", 0))
+    assert inbox.latest_and_previous("ABC") == (q("10.00", 0), None)
+    inbox.on_quote(q("10.10", 2))
+    inbox.on_quote(q("10.05", 1))  # older than the newest: ignored, previous unchanged
+    assert inbox.latest_and_previous("ABC") == (q("10.10", 2), q("10.00", 0))
+    inbox.forget("ABC")
+    assert inbox.latest_and_previous("ABC") == (None, None)

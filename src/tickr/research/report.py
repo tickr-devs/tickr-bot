@@ -16,6 +16,7 @@ from typing import Any
 
 from tickr.replay.measured import FORMAT as MEASURED_FORMAT
 from tickr.research import calibration as cal
+from tickr.research import collar as col
 from tickr.research import fill_quality as fq
 from tickr.research import latency as lat
 from tickr.research import observer_report as orep
@@ -209,6 +210,24 @@ def write_latency(result: lat.LatencyReport, source: str, out_dir: Path,
             "notices": sum(int(n["notices"]) for n in result.notices_by_hour.values()),
             "partial_last_lines": result.partial_last_lines}
     return _json(out_dir / "latency_summary.json", body, places)
+
+
+COLLAR_COLUMNS = ("entry", "reference", "symbol", "count",
+                  *col.PERCENTILE_NAMES, "max")
+
+
+def write_collar(result: col.CollarReport, out_dir: Path, places: int) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(out_dir / "collar.csv", COLLAR_COLUMNS,
+               ([*key, d.count, *d.percentiles, d.max] for key, d in result.rows.items()),
+               places)
+    overall = {f"{kind}/{reference}": {"count": d.count, **dict(zip(
+        col.PERCENTILE_NAMES, d.percentiles, strict=True)), "max": d.max}
+               for (kind, reference, group), d in result.rows.items() if group == col.OVERALL}
+    body = {"overall": overall,
+            "missing_reference": {f"{k}/{r}": n for (k, r), n in result.missing.items()},
+            "partial_last_lines": result.partial_last_lines}
+    return _json(out_dir / "collar_summary.json", body, places)
 
 
 REFUSAL_COLUMNS = ("day", "strategy", "version", "role", "setup", "kind", "name", "count")

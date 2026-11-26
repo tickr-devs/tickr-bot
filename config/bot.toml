@@ -97,6 +97,17 @@ max_entry_rest_bars = 10
 # requests a minute (20), and only while a working entry's stream quote is too old; they share the snapshot route
 # budget with discovery, whose pass stops early on a refusal and keeps its previous candidates; read by runtime.entries.
 entry_snapshot_interval_seconds = 3
+# Price collar on an entry (backlog T10): an entry whose final limit price is further than this ratio from the close
+# of the last completed M1 bar, |limit - close| / close, is refused (PRICE_COLLAR_BREACH). 0 = off. Shipped off: no
+# measured number yet; the owner picks one from `python -m tickr.research collar` over captured days (docs/research.md).
+# While either side is on, an entry needs both references, the bar and the previous quote (PRICE_COLLAR_UNKNOWN
+# otherwise), and the refusal records both distances. Blocks entries only, never an exit or a stop; read by safety.
+entry_collar_bar_ratio = 0
+# Price collar, the quote side: refused when the final limit price is further than this ratio from the ask of the
+# stream quote before the current one, |limit - previous ask| / previous ask; that quote may be no older than
+# max_quote_age_seconds (PRICE_COLLAR_UNKNOWN otherwise). 0 = off, shipped off like the bar side (no measured number
+# yet); read by safety.
+entry_collar_quote_ratio = 0
 
 [session]
 # Market time zone for all session times; read by the calendar and the scheduler.
