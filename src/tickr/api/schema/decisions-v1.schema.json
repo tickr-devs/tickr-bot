@@ -201,6 +201,12 @@
                       "BUYING_POWER_SHORT",
                       "ENTRY_BUDGET_UNAVAILABLE",
                       "STOP_BUDGET_UNAVAILABLE",
+                      "TRADABILITY_BUDGET_UNAVAILABLE",
+                      "TRADABILITY_UNKNOWN",
+                      "INSTRUMENT_HALTED",
+                      "INSTRUMENT_CLOSE_ONLY",
+                      "INSTRUMENT_DENIED",
+                      "INSTRUMENT_NOT_TRADABLE",
                       "ENGINE_REFUSED",
                       "UNKNOWN"
                     ]

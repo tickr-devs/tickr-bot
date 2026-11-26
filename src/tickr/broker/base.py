@@ -10,9 +10,9 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from tickr.types import ComboRole, OrderDetail, OrderRequest, Position
+from tickr.types import ComboRole, OrderDetail, OrderRequest, Position, Tradability
 
 
 class BrokerError(Exception):
@@ -104,6 +104,23 @@ class CashTrade:
     side: str  # the broker's word (BUY, SELL, ...)
     net_amount: Decimal
     at: datetime  # `biz_time`: equal to the fill's `filled_time_at` (probe 2026-11-16)
+
+
+@runtime_checkable
+class TradabilityReader(Protocol):
+    """A broker that can say whether a symbol may be traded now (backlog T8). Read only: the
+    entry desk asks it for an entry every other check admitted, when `[risk]
+    tradability_check_enabled` is on. A broker without it leaves admission refusing."""
+
+    def tradability(self, symbol: str) -> Tradability:
+        """The broker's tradability answers for `symbol`. Raises BrokerError when they
+        cannot be read or do not name one instrument."""
+        ...
+
+    def can_read_tradability(self) -> bool:
+        """True if the request budget would admit every read `tradability` sends now. Takes
+        nothing and sends nothing."""
+        ...
 
 
 class Broker(Protocol):

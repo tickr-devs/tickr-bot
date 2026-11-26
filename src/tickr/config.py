@@ -101,6 +101,9 @@ class RiskConfig:
     symbol_cooldown_minutes_after_loss: int
     max_entry_rest_bars: int
     entry_snapshot_interval_seconds: Decimal
+    tradability_check_enabled: bool
+    tradability_entry_profile_statuses: tuple[str, ...]
+    tradability_blocked_profile_statuses: tuple[str, ...]
     entry_collar_bar_ratio: Decimal
     entry_collar_quote_ratio: Decimal
 
@@ -898,6 +901,12 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if system.sleep_check_timeout_seconds <= 0 or system.system_restart_rows < 1:
         raise ConfigError("[api] sleep_check_timeout_seconds must be above 0 and "
                           "system_restart_rows at least 1")
+    risk_cfg: RiskConfig = built["risk"]
+    both = sorted(set(risk_cfg.tradability_entry_profile_statuses)
+                  & set(risk_cfg.tradability_blocked_profile_statuses))
+    if both:
+        raise ConfigError("[risk] tradability_entry_profile_statuses and "
+                          f"tradability_blocked_profile_statuses both list {', '.join(both)}")
     chart: ChartConfig = built["chart"]
     if chart.requests_per_minute < 1 or chart.bars_per_request < 1:
         raise ConfigError("[chart] requests_per_minute and bars_per_request must be at least 1")

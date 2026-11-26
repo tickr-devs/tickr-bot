@@ -73,6 +73,12 @@ cause. Each blocks that one entry only; the bot tries again at the next signal.
 | `BUYING_POWER_SHORT` | There is not enough buying power for the trade. | Nothing, or add funds. |
 | `ENTRY_BUDGET_UNAVAILABLE` | The broker request budget has no room for the entry order. | Nothing. |
 | `STOP_BUDGET_UNAVAILABLE` | There is no request room left for the protective stops, so no entry is allowed. | Nothing. |
+| `TRADABILITY_BUDGET_UNAVAILABLE` | The tradability check is on, but the broker request budget has no room for its two reads. | Nothing. |
+| `TRADABILITY_UNKNOWN` | The tradability check is on, but the broker did not say clearly whether the stock can be traded now (an answer was missing, unknown or not read). | Nothing; if it stays, check that `tickr probe-tradability` has run and the settings match its answers. |
+| `INSTRUMENT_HALTED` | The broker says trading in this stock is halted. | Nothing. |
+| `INSTRUMENT_CLOSE_ONLY` | The broker allows only closing trades in this stock, so no new entry. | Nothing. |
+| `INSTRUMENT_DENIED` | The broker does not allow trading this stock. | Nothing. |
+| `INSTRUMENT_NOT_TRADABLE` | The broker's profile of this stock has a status the settings list as not tradable. | Nothing, or review that list in the settings. |
 | `ENGINE_REFUSED` | The checks passed but the trading engine refused to open the trade; its own text says why. | Read the recorded text. |
 
 ### Entry fences: `tickr.engine.core.Fence`

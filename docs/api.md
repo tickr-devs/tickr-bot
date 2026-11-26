@@ -1324,7 +1324,7 @@ Every refused minute is its own row: consecutive refusals are not merged.
 `{code, message, since, until, params}`, read from the recorded `CODE: detail` at the API (the
 decision file keeps the text):
 - `code`: the admission cause (`risk/causes.py`, in spec order: `GATE_CLOSED` ...
-  `STOP_BUDGET_UNAVAILABLE`), `ENGINE_REFUSED` when admission passed but the engine refused to
+  `STOP_BUDGET_UNAVAILABLE`, then the tradability causes `TRADABILITY_UNKNOWN` ... `INSTRUMENT_NOT_TRADABLE`), `ENGINE_REFUSED` when admission passed but the engine refused to
   open the trade, or `UNKNOWN` (see below). The schema lists the closed set.
 - `message`: the detail as a sentence without raw timestamps. For most codes it is the recorded
   detail itself (`1 own position(s) open`); `SYMBOL_COOLDOWN`, `AFTER_LAST_ENTRY`,

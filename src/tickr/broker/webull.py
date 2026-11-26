@@ -85,6 +85,7 @@ from tickr.types import (
     Position,
     Quote,
     Side,
+    Tradability,
 )
 
 log = logging.getLogger(__name__)
@@ -148,6 +149,9 @@ class Route(Enum):
     # Read only by `quote_sources` (probe Q1): which read is fresh outside the regular session.
     DEPTHS = ("GET", "/market-data/stocks/depths/list", False)
     TICKS = ("GET", "/market-data/stocks/ticks/list", False)
+    # One instrument's `trade_policy` and `forbid_reason` (SDK `get_trade_instrument_detail`,
+    # query `instrument_id` only, no account id); read only (backlog T8). Its body is UNPROVEN.
+    TRADE_INSTRUMENT = ("GET", "/trade/instrument", False)
 
     @property
     def method(self) -> str:
@@ -165,7 +169,7 @@ class Route(Enum):
 # Routes that are not account-scoped: the transport never adds the account id to them.
 ACCOUNT_FREE_ROUTES = frozenset(
     {Route.ACCOUNTS, Route.GAINERS_LOSERS, Route.TOP_ACTIVES, Route.SNAPSHOT, Route.BARS,
-     Route.PROFILES, Route.DEPTHS, Route.TICKS}
+     Route.PROFILES, Route.DEPTHS, Route.TICKS, Route.TRADE_INSTRUMENT}
 )
 # The only routes a market-data-only transport (the API's chart reads) may send.
 MARKET_DATA_ROUTES = frozenset(
@@ -821,6 +825,7 @@ class WebullBroker:
         history_max_pages: int,
         cash_activities_max_pages: int,
         wall: Callable[[], datetime] = lambda: datetime.now(UTC),
+        instrument_category: str | None = None,
     ) -> None:
         if open_orders_max_pages < 1:
             raise AdapterConfigError("open_orders_max_pages must be at least 1")
@@ -840,6 +845,9 @@ class WebullBroker:
         self._client_order_id_max_length = client_order_id_max_length
         self._clock = clock
         self._wall = wall
+        # The instrument category of profile and snapshot reads (`[market_data]
+        # screener_category`); None = tradability cannot be read.
+        self._category = instrument_category
 
     # -- plumbing -------------------------------------------------------------------------
 
@@ -880,6 +888,67 @@ class WebullBroker:
         if not response.ok:
             raise BrokerReadFailed(route.name, response.status, response.error_code)
         return response.body
+
+    # -- tradability (backlog T8, read only) ----------------------------------------------
+
+    def _require_category(self) -> str:
+        if self._category is None:
+            raise AdapterConfigError("no instrument category: tradability cannot be read")
+        return self._category
+
+    def tradability(self, symbol: str) -> Tradability:
+        """The symbol's profile `status` and its trade instrument's `trade_policy` and
+        `forbid_reason`: two reads, each sent once. A symbol with no profile row or several
+        (OPENW had two, probe M1) is refused, never resolved by guessing."""
+        rows = [p for p in read_profiles(self._read(Route.PROFILES, {
+            "symbols": symbol, "category": self._require_category()})).values()
+            if p.symbol == symbol]
+        if len(rows) != 1:
+            raise MalformedResponse(f"profiles: {len(rows)} instruments for {symbol}, need one")
+        row = rows[0]
+        policy, reason = read_trade_instrument(
+            self._read(Route.TRADE_INSTRUMENT, {"instrument_id": row.instrument_id}),
+            row.instrument_id)
+        return Tradability(symbol, row.fields.get(PROFILE_STATUS_KEY), policy, reason)
+
+    def can_read_tradability(self) -> bool:
+        """Check 7's question for the two reads `tradability` sends (one each route)."""
+        return all(self._budget.can_take(route.path) for route in TRADABILITY_ROUTES)
+
+    def tradability_sources(self, symbols: Sequence[str]) -> list[tuple[str, SourceRead]]:
+        """Probe T8, read only: the snapshot and the instrument profiles of `symbols` (one
+        request each), then the trade instrument of every profile row's instrument id, each
+        sent once and kept as answered (a refusal is evidence too). Returns (label, read)
+        pairs, the label naming the symbols or the instrument. Never used to trade."""
+        category = self._require_category()
+        joined = ",".join(symbols)
+        found: list[tuple[str, SourceRead]] = []
+
+        def read(label: str, name: str, route: Route, params: Mapping[str, Any]) -> Any:
+            try:
+                response = self._send(route, params)
+            except (RateLimited, BrokerReadFailed) as exc:
+                found.append((label, SourceRead(name, None, type(exc).__name__, None,
+                                                self._wall())))
+                return None
+            found.append((label, SourceRead(name, response.status, response.error_code,
+                                            response.body, self._wall())))
+            return response.body if response.ok else None
+
+        read(joined, SOURCE_SNAPSHOT, Route.SNAPSHOT, {"symbols": joined, "category": category})
+        body = read(joined, SOURCE_PROFILES, Route.PROFILES,
+                    {"symbols": joined, "category": category})
+        try:
+            rows = _unwrap_list(body, "profiles") if body is not None else []
+        except MalformedResponse:
+            rows = []
+        for row in rows:
+            iid = row.get("instrument_id") if isinstance(row, Mapping) else None
+            if iid is None:
+                continue
+            read(f"{row.get('symbol')} {iid}", SOURCE_TRADE_INSTRUMENT, Route.TRADE_INSTRUMENT,
+                 {"instrument_id": str(iid)})
+        return found
 
     # -- Broker protocol ------------------------------------------------------------------
 
@@ -1262,6 +1331,31 @@ def read_profiles(body: Any) -> dict[str, InstrumentProfile]:
     return profiles
 
 
+# Keys of the trade instrument read (SDK `TradePolicy` docs; the body is UNPROVEN: no answer has
+# been recorded yet, `tickr probe-tradability` records the first) and the profile's status.
+TRADE_POLICY_KEY = "trade_policy"
+FORBID_REASON_KEY = "forbid_reason"
+PROFILE_STATUS_KEY = "status"
+# The reads `WebullBroker.tradability` sends, one request each, in order.
+TRADABILITY_ROUTES = (Route.PROFILES, Route.TRADE_INSTRUMENT)
+
+
+def read_trade_instrument(body: Any, instrument_id: str) -> tuple[str, str | None]:
+    """A trade instrument body -> (trade_policy, forbid_reason or None). Read strictly as the
+    SDK names it, an object with `trade_policy`, because no answer has been recorded yet: any
+    other shape (a `data` wrapper included), a missing policy, or another instrument's answer is
+    refused, never guessed (the entry is then refused as TRADABILITY_UNKNOWN)."""
+    where = f"trade instrument {instrument_id}"
+    policy = _require(body, TRADE_POLICY_KEY, where)
+    named = _optional(body, "instrument_id")
+    if named is not None and str(named) != instrument_id:
+        raise MalformedResponse(f"{where}: answer names instrument {named}")
+    reason = _optional(body, FORBID_REASON_KEY)
+    if not isinstance(policy, str) or not (reason is None or isinstance(reason, str)):
+        raise MalformedResponse(f"{where}: trade_policy and forbid_reason must be strings")
+    return policy, reason
+
+
 def read_snapshot(body: Any, receipt_time: datetime) -> list[Quote]:
     """Snapshot body (bare array, recorded) -> quotes.
 
@@ -1397,6 +1491,8 @@ def _require_present(obj: Any, key: str, where: str) -> Any:
 
 # Probe Q1 (`tickr probe-quote-sources`): names of the reads and their fixed parameters.
 SOURCE_SNAPSHOT = "snapshot"
+SOURCE_PROFILES = "profiles"
+SOURCE_TRADE_INSTRUMENT = "trade-instrument"
 SOURCE_SNAPSHOT_EXTENDED = "snapshot-extended"
 SOURCE_DEPTH = "depth"
 SOURCE_TICKS = "ticks"
@@ -2967,6 +3063,7 @@ def broker_from_config(config: Config, transport: Transport | None = None,
         gate=lambda: trading_gate(config),
         history_max_pages=config.environment.history_max_pages,
         cash_activities_max_pages=config.environment.cash_activities_max_pages,
+        instrument_category=config.market_data.screener_category,
     )
 
 

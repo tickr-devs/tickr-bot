@@ -97,6 +97,23 @@ max_entry_rest_bars = 10
 # requests a minute (20), and only while a working entry's stream quote is too old; they share the snapshot route
 # budget with discovery, whose pass stops early on a refusal and keeps its previous candidates; read by runtime.entries.
 entry_snapshot_interval_seconds = 3
+# Tradability check before an entry (backlog T8): true = for an entry every other check admitted, the bot reads the
+# symbol's instrument profile and its trade instrument (`GET /trade/instrument`) and refuses the entry when Webull says
+# HALTED (INSTRUMENT_HALTED), CLOSE_ONLY (INSTRUMENT_CLOSE_ONLY) or DENIED (INSTRUMENT_DENIED), when the profile status
+# is listed in tradability_blocked_profile_statuses (INSTRUMENT_NOT_TRADABLE), and when any answer is missing, unknown or
+# unreadable (TRADABILITY_UNKNOWN); exits are never checked. Two more reads per admitted entry, counted in the request
+# budget check (TRADABILITY_BUDGET_UNAVAILABLE when they do not fit). false = off (the two
+# lists below are then not read). Off until the owner has run `tickr probe-tradability` (docs/manual-trade.md) and
+# checked the lists below against what Webull showed; read by safety and runtime.entries.
+tradability_check_enabled = false
+# Profile `status` values that allow an entry (strings, Webull's words): OC was seen on every common stock, ETF and ADR
+# probed (M1, 2026-11-14, docs/webull-facts.md); its meaning is not documented. A status in neither list refuses as
+# unknown; read by safety when tradability_check_enabled.
+tradability_entry_profile_statuses = ["OC"]
+# Profile `status` values known to mean not tradable (strings): none proven yet (NT was seen on a stale OPENW row, CO on
+# warrants; both stay unknown, so refused, until the probe says what they mean); read by safety when
+# tradability_check_enabled.
+tradability_blocked_profile_statuses = []
 # Price collar on an entry (backlog T10): an entry whose final limit price is further than this ratio from the close
 # of the last completed M1 bar, |limit - close| / close, is refused (PRICE_COLLAR_BREACH). 0 = off. Shipped off: no
 # measured number yet; the owner picks one from `python -m tickr.research collar` over captured days (docs/research.md).
