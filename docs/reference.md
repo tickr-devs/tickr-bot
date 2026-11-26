@@ -262,4 +262,5 @@ risk). **Today** means look before the next session. **Info** means no action is
 | `flatten-after-close` | Now | A close was due while the market was shut; no order was sent. See [operations.md](operations.md#flatten-after-close). |
 | `fees-unknown` | Today | An order's broker fees are not known, so today's money is unknown and entries are refused. Wait for the fees to appear; if they do not, report it. |
 | `fees-corrected` | Info | The account's cash activity showed the recorded fees were wrong, and they were replaced. |
+| `remote-auth-blocked` | Today | The API's remote port refuses an address (or, with a full table, every new address) after too many failed token or pairing-code checks. If it is not one of your devices, nothing to do: the limit holds. If it is yours, wait the time in the alert, then re-pair the device (or revoke a stale one sharing its address). Always sent on every channel: it cannot be switched off. See [api.md](api.md#failed-authentication-limit). |
 | `api-credentials-unexpected` | Today | The local API holds a credential variable it must not have. See [operations.md](operations.md#the-api-job-and-the-webull-keys). |

@@ -245,6 +245,13 @@ class ApiConfig:
     remote_pairing_file: str
     remote_pairing_code_file: str
     remote_pairing_code_ttl_seconds: int
+    remote_auth_trusted_proxy: str
+    remote_auth_window_seconds: int
+    remote_auth_failures: int
+    remote_pair_window_seconds: int
+    remote_pair_failures: int
+    remote_auth_max_addresses: int
+    remote_auth_ipv6_prefix_length: int
     demo_port: int
     status_file: str
     account_file: str

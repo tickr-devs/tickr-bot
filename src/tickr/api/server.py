@@ -44,7 +44,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import contract, devices, flow, settled, symbols, trade_whatif
+from tickr.api import authlimit, contract, devices, flow, settled, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.alerts import AlertsSettings, alerts_document
@@ -128,6 +128,9 @@ LOCK_SUFFIX = ".lock"  # the pairing lock file: next to the code file, never hol
 PAIR_ROUTE = "/pair"  # POST on the remote port only: redeem the one-time pairing code
 # Fewest random bytes in a token or pairing code: 128 bits, the usual floor for a bearer secret.
 MIN_SECRET_BYTES = 16
+IPV6_BITS = 128  # length of an IPv6 address (protocol constant)
+TOKEN_ROUTE_KIND = "token"  # the budget names in the block log line and the alert
+PAIR_ROUTE_KIND = "pair"
 
 
 @dataclass(frozen=True)
@@ -146,6 +149,13 @@ class ApiSettings:
     pairing_path: Path
     pairing_code_path: Path  # SHA-256 of the waiting one-time code and its expiry
     pairing_code_ttl_seconds: int
+    auth_trusted_proxy: str  # the proxy's TCP peer address: only its X-Forwarded-For counts
+    auth_window_seconds: int  # device-token budget: failed checks per address per window
+    auth_failures: int
+    pair_window_seconds: int  # POST /pair budget, stricter
+    pair_failures: int
+    auth_max_addresses: int  # addresses each budget tracks; full of live ones = fail closed
+    auth_ipv6_prefix_length: int  # an IPv6 client counts as its network of this length
     status_path: Path
     inbox: Path
     idempotency: Path  # <commands_dir>/idempotency: remembered Idempotency-Key answers
@@ -235,6 +245,19 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         raise ConfigError(f"[api] remote_token_bytes must be at least {MIN_SECRET_BYTES}")
     if api.remote_pairing_code_ttl_seconds <= 0:
         raise ConfigError("[api] remote_pairing_code_ttl_seconds must be positive")
+    try:
+        ipaddress.ip_address(api.remote_auth_trusted_proxy)
+    except ValueError:
+        raise ConfigError("[api] remote_auth_trusted_proxy must be an IP address") from None
+    if min(api.remote_auth_window_seconds, api.remote_auth_failures, api.remote_pair_failures,
+           api.remote_auth_max_addresses) <= 0:
+        raise ConfigError("[api] remote_auth_window_seconds, remote_auth_failures, "
+                          "remote_pair_failures and remote_auth_max_addresses must be positive")
+    if api.remote_pair_window_seconds < api.remote_pairing_code_ttl_seconds:
+        raise ConfigError("[api] remote_pair_window_seconds must be at least "
+                          "remote_pairing_code_ttl_seconds, so one window covers a code's life")
+    if not 0 < api.remote_auth_ipv6_prefix_length <= IPV6_BITS:
+        raise ConfigError(f"[api] remote_auth_ipv6_prefix_length must be 1-{IPV6_BITS}")
     if api.idempotency_key_ttl_seconds <= api.command_max_age_seconds:
         raise ConfigError("[api] idempotency_key_ttl_seconds must be above "
                           "command_max_age_seconds, so a repeat can never queue a command twice")
@@ -287,6 +310,13 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         pairing_path=data / api.remote_pairing_file,
         pairing_code_path=data / api.remote_pairing_code_file,
         pairing_code_ttl_seconds=api.remote_pairing_code_ttl_seconds,
+        auth_trusted_proxy=api.remote_auth_trusted_proxy,
+        auth_window_seconds=api.remote_auth_window_seconds,
+        auth_failures=api.remote_auth_failures,
+        pair_window_seconds=api.remote_pair_window_seconds,
+        pair_failures=api.remote_pair_failures,
+        auth_max_addresses=api.remote_auth_max_addresses,
+        auth_ipv6_prefix_length=api.remote_auth_ipv6_prefix_length,
         status_path=data / api.status_file,
         inbox=data / api.commands_dir / contract.INBOX,
         idempotency=data / api.commands_dir / IDEMPOTENCY,
@@ -396,6 +426,19 @@ class ApiServer(ThreadingHTTPServer):
         self.start_lock = start_lock or threading.Lock()
         # One redemption at a time, so a pairing code can never yield two tokens.
         self.pair_lock = threading.Lock()
+        # The remote port's failed-authentication budgets per client address (api/authlimit.py).
+        self.auth_limits = {
+            TOKEN_ROUTE_KIND: authlimit.AuthLimiter(
+                settings.auth_failures, settings.auth_window_seconds,
+                settings.auth_max_addresses),
+            PAIR_ROUTE_KIND: authlimit.AuthLimiter(
+                settings.pair_failures, settings.pair_window_seconds,
+                settings.auth_max_addresses),
+        }
+        # Called with the alert text when an address is blocked; set by `python -m tickr.api`
+        # (the `remote-auth-blocked` alert), None in tests and the demo.
+        self.auth_alert: Callable[[str], None] | None = None
+        self._table_full_logged = {kind: False for kind in self.auth_limits}
         # Shared too, so one replay at a time whichever listener started it.
         self.lab = lab or LabReplay(settings.lab, clock)
         self.page = (STATIC_DIR / "status.html").read_bytes()
@@ -441,6 +484,33 @@ class ApiServer(ThreadingHTTPServer):
         self.start_runner = run_command  # runs [api] start_bot_command; replaced in tests
         port = settings.remote_port if remote else settings.port
         super().__init__((settings.host, port), Handler)
+
+    def auth_blocked(self, kind: str, key: str) -> None:
+        """One log line and the `remote-auth-blocked` alert when `key` used up its `kind`
+        budget. The address is the caller's (never a token or code); `kind` names the budget."""
+        limiter = self.auth_limits[kind]
+        self._report_block(f"address {key} refused on the remote port for up to "
+                           f"{limiter.window} s after {limiter.failures} failed {kind} checks")
+
+    def auth_table_full(self, kind: str, refused: bool) -> None:
+        """Once per spell: the `kind` table is full of addresses that still count, so new
+        addresses are refused (fail closed) until one ages out."""
+        limiter = self.auth_limits[kind]
+        if not refused:
+            if self._table_full_logged[kind] and len(limiter) < limiter.max_addresses:
+                self._table_full_logged[kind] = False
+            return
+        if self._table_full_logged[kind]:
+            return
+        self._table_full_logged[kind] = True
+        self._report_block(f"every new address refused on the remote port: the {kind} table "
+                           f"holds {limiter.max_addresses} addresses with failed checks inside "
+                           f"{limiter.window} s")
+
+    def _report_block(self, text: str) -> None:
+        sys.stderr.write(f"api: auth limit: {text}\n")
+        if self.auth_alert is not None:
+            self.auth_alert(text)
 
     def _warm_past_day(self, day: date, today: date) -> None:
         """Builds what a pick of past day `day` reads: its trades (GET /days/<date>, which
@@ -775,7 +845,7 @@ _ERROR_CODES = {
     "method_not_allowed": 405, "length_required": 411, "payload_too_large": 413,
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
     "internal": 500, "unavailable": 503, "unauthorized": 401, "conflict": 409,
-    "rate_limited": 429,
+    "rate_limited": 429, "auth_rate_limited": 429,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", RECEIPT_ROUTE, "/schema", "/days", "/bars",
               "/settings",
@@ -854,6 +924,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ plumbing
 
+    _client = ""  # the remote port's client address key (api/authlimit.py), set by _guard
+    _last_error: str | None = None  # the error code last answered, read by _simulator_authorized
+
     def setup(self) -> None:
         # Before the stdlib applies it to the socket: a client that stops sending (no request
         # line, headers or body) is dropped after this long instead of holding a thread forever.
@@ -876,6 +949,7 @@ class Handler(BaseHTTPRequestHandler):
                    f"{JSON_TYPE}; charset=utf-8", {})
 
     def _error(self, error: str, cause: str, extra: dict[str, str] | None = None) -> None:
+        self._last_error = error
         body = contract.dumps(ErrorV1(error, cause)).encode("utf-8")
         self._send(_ERROR_CODES[error], body, f"{JSON_TYPE}; charset=utf-8", extra or {})
 
@@ -883,6 +957,24 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host")
         origin = self.headers.get("Origin")
         if self.server.remote:
+            settings = self.server.settings
+            try:
+                self._client = authlimit.client_key(
+                    self.client_address[0], self.headers.get_all(authlimit.FORWARDED_FOR) or [],
+                    settings.auth_trusted_proxy, settings.auth_ipv6_prefix_length)
+            except authlimit.BadForwardedFor:
+                # A proxy that names no client: counted under the proxy itself, never guessed.
+                self._client = authlimit.address_key(self.client_address[0],
+                                                     settings.auth_ipv6_prefix_length)
+                with self.server.pair_lock:
+                    refused = self._admit(TOKEN_ROUTE_KIND)
+                    if refused is None:
+                        self._settle(TOKEN_ROUTE_KIND, failed=True)
+                if refused is not None:
+                    self._refuse(TOKEN_ROUTE_KIND, refused)
+                else:
+                    self._error("bad_request", authlimit.BAD_FORWARDED_FOR)
+                return False
             # The remote listener: the token is always required; Host guards against rebinding.
             if host is None or not (host in self.server.settings.remote_hosts
                                     or self._simulator_host(host)):
@@ -901,6 +993,25 @@ class Handler(BaseHTTPRequestHandler):
             return True
         self._error("forbidden_host", f"Host {host!r} is not allowed")
         return False
+
+    def _admit(self, kind: str) -> authlimit.Refused | None:
+        """Reserve one `kind` check for this request's client address (None), or the refusal to
+        answer with `_refuse` before any credential is looked at. The caller holds `pair_lock`
+        (checks are one at a time) and settles every admission with `_settle`."""
+        refused = self.server.auth_limits[kind].acquire(self._client)
+        self.server.auth_table_full(kind, refused is not None and refused.table_full)
+        return refused
+
+    def _refuse(self, kind: str, refused: authlimit.Refused) -> None:
+        """429 `auth_rate_limited` with Retry-After: names no credential and tests none."""
+        cause = ("too many addresses failed authentication recently" if refused.table_full
+                 else f"too many failed {kind} checks from this address")
+        self._error("auth_rate_limited", f"{cause}; retry after {refused.retry_after} s",
+                    {"Retry-After": str(refused.retry_after)})
+
+    def _settle(self, kind: str, failed: bool) -> None:
+        if self.server.auth_limits[kind].release(self._client, failed):
+            self.server.auth_blocked(kind, self._client)
 
     def _simulator_host(self, host: str) -> bool:
         """The remote port's own loopback address (host:port it listens on), which the iOS
@@ -923,21 +1034,17 @@ class Handler(BaseHTTPRequestHandler):
         settings = self.server.settings
         header = self.headers.get("Authorization") or ""
         with self.server.pair_lock, _pairing_lock(settings):
-            try:
-                paired: tuple[devices.Device, ...] | Exception = load_devices(settings)
-            except (OSError, devices.DeviceFileError) as exc:
-                paired = exc
-            device = None
-            if isinstance(paired, tuple) and header.startswith(BEARER):
-                device = devices.match(paired, header[len(BEARER):])
-            if isinstance(paired, tuple) and device is not None:
-                marked = devices.used(paired, device.name, self.server.clock())
+            refused = self._admit(TOKEN_ROUTE_KIND)
+            if refused is None:
+                paired: tuple[devices.Device, ...] | Exception = ()
+                device = None
                 try:
-                    if marked is not None:
-                        _write_private(settings.devices_path, devices.render(marked))
-                except OSError as exc:  # the request is still the device's: only the time is lost
-                    sys.stderr.write(f"api: last-used time of device {device.name!r} not "
-                                     f"recorded ({type(exc).__name__})\n")
+                    paired, device = self._match_device(header)
+                finally:  # every answer below for a readable list without a match is a 401
+                    self._settle(TOKEN_ROUTE_KIND, isinstance(paired, tuple) and device is None)
+        if refused is not None:
+            self._refuse(TOKEN_ROUTE_KIND, refused)
+            return False
         if not isinstance(paired, tuple):
             self._device_list_unreadable(paired)
             return False
@@ -953,6 +1060,28 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _match_device(self, header: str) -> tuple[tuple[devices.Device, ...] | Exception,
+                                                  devices.Device | None]:
+        """The paired devices (or why they cannot be read) and the one whose token `header`
+        carries, its last-used time recorded; the caller holds the pairing locks."""
+        settings = self.server.settings
+        try:
+            paired = load_devices(settings)
+        except (OSError, devices.DeviceFileError) as exc:
+            return exc, None
+        if not header.startswith(BEARER):
+            return paired, None
+        device = devices.match(paired, header[len(BEARER):])
+        if device is not None:
+            marked = devices.used(paired, device.name, self.server.clock())
+            try:
+                if marked is not None:
+                    _write_private(settings.devices_path, devices.render(marked))
+            except OSError as exc:  # the request is still the device's: only the time is lost
+                sys.stderr.write(f"api: last-used time of device {device.name!r} not "
+                                 f"recorded ({type(exc).__name__})\n")
+        return paired, device
+
     def _device_list_unreadable(self, exc: Exception) -> None:
         """503 for a device list that cannot be read. The cause and the log name the exception's
         type only: its text carries the local path of the file, which never leaves this Mac."""
@@ -961,6 +1090,18 @@ class Handler(BaseHTTPRequestHandler):
         self._error("unavailable", f"device_list_unreadable:{kind}")
 
     def _simulator_authorized(self) -> bool:
+        with self.server.pair_lock:
+            refused = self._admit(TOKEN_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                try:
+                    return self._simulator_token_matches()
+                finally:
+                    self._settle(TOKEN_ROUTE_KIND, self._last_error == "unauthorized")
+        self._refuse(TOKEN_ROUTE_KIND, refused)
+        return False
+
+    def _simulator_token_matches(self) -> bool:
         challenge = {"WWW-Authenticate": "Bearer"}
         path = self.server.settings.simulator_token_hash_path
         try:
@@ -1242,45 +1383,61 @@ class Handler(BaseHTTPRequestHandler):
             return
         settings = self.server.settings
         with self.server.pair_lock, _pairing_lock(settings):
-            try:
-                waiting = json.loads(settings.pairing_code_path.read_text("ascii"))
-                digest = waiting["sha256"]
-                name = waiting["name"]
-                expires_at = contract.parse_time(waiting["expires_at"])
-                if not isinstance(digest, str):
-                    raise TypeError("sha256")
-                if not isinstance(name, str) or not devices.valid_name(name):
-                    raise ValueError("name")
-            except FileNotFoundError:
-                self._error("unauthorized", "no pairing is waiting; run `python -m tickr.api "
-                            "pair` on the Mac")
-                return
-            except (OSError, ValueError, KeyError, TypeError, ContractError) as exc:
-                self._error("unavailable",
-                            f"the pairing code file is unreadable ({type(exc).__name__})")
-                return
-            if self.server.clock() >= expires_at:
-                settings.pairing_code_path.unlink(missing_ok=True)
-                settings.pairing_path.unlink(missing_ok=True)
-                self._error("unauthorized", "the pairing code has expired; run `python -m "
-                            "tickr.api pair` on the Mac again")
-                return
-            presented = hashlib.sha256(body["code"].encode("utf-8")).hexdigest()
-            if not hmac.compare_digest(presented, digest):
-                self._error("unauthorized", "the pairing code is not the waiting one")
-                return
-            try:
-                paired = load_devices(settings)
-            except (OSError, devices.DeviceFileError) as exc:
-                self._device_list_unreadable(exc)
-                return
-            token = secrets.token_urlsafe(settings.token_bytes)
-            device = devices.Device(name, devices.digest(token), self.server.clock(), None)
-            _write_private(settings.devices_path,
-                           devices.render(devices.with_device(paired, device)))
+            refused = self._admit(PAIR_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                try:
+                    token = self._redeem_locked(body["code"])
+                finally:  # every 401 here is a code that failed; a 503 tested none
+                    self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
+        if refused is not None:
+            self._refuse(PAIR_ROUTE_KIND, refused)
+        elif token is not None:
+            self._json(200, PairedV1(token=token))
+
+    def _redeem_locked(self, code: str) -> str | None:
+        """`_redeem` under the pairing locks, once admitted by the /pair budget: the new token,
+        or None once the refusal is answered."""
+        settings = self.server.settings
+        try:
+            waiting = json.loads(settings.pairing_code_path.read_text("ascii"))
+            digest = waiting["sha256"]
+            name = waiting["name"]
+            expires_at = contract.parse_time(waiting["expires_at"])
+            if not isinstance(digest, str):
+                raise TypeError("sha256")
+            if not isinstance(name, str) or not devices.valid_name(name):
+                raise ValueError("name")
+        except FileNotFoundError:
+            self._error("unauthorized", "no pairing is waiting; run `python -m tickr.api "
+                        "pair` on the Mac")
+            return None
+        except (OSError, ValueError, KeyError, TypeError, ContractError) as exc:
+            self._error("unavailable",
+                        f"the pairing code file is unreadable ({type(exc).__name__})")
+            return None
+        if self.server.clock() >= expires_at:
             settings.pairing_code_path.unlink(missing_ok=True)
             settings.pairing_path.unlink(missing_ok=True)
-        self._json(200, PairedV1(token=token))
+            self._error("unauthorized", "the pairing code has expired; run `python -m "
+                        "tickr.api pair` on the Mac again")
+            return None
+        presented = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(presented, digest):
+            self._error("unauthorized", "the pairing code is not the waiting one")
+            return None
+        try:
+            paired = load_devices(settings)
+        except (OSError, devices.DeviceFileError) as exc:
+            self._device_list_unreadable(exc)
+            return None
+        token = secrets.token_urlsafe(settings.token_bytes)
+        device = devices.Device(name, devices.digest(token), self.server.clock(), None)
+        _write_private(settings.devices_path,
+                       devices.render(devices.with_device(paired, device)))
+        settings.pairing_code_path.unlink(missing_ok=True)
+        settings.pairing_path.unlink(missing_ok=True)
+        return token
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated

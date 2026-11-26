@@ -600,7 +600,9 @@ straight to the supervisor. Limits:
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
 `exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`,
 `flatten-after-close`, from the API `api-credentials-unexpected` (Mac notification and feed only, see
-"The API job and the Webull keys"), and from
+"The API job and the Webull keys") and `remote-auth-blocked` (an address used up its
+failed-authentication budget on the remote port, docs/api.md; Mac notification and feed, feed only
+off macOS), and from
 the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
 `watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`, `bot-down`,
 `disk-low`. Every alert goes to

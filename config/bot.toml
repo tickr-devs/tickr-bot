@@ -483,6 +483,46 @@ remote_pairing_file = "remote-pairing-link"
 remote_pairing_code_file = "remote-pairing-code.json"
 # Seconds a pairing code stays redeemable after `pair` made it; later the phone gets 401 and the owner runs `pair` again; read by `pair`.
 remote_pairing_code_ttl_seconds = 600
+# Failed-authentication limit of the remote port, per client address (api/authlimit.py; docs/api.md "Failed
+# authentication limit"). The token (remote_token_bytes = 32: 256 bits, 128 at the floor) is what makes guessing
+# infeasible: at the budgets below even 2^33 addresses (all of IPv4 plus 2^32 IPv6 /64s) get about 2^52 guesses a year,
+# a chance of 2^-76 at the 128-bit floor. The limit bounds the work and the noise each address can cause; the numbers
+# are therefore set by the owner's side: how long a device that failed is locked out, and how many failures a correct
+# device can cause by itself. Read by the api server.
+# TCP peer address of the HTTPS proxy in front of the remote port, an IP address: Caddy on the server
+# (ops/aws/bot/files/Caddyfile, reverse_proxy 127.0.0.1, network_mode host) and `tailscale serve` on the Mac both
+# connect from 127.0.0.1. From this peer only, the last X-Forwarded-For entry is the client (each proxy replaces or
+# appends to what its caller sent); from any other peer, or without the header, the client is the peer; read by the api
+# server.
+remote_auth_trusted_proxy = "127.0.0.1"
+# Sliding window of the device-token budget, seconds; also the longest a blocked address waits, since it is refused only
+# until its oldest counted failure is this old. 600 s (10 min): the pairing code's lifetime above, and the published
+# default ban and find time of fail2ban. Not derivable from the token's strength (any window keeps 256 bits out of
+# reach); a judgment between lockout and noise, flagged for the owner's review; read by the api server.
+remote_auth_window_seconds = 600
+# Failed device-token checks per client address per remote_auth_window_seconds before the address is refused 429
+# auth_rate_limited, count. The owner never types a token; a correct device fails only in the race where it is re-paired
+# while its reads are in flight with the old token, at most one per polling loop of the iOS app (about 10), so 10
+# failures never lock out a device that then uses its new token. Flagged for review; read by the api server.
+remote_auth_failures = 10
+# Sliding window of the POST /pair budget, seconds: at least remote_pairing_code_ttl_seconds (checked at start), so one
+# code's whole life is inside one window and each address gets at most remote_pair_failures guesses at any code; read
+# by the api server.
+remote_pair_window_seconds = 600
+# Failed POST /pair redeems per client address per remote_pair_window_seconds, count: stricter than the token's, since
+# the owner fails at most twice per pairing (opening an expired link, opening a used link again; then he runs `pair`
+# and redeems the new code), plus one to spare. Flagged for review; read by the api server.
+remote_pair_failures = 3
+# Most client addresses each budget tracks, count. A tracked address takes at most about 650 bytes (measured: a /64 key
+# and 10 failures), so the token table stays under about 42 MB and the /pair table under about 26 MB. When every
+# tracked address still counts, a new address is refused 429 (fail closed) instead of checked unlimited: an attacker
+# needs this many addresses failing once per window (about 110 requests/s) to keep new addresses out. Not derivable;
+# the largest value whose memory is small next to the bot server's 4 GiB, flagged for review; read by the api server.
+remote_auth_max_addresses = 65536
+# IPv6 prefix length an IPv6 client address counts as, bits: 64, the smallest prefix a network gives one host (SLAAC
+# interface identifiers are 64 bits, RFC 4291; RFC 6177 assigns end sites /48 to /56), so a host cannot get a fresh
+# budget from each of its 2^64 addresses; read by the api server.
+remote_auth_ipv6_prefix_length = 64
 # Status file the bot writes and the API serves, relative to data_dir; read by the bot's status writer and the api server.
 status_file = "status.json"
 # Account file the bot writes after each successful broker read of positions and open orders (reconciliation) and the API serves at GET /account, relative to data_dir; read by the bot's account writer and the api server.

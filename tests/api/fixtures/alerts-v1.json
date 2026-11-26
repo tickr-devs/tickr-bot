@@ -296,6 +296,16 @@
         "imessage": true,
         "push": true
       }
+    },
+    {
+      "kind": "remote-auth-blocked",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "mac": true,
+        "imessage": true,
+        "push": true
+      }
     }
   ],
   "routing_cause": null,

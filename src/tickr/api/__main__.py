@@ -55,6 +55,7 @@ from tickr.runtime.alerts import (
     MACOS,
     Alerter,
     AlertKind,
+    AlertOutcome,
     Channels,
     FeedNotifier,
     Notifier,
@@ -136,15 +137,40 @@ def unexpected_credentials(cfg: config_module.Config,
 
 
 def _api_notifier(cfg: config_module.Config) -> Notifier | None:
-    """The Mac notification (run without any credential variable) and the alerts feed file; no
-    iMessage (the API has no recipient variable); None off macOS."""
+    """The alerts feed file and, on macOS, the Mac notification (run without any credential
+    variable); no iMessage (the API has no recipient variable). Off macOS (the bot server) the
+    feed is the only channel."""
+    feed = FeedNotifier(feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
     if sys.platform != "darwin":
-        return None
+        return Channels((), ((FEED, feed),))
     run = functools.partial(subprocess.run,
                             env=config_module.environ_without(
                                 config_module.credential_variables(cfg)))
-    feed = FeedNotifier(feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
     return Channels((), ((MACOS, mac_notifier(cfg.alerts, run)), (FEED, feed)))
+
+
+def _log_outcomes(outcomes: list[AlertOutcome]) -> None:
+    for outcome in outcomes:
+        body = outcome.journal_body()
+        print(f"tickr api: alert {body['kind']} {body['delivery']}"
+              + (f" ({body['error']})" if body["error"] else ""), file=sys.stderr)
+
+
+def auth_alert(cfg: config_module.Config,
+               notifier: Callable[[config_module.Config], Notifier | None] = _api_notifier,
+               ) -> Callable[[str], None]:
+    """The remote port's `remote-auth-blocked` alert (ApiServer.auth_alert): its channels run in
+    the background, so the request never waits for them; each outcome is one line in api.log.
+    The text names the client address and the budget, never a token or code."""
+    alerter = Alerter(cfg.alerts, f"{ALERT_TITLE} {cfg.environment_name}", notifier(cfg))
+    lock = threading.Lock()  # request threads share one alerter
+
+    def send(text: str) -> None:
+        with lock:
+            _log_outcomes([*alerter.completed(),
+                           alerter.alert(AlertKind.REMOTE_AUTH_BLOCKED, text)])
+
+    return send
 
 
 def check_credentials(cfg: config_module.Config, environ: Mapping[str, str] = os.environ,
@@ -162,11 +188,8 @@ def check_credentials(cfg: config_module.Config, environ: Mapping[str, str] = os
     alerter = Alerter(cfg.alerts, f"{ALERT_TITLE} {cfg.environment_name}", notifier(cfg))
 
     def send() -> None:
-        outcomes = [alerter.alert(AlertKind.API_CREDENTIALS_UNEXPECTED, text), *alerter.flush()]
-        for outcome in outcomes:
-            body = outcome.journal_body()
-            print(f"tickr api: alert {body['kind']} {body['delivery']}"
-                  + (f" ({body['error']})" if body["error"] else ""), file=sys.stderr)
+        _log_outcomes([alerter.alert(AlertKind.API_CREDENTIALS_UNEXPECTED, text),
+                       *alerter.flush()])
 
     thread = threading.Thread(target=send, name="credentials-alert", daemon=True)
     thread.start()
@@ -252,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     remote = None
     if settings.remote_hosts:
         remote = make_remote_server(server)
+        remote.auth_alert = auth_alert(cfg)
         threading.Thread(target=remote.serve_forever, daemon=True).start()
         print(f"tickr api for the phone on http://{settings.host}:{remote.server_port}/ "
               "(bearer token required; point tailscale serve here)", file=sys.stderr)
