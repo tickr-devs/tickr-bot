@@ -537,6 +537,30 @@ def test_a_stream_gap_refuses_until_a_complete_backfill_spans_it(creds):
     assert store.snapshot(T0 + 30).refusal("AAPL") is None
 
 
+def test_the_repair_starts_at_the_last_row_received_not_the_highest_sip_time(creds):
+    """The stricter of the two bounds (#793 kept the highest SIP time, #834 the last received):
+    a row out of SIP order does not move the verified end forward."""
+    store = ticks.TickStore(DAY)
+    store.subscribe(["AAPL"], T0)
+    streamed(store, "AAPL", T0 + 1, q=1, t=T0 // MS + 7)
+    streamed(store, "AAPL", T0 + 2, q=2, t=T0 // MS + 3)  # received last, earlier SIP time
+    store.down(["AAPL"], T0 + 10, "ConnectionError", 500)
+    assert store.snapshot(T0 + 10).repair_from("AAPL") == T0 + 3 * MS
+
+
+def test_a_row_received_before_the_resubscription_but_handed_after_proves_nothing(creds):
+    """On the shared stream a row can wait in its lane while the acknowledgment is recorded:
+    only a row received at or after the mark verifies the hand-over."""
+    store = ticks.TickStore(DAY)
+    store.subscribe(["AAPL"], T0 + 10)
+    fill(store, "AAPL", START, END, T0 + 11)
+    streamed(store, "AAPL", T0 + 5, q=1)  # received before the mark, added after it
+    assert store.counts["handed_after_mark"] == 2  # its trade and its quote
+    assert store.snapshot(ALL).refusal("AAPL") == "tick_coverage_unverified"
+    streamed(store, "AAPL", T0 + 12, q=2)
+    assert store.snapshot(ALL).refusal("AAPL") is None
+
+
 def test_receipt_times_are_never_compared_with_sip_times_as_coverage(creds):
     """codex-109 point 6: the local clock may run ahead of or behind SIP time; coverage is the
     SIP time of rows seen, whatever the receipt times of the drop and the resubscription."""

@@ -74,8 +74,10 @@ far larger than a cohort's; the capacity of either path is not measured yet and 
 invented here.
 
 Not decided here: which subscription path runs (`[massive] tick_subscription`, "symbols" or
-"market", a measurement decision), and whether this stream may share Massive's one connection
-per cluster with `MinuteStream` (both use `stream_host` / `stream_path`).
+"market", a measurement decision). On a plan with one connection per cluster, `MinuteStream`
+and `TickStream` would close each other (`max_connections`); `tickr.model.stream.SharedStream`
+carries both channel sets on one connection (and records its subscriptions at their
+acknowledgment, so a resubscription mark is the acknowledgment's receipt there).
 """
 
 from __future__ import annotations
@@ -312,7 +314,7 @@ class TickStore:
         self.first: dict[tuple[str, str], list[tuple[int, int, int]]] = {}
         # symbol (or MARKET) -> its gaps in drop order: rows sent while down are lost
         self.gaps: dict[str, list[Gap]] = {}
-        self._last_sip: dict[tuple[str, str], int] = {}  # (kind, ticker) -> latest stream SIP ns
+        self._last_sip: dict[tuple[str, str], int] = {}  # (kind, ticker) -> last received SIP ns
         # measurement counts: other_day, late, same_ms_trades / _quotes / _trade_quote
         self.counts: collections.Counter[str] = collections.Counter()
         self._cutoff = 0  # the latest cutoff a snapshot was taken at
@@ -338,8 +340,9 @@ class TickStore:
                 if source == STREAM:
                     self._same_ms(kind, row["ticker"], ts // NS_PER_MS)
                     self._first(kind, row["ticker"], recv_ns, ts)
-                    held_sip = self._last_sip.get((kind, row["ticker"]), ts)
-                    self._last_sip[(kind, row["ticker"])] = max(held_sip, ts)
+                    # the last row received, not the highest SIP time: a row out of SIP order
+                    # does not move the verified end forward (the stricter bound, codex-109 p. 6)
+                    self._last_sip[(kind, row["ticker"])] = ts
                 versions = held.setdefault(key, [])
                 if not versions:
                     new += 1
@@ -360,6 +363,11 @@ class TickStore:
 
     def _first(self, kind: str, ticker: str, recv_ns: int, sip_ns: int) -> None:
         mark = max(self._resumed.get(ticker, -1), self._resumed.get(MARKET, -1))
+        if recv_ns < mark:
+            # received before the (re)subscription mark but handed after it (a queued row on the
+            # shared stream): it proves nothing about delivery after the mark
+            self.counts["handed_after_mark"] += 1
+            return
         found = self.first.setdefault((kind, ticker), [])
         if not found or found[-1][0] != mark:
             found.append((mark, recv_ns, sip_ns))
@@ -406,11 +414,14 @@ class TickStore:
                 self.gaps.setdefault(key, []).append(
                     Gap(cause, down_ns, mono_ns, None, None, before))
 
-    def up(self, up_ns: int, mono_ns: int) -> None:
-        """The subscription was sent again: every open gap ends its drop at `up_ns`; whether
-        the events of the gap are covered is a question of SIP time (TickSnapshot.refusal)."""
+    def up(self, up_ns: int, mono_ns: int, keys: list[str] | None = None) -> None:
+        """The subscription was sent again (or, on the shared stream, acknowledged): the open
+        gaps of `keys` (every key when None) end their drop at `up_ns`; whether the events of
+        the gap are covered is a question of SIP time (TickSnapshot.refusal)."""
         with self._lock:
             for key, gaps in self.gaps.items():
+                if keys is not None and key not in keys:
+                    continue
                 for i, gap in enumerate(gaps):
                     if gap.up_ns is None:
                         gaps[i] = dataclasses.replace(gap, up_ns=up_ns, up_mono=mono_ns)
