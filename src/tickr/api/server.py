@@ -1224,7 +1224,7 @@ class Handler(BaseHTTPRequestHandler):
             routing = settings.routing.set(body["kind"], body["channel"], body["on"])
         except RoutingRefused as exc:
             bad = exc.cause in (RefusalCause.UNKNOWN_KIND, RefusalCause.UNKNOWN_CHANNEL)
-            self._error("bad_request" if bad else "conflict", str(exc))
+            self._error("bad_request" if bad else "conflict", safe_cause(exc))
             return
         self._json(200, alerts_document(settings, routing))
 

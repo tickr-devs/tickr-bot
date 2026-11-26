@@ -69,12 +69,26 @@ alert channel is an owner decision (see "Open owner decisions").
    ```sh
    C="docker compose -f ops/docker/compose.yaml --profile jobs"
    $C run --rm preflight mkdir -m 700 /app/data/webull-token-sandbox
-   $C run --rm preflight; echo $?      # today: 1, alert-channel-missing
+   $C run --rm preflight; echo $?      # 1, alert-channel-missing, until Telegram is set
    ```
-6. API: `docker compose -f ops/docker/compose.yaml up -d api`;
+6. **Cutover step: send one test alert before the first bot start; the owner confirms it
+   arrived.** With `TICKR_TELEGRAM_BOT_TOKEN` and `TICKR_TELEGRAM_CHAT_ID` in the env file
+   (on AWS: in the `tickr-bot/env` secret, then `sudo systemctl restart tickr-secrets`):
+   ```sh
+   $C run --rm preflight python -m tickr.runtime --config /app/config/bot.toml \
+       alert preflight-failed "test alert from the server"
+   ```
+   It sends one alert through every configured channel, exactly like the bot's jobs (same
+   image, env file and config), and prints a JSON `alert` line `"delivery": "sending"`, then
+   one per channel once it has answered: `"delivery":
+   "shown"` with `"channel": "telegram"` when Telegram accepted it, or `"failed"` with an
+   `error` naming only the HTTP status or the failure type (never the token or chat id).
+   `preflight-failed` is a locked kind, so the owner's routing cannot turn it off. Do not start
+   the bot until the message is on the owner's phone.
+7. API: `docker compose -f ops/docker/compose.yaml up -d api`;
    `curl -s http://127.0.0.1:8766/` on the server.
-7. Production only: uncomment the authorization bind mount in `compose.yaml`.
-8. Schedule the jobs with systemd timers (below). Stop the bot with
+8. Production only: uncomment the authorization bind mount in `compose.yaml`.
+9. Schedule the jobs with systemd timers (below). Stop the bot with
    `docker compose -f ops/docker/compose.yaml stop bot`; logs with `... logs -f bot`.
    Before rebooting the server, the same rule as the Mac: wait for the `bot-exit` line.
 
@@ -195,9 +209,9 @@ Delete the zip from the volume after copying it.
 
 ## Open owner decisions
 
-1. **Linux alert channel (blocker).** iMessage needs Messages.app on a signed-in Mac. Choices
-   include keeping a Mac as the iMessage sender, or a channel that works from Linux. A new
-   channel is an owner decision; nothing is implemented. Until then preflight refuses on Linux.
+1. **Linux alert channel.** iMessage needs Messages.app on a signed-in Mac. Telegram
+   (`TelegramNotifier`, above) is the channel that works from Linux: preflight refuses on Linux
+   until both Telegram variables are set, and step 6 proves the send before the first start.
 2. **Where the server runs** (home box, VPS and its region; latency to Webull; who else has root
    on it, since root can read the env file and the token folder).
 3. **How its clock is synced** (chrony or systemd-timesyncd, which servers), and whether

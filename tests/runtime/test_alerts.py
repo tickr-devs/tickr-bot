@@ -578,3 +578,25 @@ def test_a_failed_telegram_send_is_recorded_as_a_failed_delivery():
     assert outcome.delivery is Delivery.FAILED and outcome.channel == TELEGRAM
     assert "telegram did not answer" in (outcome.error or "")
     assert len(sent) == 1
+
+
+@pytest.mark.parametrize("error", [ValueError("https://x/bottoken-canary/s chat-canary"),
+                                   RuntimeError("token-canary"), KeyError("chat-canary")])
+def test_an_unexpected_telegram_error_becomes_a_notify_error_naming_only_its_type(error):
+    sent = []
+    with pytest.raises(NotifyError) as caught:
+        TelegramNotifier(TG, TG_ENV, _opener(sent, error)).notify("t", "x")
+    assert str(caught.value) == f"telegram failed: {type(error).__name__}"
+    # No chained exception carries the original message (it may hold the URL or chat id).
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__
+    assert len(sent) == 1
+
+
+def test_an_unexpected_telegram_error_never_reaches_the_alert_caller():
+    sent = []
+    notifier = TelegramNotifier(TG, TG_ENV, _opener(sent, ValueError("token-canary")))
+    # In the caller's thread too (no background), the alert returns a failed outcome.
+    alerter = Alerter(CONFIG, "tickr", Channels(((TELEGRAM, notifier),), ()))
+    outcome = alerter.alert(AlertKind.DISK_LOW, "low")
+    assert outcome.delivery is Delivery.FAILED and outcome.error is not None
+    assert "canary" not in outcome.error and "ValueError" in outcome.error

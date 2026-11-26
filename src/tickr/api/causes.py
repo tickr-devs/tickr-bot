@@ -38,6 +38,7 @@ REFUSALS = frozenset({
     "tickr.data.base.SymbolsRefused",
     "tickr.broker.base.RateLimited",
     "tickr.broker.budget.BudgetExhausted",
+    "tickr.runtime.alert_routing.RoutingRefused",
 })
 
 
