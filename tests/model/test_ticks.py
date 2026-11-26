@@ -100,9 +100,9 @@ def test_the_bot_path_does_not_import_boto3():
 # The pinned converter's `main()` and `creds()` read S3 credential values (environment or Secrets
 # Manager) for the training's download modes. They are the one place in the repository where
 # credential values are read, byte-pinned and unreachable from the bot path: the bot calls only
-# `day()`, reads the constants TCOLS and QCOLS and sets the group count KB. These two tests are
-# that exception (rule 4).
-BOT_USES_OF_THE_CONVERTER = {"day", "TCOLS", "QCOLS", "KB"}
+# `day()`, reads the constants TCOLS, QCOLS and RTH and sets the group count KB. These two tests
+# are that exception (rule 4).
+BOT_USES_OF_THE_CONVERTER = {"day", "TCOLS", "QCOLS", "RTH", "KB"}
 
 
 def test_the_bot_only_uses_day_and_constants_of_the_converter():
