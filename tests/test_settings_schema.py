@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -181,3 +182,126 @@ def test_a_maximum_comes_from_the_schema_file(tmp_path):
     refusals = schema.validate(settings, P, {"risk.max_open_positions": 9}, _current(P))
     assert [(r.key, r.cause) for r in refusals] == [
         ("risk.max_open_positions", Cause.ABOVE_MAXIMUM)]
+
+
+CLASSES = schema.load_classes(SCHEMA_FILE)
+BOT_KEYS = _current(schema.PLATFORM)
+
+
+def test_every_key_of_bot_toml_has_a_class():
+    unclassed = [k for k in BOT_KEYS if schema.classify(CLASSES, schema.PLATFORM, k) is None]
+    assert unclassed == [], "name the table in [classes.tables] of config/settings_schema.toml"
+
+
+def test_class_lists_name_only_tables_and_keys_that_exist():
+    document = tomllib.loads(FILES[schema.PLATFORM].read_text("utf-8"))
+    tables = {t for t, v in document.items() if t != "environments"} | {
+        f"environments.{e}" for e in document["environments"]}
+    assert set(CLASSES.tables) == tables
+    assert set(CLASSES.keys) <= set(BOT_KEYS)
+
+
+def test_owner_keys_are_exactly_the_platform_records():
+    owner = {k for k in BOT_KEYS
+             if schema.classify(CLASSES, schema.PLATFORM, k) is schema.SettingClass.OWNER}
+    assert owner == {s.key for s in SETTINGS if s.owner == schema.PLATFORM}
+
+
+def test_environments_secrets_and_authorization_are_closed():
+    for key in BOT_KEYS:
+        closed = schema.classify(CLASSES, schema.PLATFORM, key) is schema.SettingClass.CLOSED
+        secretive = key.startswith(("environments.", "run.environment")) or key.endswith(
+            "_variable")
+        assert closed or not secretive, key
+
+
+def test_a_new_model_setting_is_owner_once_it_has_a_record():
+    # [model] is engineering until a record exists; the mechanism needs no list change.
+    assert schema.classify(CLASSES, schema.PLATFORM, "model.enabled") is (
+        schema.SettingClass.ENGINEERING)
+
+
+CLOSED_NAMES = [n for n, c in (*CLASSES.tables.items(), *CLASSES.keys.items())
+                if c is schema.SettingClass.CLOSED]
+
+
+def _record_at(key: str) -> schema.Setting:
+    base = next(r for r in schema.RECORDS if r.owner == schema.PLATFORM)
+    return replace(base, key=key)
+
+
+@pytest.mark.parametrize("name", CLOSED_NAMES)
+@pytest.mark.parametrize("suffix", ["", ".x", ".deep.er.key"])
+def test_a_record_at_or_under_any_closed_name_is_refused_and_classified_closed(
+        monkeypatch, name, suffix):
+    # Review probe: a record under environments.production loaded and classified as owner.
+    key = name + suffix
+    monkeypatch.setattr(schema, "RECORDS", (*schema.RECORDS, _record_at(key)))
+    with pytest.raises(schema.SchemaError):
+        schema.load_classes(SCHEMA_FILE)
+    assert schema.classify(CLASSES, schema.PLATFORM, key) is schema.SettingClass.CLOSED
+
+
+def test_the_review_probe_record_is_refused(monkeypatch):
+    key = "environments.production.trading_enabled"
+    monkeypatch.setattr(schema, "RECORDS", (*schema.RECORDS, _record_at(key)))
+    with pytest.raises(schema.SchemaError, match="closed"):
+        schema.load_classes(SCHEMA_FILE)
+    assert schema.classify(CLASSES, schema.PLATFORM, key) is schema.SettingClass.CLOSED
+
+
+@pytest.mark.parametrize("name", CLOSED_NAMES)
+def test_every_spelling_of_a_closed_path_is_closed(name):
+    parts = name.split(".")
+    for key in ('.'.join(f'"{p}"' for p in parts) + ".k",
+                " . ".join(parts) + " . k",
+                ".".join(f"'{p}'" for p in parts),
+                name.upper() + ".K"):
+        assert schema.classify(CLASSES, schema.PLATFORM, key) is schema.SettingClass.CLOSED, key
+
+
+@pytest.mark.parametrize("key", [
+    "no_such_table.key", "risk", "", ".", "risk.", ".risk.x", "risk..x", "nope.x\nrun.y"])
+def test_a_key_outside_the_classification_has_no_class(key):
+    # Fail closed: None is refused by every caller (UNKNOWN_KEY), never defaulted to owner.
+    assert schema.classify(CLASSES, schema.PLATFORM, key) is None
+
+
+@pytest.mark.parametrize("key", [
+    'risk."max_open_positions"', "risk.max_open_positions = 1", "risk . max_open_positions",
+    "RISK.max_open_positions", 'risk."a\\u0062"'])
+def test_only_the_exact_spelling_of_a_record_is_owner(key):
+    assert schema.classify(CLASSES, schema.PLATFORM, key) is not schema.SettingClass.OWNER
+
+
+def test_a_file_key_with_slashes_under_a_closed_table_is_closed():
+    keys = [k for k in BOT_KEYS if k.startswith("environments.") and "/" in k]
+    assert keys, "bot.toml has route_limits keys with slashes under [environments.*]"
+    assert all(schema.classify(CLASSES, schema.PLATFORM, k) is schema.SettingClass.CLOSED
+               for k in keys)
+
+
+def test_a_closed_table_holding_records_is_refused(tmp_path):
+    # Take risk out of the engineering list first, so only the closed check can refuse it.
+    text = SCHEMA_FILE.read_text("utf-8").replace('  "risk",\n', "", 1).replace(
+        "closed_tables = [", 'closed_tables = [\n  "risk",')
+    bad = tmp_path / "s.toml"
+    bad.write_text(text, "utf-8")
+    with pytest.raises(schema.SchemaError, match="closed"):
+        schema.load_classes(bad)
+
+
+def test_a_record_inside_a_closed_list_is_refused(tmp_path):
+    bad = tmp_path / "s.toml"
+    bad.write_text(SCHEMA_FILE.read_text("utf-8").replace(
+        "closed_keys = [", 'closed_keys = [\n  "risk.max_open_positions",'), "utf-8")
+    with pytest.raises(schema.SchemaError):
+        schema.load_classes(bad)
+
+
+def test_a_table_in_both_lists_is_refused(tmp_path):
+    bad = tmp_path / "s.toml"
+    bad.write_text(SCHEMA_FILE.read_text("utf-8").replace(
+        "closed_tables = [", 'closed_tables = [\n  "risk",'), "utf-8")
+    with pytest.raises(schema.SchemaError):
+        schema.load_classes(bad)

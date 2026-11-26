@@ -17,6 +17,7 @@ import pytest
 from tickr import config
 from tickr import settings_schema as schema
 from tickr.api.server import make_server, settings_from_config
+from tickr.api.settingsview import draft_document
 
 from .samples import T0
 from .schema_check import errors
@@ -140,7 +141,25 @@ def test_a_draft_reports_when_each_change_applies_and_which_needs_face_id(served
     (schema.PLATFORM, "risk.max_quote_age_seconds", "1" * 40 + ".5", "WRONG_TYPE"),
     (schema.PLATFORM, "risk.max_daily_loss_usd", "50.5", "OFF_STEP"),
     (schema.PLATFORM, "risk.symbol_cooldown_after_loss_enabled", "yes", "WRONG_TYPE"),
-    (schema.PLATFORM, "risk.planned_loss_usd", "50", "UNKNOWN_KEY"),
+    (schema.PLATFORM, "risk.planned_loss_usd", "50", "ENGINEERING_KEY"),
+    (schema.PLATFORM, "risk.no_such_key", "50", "UNKNOWN_KEY"),
+    (schema.PLATFORM, "run.environment", '"production"', "CLOSED_KEY"),
+    (schema.PLATFORM, "environments.production.trading_enabled", "true", "CLOSED_KEY"),
+    (schema.PLATFORM, "environments.production.authorization_file", '""', "CLOSED_KEY"),
+    (schema.PLATFORM, "massive.api_key_variable", '"X"', "CLOSED_KEY"),
+    (schema.PLATFORM, "model.enabled", "true", "ENGINEERING_KEY"),
+    # A closed table or key is refused at any depth and in any spelling of its path.
+    (schema.PLATFORM, 'environments."production".trading_enabled', "true", "CLOSED_KEY"),
+    (schema.PLATFORM, "environments . production . trading_enabled", "true", "CLOSED_KEY"),
+    (schema.PLATFORM, "Environments.PRODUCTION.trading_enabled", "true", "CLOSED_KEY"),
+    (schema.PLATFORM, "environments.production", "true", "CLOSED_KEY"),
+    (schema.PLATFORM, "environments.production.a.b.c", "true", "CLOSED_KEY"),
+    (schema.PLATFORM, "environments.sandbox.no_such_key", "1", "CLOSED_KEY"),
+    (schema.PLATFORM, "run.environment.nested", '"x"', "CLOSED_KEY"),
+    (schema.PLATFORM, "api.'remote_pairing_file'", '"x"', "CLOSED_KEY"),
+    (schema.PLATFORM, "no_such_table.key", "1", "UNKNOWN_KEY"),
+    (schema.PLATFORM, "risk..max_open_positions", "1", "UNKNOWN_KEY"),
+    (schema.PLATFORM, 'risk."max_open_positions"', "1", "UNKNOWN_KEY"),
     (schema.PLATFORM, "risk.min_daily_room_usd", "100000", "RULE_BROKEN"),
     (PA3, "indicators.fast_ema_period", "1000", "RULE_BROKEN"),
     ("no-such-strategy", "indicators.fast_ema_period", "5", "UNKNOWN_KEY"),
@@ -204,3 +223,20 @@ def test_without_a_config_path_values_and_validate_are_unavailable(served):
     assert request(server, "GET", "/settings/schema")[0].status == 200
     assert request(server, "GET", "/settings/values")[0].status == 503
     assert _validate(server, (schema.PLATFORM, "risk.max_open_positions", "1"))[0].status == 503
+
+
+def test_a_record_under_a_closed_table_is_still_refused_by_the_draft(served, monkeypatch):
+    # Review probe: a mistaken platform record under [environments.production] must not make
+    # the key changeable from the apps, even when the loader's check is bypassed.
+    _, root = served
+    key = "environments.production.trading_enabled"
+    base = next(r for r in schema.RECORDS if r.kind is schema.Kind.BOOL
+                and r.owner == schema.PLATFORM)
+    probe = replace(base, key=key)
+    classes = schema.load_classes(root / "config" / "settings_schema.toml")
+    monkeypatch.setattr(schema, "RECORDS", (*schema.RECORDS, probe))
+    settings = (*schema.load(root / "config" / "settings_schema.toml"), probe)
+    body = draft_document(settings, ((schema.PLATFORM, key, "true"),),
+                          root / "config" / "bot.toml", root, classes)
+    assert [(r.key, r.cause) for r in body.refusals] == [(key, schema.Cause.CLOSED_KEY)]
+    assert body.changes == ()

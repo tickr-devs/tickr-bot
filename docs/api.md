@@ -825,7 +825,11 @@ a journal row or a database row; applying a draft, its history and rollback come
   (no refusal), `refusals[]` (`owner`, `key`, `cause`, `detail`) and `changes[]`. Causes:
   `UNKNOWN_KEY` (not a schema setting, or no such owner), `WRONG_TYPE` (the text is not of the
   setting's kind), `BELOW_MINIMUM`, `ABOVE_MAXIMUM`, `OFF_STEP`, `RULE_BROKEN` (the draft over
-  the file breaks a rule; named on the rule's left key), `VALUE_MISSING` (the file has no present
+  the file breaks a rule; named on the rule's left key), `ENGINEERING_KEY` (the key is in the file but is file-only), `CLOSED_KEY` (the key is, or lies at
+  any depth under, a closed table or key in any spelling of its path, in the file or not:
+  environment, Production authorization, secrets; refused whatever its value, even when a schema
+  record names it, backlog S2),
+  `VALUE_MISSING` (the file has no present
   value to compare with, or a rule needs a key the file lacks). `changes[]` holds every draft key
   of the right kind with a present value: `current` and `draft` (TOML text), `changed` (false
   when the draft repeats the present value), `applies`, `needs_face_id` and

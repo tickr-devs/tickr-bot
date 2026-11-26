@@ -77,6 +77,7 @@ from tickr.api.settingsview import (
     BadDraft,
     SettingsUnavailable,
     draft_document,
+    load_classes,
     load_schema,
     parse_draft,
     schema_document,
@@ -1596,7 +1597,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             self._json(200, draft_document(load_schema(settings.settings_schema_file), changes,
-                                           settings.config_file, settings.config_root))
+                                           settings.config_file, settings.config_root,
+                                           load_classes(settings.settings_schema_file)))
         except SettingsUnavailable as exc:
             self._error("unavailable", safe_cause(exc))
 

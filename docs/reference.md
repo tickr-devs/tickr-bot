@@ -222,6 +222,8 @@ Why a settings change from the app or the site was declined. Nothing was changed
 | `OFF_STEP` | The value is not one of the allowed steps. | Use a multiple of the step. |
 | `RULE_BROKEN` | The value breaks a rule that links it to another setting. | Change the related setting too. |
 | `VALUE_MISSING` | A required value was not given. | Enter a value. |
+| `ENGINEERING_KEY` | The setting is changed only in the configuration file, not from the app. | Ask the engineer to change the file. |
+| `CLOSED_KEY` | The setting is never changed from an app: the environment, the Production authorization or a secret's name. | Leave it; it is set on the Mac by its owner. |
 
 ## Alerts
 
