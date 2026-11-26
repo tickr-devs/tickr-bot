@@ -62,4 +62,4 @@ class PastDayWarmer:
             sys.stderr.write(f"api warmed past day {day.isoformat()} in {seconds:.1f} s\n")
         except self.errors as exc:
             sys.stderr.write(f"api could not warm the latest past day: "
-                             f"{type(exc).__name__}: {exc}\n")
+                             f"{type(exc).__name__}\n")

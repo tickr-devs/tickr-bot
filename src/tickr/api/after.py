@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Protocol
 
 from tickr.api import contract as api
+from tickr.api.causes import safe_cause
 from tickr.api.observer_results import (
     NoInputs,
     SimulationPaths,
@@ -94,13 +95,13 @@ class Closes:
             try:
                 calendar = SessionCalendar.load(self.folder)
             except (CalendarRefused, OSError) as exc:
-                return f"session calendar unreadable: {exc}"
+                return f"session calendar unreadable: {safe_cause(exc)}"
             with self._lock:
                 self._key, self._calendar = key, calendar
         try:
             return calendar.day(day).regular_close
         except CalendarRefused as exc:
-            return f"calendar refuses {day.isoformat()}: {exc}"
+            return f"calendar refuses {day.isoformat()}: {safe_cause(exc)}"
 
 
 def prices_after(symbol: str, bars: Sequence[_Priced], anchor: datetime,
@@ -165,7 +166,7 @@ def trade_after(trade: api.DayTrade, bars: Sequence[_Priced], close: Close,
                               settings.minutes, close)
         usd, r, cause = overshoot(trade, bars, settings.minutes[-1], close, settings.r_places)
     except Exception as exc:  # noqa: BLE001 - display only, see docstring
-        failed = f"{type(exc).__name__}: {exc}"
+        failed = type(exc).__name__
         return replace(trade, prices_after=(), prices_after_cause=failed, overshoot_usd=None,
                        overshoot_r=None, overshoot_cause=failed)
     return replace(trade, prices_after=points, prices_after_cause=None, overshoot_usd=usd,
@@ -178,7 +179,7 @@ def what_if(record: DecisionRecord, bars: Sequence[Bar], settings: ReplaySetting
     try:
         found = simulate_one(record, bars, settings, clock_for)
     except (ReplayError, ResearchError) as exc:
-        return api.WhatIfV1(None, None, None, f"simulation refused: {exc}")
+        return api.WhatIfV1(None, None, None, f"simulation refused: {safe_cause(exc)}")
     if found.trade is None or found.result_usd is None:
         return api.WhatIfV1(None, None, None, f"{found.outcome.value}: {found.cause}")
     places = settings.output_decimal_places
@@ -208,7 +209,7 @@ def _signal_after(signal: api.SkippedSignalV1, record: DecisionRecord,
         else:
             result = what_if(record, bars.get(record.symbol, ()), *replay)
     except Exception as exc:  # noqa: BLE001 - display only, see docstring
-        failed = f"{type(exc).__name__}: {exc}"
+        failed = type(exc).__name__
         return replace(signal, prices_after=(), prices_after_cause=failed,
                        what_if=api.WhatIfV1(None, None, None, failed))
     return replace(signal, prices_after=points, prices_after_cause=points_cause,
@@ -248,11 +249,11 @@ class SkippedAfter:
             try:
                 bars = day_bars(self.captured_bars, self.paths, day, today)
             except NoInputs as exc:
-                bars, transient = str(exc), exc.transient
+                bars, transient = safe_cause(exc), exc.transient
             try:
                 replay = replay_inputs(self.paths)
             except NoInputs as exc:
-                replay, transient = str(exc), transient or exc.transient
+                replay, transient = safe_cause(exc), transient or exc.transient
             close = self.closes.close(day)
             transient = transient or isinstance(close, str)
         value = replace(base, signals=tuple(

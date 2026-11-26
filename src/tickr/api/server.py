@@ -48,6 +48,7 @@ from tickr.api import contract, devices, flow, settled, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
+from tickr.api.causes import safe_cause
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from tickr.api.configview import config_document
 from tickr.api.contract import (
@@ -465,7 +466,7 @@ class ApiServer(ThreadingHTTPServer):
         except FileNotFoundError:
             cause = "the bot has not written a status file"
         except (ContractError, OSError) as exc:
-            cause = f"status file is invalid ({exc})"
+            cause = f"status file is invalid ({safe_cause(exc)})"
         if status is not None:
             age = contract.seconds_between(status.written_at, now)
             if age < 0:
@@ -491,7 +492,7 @@ class ApiServer(ThreadingHTTPServer):
         except FileNotFoundError:
             return ErrorV1("unavailable", "the bot has not written an account file")
         except (ContractError, OSError) as exc:
-            return ErrorV1("unavailable", f"account file is invalid ({exc})")
+            return ErrorV1("unavailable", f"account file is invalid ({safe_cause(exc)})")
         age = contract.seconds_between(account.read_at, now)
         if age < 0:
             return ErrorV1("unavailable", "account file is dated in the future")
@@ -505,7 +506,7 @@ class ApiServer(ThreadingHTTPServer):
         except FileNotFoundError:
             return ErrorV1("unavailable", "the bot has not written a quotes file")
         except (ContractError, OSError) as exc:
-            return ErrorV1("unavailable", f"quotes file is invalid ({exc})")
+            return ErrorV1("unavailable", f"quotes file is invalid ({safe_cause(exc)})")
         return QuotesResponseV1(served_at=self.clock(), quotes=quotes)
 
     def start_bot(self) -> BotStartV1 | ErrorV1:
@@ -624,7 +625,8 @@ class ApiServer(ThreadingHTTPServer):
         try:
             self.settled.put(day, key, kept)
         except OSError as exc:  # memory holds them; the disk copy is only for the next start
-            sys.stderr.write(f"settled answers of {day.isoformat()} not written: {exc}\n")
+            sys.stderr.write(f"settled answers of {day.isoformat()} not written "
+                             f"({type(exc).__name__})\n")
         if failure is not None:
             raise failure
         if answer is None:
@@ -817,7 +819,7 @@ def _query(raw: str, names: frozenset[str],
     try:
         pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=bool(raw))
     except ValueError as exc:
-        raise BadQuery(f"malformed query string: {exc}") from exc
+        raise BadQuery(f"malformed query string: {type(exc).__name__}") from exc
     found: dict[str, str] = {}
     for name, value in pairs:
         if name not in names:
@@ -837,7 +839,7 @@ def _day(text: str) -> date:
     try:
         return contract.parse_date(text)
     except ContractError as exc:
-        raise BadQuery(str(exc)) from exc
+        raise BadQuery(safe_cause(exc)) from exc
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1176,7 +1178,7 @@ class Handler(BaseHTTPRequestHandler):
             record_decision(settings.advisor_dir, body["run"], verdicts[body["verdict"]],
                             self.server.clock())
         except DecisionRefused as exc:
-            self._error("not_found" if exc.missing else "conflict", str(exc))
+            self._error("not_found" if exc.missing else "conflict", safe_cause(exc))
             return
         self._json(200, advisor_document(settings.advisor_dir, settings.advisor_runs))
 
@@ -1249,12 +1251,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             day = None if "day" not in body else _day(body["day"])
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         try:
             self._json(202, self.server.lab.start(body.get("version"), body.get("compare"), day))
         except LabReplayRefused as exc:
-            self._error("conflict", str(exc))
+            self._error("conflict", safe_cause(exc))
 
     def _history(self, path: str) -> None:
         """GET /days, /days/<YYYY-MM-DD>, /bars?symbol=&date=, /performance?from=&to=:
@@ -1286,10 +1288,10 @@ class Handler(BaseHTTPRequestHandler):
                 _query(query, frozenset())
                 document = history.day(_day(path[len(DAY_PREFIX):]), today)
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         except HistoryUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
             return
         self._json(200, document)
 
@@ -1313,7 +1315,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             _query(urlsplit(self.path).query, frozenset())
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         try:
             specs = load_schema(settings.settings_schema_file)
@@ -1325,7 +1327,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, values_document(specs, settings.config_file, settings.config_root))
         except SettingsUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
 
     def _validate_settings(self) -> None:
         """POST /settings/validate with {"changes": [...]}: 200 settings-draft-v1, the verdict
@@ -1337,7 +1339,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             changes = parse_draft(body)
         except BadDraft as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         if settings.config_file is None:
             self._error("unavailable", "this API was started without a config file path")
@@ -1346,14 +1348,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, draft_document(load_schema(settings.settings_schema_file), changes,
                                            settings.config_file, settings.config_root))
         except SettingsUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
 
     def _account(self) -> None:
         """GET /account: the bot's latest broker read of positions and open orders."""
         try:
             _query(urlsplit(self.path).query, frozenset())
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         result = self.server.account_response()
         if isinstance(result, ErrorV1):
@@ -1370,7 +1372,7 @@ class Handler(BaseHTTPRequestHandler):
             day = (_day(params["date"]) if "date" in params
                    else ny_date_of(self.server.clock()))
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         self._json(200, day_events(self.server.settings.jobs.database, day))
 
@@ -1379,7 +1381,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             _query(urlsplit(self.path).query, frozenset())
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         result = self.server.quotes_response()
         if isinstance(result, ErrorV1):
@@ -1396,7 +1398,7 @@ class Handler(BaseHTTPRequestHandler):
             document = self.server.chart.answer(symbol, interval, span, self.server.clock())
         except BadQuery as exc:
             self.log_message("GET /chart refused: bad_request: %s", exc)
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         except ChartRefused as exc:
             self.log_message("GET /chart refused: %s: %s", exc.error, exc.cause)
@@ -1419,14 +1421,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadQuery(f"version {params['version']!r} is not a strategy folder name")
             day = _day(params["date"])
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         try:
             document = trade_whatif.what_if(self.server.settings.trade_whatif,
                                             params["version"], params["symbol"], day,
                                             self.server.clock(), self.server.captured_bars)
         except trade_whatif.TradeWhatIfRefused as exc:
-            self._error("conflict", str(exc))
+            self._error("conflict", safe_cause(exc))
             return
         self._json(200, document)
 
@@ -1437,7 +1439,7 @@ class Handler(BaseHTTPRequestHandler):
             if not SYMBOL_PATTERN.match(symbol):
                 raise BadQuery(f"symbol {symbol!r} is not a ticker")
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         day = ny_date_of(self.server.clock())
         try:
@@ -1445,7 +1447,7 @@ class Handler(BaseHTTPRequestHandler):
                      if r.role is Role.ACTIVE]  # as DecisionLog.latest_active filters
             record = found[-1] if found else None
         except (RecordFileError, OSError) as exc:
-            self._error("unavailable", f"decision file unreadable: {exc}")
+            self._error("unavailable", f"decision file unreadable: {safe_cause(exc)}")
             return
         if record is None:
             self._error("not_found", f"no decision recorded for {symbol} on {day.isoformat()}")
@@ -1471,7 +1473,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise BadQuery(f"symbol {params['symbol']!r} is not a ticker")
             day = _day(params["date"]) if "date" in params else today
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         cache = self.server.decisions
         try:
@@ -1487,16 +1489,16 @@ class Handler(BaseHTTPRequestHandler):
                 document, _ = self.server.day_document(
                     path, day, today, lambda role: cache.records(day, today, role=role))
         except ObserverError as exc:
-            self._error("unavailable", f"observer strategy unreadable: {exc}")
+            self._error("unavailable", f"observer strategy unreadable: {safe_cause(exc)}")
             return
         except CaptureError as exc:
-            self._error("unavailable", f"capture file unreadable: {exc}")
+            self._error("unavailable", f"capture file unreadable: {safe_cause(exc)}")
             return
         except HistoryUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
             return
         except (RecordFileError, OSError) as exc:
-            self._error("unavailable", f"decision file unreadable: {exc}")
+            self._error("unavailable", f"decision file unreadable: {safe_cause(exc)}")
             return
         self._json(200, document)
 
@@ -1517,7 +1519,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = contract.parse_json(self.rfile.read(length))
         except ContractError as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return None
         if not isinstance(body, dict):
             self._error("bad_request", "body must be a JSON object")
