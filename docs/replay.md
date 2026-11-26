@@ -51,7 +51,8 @@ Slippage per fill = max(price x `slippage_percent` / 100, `slippage_min_usd`), a
 us. `measured_slippage_file` (empty: none) replaces `slippage_percent` with the stop slippage
 measured from the bot's own stopped trades (`python -m tickr.research slippage`,
 `docs/research.md`); a missing file or one with fewer than `measured_slippage_min_trades`
-measured trades is refused.
+measured trades is refused. That `slippage_summary.json` leaves out the sealed exam window's
+days; the command's `slippage_operations.json` (every live day) is refused as an input.
 
 **History.** The strategy gets the same shape of input as live: `bars` = the last
 `[market_data] history_sessions` (config/bot.toml, the only place of that number) sessions of

@@ -72,13 +72,26 @@ output written); a sealed day is never dropped while the rest is reported.
 | `collar` | every captured quote and captured bar (both are market data), `--decisions` | - |
 | `calibration` | nothing can be checked: stored answers carry no day, so the caller keeps sealed answers out | - |
 | `latency` | every captured quote (`--quotes` is market data and required, so in practice the whole command) | stream notices (`--notices`) |
-| `fill-quality` | every captured quote (`--quotes`) | the database's trades, orders and fills; run it without `--quotes` |
-| `slippage` | - | the database's stopped trades; their realized P&L is withheld (below) |
-| `refusals` | - | the bot's decision records: admission causes and failed-check counts per day and setup, no prices or returns |
+| `fill-quality` | every captured quote (`--quotes`) | the database's trades, orders and fills (run it without `--quotes`); absolute prices withheld (below) |
+| `slippage` | - | the database's stopped trades; absolute prices and P&L withheld, never in the replay feed (below) |
+| `refusals` | - | the bot's decision records: platform refusal causes only (below) |
 
-`slippage` keeps the stop slippage of a sealed day's trades (execution evidence) but leaves its
-`realized_loss_usd` empty in `slippage_trades.csv` and `slippage_days.csv`, sets the summary's
-total to null and lists those days in `realized_loss_withheld_days`.
+What an execution report prints for a sealed day (owner ruling 2026-11-26):
+
+- `slippage`: each trade row keeps its stop slippage (`slippage_usd`, `slippage_percent`,
+  against the stop's trigger price) and its quantities, and leaves `stop_price`,
+  `stop_fill_price`, `entry_price` and `realized_loss_usd` empty; the day row keeps its sums but
+  not `realized_loss_usd`. `slippage_summary.json`, the replay's `measured_slippage_file` feed,
+  counts only days outside the window and lists the others in `sealed_days_excluded`.
+  `slippage_operations.json` (format `tickr-slippage-operations-v1`) counts every live day for
+  operations, sealed days included (`sealed_days`, realized P&L null when one is among them); it
+  is never a replay input and the replay refuses it.
+- `fill-quality`: each trade row keeps every fill's slippage against its limit or quote, the
+  delays, shares and fees, and leaves `entry_limit`, `entry_fill`, `entry_ask`, `exit_fill` and
+  `exit_bid` empty; the per-day and overall figures are percents and stay.
+- `refusals`: a sealed day's rows are the platform's refusal causes only, counted per day and
+  cause with strategy, version, role and setup empty; its strategy checks and entry counts are
+  left out. `refusals_summary.json` lists those days in `platform_only_days`.
 
 ## Decision records (input)
 
@@ -302,7 +315,8 @@ missing price has a `cause` and is left out of every sum. Days are New York date
 Outputs: `slippage_trades.csv`, `slippage_days.csv` (per day: stopped and measured trades,
 planned and realized loss, stop slippage in USD and percent) and `slippage_summary.json`, whose
 `stop_slippage_percent` = sum((stop - fill) x shares) / sum(stop x shares) x 100 over every
-measured stop fill.
+measured stop fill outside the sealed exam window, and `slippage_operations.json`, the same
+totals over every day for operations only (see "Sealed exam window": the replay refuses it).
 
 **Replay and backtests.** `measured_slippage_file` in `config/replay.toml` (relative to that
 file's folder; `""` = none) selects a `slippage_summary.json`: its `stop_slippage_percent`

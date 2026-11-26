@@ -15,6 +15,9 @@ from research_helpers import HERE, NY, bar_json, flat, record, series, write_jso
 
 from tickr.data.base import StreamNotice
 from tickr.data.capture import CaptureWriter
+from tickr.replay.errors import MeasuredSlippageError
+from tickr.replay.measured import FORMAT as MEASURED_FORMAT
+from tickr.replay.measured import OPERATIONS_FORMAT, load_measured_slippage
 from tickr.research import sealed
 from tickr.research.__main__ import COMMANDS, _parser, main
 from tickr.research.errors import ResearchSettingsError
@@ -143,13 +146,14 @@ def _database(tmp_path, days):
                 "entry_limit_price, stop_price, planned_loss_usd, opened_at, closed_at, "
                 "close_cause) VALUES (?, ?, 'ABC', 'closed', '10', '10.00', '9.80', '2.00', ?, "
                 "?, 'stopped-out')", (f"t{n}", run, closed, closed))
-            for leg, side, price in (("entry", "BUY", "10.00"), ("stop", "SELL", "9.70")):
+            for leg, side, limit, price in (("entry", "BUY", "10.00", "10.01"),
+                                            ("stop", "SELL", None, "9.70")):
                 store.execute(
                     "INSERT INTO orders(client_order_id, trade_id, leg, symbol, side, "
-                    "order_type, quantity, stop_price, send_state, filled_quantity, "
-                    "average_fill_price, updated_at) VALUES (?, ?, ?, 'ABC', ?, 'LIMIT', '10', "
-                    "'9.80', 'acknowledged', '10', ?, ?)",
-                    (f"t{n}-{leg}", f"t{n}", leg, side, price, closed))
+                    "order_type, quantity, limit_price, stop_price, send_state, "
+                    "filled_quantity, average_fill_price, updated_at) VALUES (?, ?, ?, 'ABC', "
+                    "?, 'LIMIT', '10', ?, '9.80', 'acknowledged', '10', ?, ?)",
+                    (f"t{n}-{leg}", f"t{n}", leg, side, limit, price, closed))
     store.close()
     return str(path)
 
@@ -307,19 +311,68 @@ def test_an_execution_report_touching_sealed_market_data_is_refused(tmp_path, ca
     assert not (tmp_path / "b").exists()
 
 
-def test_slippage_withholds_the_pnl_of_a_sealed_day(tmp_path):
+def _csv(path):
+    with open(path, newline="") as handle:
+        return {r["day"]: r for r in csv.DictReader(handle)}
+
+
+def test_slippage_on_a_sealed_day_keeps_slippage_and_withholds_prices_and_pnl(tmp_path):
+    (tmp_path / "in").mkdir()
+    argv = _slippage(tmp_path / "in", [OPEN, date(2026, 11, 20)])
+    assert main([*argv, "--out", str(tmp_path / "o")]) == 0
+    trades = _csv(tmp_path / "o" / "slippage_trades.csv")
+    sealed_row, open_row = trades["2026-11-20"], trades[OPEN.isoformat()]
+    for column in ("stop_price", "stop_fill_price", "entry_price", "realized_loss_usd"):
+        assert sealed_row[column] == "" and open_row[column] != ""
+    assert sealed_row["slippage_usd"] == open_row["slippage_usd"] != ""
+    assert sealed_row["slippage_percent"] != ""
+    days = _csv(tmp_path / "o" / "slippage_days.csv")
+    assert days["2026-11-20"]["realized_loss_usd"] == ""
+    assert days["2026-11-20"]["stop_slippage_percent"] != ""
+
+
+def test_the_replay_feed_excludes_sealed_days_and_refuses_the_operations_file(tmp_path):
     (tmp_path / "in").mkdir()
     argv = _slippage(tmp_path / "in", [OPEN, date(2026, 11, 20)])
     assert main([*argv, "--out", str(tmp_path / "o")]) == 0
     summary = json.loads((tmp_path / "o" / "slippage_summary.json").read_text())
-    assert summary["realized_loss_usd"] is None
-    assert summary["realized_loss_withheld_days"] == ["2026-11-20"]
-    assert summary["measured_trades"] == 2 and summary["stop_slippage_percent"] is not None
-    for name in ("slippage_trades.csv", "slippage_days.csv"):
-        with open(tmp_path / "o" / name, newline="") as handle:
-            rows = {r["day"]: r for r in csv.DictReader(handle)}
-        assert rows["2026-11-20"]["realized_loss_usd"] == ""
-        assert rows[OPEN.isoformat()]["realized_loss_usd"] != ""
+    assert summary["format"] == MEASURED_FORMAT
+    assert summary["days"] == [OPEN.isoformat()] and summary["measured_trades"] == 1
+    assert summary["sealed_days_excluded"] == ["2026-11-20"]
+    assert summary["realized_loss_usd"] is not None
+    operations = json.loads((tmp_path / "o" / "slippage_operations.json").read_text())
+    assert operations["format"] == OPERATIONS_FORMAT and operations["measured_trades"] == 2
+    assert operations["sealed_days"] == ["2026-11-20"] and operations["realized_loss_usd"] is None
+    assert load_measured_slippage(tmp_path / "o" / "slippage_summary.json", 1) >= 0
+    with pytest.raises(MeasuredSlippageError, match="never a replay input"):
+        load_measured_slippage(tmp_path / "o" / "slippage_operations.json", 1)
+
+
+def test_fill_quality_on_a_sealed_day_withholds_absolute_prices(tmp_path):
+    (tmp_path / "in").mkdir()
+    argv = _fill_quality(tmp_path / "in", [OPEN, date(2026, 7, 1)])
+    assert main([*argv, "--out", str(tmp_path / "o")]) == 0
+    trades = _csv(tmp_path / "o" / "records" / "fill_quality_trades.csv")
+    for column in ("entry_limit", "entry_fill"):  # the stop exits have no market exit price
+        assert trades["2026-07-01"][column] == "" and trades[OPEN.isoformat()][column] != ""
+    assert trades["2026-07-01"]["entry_vs_limit_usd"] != ""
+
+
+def test_refusals_on_a_sealed_day_count_platform_causes_only(tmp_path):
+    (tmp_path / "in").mkdir()
+    argv = _refusals(tmp_path / "in", [OPEN, date(2026, 7, 1)])
+    assert main([*argv, "--out", str(tmp_path / "o")]) == 0
+    with open(tmp_path / "o" / "refusals.csv", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    sealed_rows = [r for r in rows if r["day"] == "2026-07-01"]
+    assert [(r["strategy"], r["version"], r["role"], r["setup"], r["kind"], r["name"], r["count"])
+            for r in sealed_rows] == [("", "", "", "", "platform_refusal", "daily loss ceiling",
+                                       "1")]
+    assert {r["kind"] for r in rows if r["day"] == OPEN.isoformat()} == {
+        "enter", "platform_refusal"}
+    assert all(r["strategy"] == "s" for r in rows if r["day"] == OPEN.isoformat())
+    summary = json.loads((tmp_path / "o" / "refusals_summary.json").read_text())
+    assert summary["platform_only_days"] == ["2026-07-01"]
 
 
 def test_every_command_is_in_exactly_one_list():

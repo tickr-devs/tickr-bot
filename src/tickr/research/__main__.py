@@ -239,7 +239,7 @@ def _fill_quality(args: argparse.Namespace) -> dict:
                                   days=[t.day for t in (*fills, *stopped)])
         sets.append((label, fills, stopped))
     return report.write_fill_quality(sets, {"slippage_percent": replay.slippage_percent},
-                                     args.out, replay.output_decimal_places)
+                                     args.out, replay.output_decimal_places, sealed_day)
 
 
 def _gate(args: argparse.Namespace) -> dict:
@@ -323,9 +323,11 @@ def _run(args: argparse.Namespace) -> dict:
         records = load_records(args.decisions)  # the bot's own admission records
         refuse_sealed_own_records(args.command, "--decisions",
                                   days=[t for r in records for t in (r.bar_start, r.time)])
-        rows = refusals.table(_filter(records, args.strategy),
-                              settings.session_timezone)
-        return report.write_refusals(rows, args.out, places)
+        rows = refusals.platform_only(
+            refusals.table(_filter(records, args.strategy), settings.session_timezone),
+            sealed_day)
+        sealed_days = sorted({r.day for r in rows if sealed_day(r.day)})
+        return report.write_refusals(rows, args.out, places, sealed_days)
     if args.command == "calibration":
         settings = load_research_settings(args.settings)
         reports = calibration.calibration(args.answers, settings.calibration_buckets)
