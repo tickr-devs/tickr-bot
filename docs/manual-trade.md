@@ -44,6 +44,7 @@ tickr check-config
 tickr status                                 # environment, gate, bot pid, last run
 tickr check-quote SYMBOL                     # read-only: is the snapshot quote fresh?
 tickr probe-quote-sources SYM [SYM...]       # read-only probe Q1: which read is fresh outside RTH
+tickr probe-tradability SYM [SYM...]         # read-only probe T8: how a halt or a non-tradable stock shows
 tickr probe-prev-day [--summary]             # read-only, overnight: when the previous session's data appears
 tickr trade SYMBOL --limit 12.34            # quantity and stop default from [probe]
 tickr trade SYMBOL --limit 12.34 --stop 12.10
@@ -262,6 +263,41 @@ probe refuses while a bot process is in the lock. About 3 minutes.
 4. Paste `run.txt` and the `summary.json` it names into the project chat; restart the bot as in
    the extended-hours probe.
 
+## Tradability probe (T8)
+
+`tickr probe-tradability SYM [SYM...]` answers how Webull shows a halted or non-tradable
+instrument (docs/webull-facts.md, the open fact "how a halt or a non-tradable instrument
+shows"). The tradability check before an entry (`[risk] tradability_check_enabled`, backlog T8)
+stays off until this has run. It is read only: it sends no orders and reads no account. Per run
+it sends one snapshot read and one instrument profile read for all the symbols together, then
+one `GET /trade/instrument` per profile row (per `instrument_id`). Every answer is kept as
+received, refusals included, in `tradability.jsonl` of
+`<data_dir>/<[probe] evidence_dir>/<NY date>/tradability-<UTC time>/`; nothing is retried.
+It can run next to the bot (a few reads on the bot's own route limits), but a quiet moment is
+better.
+
+When: in the regular session (a halt only shows while the market trades), on a day with a halt.
+
+1. Pick the symbols:
+   - a normal liquid common stock (for example `AAPL`), as the baseline;
+   - a currently halted US stock from the Nasdaq trade-halts page (nasdaqtrader.com, "Trade
+     Halts"; a LULD pause lasts 5 minutes, so run right after it appears, or pick a news halt);
+   - an OTC or otherwise non-tradable symbol if you know one, and `OPENW` (a warrant with two
+     instrument rows, one `NT`).
+2. `mkdir -p data/probe-tradability && tickr probe-tradability AAPL HALTED OTCSYM OPENW 2>&1 | tee -i data/probe-tradability/run.txt`
+   (with the real symbols). Exit 0: every read answered; 3: one was not (throttled or no
+   response; the others are still recorded); 2: not a symbol.
+3. What to look for in the printed lines (`absent: ...` names a field the answer did not have):
+   - `snapshot`: `trade_status` and `list_status` of each symbol (seen so far: `trade_status`
+     `ATH`, `CLS`); does the halted one differ, and does it still have `bid`, `ask`,
+     `quote_time`? A refused snapshot (an unknown or OTC symbol) is an answer too.
+   - `profiles`: `status` of each row (seen OC, CO, NT): what does the halted one and the OTC
+     one show?
+   - `trade-instrument <symbol> <instrument_id>`: `trade_policy` (ALL, CLOSE_ONLY or DENIED per
+     the SDK) and `forbid_reason`, or the error code the route gives. Never answered before:
+     its whole body is the evidence (is it a bare object, or wrapped in `data`?).
+4. Paste `run.txt` and the `tradability.jsonl` it names into the project chat. From them the
+   owner decides the `[risk]` profile status lists and whether to turn the check on.
 ## Trade-events probe (M3)
 
 `tickr probe-trade-events [--minutes N]` answers whether Webull's gRPC trade events (order and

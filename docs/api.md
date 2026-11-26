@@ -101,6 +101,32 @@ any other body; `503` when the code file is unreadable. Neither the code nor the
 an error or the log. A missing or empty `remote_hosts_file` (the default) turns remote access off; an unreadable
 one, or a name in it that is not a lowercase DNS name, stops the API at start.
 
+### Failed authentication limit
+
+The remote port counts failed checks per client address (`api/authlimit.py`): a `401` on any
+route (wrong, missing or unpaired token) counts against the token budget, `[api]
+remote_auth_failures` per `remote_auth_window_seconds`; a `401` at `POST /pair` (no pairing
+waiting, expired or wrong code) against the stricter pair budget, `remote_pair_failures` per
+`remote_pair_window_seconds` (at least the code's lifetime). A `400` (malformed body) tests no
+credential and counts nothing. An address over a budget gets `429 auth_rate_limited` with
+`Retry-After` (seconds until its oldest counted failure leaves the window) before its token or
+code is looked at, so neither the answer nor its timing says anything about it. A success resets
+no count, so an attacker behind the owner's address gains nothing from the owner's successes.
+Checks are taken one at a time, so parallel connections get no more guesses than sequential ones.
+
+The client address is the TCP peer, except when the peer is `[api] remote_auth_trusted_proxy`
+(127.0.0.1: Caddy on the bot server and `tailscale serve` on the Mac) and `X-Forwarded-For` is
+present: then it is the header's **last** entry, the one the proxy added (Caddy replaces what the
+caller sent; Go's proxy appends to it). A last entry that is not an IP address is `400
+bad_request` and counts as a failure of the peer. `X-Forwarded-For` from any other peer is
+ignored. An IPv6 address counts as its `remote_auth_ipv6_prefix_length` network.
+
+Memory is bounded: each budget tracks at most `remote_auth_max_addresses` addresses, dropping the
+one whose last failure is oldest once it no longer counts. When every tracked address still
+counts, a new address is refused `429` too (fail closed). The start of each block is one line in
+api.log (the address and the budget, never a token or code) and the `remote-auth-blocked` alert;
+a full table is one line and one alert per spell. The local port has no such limit (no token).
+
 The phone keeps the token in its Keychain (this device only) together with the address it was
 paired with, and sends it only over HTTPS to exactly that address; changing the address by hand
 drops the token.
@@ -195,6 +221,8 @@ Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1, "cause_c
 `unauthorized` 401 (remote request without the paired token),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
 `too_many_pending` 429, `rate_limited` 429 (GET /chart: its request budget is spent and cannot say when it refills),
+`auth_rate_limited` 429 with `Retry-After` (remote port: too many failed authentications from this address, see
+"Failed authentication limit"),
 `conflict` 409 (an `Idempotency-Key` already used for another command; a Lab replay that cannot
 start now; an alert routing write refused),
 `internal` 500, `unavailable` 503 (history cannot be read now: database of another schema
@@ -917,7 +945,8 @@ Which alert kinds go to which channel (backlog T14). Code: `src/tickr/api/alerts
   fences), plus unprotected position, unknown order status and order conflicts, foreign
   exposure, failing broker reads, a lost stream with a position, not flat after the flatten,
   every bot-down, crash, start and stop failure, preflight failed, the token waiting for
-  confirmation, every `watchdog-*` kind and `api-credentials-unexpected`.
+  confirmation, every `watchdog-*` kind, `api-credentials-unexpected` and
+  `remote-auth-blocked`.
 - `routing_cause`: null, or why the routing file cannot be used (then every kind goes to every
   channel and writes are refused until the owner deletes the file).
 
@@ -1324,7 +1353,7 @@ Every refused minute is its own row: consecutive refusals are not merged.
 `{code, message, since, until, params}`, read from the recorded `CODE: detail` at the API (the
 decision file keeps the text):
 - `code`: the admission cause (`risk/causes.py`, in spec order: `GATE_CLOSED` ...
-  `STOP_BUDGET_UNAVAILABLE`), `ENGINE_REFUSED` when admission passed but the engine refused to
+  `STOP_BUDGET_UNAVAILABLE`, then the tradability causes `TRADABILITY_UNKNOWN` ... `INSTRUMENT_NOT_TRADABLE`), `ENGINE_REFUSED` when admission passed but the engine refused to
   open the trade, or `UNKNOWN` (see below). The schema lists the closed set.
 - `message`: the detail as a sentence without raw timestamps. For most codes it is the recorded
   detail itself (`1 own position(s) open`); `SYMBOL_COOLDOWN`, `AFTER_LAST_ENTRY`,

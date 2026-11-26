@@ -107,17 +107,47 @@ jobs:
     if: needs.python-changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      TICKR_CONFIG_HOST: /srv/tickr/etc/bot.toml
+      TICKR_ENV_FILE_HOST: /srv/tickr/etc/env
+      TICKR_BOT_EXIT_TIMEOUT: "1"
+      TICKR_NIGHTLY_OUT: data/nightly
+      TICKR_NIGHTLY_SEED: data/nightly-seed
+      TICKR_DATA_HOST: /srv/tickr/data
     steps:
       - uses: actions/checkout@v7
       - run: docker build -t tickr:ci .
-      - run: docker compose -f ops/docker/compose.yaml --profile jobs config -q
+      # compose runs the image TICKR_IMAGE names (on the server: the release image, through
+      # limits.env), here the one just built; every service runs it.
+      - run: |
+          docker compose -f ops/docker/compose.yaml --profile jobs config -q
+          test "$(docker compose -f ops/docker/compose.yaml --profile jobs config --images | sort -u)" = tickr:ci
         env:
-          TICKR_CONFIG_HOST: /srv/tickr/etc/bot.toml
-          TICKR_ENV_FILE_HOST: /srv/tickr/etc/env
-          TICKR_BOT_EXIT_TIMEOUT: "1"
-          TICKR_NIGHTLY_OUT: data/nightly
-          TICKR_NIGHTLY_SEED: data/nightly-seed
-          TICKR_DATA_HOST: /srv/tickr/data
+          TICKR_IMAGE: tickr:ci
+      # Without TICKR_IMAGE compose refuses: there is no default image and nothing to build.
+      - run: |
+          if docker compose -f ops/docker/compose.yaml --profile jobs config -q; then
+            echo "compose accepted a missing TICKR_IMAGE" >&2
+            exit 1
+          fi
+      # The server has no clone: deploy-server.sh renders the units inside the release image and
+      # compares the host's compose.yaml with the image's own copy; the server takes the script from
+      # the image. All three must be in it.
+      - run: |
+          out=$(mktemp -d)
+          chmod 777 "$out"
+          docker run --rm --pull never --network none --entrypoint python \
+            --mount "type=bind,source=$PWD/config/bot.toml,target=/app/config/bot.toml,readonly" \
+            --mount "type=bind,source=$PWD/ops/docker/compose.yaml,target=/srv/tickr/etc/compose.yaml,readonly" \
+            --mount "type=bind,source=$out,target=/out" \
+            tickr:ci -m tickr.runtime --config /app/config/bot.toml render-systemd \
+            --compose /srv/tickr/etc/compose.yaml --image tickr:ci --out /out
+          grep -qx 'TICKR_IMAGE=tickr:ci' "$out/limits.env"
+          grep -q '^ExecStart=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml ' "$out/tickr-bot.service"
+          docker run --rm --pull never --network none --entrypoint cat tickr:ci \
+            /app/ops/docker/compose.yaml | cmp - ops/docker/compose.yaml
+          docker run --rm --pull never --network none --entrypoint cat tickr:ci \
+            /app/ops/systemd/deploy-server.sh | cmp - ops/systemd/deploy-server.sh
   web-tests:
     # The tickr.bot web app (web/, docs in web/README.md): its own uv project and lock, tested
     # against a real Postgres like the one on its server.

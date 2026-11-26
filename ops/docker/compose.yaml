@@ -4,14 +4,18 @@
 # On Linux preflight refuses with `alert-channel-missing`, so the bot job never starts the bot.
 # A Linux alert channel is an open owner decision.
 #
-# Run from the repo root on the server, with these host variables set (paths only, no values):
-#   TICKR_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the build uid)
+# On the server this file is the host copy /srv/tickr/etc/compose.yaml (deploy-server.sh refuses
+# one that differs from the release image's /app/ops/docker/compose.yaml). Run with these host
+# variables set (paths only, no values):
+#   TICKR_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the image's uid)
 #   TICKR_CONFIG_HOST    absolute path of the bot.toml to run with
-# and render-systemd's limits.env loaded (TICKR_DATA_HOST, the host data folder, and the bot's
-# grace period): set -a; . /srv/tickr/etc/limits.env; set +a
-#   docker compose -f ops/docker/compose.yaml build \
-#     --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g) \
-#     --build-arg TICKR_CODE_VERSION=$(git rev-parse HEAD)$(git diff --quiet HEAD || echo -dirty)
+# and render-systemd's limits.env loaded (TICKR_IMAGE, TICKR_DATA_HOST, the host data folder,
+# and the bot's grace period): set -a; . /srv/tickr/etc/limits.env; set +a
+#
+# The image is never built or pulled here. On the server TICKR_IMAGE is the release image
+# <registry>/tickr-bot:<commit>, pulled beforehand by the host helper `tickr-image-pull <commit>`
+# and written into limits.env by deploy-server.sh. Anywhere else, build an image yourself and
+# name it in TICKR_IMAGE (docs/deploy-server.md, "An image built by hand").
 #
 # Jobs, matching the launchd jobs on the Mac (docs/operations.md, "Jobs"):
 #   api        always on, restarted by Docker (launchd KeepAlive)      -> `up -d api`
@@ -25,10 +29,9 @@
 name: tickr
 
 x-tickr: &tickr
-  build:
-    context: ../..
-    dockerfile: Dockerfile
-  image: tickr:local
+  image: ${TICKR_IMAGE:?image to run; on the server deploy-server.sh writes it into limits.env}
+  # Only an image already on the host runs: compose never pulls (and has nothing to build).
+  pull_policy: never
   # Host networking: the API's loopback bind (127.0.0.1, enforced by the API itself) is the
   # server's loopback, never a public interface; Docker publishes no ports.
   network_mode: host

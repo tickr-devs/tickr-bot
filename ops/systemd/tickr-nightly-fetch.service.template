@@ -12,8 +12,7 @@ After=docker.service tickr-secrets.service
 [Service]
 Type=oneshot
 User={{USER}}
-WorkingDirectory={{REPO}}
 EnvironmentFile={{COMPOSE_ENV}}
 Environment=TICKR_CONFIG_HOST={{CONFIG_HOST}}
 Environment=TICKR_ENV_FILE_HOST={{ENV_FILE}}
-ExecStart=/usr/bin/docker compose -f ops/docker/compose.yaml --profile jobs run --rm nightly-fetch
+ExecStart=/usr/bin/docker compose -f {{COMPOSE}} --profile jobs run --rm nightly-fetch

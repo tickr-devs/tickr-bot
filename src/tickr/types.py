@@ -168,3 +168,27 @@ class Position:
     market_value: Decimal | None = None
     unrealized_profit_loss: Decimal | None = None
     day_profit_loss: Decimal | None = None
+
+
+# The broker's words for whether an instrument may be traded (backlog T8). `trade_policy` of the
+# trade instrument read (SDK `TradePolicy`: ALL, CLOSE_ONLY, DENIED) and the SDK's instrument
+# status HALTED. Where HALTED shows (profile `status`, `trade_policy` or neither) is UNPROVEN
+# until `tickr probe-tradability` has seen a halted symbol (docs/webull-facts.md).
+TRADE_POLICY_ALL = "ALL"
+TRADE_POLICY_CLOSE_ONLY = "CLOSE_ONLY"
+TRADE_POLICY_DENIED = "DENIED"
+INSTRUMENT_HALTED = "HALTED"
+
+
+@dataclass(frozen=True)
+class Tradability:
+    """What the broker says about trading one symbol now: the instrument profile's `status`
+    and the trade instrument read's `trade_policy` and `forbid_reason`, as given (None = not
+    stated). `read_error` is set, and the rest None, when the reads failed or were ambiguous
+    (several instruments for the symbol, an unreadable body): admission then refuses."""
+
+    symbol: str
+    profile_status: str | None
+    trade_policy: str | None
+    forbid_reason: str | None
+    read_error: str | None = None
