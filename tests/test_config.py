@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import tomllib
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,7 @@ SAME_NAME_DIFFERENT_MEANING = {
     "request_timeout_seconds": "different servers: [advisor] one proposal, [api] one idle client",
     "history_dir": "different caches: [market_data] live bars, [massive] model minute files",
     "history_max_pages": "different routes: [probe] probe H2, [environments.*] display read",
+    "enabled": "different switches: [model] the trained model, [trailing_stop] stop tightening",
     "atr_period": "research.toml measures moves in ATR itself, not the strategy indicator",
     "environment": "config/demo.toml names the demo run, bot.toml [run] the real one",
     "observers": "config/demo.toml is the demo copy of bot.toml [strategy] observers",
@@ -702,3 +704,38 @@ def test_extended_sessions_refused_at_load(tmp_path, key, value, match):
     text = re.sub(rf"(?m)^{key} = \S+", f"{key} = {value}", BOT.read_text("utf-8"))
     with pytest.raises(config.ConfigError, match=match):
         config.load(_copy(tmp_path, text))
+
+
+def test_trailing_stop_ships_off_with_the_backlog_starting_values():
+    trailing = config.load(BOT).trailing_stop
+    assert trailing.enabled is False
+    assert (trailing.atr_multiple, trailing.breakeven_after_r, trailing.min_move_usd) == (
+        Decimal("1.5"), Decimal("1.0"), Decimal(0))
+
+
+@pytest.mark.parametrize("value", ["0", "0.05"])
+def test_trailing_stop_min_move_accepts_zero_and_a_positive_step(tmp_path: Path, value: str):
+    text = BOT.read_text("utf-8")
+    assert "min_move_usd = 0\n" in text
+    cfg = config.load(_copy(tmp_path, text.replace("min_move_usd = 0\n",
+                                                   f"min_move_usd = {value}\n", 1)))
+    assert cfg.trailing_stop.min_move_usd == Decimal(value)
+
+
+@pytest.mark.parametrize(("old", "new"), [
+    ("[trailing_stop]\n", None),
+    ("atr_multiple = 1.5", "atr_multiple = 0"),
+    ("breakeven_after_r = 1.0", "breakeven_after_r = -1"),
+    ("min_move_usd = 0\n", "min_move_usd = -0.01\n"),
+])
+def test_trailing_stop_refuses_on_and_non_positive_values(tmp_path: Path, old: str,
+                                                          new: str | None):
+    text = BOT.read_text("utf-8")
+    if new is None:  # switch it on
+        head, tail = text.split(old, 1)
+        new_text = head + old + tail.replace("enabled = false", "enabled = true", 1)
+    else:
+        assert old in text
+        new_text = text.replace(old, new, 1)
+    with pytest.raises(config.ConfigError, match=r"\[trailing_stop\]"):
+        config.load(_copy(tmp_path, new_text))

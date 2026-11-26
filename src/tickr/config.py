@@ -377,6 +377,16 @@ class AdvisorConfig:
 
 
 @dataclass(frozen=True)
+class TrailingStopConfig:
+    """Stop tightening by replace (backlog T1), read by `risk.trailing`; not in the loop yet."""
+
+    enabled: bool
+    atr_multiple: Decimal
+    breakeven_after_r: Decimal
+    min_move_usd: Decimal
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     enabled: bool
     bundles_dir: str
@@ -515,6 +525,7 @@ class Config:
     advisor: AdvisorConfig
     model: ModelConfig
     massive: MassiveConfig
+    trailing_stop: TrailingStopConfig
     environments: dict[str, EnvironmentConfig]
     root: Path
     digest: str
@@ -546,6 +557,7 @@ _SECTIONS: dict[str, type] = {
     "advisor": AdvisorConfig,
     "model": ModelConfig,
     "massive": MassiveConfig,
+    "trailing_stop": TrailingStopConfig,
 }
 
 
@@ -745,6 +757,16 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[model] enabled must stay false: the trained model is not wired into "
                           "the trading loop yet (the bundle loader and the shared feature code "
                           "are; the live data feed and the decision path follow)")
+    trailing: TrailingStopConfig = built["trailing_stop"]
+    if trailing.enabled:
+        raise ConfigError("[trailing_stop] enabled must stay false: stop replacement is not in "
+                          "the trading loop yet (it waits for the Webull replace check, "
+                          "docs/webull-facts.md F5)")
+    if trailing.atr_multiple <= 0 or trailing.breakeven_after_r <= 0:
+        raise ConfigError("[trailing_stop] atr_multiple and breakeven_after_r must be above 0")
+    if trailing.min_move_usd < 0:
+        raise ConfigError("[trailing_stop] min_move_usd must be at least 0 (0 = no minimum "
+                          "step)")
     massive: MassiveConfig = built["massive"]
     if (massive.http_timeout_seconds < 1 or massive.page_limit < 1 or massive.max_pages < 1
             or massive.stream_max_message_bytes < 1 or massive.stream_reconnect_seconds <= 0

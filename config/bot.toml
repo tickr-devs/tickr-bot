@@ -781,6 +781,26 @@ backtest_stop_distance_edges_percent = [1, 2, 4, 8]
 # stop exit until the session end, both measured from the entry, increasing; read by advisor.backtest_evidence.
 backtest_excursion_edges_r = [0, 0.5, 1, 2, 3]
 
+[trailing_stop]
+# Stop tightening by replace (backlog T1): the broker stop of an open position only moves up toward the price, to the
+# best price since entry minus atr_multiple ATR, and to at least the fill price once the best price reached
+# breakeven_after_r R above it. Values provisional (old tracker #153-34, Q10). Nothing in the trading loop reads this
+# table yet; computed by tickr.risk.trailing.
+# Switch: true = the bot replaces its stops by this rule. Must stay false until the loop integration is merged after
+# the Webull replace check (docs/webull-facts.md F5); config load refuses true until then; read by config.load.
+enabled = false
+# Trail distance below the best price since entry, in ATR (the ATR of completed bars, USD per share); provisional
+# starting value from docs/backlog.md T1 ("best price since entry minus 1.5 ATR"); read by tickr.risk.trailing.
+atr_multiple = 1.5
+# Break-even step: once the best price since entry reached fill + this many R (R = fill - initial stop, USD per share),
+# the stop is at least the fill price; R; provisional starting value from docs/backlog.md T1 ("at least the fill price
+# after +1.0 R"); read by tickr.risk.trailing.
+breakeven_after_r = 1.0
+# Smallest tightening worth one replace request, USD per share: a new stop less than this above the current one is
+# not sent. 0 = no minimum step (off) until the owner sets a measured value; the loop PR measures it from the replace
+# request budget; at least 0; read by tickr.risk.trailing.
+min_move_usd = 0
+
 [model]
 # Trained model switch (backlog R24..R26): true = the trained model decides entries; false = it is not loaded and the
 # active strategy above decides as before. Must stay false until the live feed and the decision path are merged (config
