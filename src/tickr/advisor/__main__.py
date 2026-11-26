@@ -55,7 +55,7 @@ def main(argv: Sequence[str] | None = None, client_factory=AnthropicClient) -> i
         cfg = config_module.load(args.config)
         notes = args.notes.read_text("utf-8") if args.notes else ""
         if args.backtest is not None:
-            replay = load_settings(args.replay_settings)
+            replay = load_settings(args.replay_settings, cfg.market_data.history_sessions)
             result = run_backtest_advisor(cfg, args.backtest, args.backtest_data,
                                           client_factory(cfg.advisor), replay, datetime.now(UTC),
                                           folder=args.strategy_folder, out_dir=args.out,
@@ -67,7 +67,7 @@ def main(argv: Sequence[str] | None = None, client_factory=AnthropicClient) -> i
                 days,
                 client_factory(cfg.advisor),
                 load_research_settings(args.research_settings),
-                load_settings(args.replay_settings),
+                load_settings(args.replay_settings, cfg.market_data.history_sessions),
                 datetime.now(UTC),
                 folder=args.strategy_folder,
                 out_dir=args.out,

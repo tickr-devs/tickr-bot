@@ -37,7 +37,7 @@ def test_decide_outcomes_whatif_diff_end_to_end(tmp_path, capsys):
     v2 = str(tmp_path / "v2" / "decisions.jsonl")
 
     assert main(["outcomes", "--bars", bars, "--decisions", v1,
-                 "--settings", str(HERE / "research_settings.toml"),
+                 "--settings", str(HERE / "research_settings.toml"), *CLOCK[:2],
                  "--config", str(ROOT / "config" / "bot.toml"),
                  "--out", str(tmp_path / "o")]) == 0
     outcome_rows = _rows(tmp_path / "o" / "outcomes.csv")
@@ -54,7 +54,7 @@ def test_decide_outcomes_whatif_diff_end_to_end(tmp_path, capsys):
     assert summary["label"] == "simulated" and summary["trades"] == 1
 
     assert main(["diff", "--baseline", v1, "--candidate", v2,
-                 "--settings", str(HERE / "research_settings.toml"),
+                 "--settings", str(HERE / "research_settings.toml"), *CLOCK[:2],
                  "--out", str(tmp_path / "d")]) == 0
     diff_summary = json.loads((tmp_path / "d" / "diff_summary.json").read_text())
     assert diff_summary["by_kind"]["verdict_changed"] == 2

@@ -185,15 +185,8 @@ def test_a_version_that_raises_is_a_cause_not_a_crash(cfg, monkeypatch):
     assert found.cause.startswith("simulation failed: KeyError") and found.trades == ()
 
 
-def test_an_empty_cache_or_other_replay_history_is_refused(cfg):
+def test_an_empty_cache_is_refused(cfg):
     _capture(cfg, day_offset=-3)
     _history(cfg).write_text("")
     found = what_if(_settings(cfg), "scripted-v1", "ABCD", PAST, SATURDAY, CapturedBarsDays())
     assert found.cause == "cached prior sessions hold no bar of ABCD"
-    _history(cfg)
-    replay_file = cfg.root / cfg.api.replay_settings_file
-    text = replay_file.read_text("utf-8")
-    assert text.count("history_sessions = 5") == 1
-    replay_file.write_text(text.replace("history_sessions = 5", "history_sessions = 3"))
-    found = what_if(_settings(cfg), "scripted-v1", "ABCD", PAST, SATURDAY, CapturedBarsDays())
-    assert "differ from [market_data] history_sessions 5" in found.cause

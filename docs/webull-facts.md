@@ -3,6 +3,7 @@
 What we know about Webull OpenAPI, with the source of each fact. Ported from the old `Trading` project (2026-11-14).
 Sources: **SDK** = webull-openapi-python-sdk 3.0.3 source; **docs** = developer.webull.com (as read on the date given); **probe** = observed on our Sandbox account.
 A fact marked UNPROVEN must not be relied on by trading code until a probe proves it.
+Questions for Webull support that these facts leave open: `docs/webull-questions.md`.
 
 ## Hosts, credentials, auth
 - Production hosts (SDK): `api.webull.com`, `data-api.webull.com`, `events-api.webull.com`. Sandbox hosts (docs): `api.sandbox.webull.com`, `data-api.sandbox.webull.com`, `events-api.sandbox.webull.com`. Ports: HTTPS 443, MQTT 1883 (TLS), gRPC 443. Probe: only allowlisted hosts were contacted.

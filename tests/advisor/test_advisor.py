@@ -29,6 +29,7 @@ from tickr.strategy.base import Check, Decision, Role, Verdict
 from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+BOT_HISTORY = config_module.load(ROOT / "config" / "bot.toml").market_data.history_sessions
 NY = ZoneInfo("America/New_York")
 M1 = timedelta(minutes=1)
 DAYS = [date(2026, 11, 16), date(2026, 11, 17)]
@@ -110,7 +111,7 @@ def make_root(tmp_path, min_days=2, extra=""):
 def run(cfg, client, tmp_path, **kw):
     return run_advisor(cfg, DAYS, client,
                        load_research_settings(ROOT / "config" / "research.toml"),
-                       load_settings(ROOT / "config" / "replay.toml"), NOW,
+                       load_settings(ROOT / "config" / "replay.toml", BOT_HISTORY), NOW,
                        out_dir=tmp_path / "out", **kw)
 
 
