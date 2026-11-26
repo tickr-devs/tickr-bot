@@ -1,0 +1,18 @@
+# Tickr nightly backtest data job: after the close on configured weekdays, adds the newest
+# sessions to the folder the Lab replays (compose service `nightly-fetch`, profile jobs, never
+# restarted). Reads market data only; never trades. The env file is the path /run/tickr/env on
+# the host, written by tickr-secrets.service; only its path is named here, never a value.
+# Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
+[Unit]
+Description=Tickr nightly backtest data
+Requires=docker.service tickr-secrets.service
+After=docker.service tickr-secrets.service
+
+[Service]
+Type=oneshot
+User=tickr
+WorkingDirectory=/srv/tickr/repo
+EnvironmentFile=/srv/tickr/etc/limits.env
+Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml
+Environment=TICKR_ENV_FILE_HOST=/run/tickr/env
+ExecStart=/usr/bin/docker compose -f ops/docker/compose.yaml --profile jobs run --rm nightly-fetch

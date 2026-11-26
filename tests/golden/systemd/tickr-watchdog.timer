@@ -1,0 +1,11 @@
+# Starts tickr-watchdog.service on the configured weekdays ([runtime] watchdog_start_local, in
+# the zone given to render-systemd), if it is not already running.
+[Unit]
+Description=Tickr watchdog schedule
+
+[Timer]
+OnCalendar=Mon,Tue,Wed,Thu,Fri *-*-* 03:30:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target
