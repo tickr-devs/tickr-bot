@@ -634,6 +634,24 @@ _PROSE = _shapes(
     ("close_in_progress", r"a close is in progress; send stop-bot again after it completes"),
     ("trades_still_open", r"(?P<count>[0-9]+) trade\(s\) open or entering; flatten first \(or "
                           r"send emergency\), then stop-bot"),
+    # a stop-bot with a mode (backlog V4)
+    ("stop_already_running", r"a close-and-stop is already running \((?P<command>\S+)\)"),
+    ("trades_left_open", r"(?P<count>[0-9]+) trade\(s\) left open: nothing closes them; their "
+                         r"broker stops are DAY orders"),
+    ("stop_close_refused", r"closing order refused for (?P<trades>.+): the bot places their "
+                           r"stop again; look in the Webull app"),
+    ("stop_close_not_filled", r"closing order not filled for (?P<trades>.+): it is still working "
+                              r"at the broker and its shares are not under a stop; look in the "
+                              r"Webull app"),
+    ("stop_close_not_sent", r"close not sent for (?P<trades>.+) outside the regular session: "
+                            r"nothing was sent and the stop stays"),
+    ("stop_close_failed", r"close held for (?P<trades>.+) \((?P<fences>[a-z, -]+)\): look in the "
+                          r"Webull app"),
+    ("stop_close_kept", r"the bot keeps running and entry-stop stays on"),
+    ("stop_new_trade", r"trade\(s\) (?P<trades>.+) opened during close-and-stop: the bot keeps "
+                       r"running and the closes already asked go on; send stop-bot again"),
+    ("stop_interrupted", r"close-and-stop interrupted by a restart: the bot keeps running and "
+                         r"entry-stop stays on; send stop-bot again"),
     ("no_open_position", r"no open position in (?P<symbol>\S+)"),
     ("close_refused_before", r"closing order refused before for (?P<trades>.+): look in the "
                              r"Webull app, then clear the fence"),

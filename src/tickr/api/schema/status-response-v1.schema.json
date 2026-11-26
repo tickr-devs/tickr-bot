@@ -1020,6 +1020,59 @@
                 }
               ]
             },
+            "stop_progress": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "command_id": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "close_and_stop",
+                            "leave_open"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "step": {
+                      "type": "string",
+                      "enum": [
+                        "closing_positions",
+                        "positions_closed",
+                        "stopping",
+                        "stopped"
+                      ]
+                    },
+                    "since": {
+                      "type": "string",
+                      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+                    },
+                    "open_trades": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "command_id",
+                    "mode",
+                    "step",
+                    "since",
+                    "open_trades"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "schema_version": {
               "type": "integer",
               "const": 1

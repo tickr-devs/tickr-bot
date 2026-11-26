@@ -99,6 +99,7 @@ WARM_ERRORS = (HistoryUnavailable, CaptureError, RecordFileError, ObserverError,
 COMMAND_SOURCE = "api"
 JSON_TYPE = "application/json"
 ENTRY_STOP_STATES = {"on": CommandKind.ENTRY_STOP_ON, "off": CommandKind.ENTRY_STOP_OFF}
+STOP_MODES = {m.value: m for m in contract.StopMode}  # POST /commands/stop-bot {"mode": ...}
 COMMAND_ROUTES = {
     "/commands/entry-stop": None,  # kind comes from the body
     "/commands/cancel-own-orders": CommandKind.CANCEL_OWN_ORDERS,
@@ -674,8 +675,8 @@ class ApiServer(ThreadingHTTPServer):
         return symbols.movers_document(day, self._discovery(day, today),
                                        symbols.mover_rules(toml), records)
 
-    def enqueue(self, kind: CommandKind, symbol: str | None = None,
-                key: str | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
+    def enqueue(self, kind: CommandKind, symbol: str | None = None, key: str | None = None,
+                mode: contract.StopMode | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
         """Queue one command. With an Idempotency-Key already seen within its lifetime the
         first answer comes back as stored bytes and nothing is queued; the same key for a
         different command is a conflict. The command file is written before the key, so a
@@ -683,7 +684,9 @@ class ApiServer(ThreadingHTTPServer):
         was not queued (every command is idempotent in its effect on the bot)."""
         with self.inbox_lock:
             now = self.clock()
-            request = {"kind": kind.value, "symbol": symbol}
+            request: dict[str, Any] = {"kind": kind.value, "symbol": symbol}
+            if mode is not None:  # absent without one, so a key stored before modes still matches
+                request["mode"] = mode.value
             if key is not None:
                 stored = self._remembered(key, now)
                 if stored is not None:
@@ -695,7 +698,7 @@ class ApiServer(ThreadingHTTPServer):
                 return ErrorV1("too_many_pending",
                                f"{self.settings.max_pending_commands} commands are already "
                                "waiting for the bot")
-            command = contract.new_command(kind, now, COMMAND_SOURCE, symbol)
+            command = contract.new_command(kind, now, COMMAND_SOURCE, symbol, mode)
             contract.write_command(self.settings.inbox, command)
             state = self.status_response()
             warning = None
@@ -1055,7 +1058,7 @@ class Handler(BaseHTTPRequestHandler):
             if body is None:
                 return
             kind = COMMAND_ROUTES[path]
-            symbol = None
+            symbol, mode = None, None
             if kind is None:
                 if set(body) != {"state"} or body["state"] not in ENTRY_STOP_STATES:
                     self._error("bad_request", 'body must be exactly {"state": "on"} or '
@@ -1070,10 +1073,17 @@ class Handler(BaseHTTPRequestHandler):
                                 "with the ticker in upper case")
                     return
                 symbol = body["symbol"]
+            elif kind is CommandKind.STOP_BOT and body:
+                # Only the two modes: anything else is a client bug, never a guess.
+                if set(body) != {"mode"} or body["mode"] not in STOP_MODES:
+                    self._error("bad_request", 'body must be {}, {"mode": "close_and_stop"} '
+                                'or {"mode": "leave_open"}')
+                    return
+                mode = STOP_MODES[body["mode"]]
             elif body:
                 self._error("bad_request", "body must be an empty JSON object {}")
                 return
-            result = self.server.enqueue(kind, symbol, key)
+            result = self.server.enqueue(kind, symbol, key, mode)
             if isinstance(result, ErrorV1):
                 self._error(result.error, result.cause)
             elif isinstance(result, bytes):

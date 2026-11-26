@@ -58,7 +58,10 @@ a trade and status shows `entries_not_wired`.
 From the apps, `POST /commands/stop-bot` stops the bot the same way and makes the stop stick,
 but only when the bot is flat: with a position open, an entry working, or a close in progress,
 it is refused and the bot keeps running (send emergency or flatten first, wait for every trade
-to close, then stop-bot). A
+to close, then stop-bot). With positions open the apps ask "Close and stop / Leave open":
+mode `close_and_stop` closes them in the bot and stops once flat (refused, bot running, if a
+close fails), mode `leave_open` stops at once and nothing closes them afterwards (docs/api.md,
+stop-bot "Modes"). A
 SIGTERM does not have this check: it leaves an open position under its DAY stop, and nothing
 flattens it while the bot is down. When obeyed, the bot writes `data/<[runtime] stop_marker_file>` and every later start is refused (preflight
 cause `stopped-by-operator`, with an alert) until you run `tickr clear-stop`, or press Start in the app (`POST /commands/start-bot`,
@@ -972,8 +975,8 @@ normal exit path. The watchdog itself never places, cancels or replaces anything
   entry that day until you look and clear it (`tickr clear-fence watchdog-started`). It is set
   once per record, so a later start the same day after you cleared it is not fenced again.
 - To keep the bot down on purpose with a position open (a manual trade), unload the bot job, or
-  keep a stop marker left from an earlier stop made while flat. A new `stop-bot` is refused while
-  any trade is open, so it cannot create the marker then. See docs/manual-trade.md.
+  keep a stop marker left from an earlier stop made while flat, or send `stop-bot` with mode
+  `leave_open` (without a mode it is refused while any trade is open). See docs/manual-trade.md.
 - Owner check, once on the Mac: the exit code of `launchctl kickstart gui/$(id -u)/local.tickr.bot`
   (no `-k`) for a job launchd still sees running, and for a booted-out job. Record both here.
 
