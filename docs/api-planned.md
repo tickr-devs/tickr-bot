@@ -44,6 +44,12 @@ Until then nothing below is built.
 
 ### Config `[trailing]` (proposed; values from the old tracker, provisional)
 
+Shipped instead as `[trailing_stop]` in `config/bot.toml` (off, refused on until the loop
+integration), computed by `tickr.risk.trailing`: `enabled`, `atr_multiple`, `breakeven_after_r`
+(the backlog's "at least the fill price after +1.0 R"; the stop trails from the start, there is
+no separate activation) and `min_move_usd`. The table below is the earlier proposal; the
+`status` object below still has to be aligned with it when the loop PR adds it.
+
 | Key | Unit | Meaning |
 |---|---|---|
 | `enabled` | bool | Trail the stop of the bot's own positions. |
@@ -118,6 +124,9 @@ the latest alerts with how each was delivered, and a test button.
 
 Push needs the Apple Developer Program and APNs (backlog); its column stays drawn as disabled until
 then.
+
+Built so far (bot and API side): `GET /alerts` without `recent`, and `PUT /alerts/routing`
+(docs/api.md, "Notification settings"). `recent`, `POST /alerts/test` and the app screens follow.
 
 ### `GET /alerts` → `alerts-v1`
 

@@ -10,5 +10,13 @@ horizons_minutes = [1, 5, 15, 30, 60]
 atr_period = 14
 # Exchange time zone (IANA name); a horizon that would leave the decision's session date is reported without numbers, and latency hours are labelled in it; read by research/outcomes.py and research/__main__.py (latency).
 session_timezone = "America/New_York"
-# Decimal places for prices, ATR, percent and USD in CSV and summary outputs; read by research/report.py.
-output_decimal_places = 4
+# Equal-width probability buckets of the calibration table (10 = tenths, the owner's wording, R29); read by research/calibration.py.
+calibration_buckets = 10
+# R23 gate report, SENSITIVITY check (descriptive, never a pass or fail): months in plus wanted out of the last gate_window_months (owner's backlog R23 text, "plus in 2 of 3 months"), count (K); read by research/gate.py.
+gate_positive_months = 2
+# R23 gate report, SENSITIVITY check: calendar months looked at, ending with the month of --end (months after the last trade included), months (M); read by research/gate.py.
+gate_window_months = 3
+# R23 gate report, SENSITIVITY check: percent of trades, best by after-cost result, removed before the net is looked at again (backlog R23, "without the best 1% of trades"; the count is rounded up), percent (X); read by research/gate.py.
+gate_drop_best_percent = 1
+# R23 gate report: tail concentration, the top percents of trades by after-cost result whose share of the net is reported (the model targets rare large gainers; Codex review of #851), percent each, increasing; read by research/gate.py.
+gate_tail_percents = [1, 5, 10]

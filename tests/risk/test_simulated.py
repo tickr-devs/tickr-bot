@@ -83,4 +83,5 @@ def test_no_calendar_day_refuses():
 def test_label_names_the_values():
     label = SimulationRules.from_config(CFG).label()
     assert f"risk.max_open_positions={CFG.risk.max_open_positions}" in label
-    assert "not simulated: gate, reconciliation, quote, request_budget, buying_power" in label
+    assert ("not simulated: gate, reconciliation, quote, request_budget, tradability, "
+            "buying_power") in label

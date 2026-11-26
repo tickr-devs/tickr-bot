@@ -112,7 +112,8 @@ def _research_total(cfg, records, path):
         bars.setdefault(symbol, []).append(bar)
     calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
     report = observer_report.report(records, bars, load_settings(
-        cfg.root / cfg.api.replay_settings_file), calendar_clock(calendar, cfg.session))
+        cfg.root / cfg.api.replay_settings_file, cfg.market_data.history_sessions),
+        calendar_clock(calendar, cfg.session))
     (row,) = report.identities
     assert row.trades == 1 and row.usd_trades == 1
     return row.total_usd
@@ -325,7 +326,8 @@ def test_observer_result_is_the_research_report_simulation(api, cfg):
     bars = _capture(cfg)
     expected = _research_total(cfg, records, bars)
     assert expected < 0  # filled in the window, then stopped out
-    places = load_settings(cfg.root / cfg.api.replay_settings_file).output_decimal_places
+    places = load_settings(cfg.root / cfg.api.replay_settings_file,
+                           cfg.market_data.history_sessions).output_decimal_places
     assert _result(api) == (str(expected.quantize(Decimal(1).scaleb(-places))), None)
 
 
@@ -432,7 +434,8 @@ def test_observer_trades_are_the_simulated_enters(api, cfg):
     bars = _capture(cfg)
     read = read_captured_bars(bars)
     calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
-    settings = load_settings(cfg.root / cfg.api.replay_settings_file)
+    settings = load_settings(cfg.root / cfg.api.replay_settings_file,
+                             cfg.market_data.history_sessions)
     report = observer_report.report(
         records, {"ABCD": [b for _, b in sorted(read.bars.items())]}, settings,
         calendar_clock(calendar, cfg.session))
