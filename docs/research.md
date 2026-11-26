@@ -11,6 +11,7 @@ format (`records.py`), through the observers (`docs/observers.md`).
 | `decide` + `diff` | What would another strategy version have decided over the same day? | (decisions) |
 | `observers` | How did the live observer versions do against the active one today? | `simulated` |
 | `latency` | How late do captured quotes arrive, by symbol and hour? What do stream notices say? | (measured) |
+| `collar` | How far is an entry price from the last completed bar's close and the previous quote's ask? | (measured) |
 | `refusals` | Per day and setup: which check refused first, which platform causes, how many entries? | (counts) |
 | `calibration` | Does a model answer of 0.7 come true 70% of the time? | `measured` |
 | `slippage` | How far below the planned stop did stops fill? Planned against realized loss per day? | `measured` |
@@ -176,6 +177,41 @@ Latency = `receipt_time` minus `provider_time` in milliseconds, for quotes of `-
 
 A malformed line is refused with file, line and cause. A last line without its newline (a file
 the bot is still appending to) is left unread and counted in `partial_last_lines`.
+
+## collar: entry price distance for the price collar (T10)
+
+```
+python -m tickr.research collar --quotes data/capture/<env>/<NY date>/quotes.jsonl \
+  --bars data/capture/<env>/<NY date>/bars.jsonl \
+  [--decisions data/decisions/<NY date>/decisions.jsonl] \
+  [--replay-settings config/replay.toml] [--config config/bot.toml] --out out/collar
+```
+
+Measures what the price collar (`[risk] entry_collar_bar_ratio` and `entry_collar_quote_ratio`,
+spec section 7 check 5; shipped off at 0) would see, so the owner can pick its two numbers from
+data. Run it on the Mac over as many captured days as possible (pass several files to each
+flag, `.gz` archives included). Distance = |entry price - reference| / reference, the collar's
+own measure, as a ratio (0.02 = 2%).
+
+- Entry `quote`: every captured stream quote's ask (a marketable entry at that moment). Entry
+  `decision` (with `--decisions`): each recorded ENTER's final limit (`entry_high` rounded to the
+  tick), at the record's time. The live collar checks the limit, which is at or above the ask, so
+  read both.
+- Reference `bar`: the close of the symbol's last bar completed by then (start + 1 minute at or
+  before the quote's provider time or the decision time; a revised bar's last version).
+  Reference `quote`: the ask of the stream quote before it, as the bot's stream inbox keeps them
+  (a quote older than the newest one is skipped); for a decision, the quote before the newest one
+  received by then. The live collar refuses a previous quote older than the quote age limit;
+  the tool measures every pair as captured.
+- `collar.csv`: one row per entry kind, reference and symbol, plus `symbol = all`: `count`,
+  nearest-rank `p50`, `p90`, `p99`, `p99_9`, and `max`.
+- `collar_summary.json`: the `all` rows, `missing_reference` (entry prices with no completed bar
+  or no earlier quote: the bot refuses those as `PRICE_COLLAR_UNKNOWN` while the collar is on)
+  and `partial_last_lines`.
+
+A maximum just above the far tail (`p99_9` or `max` of the days measured) refuses only prices no
+captured day produced; a lower one also refuses real moves. Snapshot quotes are not read. A
+malformed line is refused with file, line and cause.
 
 ## refusals: per-day, per-setup refusal table
 

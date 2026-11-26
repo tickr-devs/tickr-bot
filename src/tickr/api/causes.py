@@ -18,6 +18,7 @@ from tickr.research.errors import RecordFileError
 # listed until it is audited). Each one's raise sites hold no path, file or caught-exception text
 # (tests/test_refusal_texts.py); a class not here shows as its type name.
 REFUSALS = frozenset({
+    "tickr.runtime.alert_routing.RoutingRefused",
     "tickr.api.advisor.Unreadable",
     "tickr.api.advisor.DecisionRefused",
     "tickr.api.cleanday._Unreadable",
@@ -38,7 +39,6 @@ REFUSALS = frozenset({
     "tickr.data.base.SymbolsRefused",
     "tickr.broker.base.RateLimited",
     "tickr.broker.budget.BudgetExhausted",
-    "tickr.runtime.alert_routing.RoutingRefused",
 })
 
 

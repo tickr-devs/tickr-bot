@@ -101,6 +101,8 @@ class RiskConfig:
     symbol_cooldown_minutes_after_loss: int
     max_entry_rest_bars: int
     entry_snapshot_interval_seconds: Decimal
+    entry_collar_bar_ratio: Decimal
+    entry_collar_quote_ratio: Decimal
 
 
 @dataclass(frozen=True)
@@ -862,6 +864,9 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[risk] max_entry_rest_bars must be at least 1")
     if risk.entry_snapshot_interval_seconds <= 0:
         raise ConfigError("[risk] entry_snapshot_interval_seconds must be above 0")
+    if risk.entry_collar_bar_ratio < 0 or risk.entry_collar_quote_ratio < 0:
+        raise ConfigError("[risk] entry_collar_bar_ratio and entry_collar_quote_ratio must be "
+                          "at least 0 (0 = that side of the collar off)")
     if not 0 <= risk.min_daily_room_usd < risk.max_daily_loss_usd:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
     if risk.buying_power_max_age_seconds <= 0:

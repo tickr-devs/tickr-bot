@@ -60,6 +60,8 @@ cause. Each blocks that one entry only; the bot tries again at the next signal.
 | `QUOTE_STALE` | The quote is too old. | Nothing. |
 | `SPREAD_TOO_WIDE` | The gap between bid and ask is wider than allowed. | Nothing. |
 | `PRICE_OUTSIDE_WINDOW` | The current price left the entry price window. | Nothing. |
+| `PRICE_COLLAR_UNKNOWN` | The price collar is on, but the last bar's close or the previous quote it compares the limit with is missing or too old. | Nothing; it waits for fresh prices. |
+| `PRICE_COLLAR_BREACH` | The limit price is too far from the last bar's close or from the previous quote, more than the price collar allows. | Nothing, or review the collar settings. |
 | `QUANTITY_BELOW_ONE` | The size works out to less than one share. | Nothing, or review the risk settings. |
 | `QUANTITY_NOT_WHOLE` | The size is not a whole number of shares. | Report it. |
 | `NOTIONAL_OVER_CAP` | The trade would cost more than the per-trade limit. | Nothing, or raise the limit. |

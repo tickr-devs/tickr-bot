@@ -233,6 +233,11 @@ _REFUSAL = {
     "PRICE_OUTSIDE_WINDOW": _shapes(
         ("", r"ask (?P<ask>" + _NUM + r") outside (?P<entry_low>" + _NUM + r")\.\.limit "
          r"(?P<limit>" + _NUM + r")")),
+    "PRICE_COLLAR_BREACH": _shapes(
+        ("", r"limit (?P<limit>" + _NUM + r") is (?P<bar_distance>" + _NUM + r") from bar close "
+         r"(?P<bar_close>" + _NUM + r") \(max (?P<bar_max>" + _NUM + r")\) and (?P<quote_distance>"
+         + _NUM + r") from previous ask (?P<previous_ask>" + _NUM + r") \(max (?P<quote_max>"
+         + _NUM + r")\)")),
     "QUANTITY_NOT_WHOLE": _shapes(
         ("", r"quantity (?P<quantity>" + _NUM + r") is not a whole number of shares")),
     "QUANTITY_BELOW_ONE": _shapes(
