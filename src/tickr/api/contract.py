@@ -276,6 +276,26 @@ class Position:
 
     entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
 
+
+@dataclass(frozen=True)
+class WorkingEntry:
+    """A trade whose entry order is working with nothing filled yet: the apps' Cancel entry row
+    (added after version 1 shipped). A fill of any part makes it a `Position` instead."""
+
+    symbol: str
+    quantity: Decimal  # shares the entry asks for
+    limit_price: Decimal  # the entry's limit
+    stop_price: Decimal  # the stop the bot places once it fills
+    planned_loss_usd: Decimal  # 1 R if it fills, as recorded when the trade was opened
+    entry: EntrySend
+    entry_cause: str | None  # why a field of `entry` is null; null when none is
+    # The bot asked the broker to cancel it (an operator cancel, or the entry's own rest or
+    # session end); it stays listed until a broker read shows it cancelled or filled.
+    cancel_requested: bool
+
+    entry_cause_codes: tuple[ReasonV1, ...] = _reasons_of("entry_cause")
+
+
 @dataclass(frozen=True)
 class Trade:
     symbol: str
@@ -376,6 +396,9 @@ class StatusV1:
     # Added after v1 shipped (2026-11-25, backlog V4): the stop-bot this run obeyed or is
     # carrying out; null while none. Stays in the last status a stopped bot wrote.
     stop_progress: StopProgress | None = _added_later(None)
+    # Added after v1 shipped (2026-11-26, Cancel entry): every own entry working at the broker
+    # with nothing filled yet, oldest first; a reader takes a status without it as none.
+    working_entries: tuple[WorkingEntry, ...] = _added_later(())
     schema_version: int = _const(STATUS_SCHEMA_VERSION)
 
 
@@ -470,7 +493,9 @@ class CommandV1:
     kind: CommandKind
     requested_at: datetime
     source: str
-    symbol: str | None = None  # flatten only: close just this symbol; null = everything
+    # flatten: close just this symbol; cancel-own-orders: cancel just this symbol's working
+    # entries (added 2026-11-26); null = everything; null for every other kind.
+    symbol: str | None = None
     # stop-bot only (added after version 1 shipped, backlog V4): what to do with open
     # positions; null = the old rule (refused while any trade is open).
     mode: StopMode | None = _added_later(None)

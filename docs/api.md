@@ -183,7 +183,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/symbols?date=<YYYY-MM-DD>` | `200` `symbols-v1`: every symbol the bot looked at that date (default today), with the furthest pipeline stage it reached and where and why it stands now (see GET /symbols below). |
 | GET | `/movers?date=<YYYY-MM-DD>` | `200` `movers-v1`: the fast movers of that date (default today), newest bar first, with the active strategy's thresholds (see GET /movers below). |
 | POST | `/commands/entry-stop` | Body `{"state": "on"}` or `{"state": "off"}`. `202` `command-accepted-v1`. |
-| POST | `/commands/cancel-own-orders` | Body `{}`. `202` `command-accepted-v1`. |
+| POST | `/commands/cancel-own-orders` | Body `{}` (every working entry) or `{"symbol": "<TICKER>"}` (only that symbol's, the apps' Cancel entry). `202` `command-accepted-v1`. |
 | POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
 | POST | `/commands/stop-bot` | Body `{}`, `{"mode": "close_and_stop"}` or `{"mode": "leave_open"}` (what to do with open positions, see stop-bot below). Graceful stop that sticks. `202` `command-accepted-v1`. |
 | POST | `/commands/emergency` | Body `{}`. Entry-stop on, cancel own orders, flatten all. The apps' "Close all" button. `202` `command-accepted-v1`. |
@@ -393,6 +393,15 @@ the planned loss of every open trade, and `daily_room_usd` = `[risk] max_daily_l
 realized - reserved (may be negative). Entries are refused while the room is below
 `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot tracks;
 `position` is its first element or `null`, kept for older clients.
+
+`working_entries` (added after version 1 shipped, 2026-11-26; a reader takes a status without it
+as empty) lists every own trade whose entry order is working with nothing filled yet, oldest
+first: `symbol`, `quantity` (the shares asked for), `limit_price`, `stop_price` (the stop placed
+once it fills), `planned_loss_usd` (1 R if it fills), `entry` and `entry_cause` as on a
+position, and `cancel_requested` (the bot asked the broker to cancel it: an operator
+cancel-own-orders, or the entry's own rest or the session's end). A fill of any part makes it a
+`positions` row instead; a cancel the broker confirms (a broker read shows it cancelled)
+removes it. It is the bot's records, as `positions` are.
 
 Fill prices and fees come from the bot's own records: once an order is finished, the loop
 records its fees (`fees[].actual_value`) from Detail, else the order history, and, where the
@@ -1561,6 +1570,14 @@ preconditions to every command.
 (added after version 1 shipped) is a stop-bot's mode, `close_and_stop` or `leave_open`, otherwise
 `null`; a reader takes a command without the key as `null`.
 
+- **cancel-own-orders**: asks the broker to cancel every own working entry order, or only
+  those of `symbol` (the apps' Cancel entry); never a stop or a closing order. Each cancel is
+  one send through the engine's cancel path; whether it took is what the next broker read
+  shows (`working_entries`), never assumed. A part that filled first stays a position under its
+  stop. With `symbol`, refused when no entry of it is working ("no working entry in XYZ");
+  `{"symbol": null}`, a lower-case ticker or any other key is `400`. A bot older than this
+  reads the command as a cancel of every working entry, so the bot and the API are released
+  together.
 - **flatten**: every open trade, or only the trades of `symbol`, gets an exit request through
   the normal exit path. Refused when `symbol` has no open position ("no open position in
   XYZ"), while a closing order of a chosen trade was refused before (fence

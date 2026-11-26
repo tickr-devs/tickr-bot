@@ -651,11 +651,13 @@ class Engine:
             self.store.append("fence-cleared", {"by": "operator"}, key=str(Fence.ENTRY_STOP),
                               run_id=self.run_id)
 
-    def cancel_entries(self) -> int:
-        """Operator cancel-own-orders: cancel working entry orders only, never stops or exits.
-        Returns how many entries were asked to cancel."""
+    def cancel_entries(self, symbol: str | None = None) -> int:
+        """Operator cancel-own-orders: cancel working entry orders only, never stops or exits;
+        with `symbol`, only that symbol's. Returns how many entries were asked to cancel."""
         asked = 0
         for trade in self.trades():
+            if symbol is not None and trade.symbol != symbol:
+                continue
             for order in self.orders(trade.trade_id):
                 if order.leg is Leg.ENTRY and order.live:
                     self._cancel(order)

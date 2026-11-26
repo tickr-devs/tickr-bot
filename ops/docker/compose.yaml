@@ -7,6 +7,8 @@
 # Run from the repo root on the server, with these host variables set (paths only, no values):
 #   TICKR_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the build uid)
 #   TICKR_CONFIG_HOST    absolute path of the bot.toml to run with
+# and render-systemd's limits.env loaded (TICKR_DATA_HOST, the host data folder, and the bot's
+# grace period): set -a; . /srv/tickr/etc/limits.env; set +a
 #   docker compose -f ops/docker/compose.yaml build \
 #     --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g) \
 #     --build-arg TICKR_CODE_VERSION=$(git rev-parse HEAD)$(git diff --quiet HEAD || echo -dirty)
@@ -18,6 +20,8 @@
 #   watchdog   scheduled by the host, separate from the bot, never restarted -> `up -d watchdog`
 # The host scheduler (systemd timers, see the doc) starts them at the [runtime] times.
 
+# Project name: the host units (tickr-bot-restart.service passes -p tickr) and a person typing
+# compose commands act on the same containers, whatever folder compose runs from.
 name: tickr
 
 x-tickr: &tickr
@@ -35,7 +39,12 @@ x-tickr: &tickr
       source: ${TICKR_CONFIG_HOST:?absolute path of bot.toml}
       target: /app/config/bot.toml
       read_only: true
-    - tickr-data:/app/data
+    # The data folder ([run] data_dir): the host folder TICKR_DATA_HOST (the server's data disk,
+    # /srv/tickr/data), written by render-systemd into limits.env. A host folder, not a Docker
+    # volume, so host units (tickr-bot-restart.path) see the same files as the containers.
+    - type: bind
+      source: ${TICKR_DATA_HOST:?run render-systemd and load its limits.env}
+      target: /app/data
   logging:
     driver: json-file
     options:
@@ -56,7 +65,12 @@ x-with-env: &with-env
       source: ${TICKR_ENV_FILE_HOST:?absolute path of the env file}
       target: /run/tickr/env
       read_only: true
-    - tickr-data:/app/data
+    # The data folder ([run] data_dir): the host folder TICKR_DATA_HOST (the server's data disk,
+    # /srv/tickr/data), written by render-systemd into limits.env. A host folder, not a Docker
+    # volume, so host units (tickr-bot-restart.path) see the same files as the containers.
+    - type: bind
+      source: ${TICKR_DATA_HOST:?run render-systemd and load its limits.env}
+      target: /app/data
     # Production only: the owner authorization file read by trading_gate(), for example
     # ([environments.production] authorization_file = "authorization/production.toml"):
     # - type: bind
@@ -113,8 +127,3 @@ services:
               "--out", "/app/${TICKR_NIGHTLY_OUT:?run render-systemd and load its limits.env}",
               "--seed", "/app/${TICKR_NIGHTLY_SEED:?run render-systemd and load its limits.env}"]
     restart: "no"
-
-volumes:
-  # The data folder ([run] data_dir): SQLite database, lock, status file, token folder,
-  # journals, captures, backups.
-  tickr-data:

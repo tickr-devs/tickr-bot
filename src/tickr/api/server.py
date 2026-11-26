@@ -1123,7 +1123,7 @@ class Handler(BaseHTTPRequestHandler):
                                 '{"state": "off"}')
                     return
                 kind = ENTRY_STOP_STATES[body["state"]]
-            elif kind is CommandKind.FLATTEN and body:
+            elif kind in (CommandKind.FLATTEN, CommandKind.CANCEL_OWN_ORDERS) and body:
                 # null is refused, never read as "everything": a client bug must not widen it.
                 if (set(body) != {"symbol"} or not isinstance(body["symbol"], str)
                         or not SYMBOL_PATTERN.match(body["symbol"])):

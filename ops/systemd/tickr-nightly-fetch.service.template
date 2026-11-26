@@ -5,6 +5,7 @@
 # Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
 [Unit]
 Description=Tickr nightly backtest data
+RequiresMountsFor={{DATA_HOST}}
 Requires=docker.service tickr-secrets.service
 After=docker.service tickr-secrets.service
 

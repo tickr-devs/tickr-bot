@@ -658,6 +658,7 @@ _PROSE = _shapes(
     ("stop_interrupted", r"close-and-stop interrupted by a restart: the bot keeps running and "
                          r"entry-stop stays on; send stop-bot again"),
     ("no_open_position", r"no open position in (?P<symbol>\S+)"),
+    ("no_working_entry", r"no working entry in (?P<symbol>\S+)"),
     ("close_refused_before", r"closing order refused before for (?P<trades>.+): look in the "
                              r"Webull app, then clear the fence"),
     ("close_held_outside_session",
