@@ -1407,12 +1407,12 @@ class Handler(BaseHTTPRequestHandler):
             token = parse_registration(body, settings.apns_topics, settings.apns_environments,
                                        self.server.clock())
         except BadRegistration as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         try:
             settings.push_tokens.register(self._push_device(), token)
         except StoreError as exc:
-            self._error("unavailable", f"{exc}; delete the file to start over")
+            self._error("unavailable", f"{safe_cause(exc)}; delete the file to start over")
             return
         self._json(200, push_token_document(token, token.kind))
 
@@ -1429,12 +1429,12 @@ class Handler(BaseHTTPRequestHandler):
                                frozenset({"kind"}))
                 kind = parse_kind(query.get("kind", contract.PushTokenKind.ALERT.value))
             except (BadQuery, BadRegistration) as exc:
-                self._error("bad_request", str(exc))
+                self._error("bad_request", safe_cause(exc))
                 return
             try:
                 self.server.settings.alerts.push_tokens.remove(self._push_device(), kind)
             except StoreError as exc:
-                self._error("unavailable", f"{exc}; delete the file to start over")
+                self._error("unavailable", f"{safe_cause(exc)}; delete the file to start over")
                 return
             self._json(200, push_token_document(None, kind))
         except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
