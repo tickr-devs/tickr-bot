@@ -271,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
     server = make_server(settings, warm=True)
+    # risk-command-used: shared by the remote listener made below.
+    server.alerter = Alerter(cfg.alerts, f"{ALERT_TITLE} {cfg.environment_name}",
+                             _api_notifier(cfg))
     print(f"tickr api on http://{settings.host}:{server.server_port}/", file=sys.stderr)
     remote = None
     if settings.remote_hosts:

@@ -306,6 +306,16 @@
         "imessage": true,
         "push": true
       }
+    },
+    {
+      "kind": "risk-command-used",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "mac": true,
+        "imessage": true,
+        "push": true
+      }
     }
   ],
   "routing_cause": "routing-file-unreadable: Expecting value: line 1 column 1 (char 0)",

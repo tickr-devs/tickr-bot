@@ -130,6 +130,9 @@ class AlertKind(StrEnum):
     # remote port (device token or POST /pair), or every new address is refused because the
     # address table is full of recent failures (api/authlimit.py).
     REMOTE_AUTH_BLOCKED = "remote-auth-blocked"
+    # Raised by the API for each accepted entry-stop "off" or start-bot: the device (by name),
+    # the port and the time, so a stolen device token shows up at once.
+    RISK_COMMAND_USED = "risk-command-used"
 
 
 class Delivery(StrEnum):
