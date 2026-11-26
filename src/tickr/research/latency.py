@@ -91,6 +91,16 @@ def _time(where: str, value: Any) -> datetime:
     return parsed
 
 
+def capture_times(files: Sequence[Path], keys: frozenset[str]) -> list[datetime]:
+    """Every receipt time of the capture files (quotes or notices), parsed and refused exactly
+    as the reports do; the research commands check them against the sealed window first."""
+    times: list[datetime] = []
+    for path in files:
+        _read(path, keys, lambda where, record: times.append(
+            _time(where, record["receipt_time"])))
+    return times
+
+
 def latency_report(quote_files: Sequence[Path], notice_files: Sequence[Path], source: str,
                    zone: ZoneInfo) -> LatencyReport:
     """Quotes of `source` ("stream" or "snapshot"); hours are receipt hours in `zone`."""

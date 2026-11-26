@@ -20,3 +20,9 @@ gate_window_months = 3
 gate_drop_best_percent = 1
 # R23 gate report: tail concentration, the top percents of trades by after-cost result whose share of the net is reported (the model targets rare large gainers; Codex review of #851), percent each, increasing; read by research/gate.py.
 gate_tail_percents = [1, 5, 10]
+
+[sealed]
+# The sealed exam data (backlog R20, docs/promotion.md rung 0): closed [first, last] ranges of exchange-time-zone dates ([research] session_timezone), both ends sealed; read by research/sealed.py, which refuses every research command whose dates or inputs touch them. No flag overrides it: the exam unseals only when the owner edits this table.
+ranges = [[2026-07-01, 2026-08-14]]
+# The sealed exam data (backlog R20): this date and every later one is sealed (R20 "every day from 2026-11-20"), exchange-time-zone date; read by research/sealed.py.
+every_day_from = 2026-11-20

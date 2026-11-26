@@ -16,6 +16,7 @@ from pathlib import Path
 from tickr import config as bot_config
 from tickr.calendar import CalendarRefused, SessionCalendar
 from tickr.config import ConfigError
+from tickr.data.capture import CaptureError, read_captured_bars
 from tickr.replay.__main__ import platform_sizing, session_clock, strategy_factory
 from tickr.replay.bars import load_bars
 from tickr.replay.errors import ReplayError
@@ -32,11 +33,13 @@ from tickr.research import (
 from tickr.research import gate as gate_report
 from tickr.research.collar import collar_report
 from tickr.research.errors import ResearchError
-from tickr.research.latency import latency_report
+from tickr.research.latency import NOTICE_KEYS, QUOTE_KEYS, capture_times, latency_report
 from tickr.research.outcomes import outcomes
-from tickr.research.records import load_records, write_records
+from tickr.research.records import DecisionRecord, load_records, write_records
+from tickr.research.sealed import refuse_sealed
 from tickr.research.settings import load_research_settings
 from tickr.research.whatif import what_if
+from tickr.types import Bar
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -176,6 +179,35 @@ REPORT_COMMANDS = frozenset({"outcomes", "diff", "latency", "collar", "refusals"
                              "calibration"})
 
 
+def _records(what: str, paths: Sequence[Path]) -> tuple[DecisionRecord, ...]:
+    """Decision records, refused when one of them lies in the sealed exam window."""
+    records = load_records(paths)
+    refuse_sealed(what, days=[t for r in records for t in (r.bar_start, r.time)])
+    return records
+
+
+def _bars(paths: Sequence[Path]) -> dict[str, tuple[Bar, ...]]:
+    """Replay bar files, refused when one bar lies in the sealed exam window."""
+    bars = load_bars(paths)
+    refuse_sealed("--bars", days=[b.start for series in bars.values() for b in series])
+    return bars
+
+
+def _captured(what: str, paths: Sequence[Path], keys: frozenset[str]) -> None:
+    """Refuse capture files (quotes, notices) holding a receipt in the sealed exam window."""
+    refuse_sealed(what, days=capture_times(paths, keys))
+
+
+def _captured_bars(paths: Sequence[Path]) -> None:
+    """Refuse captured bar files holding a bar in the sealed exam window."""
+    for path in paths:
+        try:
+            read = read_captured_bars(path)
+        except CaptureError as exc:
+            raise ResearchError(str(exc)) from exc
+        refuse_sealed("--bars", days=[start for _, start in read.bars])
+
+
 def _fill_quality(args: argparse.Namespace) -> dict:
     settings = load_research_settings(args.settings)
     zone = settings.session_timezone
@@ -190,10 +222,13 @@ def _fill_quality(args: argparse.Namespace) -> dict:
         raise ResearchError(f"set labels must differ and be plain names: {labels}")
     sets = []
     for label, database, environment, quote_files in pairs:
+        _captured(f"quotes of {label}", quote_files, QUOTE_KEYS)
         quotes = (fill_quality.Quotes(quote_files, args.quote_source, zone)
                   if quote_files else None)
-        sets.append((label, fill_quality.trade_fills(database, zone, quotes, environment),
-                     slippage.stopped_trades(database, zone, environment)))
+        fills = fill_quality.trade_fills(database, zone, quotes, environment)
+        stopped = slippage.stopped_trades(database, zone, environment)
+        refuse_sealed(f"trades of {label}", days=[t.day for t in (*fills, *stopped)])
+        sets.append((label, fills, stopped))
     return report.write_fill_quality(sets, {"slippage_percent": replay.slippage_percent},
                                      args.out, replay.output_decimal_places)
 
@@ -210,6 +245,7 @@ def _gate(args: argparse.Namespace) -> dict:
         start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
     except ValueError as exc:
         raise ResearchError("--start and --end must be YYYY-MM-DD") from exc
+    refuse_sealed("--start..--end", first=start, last=end)  # before any input is opened
     cfg = bot_config.load(args.config)
     directory = (cfg.root / cfg.session.calendar_file).parent
     calendar = SessionCalendar.load(directory)
@@ -217,7 +253,10 @@ def _gate(args: argparse.Namespace) -> dict:
               "calendar_files_sha256": gate_report.calendar_fingerprint(directory),
               "calendar_coverage": [[a.isoformat(), b.isoformat()] for a, b in calendar.coverage]}
     trades = gate_report.load_trades(args.trades)
-    result = gate_report.gate(trades, gate_report.load_covered_days(args.covered_days), start, end,
+    refuse_sealed("--trades", days=[t.day for t in trades])
+    covered = gate_report.load_covered_days(args.covered_days)
+    refuse_sealed("--covered-days", days=covered)
+    result = gate_report.gate(trades, covered, start, end,
                               gate_report.market_day_lookup(calendar),
                               cfg.risk.position_notional_cap_usd, all_sessions, settings)
     return report.write_gate(result, args.model_version, args.results, args.out, places, trades,
@@ -243,30 +282,34 @@ def _run(args: argparse.Namespace) -> dict:
         settings = load_research_settings(args.settings)
         cfg = bot_config.load(args.config)
         calendar = SessionCalendar.load((cfg.root / cfg.session.calendar_file).parent)
-        rows = outcomes(load_records(args.decisions), load_bars(args.bars), settings,
+        rows = outcomes(_records("--decisions", args.decisions), _bars(args.bars), settings,
                         lambda day: calendar.day(day).regular_close)
         return report.write_outcomes(rows, args.out, places)
     if args.command == "diff":
         settings = load_research_settings(args.settings)
         result = compare.diff(
-            _filter(load_records(args.baseline), args.baseline_strategy),
-            _filter(load_records(args.candidate), args.candidate_strategy),
+            _filter(_records("--baseline", args.baseline), args.baseline_strategy),
+            _filter(_records("--candidate", args.candidate), args.candidate_strategy),
             settings.session_timezone,
         )
         return report.write_diff(result, args.out, places)
     if args.command == "latency":
         settings = load_research_settings(args.settings)
+        _captured("--quotes", args.quotes, QUOTE_KEYS)
+        _captured("--notices", args.notices, NOTICE_KEYS)
         result = latency_report(args.quotes, args.notices, args.source,
                                 settings.session_timezone)
         return report.write_latency(result, args.source, args.out,
                                     places)
     if args.command == "collar":
-        records = load_records(args.decisions) if args.decisions else []
+        records = _records("--decisions", args.decisions) if args.decisions else []
+        _captured("--quotes", args.quotes, QUOTE_KEYS)
+        _captured_bars(args.bars)
         result = collar_report(args.quotes, args.bars, records)
         return report.write_collar(result, args.out, places)
     if args.command == "refusals":
         settings = load_research_settings(args.settings)
-        rows = refusals.table(_filter(load_records(args.decisions), args.strategy),
+        rows = refusals.table(_filter(_records("--decisions", args.decisions), args.strategy),
                               settings.session_timezone)
         return report.write_refusals(rows, args.out, places)
     if args.command == "calibration":
@@ -282,6 +325,7 @@ def _run(args: argparse.Namespace) -> dict:
         settings = load_research_settings(args.settings)
         trades = slippage.stopped_trades(args.database, settings.session_timezone,
                                          args.environment)
+        refuse_sealed("--database trades", days=[t.day for t in trades])
         return report.write_slippage(trades, args.environment, args.out,
                                      places)
     replay_settings = load_settings(args.replay_settings, _history_sessions(args))
@@ -294,15 +338,15 @@ def _run(args: argparse.Namespace) -> dict:
                 quantity = Decimal(args.quantity)
             except InvalidOperation as exc:
                 raise ResearchError(f"--quantity is not a number: {args.quantity!r}") from exc
-        rows = what_if(load_records(args.decisions), load_bars(args.bars), replay_settings,
+        rows = what_if(_records("--decisions", args.decisions), _bars(args.bars), replay_settings,
                        clock_for, quantity)
         return report.write_whatif(rows, args.out, places)
     if args.command == "observers":
-        result = observer_report.report(load_records(args.decisions), load_bars(args.bars),
+        result = observer_report.report(_records("--decisions", args.decisions), _bars(args.bars),
                                         replay_settings, clock_for)
         return report.write_observer_report(result, args.out, places)
     factory = strategy_factory(args.strategy, args.values)
-    records = compare.decide(factory, load_bars(args.bars), replay_settings, clock_for,
+    records = compare.decide(factory, _bars(args.bars), replay_settings, clock_for,
                              platform_sizing(args.config))
     args.out.mkdir(parents=True, exist_ok=True)
     write_records(args.out / "decisions.jsonl", records)
