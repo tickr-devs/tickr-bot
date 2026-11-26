@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from tickr.api import contract as api
+from tickr.api.causes import RowRefused, safe_cause
 from tickr.archive import GZ_SUFFIX, existing, open_text
 from tickr.calendar import ny_date_of
 from tickr.data.base import ScreenerKind, ScreenerRow
@@ -45,7 +46,7 @@ def screener_path(capture: Path, day: date) -> Path | None:
 
 def _row(raw: Any) -> tuple[datetime, ScreenerRow]:
     if not isinstance(raw, dict) or set(raw) != _RECORD_KEYS:
-        raise ValueError("not a captured screener record")
+        raise RowRefused("not a captured screener record")
     texts = ("instrument_id", "symbol", "exchange_code", "currency")
     fields = raw["fields"]
     if (not all(isinstance(raw[k], str) for k in texts)
@@ -53,10 +54,10 @@ def _row(raw: Any) -> tuple[datetime, ScreenerRow]:
             or not isinstance(raw["rank"], int) or isinstance(raw["rank"], bool)
             or not isinstance(fields, dict)
             or not all(isinstance(v, str) for v in fields.values())):
-        raise ValueError("a screener record field has the wrong type")
+        raise RowRefused("a screener record field has the wrong type")
     at = datetime.fromisoformat(raw["receipt_time"])
     if at.tzinfo is None:
-        raise ValueError("receipt_time has no UTC offset")
+        raise RowRefused("receipt_time has no UTC offset")
     return at, ScreenerRow(ScreenerKind(raw["kind"]), raw["rank"], raw["instrument_id"],
                            raw["symbol"], raw["exchange_code"], raw["currency"],
                            raw["security_type"], fields)
@@ -80,7 +81,7 @@ class _Passes:
         try:
             at, row = _row(json.loads(text))
         except (ValueError, TypeError) as exc:  # JSONDecodeError is a ValueError
-            raise CaptureError(f"{self.path}:{self.lines}: {exc}") from exc
+            raise CaptureError(f"line {self.lines}: {safe_cause(exc)}") from exc
         read = (row.kind, at)
         previous = self._previous
         opened = previous is None or (read != previous
@@ -246,7 +247,7 @@ class ScreenerChips:
                     self._chips = state.chips(self.places)
                     self._key = key
             except OSError as exc:
-                raise CaptureError(str(exc)) from exc
+                raise CaptureError(f"capture file unreadable ({type(exc).__name__})") from exc
             except CaptureError:
                 self._reset(None)  # read the file anew next time
                 raise
@@ -269,7 +270,7 @@ class ScreenerChips:
             try:
                 lines = complete.decode("utf-8").splitlines(keepends=True)
             except UnicodeDecodeError as exc:
-                raise CaptureError(f"{path}: {exc}") from exc
+                raise CaptureError(f"capture file is not UTF-8 ({type(exc).__name__})") from exc
             self._offset += len(complete)
         for text in lines:
             if self._splitter.add(text, self._open) and len(self._open) > 1:
@@ -292,7 +293,7 @@ def reconcile(day: date, today: date, status_path: Path,
         except FileNotFoundError:
             agreement_cause = "the bot has not written an account file"
         except (api.ContractError, OSError) as exc:
-            agreement_cause = f"account file is invalid ({exc})"
+            agreement_cause = f"account file is invalid ({safe_cause(exc)})"
         else:
             if ny_date_of(account.read_at) != day:
                 agreement_cause = f"the latest broker read was on {ny_date_of(account.read_at)}"
@@ -305,7 +306,7 @@ def reconcile(day: date, today: date, status_path: Path,
         except FileNotFoundError:
             fences_cause = "the bot has not written a status file"
         except (api.ContractError, OSError) as exc:
-            fences_cause = f"status file is invalid ({exc})"
+            fences_cause = f"status file is invalid ({safe_cause(exc)})"
         else:
             if ny_date_of(status.written_at) != day:
                 fences_cause = f"the latest status was written on {ny_date_of(status.written_at)}"

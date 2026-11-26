@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tickr.research.errors import ResearchSettingsError
 
-KEYS = frozenset({"horizons_minutes", "atr_period", "session_timezone", "calibration_buckets"})
+KEYS = frozenset({"horizons_minutes", "atr_period", "session_timezone", "calibration_buckets",
+                  "gate_positive_months", "gate_window_months", "gate_drop_best_percent",
+                  "gate_tail_percents"})
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,15 @@ class ResearchSettings:
     """Exchange time zone: a horizon never crosses the decision's session date in it."""
     calibration_buckets: int
     """Equal-width probability buckets of the calibration table (10 = tenths)."""
+    gate_positive_months: int
+    """R23 gate report, sensitivity check: months in plus needed (K of the last M)."""
+    gate_window_months: int
+    """R23 gate report, sensitivity check: the last M calendar months, ending with --end."""
+    gate_drop_best_percent: Decimal
+    """R23 gate report, sensitivity check: percent of trades, best by after-cost result, removed
+    before the net is looked at again."""
+    gate_tail_percents: tuple[Decimal, ...]
+    """R23 gate report: top percents of trades whose share of the net is reported."""
 
 
 def _int(key: str, raw: Any, minimum: int) -> int:
@@ -38,6 +50,19 @@ def _int(key: str, raw: Any, minimum: int) -> int:
     if raw < minimum:
         raise ResearchSettingsError(f"{key} must be at least {minimum}: {raw}")
     return raw
+
+
+def _percent(key: str, raw: Any, *, zero_ok: bool) -> Decimal:
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        raise ResearchSettingsError(f"{key} must be a number")
+    value = Decimal(str(raw))
+    low_ok = value >= 0 if zero_ok else value > 0
+    high_ok = value < 100
+    if not value.is_finite() or not low_ok or not high_ok:
+        low = "0" if zero_ok else "0 (excluded)"
+        high = "100 (excluded)"
+        raise ResearchSettingsError(f"{key} must be in {low}..{high}: {raw}")
+    return value
 
 
 def settings_from_mapping(data: dict[str, Any]) -> ResearchSettings:
@@ -63,11 +88,24 @@ def settings_from_mapping(data: dict[str, Any]) -> ResearchSettings:
         zone = ZoneInfo(zone_name)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ResearchSettingsError(f"session_timezone is unknown: {zone_name!r}") from exc
+    positive = _int("gate_positive_months", table["gate_positive_months"], 1)
+    window = _int("gate_window_months", table["gate_window_months"], positive)
+    drop = _percent("gate_drop_best_percent", table["gate_drop_best_percent"], zero_ok=True)
+    raw_tails = table["gate_tail_percents"]
+    if not isinstance(raw_tails, list) or not raw_tails:
+        raise ResearchSettingsError("gate_tail_percents must be a non-empty list of numbers")
+    tails = tuple(_percent("gate_tail_percents", t, zero_ok=False) for t in raw_tails)
+    if any(b <= a for a, b in zip(tails, tails[1:], strict=False)):
+        raise ResearchSettingsError(f"gate_tail_percents must strictly increase: {raw_tails}")
     return ResearchSettings(
         horizons_minutes=horizons,
         atr_period=_int("atr_period", table["atr_period"], 1),
         session_timezone=zone,
         calibration_buckets=_int("calibration_buckets", table["calibration_buckets"], 1),
+        gate_positive_months=positive,
+        gate_window_months=window,
+        gate_drop_best_percent=drop,
+        gate_tail_percents=tails,
     )
 
 

@@ -51,7 +51,15 @@ Rung 1 may also run for a version that has passed rung 0 only in part; see the f
 Applied before rung 2 (v4), not before the Sandbox start. It is the backlog R23 text, not new
 criteria: plus after costs on the sealed period, plus in 2 of 3 months, plus without the best 1% of
 trades, every feature available live, stop and decision frequency chosen. Status today: decided, not
-passed. R33 (live feature parity) must hold first.
+passed. R33 (live feature parity) must hold first. `python -m tickr.research gate`
+(`docs/research.md`) reports the numbers as an offline DESCRIPTIVE report on both money lines: net
+after costs, K of M months and without the best X% as named sensitivity checks, tail
+concentration and a same-trade spread cost diagnostic (a paired baseline is reported as
+unavailable), over a frozen start, end and session calendar.
+Nothing is promoted from it automatically: binding promotion criteria are set with the owner on
+open development evidence before any exam read, and portfolio dollars count only after a replay of
+cash, slots, repeated symbols, protection, session limits and actual exits (not built yet). The
+other items stay checked by hand.
 
 ### Rung 2: real account at small size
 

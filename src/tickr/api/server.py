@@ -4,12 +4,13 @@ stdlib only. Binds a loopback address and refuses any request whose Host (or Ori
 is not in the configured allowlist, which blocks DNS rebinding and cross-site requests from a
 browser. Remote access (the phone, through an HTTPS proxy on this Mac such as `tailscale serve`)
 has its own loopback listener, `[api] remote_port`: every request there must carry the paired
-bearer token whatever its Host, and its Host must be one of the names in
-`[api] remote_hosts_file`. Whether a token is needed is decided by the listener a request
+bearer token of a paired device whatever its Host, and its Host must be one of the names in
+`[api] remote_hosts_file`. Several devices can be paired, each with its own token, revoked one by
+one (api/devices.py). Whether a token is needed is decided by the listener a request
 arrives on, never by a header the caller chooses.
 The one exception is POST /pair there: the phone redeems the one-time pairing code `pair` left
-in the pairing link, once and before it expires, for a new token. The server keeps only SHA-256
-digests of the code and the token.
+in the pairing link, once and before it expires, for a new device token. The server keeps only
+SHA-256 digests of the code and the tokens.
 Commands additionally require `Content-Type: application/json`, which a cross-site form
 cannot send without a CORS preflight, and this server answers no preflight.
 
@@ -43,10 +44,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import contract, flow, settled, symbols, trade_whatif
+from tickr.api import authlimit, contract, devices, flow, settled, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
+from tickr.api.alerts import AlertsSettings, alerts_document
 from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
+from tickr.api.causes import safe_cause
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
 from tickr.api.configview import config_document
 from tickr.api.contract import (
@@ -91,6 +94,7 @@ from tickr.observers.loader import STRATEGIES_DIR, read_identity, read_values
 from tickr.observers.log import DecisionLog
 from tickr.research.errors import RecordFileError
 from tickr.research.records import DecisionRecord
+from tickr.runtime.alert_routing import RefusalCause, RoutingRefused
 from tickr.strategy.base import Role
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -99,6 +103,7 @@ WARM_ERRORS = (HistoryUnavailable, CaptureError, RecordFileError, ObserverError,
 COMMAND_SOURCE = "api"
 JSON_TYPE = "application/json"
 ENTRY_STOP_STATES = {"on": CommandKind.ENTRY_STOP_ON, "off": CommandKind.ENTRY_STOP_OFF}
+STOP_MODES = {m.value: m for m in contract.StopMode}  # POST /commands/stop-bot {"mode": ...}
 COMMAND_ROUTES = {
     "/commands/entry-stop": None,  # kind comes from the body
     "/commands/cancel-own-orders": CommandKind.CANCEL_OWN_ORDERS,
@@ -123,6 +128,9 @@ LOCK_SUFFIX = ".lock"  # the pairing lock file: next to the code file, never hol
 PAIR_ROUTE = "/pair"  # POST on the remote port only: redeem the one-time pairing code
 # Fewest random bytes in a token or pairing code: 128 bits, the usual floor for a bearer secret.
 MIN_SECRET_BYTES = 16
+IPV6_BITS = 128  # length of an IPv6 address (protocol constant)
+TOKEN_ROUTE_KIND = "token"  # the budget names in the block log line and the alert
+PAIR_ROUTE_KIND = "pair"
 
 
 @dataclass(frozen=True)
@@ -133,13 +141,21 @@ class ApiSettings:
     remote_hosts: tuple[str, ...]  # read from remote_hosts_path at start; empty = remote off
     remote_hosts_path: Path
     remote_port: int
-    token_hash_path: Path
+    token_hash_path: Path  # the single phone token's hash before devices: migrated, then gone
+    devices_path: Path  # the paired devices: name, token SHA-256, created and last-used time
     simulator_token_hash_path: Path  # the Simulator's own token (`pair-simulator`), beside it
     simulator_token_path: Path  # the Simulator's token itself, 0600, for the app to read
     token_bytes: int
     pairing_path: Path
     pairing_code_path: Path  # SHA-256 of the waiting one-time code and its expiry
     pairing_code_ttl_seconds: int
+    auth_trusted_proxy: str  # the proxy's TCP peer address: only its X-Forwarded-For counts
+    auth_window_seconds: int  # device-token budget: failed checks per address per window
+    auth_failures: int
+    pair_window_seconds: int  # POST /pair budget, stricter
+    pair_failures: int
+    auth_max_addresses: int  # addresses each budget tracks; full of live ones = fail closed
+    auth_ipv6_prefix_length: int  # an IPv6 client counts as its network of this length
     status_path: Path
     inbox: Path
     idempotency: Path  # <commands_dir>/idempotency: remembered Idempotency-Key answers
@@ -171,6 +187,7 @@ class ApiSettings:
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
     system: SystemSettings  # GET /system: link, preflight record, training, machine services
+    alerts: AlertsSettings  # GET /alerts and PUT /alerts/routing: the notification settings
     lab: LabReplaySettings  # GET and POST /lab/replay: the Lab's simulated replay
     start: StartSettings  # POST /commands/start-bot: launchd's start of the bot job
     trade_whatif: trade_whatif.TradeWhatIfSettings  # GET /trades/whatif
@@ -228,6 +245,19 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         raise ConfigError(f"[api] remote_token_bytes must be at least {MIN_SECRET_BYTES}")
     if api.remote_pairing_code_ttl_seconds <= 0:
         raise ConfigError("[api] remote_pairing_code_ttl_seconds must be positive")
+    try:
+        ipaddress.ip_address(api.remote_auth_trusted_proxy)
+    except ValueError:
+        raise ConfigError("[api] remote_auth_trusted_proxy must be an IP address") from None
+    if min(api.remote_auth_window_seconds, api.remote_auth_failures, api.remote_pair_failures,
+           api.remote_auth_max_addresses) <= 0:
+        raise ConfigError("[api] remote_auth_window_seconds, remote_auth_failures, "
+                          "remote_pair_failures and remote_auth_max_addresses must be positive")
+    if api.remote_pair_window_seconds < api.remote_pairing_code_ttl_seconds:
+        raise ConfigError("[api] remote_pair_window_seconds must be at least "
+                          "remote_pairing_code_ttl_seconds, so one window covers a code's life")
+    if not 0 < api.remote_auth_ipv6_prefix_length <= IPV6_BITS:
+        raise ConfigError(f"[api] remote_auth_ipv6_prefix_length must be 1-{IPV6_BITS}")
     if api.idempotency_key_ttl_seconds <= api.command_max_age_seconds:
         raise ConfigError("[api] idempotency_key_ttl_seconds must be above "
                           "command_max_age_seconds, so a repeat can never queue a command twice")
@@ -273,12 +303,20 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         remote_hosts_path=remote_hosts_path,
         remote_port=api.remote_port,
         token_hash_path=data / api.remote_token_hash_file,
+        devices_path=data / api.remote_devices_file,
         simulator_token_hash_path=data / api.remote_simulator_token_hash_file,
         simulator_token_path=data / api.remote_simulator_token_file,
         token_bytes=api.remote_token_bytes,
         pairing_path=data / api.remote_pairing_file,
         pairing_code_path=data / api.remote_pairing_code_file,
         pairing_code_ttl_seconds=api.remote_pairing_code_ttl_seconds,
+        auth_trusted_proxy=api.remote_auth_trusted_proxy,
+        auth_window_seconds=api.remote_auth_window_seconds,
+        auth_failures=api.remote_auth_failures,
+        pair_window_seconds=api.remote_pair_window_seconds,
+        pair_failures=api.remote_pair_failures,
+        auth_max_addresses=api.remote_auth_max_addresses,
+        auth_ipv6_prefix_length=api.remote_auth_ipv6_prefix_length,
         status_path=data / api.status_file,
         inbox=data / api.commands_dir / contract.INBOX,
         idempotency=data / api.commands_dir / IDEMPOTENCY,
@@ -311,6 +349,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
         system=SystemSettings.from_config(cfg),
+        alerts=AlertsSettings.from_config(cfg),
         lab=LabReplaySettings.from_config(cfg, config_path),
         start=StartSettings.from_config(cfg),
         trade_whatif=trade_whatif.TradeWhatIfSettings.from_config(cfg),
@@ -387,6 +426,19 @@ class ApiServer(ThreadingHTTPServer):
         self.start_lock = start_lock or threading.Lock()
         # One redemption at a time, so a pairing code can never yield two tokens.
         self.pair_lock = threading.Lock()
+        # The remote port's failed-authentication budgets per client address (api/authlimit.py).
+        self.auth_limits = {
+            TOKEN_ROUTE_KIND: authlimit.AuthLimiter(
+                settings.auth_failures, settings.auth_window_seconds,
+                settings.auth_max_addresses),
+            PAIR_ROUTE_KIND: authlimit.AuthLimiter(
+                settings.pair_failures, settings.pair_window_seconds,
+                settings.auth_max_addresses),
+        }
+        # Called with the alert text when an address is blocked; set by `python -m tickr.api`
+        # (the `remote-auth-blocked` alert), None in tests and the demo.
+        self.auth_alert: Callable[[str], None] | None = None
+        self._table_full_logged = {kind: False for kind in self.auth_limits}
         # Shared too, so one replay at a time whichever listener started it.
         self.lab = lab or LabReplay(settings.lab, clock)
         self.page = (STATIC_DIR / "status.html").read_bytes()
@@ -433,6 +485,33 @@ class ApiServer(ThreadingHTTPServer):
         port = settings.remote_port if remote else settings.port
         super().__init__((settings.host, port), Handler)
 
+    def auth_blocked(self, kind: str, key: str) -> None:
+        """One log line and the `remote-auth-blocked` alert when `key` used up its `kind`
+        budget. The address is the caller's (never a token or code); `kind` names the budget."""
+        limiter = self.auth_limits[kind]
+        self._report_block(f"address {key} refused on the remote port for up to "
+                           f"{limiter.window} s after {limiter.failures} failed {kind} checks")
+
+    def auth_table_full(self, kind: str, refused: bool) -> None:
+        """Once per spell: the `kind` table is full of addresses that still count, so new
+        addresses are refused (fail closed) until one ages out."""
+        limiter = self.auth_limits[kind]
+        if not refused:
+            if self._table_full_logged[kind] and len(limiter) < limiter.max_addresses:
+                self._table_full_logged[kind] = False
+            return
+        if self._table_full_logged[kind]:
+            return
+        self._table_full_logged[kind] = True
+        self._report_block(f"every new address refused on the remote port: the {kind} table "
+                           f"holds {limiter.max_addresses} addresses with failed checks inside "
+                           f"{limiter.window} s")
+
+    def _report_block(self, text: str) -> None:
+        sys.stderr.write(f"api: auth limit: {text}\n")
+        if self.auth_alert is not None:
+            self.auth_alert(text)
+
     def _warm_past_day(self, day: date, today: date) -> None:
         """Builds what a pick of past day `day` reads: its trades (GET /days/<date>, which
         indexes its captured bars by symbol on disk) and every answer of `settled.ROUTES`, kept
@@ -461,7 +540,7 @@ class ApiServer(ThreadingHTTPServer):
         except FileNotFoundError:
             cause = "the bot has not written a status file"
         except (ContractError, OSError) as exc:
-            cause = f"status file is invalid ({exc})"
+            cause = f"status file is invalid ({safe_cause(exc)})"
         if status is not None:
             age = contract.seconds_between(status.written_at, now)
             if age < 0:
@@ -487,7 +566,7 @@ class ApiServer(ThreadingHTTPServer):
         except FileNotFoundError:
             return ErrorV1("unavailable", "the bot has not written an account file")
         except (ContractError, OSError) as exc:
-            return ErrorV1("unavailable", f"account file is invalid ({exc})")
+            return ErrorV1("unavailable", f"account file is invalid ({safe_cause(exc)})")
         age = contract.seconds_between(account.read_at, now)
         if age < 0:
             return ErrorV1("unavailable", "account file is dated in the future")
@@ -501,7 +580,7 @@ class ApiServer(ThreadingHTTPServer):
         except FileNotFoundError:
             return ErrorV1("unavailable", "the bot has not written a quotes file")
         except (ContractError, OSError) as exc:
-            return ErrorV1("unavailable", f"quotes file is invalid ({exc})")
+            return ErrorV1("unavailable", f"quotes file is invalid ({safe_cause(exc)})")
         return QuotesResponseV1(served_at=self.clock(), quotes=quotes)
 
     def start_bot(self) -> BotStartV1 | ErrorV1:
@@ -620,7 +699,8 @@ class ApiServer(ThreadingHTTPServer):
         try:
             self.settled.put(day, key, kept)
         except OSError as exc:  # memory holds them; the disk copy is only for the next start
-            sys.stderr.write(f"settled answers of {day.isoformat()} not written: {exc}\n")
+            sys.stderr.write(f"settled answers of {day.isoformat()} not written "
+                             f"({type(exc).__name__})\n")
         if failure is not None:
             raise failure
         if answer is None:
@@ -674,8 +754,8 @@ class ApiServer(ThreadingHTTPServer):
         return symbols.movers_document(day, self._discovery(day, today),
                                        symbols.mover_rules(toml), records)
 
-    def enqueue(self, kind: CommandKind, symbol: str | None = None,
-                key: str | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
+    def enqueue(self, kind: CommandKind, symbol: str | None = None, key: str | None = None,
+                mode: contract.StopMode | None = None) -> CommandAcceptedV1 | ErrorV1 | bytes:
         """Queue one command. With an Idempotency-Key already seen within its lifetime the
         first answer comes back as stored bytes and nothing is queued; the same key for a
         different command is a conflict. The command file is written before the key, so a
@@ -683,7 +763,9 @@ class ApiServer(ThreadingHTTPServer):
         was not queued (every command is idempotent in its effect on the bot)."""
         with self.inbox_lock:
             now = self.clock()
-            request = {"kind": kind.value, "symbol": symbol}
+            request: dict[str, Any] = {"kind": kind.value, "symbol": symbol}
+            if mode is not None:  # absent without one, so a key stored before modes still matches
+                request["mode"] = mode.value
             if key is not None:
                 stored = self._remembered(key, now)
                 if stored is not None:
@@ -695,7 +777,7 @@ class ApiServer(ThreadingHTTPServer):
                 return ErrorV1("too_many_pending",
                                f"{self.settings.max_pending_commands} commands are already "
                                "waiting for the bot")
-            command = contract.new_command(kind, now, COMMAND_SOURCE, symbol)
+            command = contract.new_command(kind, now, COMMAND_SOURCE, symbol, mode)
             contract.write_command(self.settings.inbox, command)
             state = self.status_response()
             warning = None
@@ -763,14 +845,14 @@ _ERROR_CODES = {
     "method_not_allowed": 405, "length_required": 411, "payload_too_large": 413,
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
     "internal": 500, "unavailable": 503, "unauthorized": 401, "conflict": 409,
-    "rate_limited": 429,
+    "rate_limited": 429, "auth_rate_limited": 429,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", RECEIPT_ROUTE, "/schema", "/days", "/bars",
               "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/system", "/journal", "/config",
               "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events",
-              "/settings/schema", "/settings/values")
+              "/settings/schema", "/settings/values", "/alerts")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
 HTML_TYPE = "text/html; charset=utf-8"
@@ -790,6 +872,7 @@ TRADE_WHATIF = "/trades/whatif"  # GET: another version on one trade's day, simu
 FOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 ADVISOR_DECISION = "/advisor/decision"  # POST only: the owner's note on a run, never a command
 SETTINGS_VALIDATE = "/settings/validate"  # POST only: checks a draft, writes nothing
+ALERT_ROUTING = "/alerts/routing"  # PUT only: one cell of the owner's alert routing
 DAY_PREFIX = "/days/"
 # Headers a proxy adds to a request it forwards (Go's ReverseProxy, which `tailscale serve` is,
 # adds X-Forwarded-For; Tailscale adds its identity headers). The remote port's loopback Host is
@@ -811,7 +894,7 @@ def _query(raw: str, names: frozenset[str],
     try:
         pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=bool(raw))
     except ValueError as exc:
-        raise BadQuery(f"malformed query string: {exc}") from exc
+        raise BadQuery(f"malformed query string: {type(exc).__name__}") from exc
     found: dict[str, str] = {}
     for name, value in pairs:
         if name not in names:
@@ -831,7 +914,7 @@ def _day(text: str) -> date:
     try:
         return contract.parse_date(text)
     except ContractError as exc:
-        raise BadQuery(str(exc)) from exc
+        raise BadQuery(safe_cause(exc)) from exc
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -840,6 +923,9 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""
 
     # ------------------------------------------------------------ plumbing
+
+    _client = ""  # the remote port's client address key (api/authlimit.py), set by _guard
+    _last_error: str | None = None  # the error code last answered, read by _simulator_authorized
 
     def setup(self) -> None:
         # Before the stdlib applies it to the socket: a client that stops sending (no request
@@ -863,6 +949,7 @@ class Handler(BaseHTTPRequestHandler):
                    f"{JSON_TYPE}; charset=utf-8", {})
 
     def _error(self, error: str, cause: str, extra: dict[str, str] | None = None) -> None:
+        self._last_error = error
         body = contract.dumps(ErrorV1(error, cause)).encode("utf-8")
         self._send(_ERROR_CODES[error], body, f"{JSON_TYPE}; charset=utf-8", extra or {})
 
@@ -870,6 +957,24 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host")
         origin = self.headers.get("Origin")
         if self.server.remote:
+            settings = self.server.settings
+            try:
+                self._client = authlimit.client_key(
+                    self.client_address[0], self.headers.get_all(authlimit.FORWARDED_FOR) or [],
+                    settings.auth_trusted_proxy, settings.auth_ipv6_prefix_length)
+            except authlimit.BadForwardedFor:
+                # A proxy that names no client: counted under the proxy itself, never guessed.
+                self._client = authlimit.address_key(self.client_address[0],
+                                                     settings.auth_ipv6_prefix_length)
+                with self.server.pair_lock:
+                    refused = self._admit(TOKEN_ROUTE_KIND)
+                    if refused is None:
+                        self._settle(TOKEN_ROUTE_KIND, failed=True)
+                if refused is not None:
+                    self._refuse(TOKEN_ROUTE_KIND, refused)
+                else:
+                    self._error("bad_request", authlimit.BAD_FORWARDED_FOR)
+                return False
             # The remote listener: the token is always required; Host guards against rebinding.
             if host is None or not (host in self.server.settings.remote_hosts
                                     or self._simulator_host(host)):
@@ -889,6 +994,25 @@ class Handler(BaseHTTPRequestHandler):
         self._error("forbidden_host", f"Host {host!r} is not allowed")
         return False
 
+    def _admit(self, kind: str) -> authlimit.Refused | None:
+        """Reserve one `kind` check for this request's client address (None), or the refusal to
+        answer with `_refuse` before any credential is looked at. The caller holds `pair_lock`
+        (checks are one at a time) and settles every admission with `_settle`."""
+        refused = self.server.auth_limits[kind].acquire(self._client)
+        self.server.auth_table_full(kind, refused is not None and refused.table_full)
+        return refused
+
+    def _refuse(self, kind: str, refused: authlimit.Refused) -> None:
+        """429 `auth_rate_limited` with Retry-After: names no credential and tests none."""
+        cause = ("too many addresses failed authentication recently" if refused.table_full
+                 else f"too many failed {kind} checks from this address")
+        self._error("auth_rate_limited", f"{cause}; retry after {refused.retry_after} s",
+                    {"Retry-After": str(refused.retry_after)})
+
+    def _settle(self, kind: str, failed: bool) -> None:
+        if self.server.auth_limits[kind].release(self._client, failed):
+            self.server.auth_blocked(kind, self._client)
+
     def _simulator_host(self, host: str) -> bool:
         """The remote port's own loopback address (host:port it listens on), which the iOS
         Simulator on this Mac reads: answered only while a Simulator token is paired, only for a
@@ -900,20 +1024,91 @@ class Handler(BaseHTTPRequestHandler):
                 and not any(self.headers.get(name) is not None for name in FORWARDING_HEADERS))
 
     def _authorized(self, host: str) -> bool:
-        """A remote request must present the token paired for its Host: the phone's on the
+        """A remote request must present a token paired for its Host: a paired device's on the
         Tailscale names, the Simulator's on this port's loopback address only, so a copy of the
         Simulator's token (kept in a file on this Mac) opens nothing from the tailnet. The token
         is never logged or echoed."""
+        if host not in self.server.settings.remote_hosts:
+            return self._simulator_authorized()
         challenge = {"WWW-Authenticate": "Bearer"}
         settings = self.server.settings
-        simulator = host not in settings.remote_hosts
-        path = settings.simulator_token_hash_path if simulator else settings.token_hash_path
+        header = self.headers.get("Authorization") or ""
+        with self.server.pair_lock, _pairing_lock(settings):
+            refused = self._admit(TOKEN_ROUTE_KIND)
+            if refused is None:
+                paired: tuple[devices.Device, ...] | Exception = ()
+                device = None
+                try:
+                    paired, device = self._match_device(header)
+                finally:  # every answer below for a readable list without a match is a 401
+                    self._settle(TOKEN_ROUTE_KIND, isinstance(paired, tuple) and device is None)
+        if refused is not None:
+            self._refuse(TOKEN_ROUTE_KIND, refused)
+            return False
+        if not isinstance(paired, tuple):
+            self._device_list_unreadable(paired)
+            return False
+        if not paired:
+            self._error("unauthorized", "nothing is paired here; run `python -m tickr.api "
+                        "pair`", challenge)
+            return False
+        if not header.startswith(BEARER):
+            self._error("unauthorized", "a bearer token is required", challenge)
+            return False
+        if device is None:
+            self._error("unauthorized", "the bearer token is not the paired one", challenge)
+            return False
+        return True
+
+    def _match_device(self, header: str) -> tuple[tuple[devices.Device, ...] | Exception,
+                                                  devices.Device | None]:
+        """The paired devices (or why they cannot be read) and the one whose token `header`
+        carries, its last-used time recorded; the caller holds the pairing locks."""
+        settings = self.server.settings
+        try:
+            paired = load_devices(settings)
+        except (OSError, devices.DeviceFileError) as exc:
+            return exc, None
+        if not header.startswith(BEARER):
+            return paired, None
+        device = devices.match(paired, header[len(BEARER):])
+        if device is not None:
+            marked = devices.used(paired, device.name, self.server.clock())
+            try:
+                if marked is not None:
+                    _write_private(settings.devices_path, devices.render(marked))
+            except OSError as exc:  # the request is still the device's: only the time is lost
+                sys.stderr.write(f"api: last-used time of device {device.name!r} not "
+                                 f"recorded ({type(exc).__name__})\n")
+        return paired, device
+
+    def _device_list_unreadable(self, exc: Exception) -> None:
+        """503 for a device list that cannot be read. The cause and the log name the exception's
+        type only: its text carries the local path of the file, which never leaves this Mac."""
+        kind = type(exc).__name__
+        sys.stderr.write(f"api: the paired devices are unreadable ({kind})\n")
+        self._error("unavailable", f"device_list_unreadable:{kind}")
+
+    def _simulator_authorized(self) -> bool:
+        with self.server.pair_lock:
+            refused = self._admit(TOKEN_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                try:
+                    return self._simulator_token_matches()
+                finally:
+                    self._settle(TOKEN_ROUTE_KIND, self._last_error == "unauthorized")
+        self._refuse(TOKEN_ROUTE_KIND, refused)
+        return False
+
+    def _simulator_token_matches(self) -> bool:
+        challenge = {"WWW-Authenticate": "Bearer"}
+        path = self.server.settings.simulator_token_hash_path
         try:
             expected = path.read_text("ascii").strip()
         except FileNotFoundError:
-            command = "pair-simulator" if simulator else "pair"
-            self._error("unauthorized", f"nothing is paired here; run `python -m tickr.api "
-                        f"{command}`", challenge)
+            self._error("unauthorized", "nothing is paired here; run `python -m tickr.api "
+                        "pair-simulator`", challenge)
             return False
         except (OSError, UnicodeDecodeError) as exc:
             self._error("unavailable",
@@ -923,7 +1118,7 @@ class Handler(BaseHTTPRequestHandler):
         if not header.startswith(BEARER):
             self._error("unauthorized", "a bearer token is required", challenge)
             return False
-        presented = hashlib.sha256(header[len(BEARER):].encode("utf-8")).hexdigest()
+        presented = devices.digest(header[len(BEARER):])
         if not hmac.compare_digest(presented, expected):
             self._error("unauthorized", "the bearer token is not the paired one", challenge)
             return False
@@ -986,6 +1181,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/system":
                 self._json(200, system_document(self.server.settings.system,
                                                 self.server.status_response()))
+            elif path == "/alerts":
+                self._json(200, alerts_document(self.server.settings.alerts))
+            elif path == ALERT_ROUTING:
+                self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
             elif path == "/journal":
                 self._json(200, journal_document(self.server.settings.jobs.database,
                                                  self.server.settings.journal_rows))
@@ -1037,6 +1236,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == SETTINGS_VALIDATE:
                 self._validate_settings()
                 return
+            if path == ALERT_ROUTING:
+                self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
+                return
             if path == PAIR_ROUTE and self.server.remote:
                 self._redeem()
                 return
@@ -1055,14 +1257,14 @@ class Handler(BaseHTTPRequestHandler):
             if body is None:
                 return
             kind = COMMAND_ROUTES[path]
-            symbol = None
+            symbol, mode = None, None
             if kind is None:
                 if set(body) != {"state"} or body["state"] not in ENTRY_STOP_STATES:
                     self._error("bad_request", 'body must be exactly {"state": "on"} or '
                                 '{"state": "off"}')
                     return
                 kind = ENTRY_STOP_STATES[body["state"]]
-            elif kind is CommandKind.FLATTEN and body:
+            elif kind in (CommandKind.FLATTEN, CommandKind.CANCEL_OWN_ORDERS) and body:
                 # null is refused, never read as "everything": a client bug must not widen it.
                 if (set(body) != {"symbol"} or not isinstance(body["symbol"], str)
                         or not SYMBOL_PATTERN.match(body["symbol"])):
@@ -1070,10 +1272,17 @@ class Handler(BaseHTTPRequestHandler):
                                 "with the ticker in upper case")
                     return
                 symbol = body["symbol"]
+            elif kind is CommandKind.STOP_BOT and body:
+                # Only the two modes: anything else is a client bug, never a guess.
+                if set(body) != {"mode"} or body["mode"] not in STOP_MODES:
+                    self._error("bad_request", 'body must be {}, {"mode": "close_and_stop"} '
+                                'or {"mode": "leave_open"}')
+                    return
+                mode = STOP_MODES[body["mode"]]
             elif body:
                 self._error("bad_request", "body must be an empty JSON object {}")
                 return
-            result = self.server.enqueue(kind, symbol, key)
+            result = self.server.enqueue(kind, symbol, key, mode)
             if isinstance(result, ErrorV1):
                 self._error(result.error, result.cause)
             elif isinstance(result, bytes):
@@ -1122,14 +1331,49 @@ class Handler(BaseHTTPRequestHandler):
             record_decision(settings.advisor_dir, body["run"], verdicts[body["verdict"]],
                             self.server.clock())
         except DecisionRefused as exc:
-            self._error("not_found" if exc.missing else "conflict", str(exc))
+            self._error("not_found" if exc.missing else "conflict", safe_cause(exc))
             return
         self._json(200, advisor_document(settings.advisor_dir, settings.advisor_runs))
 
+    def do_PUT(self) -> None:  # noqa: N802 - stdlib naming
+        if not self._guard():
+            return
+        try:
+            if self._path() != ALERT_ROUTING:
+                self._error("method_not_allowed", "only GET and POST are supported",
+                            {"Allow": "GET, POST"})
+                return
+            self._alert_routing()
+        except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
+            self._error("internal", type(exc).__name__)
+
+    def _alert_routing(self) -> None:
+        """PUT /alerts/routing with {"kind": "<alert kind>", "channel": "mac"|"imessage"|"push",
+        "on": true|false}: change that one cell of the owner's alert routing, 200 alerts-v1;
+        400 for an unknown kind or channel, 409 for a critical kind turned off or a routing
+        file that cannot be used. A preference about where to be told, never a bot command."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        if (set(body) != {"kind", "channel", "on"} or not isinstance(body["kind"], str)
+                or not isinstance(body["channel"], str) or not isinstance(body["on"], bool)):
+            self._error("bad_request", 'body must be exactly {"kind": "<alert kind>", '
+                        '"channel": "mac" | "imessage" | "push", "on": true | false}')
+            return
+        settings = self.server.settings.alerts
+        try:
+            routing = settings.routing.set(body["kind"], body["channel"], body["on"])
+        except RoutingRefused as exc:
+            bad = exc.cause in (RefusalCause.UNKNOWN_KIND, RefusalCause.UNKNOWN_CHANNEL)
+            self._error("bad_request" if bad else "conflict", safe_cause(exc))
+            return
+        self._json(200, alerts_document(settings, routing))
+
     def _redeem(self) -> None:
         """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`
-        left in the pairing link buys one new bearer token, 200 paired-v1. The code is burnt on
-        success and when found expired; a wrong code changes nothing. Neither the code nor the
+        left in the pairing link buys one new bearer token, 200 paired-v1, for the device named
+        at `pair` (added, or its earlier token replaced). The code is burnt on success and when
+        found expired; a wrong code changes nothing. Neither the code nor the
         token is ever logged or echoed in an error."""
         body = self._read_json_body()
         if body is None:
@@ -1139,36 +1383,61 @@ class Handler(BaseHTTPRequestHandler):
             return
         settings = self.server.settings
         with self.server.pair_lock, _pairing_lock(settings):
-            try:
-                waiting = json.loads(settings.pairing_code_path.read_text("ascii"))
-                digest = waiting["sha256"]
-                expires_at = contract.parse_time(waiting["expires_at"])
-                if not isinstance(digest, str):
-                    raise TypeError("sha256")
-            except FileNotFoundError:
-                self._error("unauthorized", "no pairing is waiting; run `python -m tickr.api "
-                            "pair` on the Mac")
-                return
-            except (OSError, ValueError, KeyError, TypeError, ContractError) as exc:
-                self._error("unavailable",
-                            f"the pairing code file is unreadable ({type(exc).__name__})")
-                return
-            if self.server.clock() >= expires_at:
-                settings.pairing_code_path.unlink(missing_ok=True)
-                settings.pairing_path.unlink(missing_ok=True)
-                self._error("unauthorized", "the pairing code has expired; run `python -m "
-                            "tickr.api pair` on the Mac again")
-                return
-            presented = hashlib.sha256(body["code"].encode("utf-8")).hexdigest()
-            if not hmac.compare_digest(presented, digest):
-                self._error("unauthorized", "the pairing code is not the waiting one")
-                return
-            token = secrets.token_urlsafe(settings.token_bytes)
-            _write_private(settings.token_hash_path,
-                           hashlib.sha256(token.encode("utf-8")).hexdigest() + "\n")
+            refused = self._admit(PAIR_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                try:
+                    token = self._redeem_locked(body["code"])
+                finally:  # every 401 here is a code that failed; a 503 tested none
+                    self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
+        if refused is not None:
+            self._refuse(PAIR_ROUTE_KIND, refused)
+        elif token is not None:
+            self._json(200, PairedV1(token=token))
+
+    def _redeem_locked(self, code: str) -> str | None:
+        """`_redeem` under the pairing locks, once admitted by the /pair budget: the new token,
+        or None once the refusal is answered."""
+        settings = self.server.settings
+        try:
+            waiting = json.loads(settings.pairing_code_path.read_text("ascii"))
+            digest = waiting["sha256"]
+            name = waiting["name"]
+            expires_at = contract.parse_time(waiting["expires_at"])
+            if not isinstance(digest, str):
+                raise TypeError("sha256")
+            if not isinstance(name, str) or not devices.valid_name(name):
+                raise ValueError("name")
+        except FileNotFoundError:
+            self._error("unauthorized", "no pairing is waiting; run `python -m tickr.api "
+                        "pair` on the Mac")
+            return None
+        except (OSError, ValueError, KeyError, TypeError, ContractError) as exc:
+            self._error("unavailable",
+                        f"the pairing code file is unreadable ({type(exc).__name__})")
+            return None
+        if self.server.clock() >= expires_at:
             settings.pairing_code_path.unlink(missing_ok=True)
             settings.pairing_path.unlink(missing_ok=True)
-        self._json(200, PairedV1(token=token))
+            self._error("unauthorized", "the pairing code has expired; run `python -m "
+                        "tickr.api pair` on the Mac again")
+            return None
+        presented = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(presented, digest):
+            self._error("unauthorized", "the pairing code is not the waiting one")
+            return None
+        try:
+            paired = load_devices(settings)
+        except (OSError, devices.DeviceFileError) as exc:
+            self._device_list_unreadable(exc)
+            return None
+        token = secrets.token_urlsafe(settings.token_bytes)
+        device = devices.Device(name, devices.digest(token), self.server.clock(), None)
+        _write_private(settings.devices_path,
+                       devices.render(devices.with_device(paired, device)))
+        settings.pairing_code_path.unlink(missing_ok=True)
+        settings.pairing_path.unlink(missing_ok=True)
+        return token
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated
@@ -1185,12 +1454,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             day = None if "day" not in body else _day(body["day"])
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         try:
             self._json(202, self.server.lab.start(body.get("version"), body.get("compare"), day))
         except LabReplayRefused as exc:
-            self._error("conflict", str(exc))
+            self._error("conflict", safe_cause(exc))
 
     def _history(self, path: str) -> None:
         """GET /days, /days/<YYYY-MM-DD>, /bars?symbol=&date=, /performance?from=&to=:
@@ -1222,10 +1491,10 @@ class Handler(BaseHTTPRequestHandler):
                 _query(query, frozenset())
                 document = history.day(_day(path[len(DAY_PREFIX):]), today)
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         except HistoryUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
             return
         self._json(200, document)
 
@@ -1249,7 +1518,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             _query(urlsplit(self.path).query, frozenset())
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         try:
             specs = load_schema(settings.settings_schema_file)
@@ -1261,7 +1530,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, values_document(specs, settings.config_file, settings.config_root))
         except SettingsUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
 
     def _validate_settings(self) -> None:
         """POST /settings/validate with {"changes": [...]}: 200 settings-draft-v1, the verdict
@@ -1273,7 +1542,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             changes = parse_draft(body)
         except BadDraft as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         if settings.config_file is None:
             self._error("unavailable", "this API was started without a config file path")
@@ -1282,14 +1551,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, draft_document(load_schema(settings.settings_schema_file), changes,
                                            settings.config_file, settings.config_root))
         except SettingsUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
 
     def _account(self) -> None:
         """GET /account: the bot's latest broker read of positions and open orders."""
         try:
             _query(urlsplit(self.path).query, frozenset())
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         result = self.server.account_response()
         if isinstance(result, ErrorV1):
@@ -1306,7 +1575,7 @@ class Handler(BaseHTTPRequestHandler):
             day = (_day(params["date"]) if "date" in params
                    else ny_date_of(self.server.clock()))
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         self._json(200, day_events(self.server.settings.jobs.database, day))
 
@@ -1315,7 +1584,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             _query(urlsplit(self.path).query, frozenset())
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         result = self.server.quotes_response()
         if isinstance(result, ErrorV1):
@@ -1332,7 +1601,7 @@ class Handler(BaseHTTPRequestHandler):
             document = self.server.chart.answer(symbol, interval, span, self.server.clock())
         except BadQuery as exc:
             self.log_message("GET /chart refused: bad_request: %s", exc)
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         except ChartRefused as exc:
             self.log_message("GET /chart refused: %s: %s", exc.error, exc.cause)
@@ -1355,14 +1624,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadQuery(f"version {params['version']!r} is not a strategy folder name")
             day = _day(params["date"])
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         try:
             document = trade_whatif.what_if(self.server.settings.trade_whatif,
                                             params["version"], params["symbol"], day,
                                             self.server.clock(), self.server.captured_bars)
         except trade_whatif.TradeWhatIfRefused as exc:
-            self._error("conflict", str(exc))
+            self._error("conflict", safe_cause(exc))
             return
         self._json(200, document)
 
@@ -1373,7 +1642,7 @@ class Handler(BaseHTTPRequestHandler):
             if not SYMBOL_PATTERN.match(symbol):
                 raise BadQuery(f"symbol {symbol!r} is not a ticker")
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         day = ny_date_of(self.server.clock())
         try:
@@ -1381,7 +1650,7 @@ class Handler(BaseHTTPRequestHandler):
                      if r.role is Role.ACTIVE]  # as DecisionLog.latest_active filters
             record = found[-1] if found else None
         except (RecordFileError, OSError) as exc:
-            self._error("unavailable", f"decision file unreadable: {exc}")
+            self._error("unavailable", f"decision file unreadable: {safe_cause(exc)}")
             return
         if record is None:
             self._error("not_found", f"no decision recorded for {symbol} on {day.isoformat()}")
@@ -1407,7 +1676,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise BadQuery(f"symbol {params['symbol']!r} is not a ticker")
             day = _day(params["date"]) if "date" in params else today
         except BadQuery as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return
         cache = self.server.decisions
         try:
@@ -1423,16 +1692,16 @@ class Handler(BaseHTTPRequestHandler):
                 document, _ = self.server.day_document(
                     path, day, today, lambda role: cache.records(day, today, role=role))
         except ObserverError as exc:
-            self._error("unavailable", f"observer strategy unreadable: {exc}")
+            self._error("unavailable", f"observer strategy unreadable: {safe_cause(exc)}")
             return
         except CaptureError as exc:
-            self._error("unavailable", f"capture file unreadable: {exc}")
+            self._error("unavailable", f"capture file unreadable: {safe_cause(exc)}")
             return
         except HistoryUnavailable as exc:
-            self._error("unavailable", str(exc))
+            self._error("unavailable", safe_cause(exc))
             return
         except (RecordFileError, OSError) as exc:
-            self._error("unavailable", f"decision file unreadable: {exc}")
+            self._error("unavailable", f"decision file unreadable: {safe_cause(exc)}")
             return
         self._json(200, document)
 
@@ -1453,7 +1722,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = contract.parse_json(self.rfile.read(length))
         except ContractError as exc:
-            self._error("bad_request", str(exc))
+            self._error("bad_request", safe_cause(exc))
             return None
         if not isinstance(body, dict):
             self._error("bad_request", "body must be a JSON object")
@@ -1465,7 +1734,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error("method_not_allowed", "only GET and POST are supported",
                         {"Allow": "GET, POST"})
 
-    do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
+    do_HEAD = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
 
 
 def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
@@ -1544,14 +1813,18 @@ def unpair_simulator(settings: ApiSettings) -> None:
         settings.simulator_token_path.unlink(missing_ok=True)
 
 
-def pair(settings: ApiSettings, now: datetime | None = None) -> Path:
-    """Start a new pairing: revoke the current phone token (its hash file is deleted, so the
-    old phone stops working at once), make a one-time pairing code that expires after
-    `[api] remote_pairing_code_ttl_seconds`, keep only its SHA-256, and leave the pairing link
-    with the code in a 0600 file for the owner to move to the phone. The phone redeems the code
-    once at POST /pair for its token, so a copy of the link left anywhere is worthless after
-    that or after expiry. Nothing secret is printed or logged. Returns the link file's path.
-    """
+def pair(settings: ApiSettings, name: str, now: datetime | None = None) -> Path:
+    """Start pairing the device `name`: make a one-time pairing code that expires after
+    `[api] remote_pairing_code_ttl_seconds`, keep only its SHA-256 with the name, and leave the
+    pairing link with the code in a 0600 file for the owner to move to the device. The device
+    redeems the code once at POST /pair for its token, so a copy of the link left anywhere is
+    worthless after that or after expiry. Other paired devices keep working; a device already
+    paired under `name` keeps its token until the new code is redeemed, which replaces it. A new
+    `pair` replaces a code still waiting. Nothing secret is printed or logged. Returns the link
+    file's path."""
+    if not devices.valid_name(name):
+        raise ValueError(f"device name {name!r}: letters, digits, space, dot, dash and underscore "
+                         "only, starting and ending with a letter or digit")
     if not settings.remote_hosts:
         raise ConfigError(f"no remote host: write the Tailscale name of this Mac into "
                           f"{settings.remote_hosts_path} first")
@@ -1560,9 +1833,53 @@ def pair(settings: ApiSettings, now: datetime | None = None) -> Path:
     expires_at = now + timedelta(seconds=settings.pairing_code_ttl_seconds)
     address = f"https://{settings.remote_hosts[0]}"
     with _pairing_lock(settings):
-        settings.token_hash_path.unlink(missing_ok=True)
         _write_private(settings.pairing_code_path, json.dumps({
-            "sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "sha256": devices.digest(code),
+            "name": name,
             "expires_at": contract.format_time(expires_at)}) + "\n")
         _write_private(settings.pairing_path, pairing_link(address, code) + "\n")
     return settings.pairing_path
+
+
+def load_devices(settings: ApiSettings) -> tuple[devices.Device, ...]:
+    """The paired devices; the caller holds the pairing lock. The single phone token of before
+    (`token_hash_path`) is migrated here, once, as the device "default": the device list is
+    written first, then the old file goes, so a crash in between leaves the same token in both
+    and the next read only finishes the deletion. An old file whose token the list does not hold
+    is refused, never merged by guess. Raises DeviceFileError or OSError."""
+    try:
+        text: str | None = settings.devices_path.read_text("ascii")
+    except FileNotFoundError:
+        text = None
+    except UnicodeDecodeError as exc:
+        raise devices.DeviceFileError(f"not ASCII ({type(exc).__name__})") from exc
+    paired = () if text is None else devices.parse(text)
+    if not settings.token_hash_path.exists():
+        return paired
+    legacy = devices.legacy_device(settings.token_hash_path)
+    if text is None:
+        text = devices.render((legacy,))
+        _write_private(settings.devices_path, text)
+        paired = devices.parse(text)  # as stored: times to the millisecond
+    elif not any(d.sha256 == legacy.sha256 for d in paired):
+        raise devices.DeviceFileError(f"{settings.token_hash_path.name} holds a token the device "
+                                      "list does not: delete one of the two by hand")
+    settings.token_hash_path.unlink()
+    return paired
+
+
+def list_devices(settings: ApiSettings) -> tuple[devices.Device, ...]:
+    """The paired devices, for `python -m tickr.api devices` (migrating an old single token)."""
+    with _pairing_lock(settings):
+        return load_devices(settings)
+
+
+def revoke_device(settings: ApiSettings, name: str) -> bool:
+    """Revoke one device's token: the api server refuses it from the next request on; the other
+    devices keep working. False when no device has that name (nothing changes)."""
+    with _pairing_lock(settings):
+        kept = devices.without(load_devices(settings), name)
+        if kept is None:
+            return False
+        _write_private(settings.devices_path, devices.render(kept))
+        return True

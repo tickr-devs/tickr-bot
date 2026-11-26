@@ -54,5 +54,6 @@ def test_a_failed_read_is_logged_never_raised(capsys):
     warmer, _ = _warmer(fail=OSError("capture file unreadable"))
     warmer.enabled = True
     _request(warmer, TODAY)
-    assert "could not warm the latest past day: OSError: capture file unreadable" in \
-        capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "could not warm the latest past day: OSError" in err
+    assert "capture file unreadable" not in err  # the exception's text is never logged

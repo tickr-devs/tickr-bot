@@ -39,7 +39,7 @@ from tickr.calendar import (
     ny_date_of,
 )
 from tickr.config import Config, trading_gate
-from tickr.engine.core import Engine, Fence, Leg, OrderRow, SendState, TradeRow
+from tickr.engine.core import OPERATOR_FENCES, Engine, Fence, Leg, OrderRow, SendState, TradeRow
 from tickr.engine.loop import drain
 from tickr.engine.manual import flatten_deadline
 from tickr.observers.runner import DROPPED
@@ -74,6 +74,37 @@ COMMAND_EFFECT = "command-effect"
 COMMAND_STEP = "command-step"  # one row per finished step of an emergency command
 EMERGENCY_STEPS = ("entry-stop-on", "cancel-own-orders", "flatten")
 CLOSE_IN_PROGRESS = "a close is in progress; send stop-bot again after it completes"
+# One row per step of an obeyed or running stop-bot (api.StopStep), keyed by its command_id.
+STOP_PROGRESS = "stop-progress"
+# The fences that end a close_and_stop: the engine's operator fences (on the trade or on one
+# of its orders), each one a point where the engine stops closing that trade on its own until
+# the operator has looked: a close refused (exit-refused), not filled in [orders]
+# max_exit_seconds (exit-not-filled), due outside the regular session and not sent
+# (market-closed), a stop or entry still working after every cancel (cancel-failed), a stop
+# replace unresolved, and so on. None of them is ever resent by the flow.
+CLOSE_FAILED_FENCES = tuple(sorted(OPERATOR_FENCES))
+STOP_RUNNING = "a close-and-stop is already running ({command})"
+# A cancel-own-orders for one symbol with no entry of it working (Cancel entry, 2026-11-26).
+NO_WORKING_ENTRY = "no working entry in {symbol}"
+TRADES_LEFT_OPEN = ("{count} trade(s) left open: nothing closes them; their broker stops are "
+                    "DAY orders")
+# A close_and_stop that a fence ended: one `; `-joined part per kind of fence, saying what is
+# then true at the broker, then STOP_CLOSE_KEPT.
+STOP_CLOSE_REFUSED = ("closing order refused for {trades}: the bot places their stop again; "
+                      "look in the Webull app")
+STOP_CLOSE_NOT_FILLED = ("closing order not filled for {trades}: it is still working at the "
+                         "broker and its shares are not under a stop; look in the Webull app")
+STOP_CLOSE_NOT_SENT = ("close not sent for {trades} outside the regular session: nothing was "
+                       "sent and the stop stays")
+STOP_CLOSE_FAILED = "close held for {trades} ({fences}): look in the Webull app"
+STOP_CLOSE_KEPT = "the bot keeps running and entry-stop stays on"
+STOP_CLOSE_PARTS = {Fence.EXIT_REFUSED: STOP_CLOSE_REFUSED,
+                    Fence.EXIT_NOT_FILLED: STOP_CLOSE_NOT_FILLED,
+                    Fence.MARKET_CLOSED: STOP_CLOSE_NOT_SENT}
+STOP_NEW_TRADE = ("trade(s) {trades} opened during close-and-stop: the bot keeps running and "
+                  "the closes already asked go on; send stop-bot again")
+STOP_INTERRUPTED = ("close-and-stop interrupted by a restart: the bot keeps running and "
+                    "entry-stop stays on; send stop-bot again")
 OBSERVER_FAILURE = "observer-failure"
 OBSERVERS_STOPPED = "observers-stopped"
 OBSERVERS_DROPPED = "observers-dropped"  # one row per pass with evaluations the observers dropped
@@ -93,6 +124,23 @@ WATCHDOG_FENCE_TAIL = ("no new entry until the operator clears this "
 NOT_WIRED = api.EntryBlock("entries_not_wired",
                            "This build does not open trades on its own yet.")
 ZERO = Decimal(0)
+
+
+def stop_close_failed(failed: list[tuple[str, Fence]]) -> str:
+    """The cause of a close_and_stop a fence ended, from its (trade, fence) pairs: what is true
+    at the broker for each kind of fence (exit-refused, exit-not-filled, market-closed, then
+    the other operator fences together), then that the bot runs on with entry-stop on."""
+    parts = []
+    for kind, text in STOP_CLOSE_PARTS.items():
+        trades = sorted({trade for trade, fence in failed if fence is kind})
+        if trades:
+            parts.append(text.format(trades=", ".join(trades)))
+    other = [(trade, fence) for trade, fence in failed if fence not in STOP_CLOSE_PARTS]
+    if other:
+        parts.append(STOP_CLOSE_FAILED.format(
+            trades=", ".join(sorted({trade for trade, _ in other})),
+            fences=", ".join(sorted({str(fence) for _, fence in other}))))
+    return "; ".join([*parts, STOP_CLOSE_KEPT])
 
 
 @dataclass(frozen=True)
@@ -184,6 +232,11 @@ class Service:
         self._skipping: str | None = None  # cause of the current protect-first episode
         self._entry_quotes: EntryQuotes | None = None  # built on the first entry guard
         self.stopped_by: str | None = None  # command_id of an obeyed stop-bot command
+        # A close_and_stop being carried out: its command and the trades open when it began
+        # (backlog V4).
+        self._closing: tuple[api.CommandV1, frozenset[str]] | None = None
+        # The stop-bot this run obeyed or is carrying out (status `stop_progress`).
+        self._progress: tuple[str, api.StopMode | None, api.StopStep, datetime] | None = None
         self._account_failing = False  # the last account file write failed (journaled once)
         # Balances, account kind and today's fills, read on their own thread (display only).
         self.account_reads = account_reads
@@ -265,6 +318,12 @@ class Service:
     def _act(self, command: api.CommandV1) -> None:
         engine, store = self.engine, self.engine.store
         kind = command.kind
+        if kind is api.CommandKind.ENTRY_STOP_OFF and self._closing is not None:
+            # No new trade may open while a close_and_stop runs (its entry-stop fence).
+            with store.transaction():
+                self._record(command, api.CommandOutcome.REFUSED, STOP_RUNNING.format(
+                    command=self._closing[0].command_id))
+            return
         if kind in (api.CommandKind.ENTRY_STOP_ON, api.CommandKind.ENTRY_STOP_OFF):
             with store.transaction():
                 self._record(command, api.CommandOutcome.DONE, None)
@@ -272,6 +331,13 @@ class Service:
                                       f"operator command {command.command_id}")
             return
         if kind is api.CommandKind.CANCEL_OWN_ORDERS:
+            if command.symbol is not None and not any(
+                    o.leg is Leg.ENTRY and o.live for t in engine.trades()
+                    if t.symbol == command.symbol for o in engine.orders(t.trade_id)):
+                with store.transaction():
+                    self._record(command, api.CommandOutcome.REFUSED,
+                                 NO_WORKING_ENTRY.format(symbol=command.symbol))
+                return
             with store.transaction():
                 self._record(command, api.CommandOutcome.DONE, None)
             self._cancel_entries(command)
@@ -318,32 +384,143 @@ class Service:
         return api.CommandOutcome.DONE, None if trades else "nothing open"
 
     def _stop_bot(self, command: api.CommandV1) -> None:
-        """Graceful stop, obeyed only when flat: the marker first (durable, so no later start
-        can miss it), then the record; the loop then ends and drains as on SIGTERM. Refused
-        while a close is requested or working (an operator flatten, an emergency, the session
-        flatten): stopping then would abandon an exit request that a later start would carry
-        out without anyone asking. Refused while any trade is not closed, a working entry with
-        no fill included: a broker stop is a DAY order and a stopped bot does not flatten at
-        the flatten time, so a position (or an entry filling during the drain) could go
-        overnight unprotected."""
+        """Graceful stop. Without a mode it is obeyed only when flat: the marker first (durable,
+        so no later start can miss it), then the record; the loop then ends and drains as on
+        SIGTERM. Refused while a close is requested or working (an operator flatten, an
+        emergency, the session flatten): stopping then would abandon an exit request that a
+        later start would carry out without anyone asking. Refused while any trade is not
+        closed, a working entry with no fill included: a broker stop is a DAY order and a
+        stopped bot does not flatten at the flatten time, so a position (or an entry filling
+        during the drain) could go overnight unprotected.
+
+        With open trades the owner picks a mode (backlog V4, owner 2026-11-18):
+        `close_and_stop` closes every own position through the flatten path and stops once
+        flat (`carry_out_stop`); `leave_open` stops at once and leaves them under their broker
+        stops (the drain still cancels a working entry and protects its fills), and nothing
+        closes them later. Any stop-bot is refused while a close_and_stop is running."""
         engine = self.engine
+        if self._closing is not None:
+            with engine.store.transaction():
+                self._record(command, api.CommandOutcome.REFUSED, STOP_RUNNING.format(
+                    command=self._closing[0].command_id))
+            return
         trades = engine.trades()
+        if trades and command.mode is api.StopMode.CLOSE_AND_STOP:
+            self._close_and_stop(command)
+            return
         for trade in trades:
             orders = engine.orders(trade.trade_id)
             if trade.exit_requested or any(o.leg is Leg.EXIT and o.live for o in orders):
                 with engine.store.transaction():
                     self._record(command, api.CommandOutcome.REFUSED, CLOSE_IN_PROGRESS)
                 return
-        if trades:
+        if trades and command.mode is not api.StopMode.LEAVE_OPEN:
             with engine.store.transaction():
                 self._record(command, api.CommandOutcome.REFUSED, (
                     f"{len(trades)} trade(s) open or entering; flatten first (or send "
                     "emergency), then stop-bot"))
             return
+        self._obey_stop(command, TRADES_LEFT_OPEN.format(count=len(trades)) if trades else None)
+
+    def _obey_stop(self, command: api.CommandV1, cause: str | None) -> None:
+        """The marker first (durable), then the record and the `stopping` step in one write;
+        the loop then ends and drains."""
         stopmarker.write(self.config, command.command_id, self.now())
-        with engine.store.transaction():
-            self._record(command, api.CommandOutcome.DONE, None)
+        with self.engine.store.transaction():
+            self._record(command, api.CommandOutcome.DONE, cause)
+            self._step(command, api.StopStep.STOPPING)
         self.stopped_by = command.command_id
+
+    def _step(self, command: api.CommandV1, step: api.StopStep) -> None:
+        """Inside the caller's transaction: journal a stop-bot step and show it in status."""
+        self.engine.store.append(STOP_PROGRESS, {
+            "mode": command.mode, "step": step, "source": command.source,
+            "requested_at": api.format_time(command.requested_at)},
+            key=command.command_id, run_id=self.engine.run_id)
+        self._progress = (command.command_id, command.mode, step, self.now())
+
+    def _close_and_stop(self, command: api.CommandV1) -> None:
+        """Start a close_and_stop: in one write the exit requests of every open trade (the
+        flatten path, each close sent once by the engine and never resent), the entry-stop
+        fence (no new trade while closing) and the `closing_positions` step; then cancel the
+        working entries. Refused, with nothing changed, when the flatten is refused."""
+        engine, cid = self.engine, command.command_id
+        with engine.store.transaction():
+            started = frozenset(t.trade_id for t in engine.trades())
+            outcome, cause = self._flatten_rows(None, "operator-flatten")
+            if outcome is api.CommandOutcome.REFUSED:
+                self._record(command, outcome, f"flatten: {cause}")
+                return
+            engine.entry_stop_row(True, f"operator command {cid}")
+            self._step(command, api.StopStep.CLOSING_POSITIONS)
+        engine.cancel_entries()
+        self._closing = (command, started)
+
+    def carry_out_stop(self) -> None:
+        """Each loop pass while a close_and_stop runs, in the bot (an app that disconnects
+        changes nothing): once no own trade is open, `positions_closed`, then the stop as
+        without a mode. Ended, refused, with the bot running and entry-stop on, as soon as a
+        trade it began with holds a `CLOSE_FAILED_FENCES` fence (the engine then closes it no
+        further without the operator, and never resends), or a trade it did not begin with is
+        open. No time-out of its own: every close it waits on ends in a fill or in one of
+        those fences (`[orders] max_exit_seconds` for a sent close, the session's close-order
+        cutoff for one not sent); a close held by a condition that clears itself (a broker
+        read, a Detail read, a quantity mismatch) is waited on like the session flatten waits
+        on it, under that condition's own alert."""
+        if self._closing is None:
+            return
+        command, started = self._closing
+        engine = self.engine
+        trades = engine.trades()
+        if not trades:
+            self._closing = None
+            with engine.store.transaction():
+                self._step(command, api.StopStep.POSITIONS_CLOSED)
+            self._obey_stop(command, None)
+            return
+        cause = None
+        new = sorted(t.trade_id for t in trades if t.trade_id not in started)
+        if new:
+            cause = STOP_NEW_TRADE.format(trades=", ".join(new))
+        else:
+            fences = engine.fences()
+            failed = [(t.trade_id, kind) for t in trades
+                      for key in (t.trade_id, *(o.client_order_id
+                                                for o in engine.orders(t.trade_id)))
+                      for kind in CLOSE_FAILED_FENCES if f"{kind}:{key}" in fences]
+            if failed:
+                cause = stop_close_failed(failed)
+        if cause is not None:
+            self._closing = None
+            self._progress = None
+            with engine.store.transaction():
+                self._record(command, api.CommandOutcome.REFUSED, cause)
+
+    def _close_interrupted_stop(self) -> None:
+        """At startup: a close_and_stop a crash or restart interrupted (its latest step is
+        before `stopping` and it has no record) is recorded refused, never resumed; the exit
+        requests it made stay and the bot runs on."""
+        store = self.engine.store
+        if self._closing is not None:
+            return  # this process is carrying it out
+        rows = store.journal(STOP_PROGRESS, newest=1)
+        if not rows or rows[0].key is None or rows[0].body["step"] not in (
+                api.StopStep.CLOSING_POSITIONS, api.StopStep.POSITIONS_CLOSED):
+            return
+        cid, body = rows[0].key, rows[0].body
+        if self._seen(cid):
+            return
+        command = api.CommandV1(cid, api.CommandKind.STOP_BOT,
+                                api.parse_time(body["requested_at"]), body["source"],
+                                mode=None if body["mode"] is None else api.StopMode(body["mode"]))
+        with store.transaction():
+            self._record(command, api.CommandOutcome.REFUSED, STOP_INTERRUPTED)
+
+    def stop_progress(self) -> api.StopProgress | None:
+        if self._progress is None:
+            return None
+        cid, mode, step, since = self._progress
+        return api.StopProgress(cid, mode, step, since, len(self.engine.trades()))
 
     def _emergency(self, command: api.CommandV1) -> None:
         """Entry-stop on, then cancel own orders, then flatten all: the existing handlers, each
@@ -381,7 +558,7 @@ class Service:
                     f"{name}: {body['cause'] or 'done'}" for name, body in done.items()))
 
     def _cancel_entries(self, command: api.CommandV1) -> None:
-        asked = self.engine.cancel_entries()
+        asked = self.engine.cancel_entries(command.symbol)
         with self.engine.store.transaction():
             self.engine.store.append(COMMAND_EFFECT, {"entries_cancel_requested": asked},
                                      key=command.command_id, run_id=self.engine.run_id)
@@ -713,6 +890,23 @@ class Service:
                                       entry, cause))
         return tuple(found)
 
+    def _working_entries(self) -> tuple[api.WorkingEntry, ...]:
+        """Every own trade whose entry order is working with nothing filled yet, oldest first;
+        a fill of any part makes it a position (`_positions`)."""
+        found = []
+        for trade in self.engine.trades():
+            orders = self.engine.orders(trade.trade_id)
+            entries = [o for o in orders if o.leg is Leg.ENTRY]
+            live = [o for o in entries if o.live]
+            if not live or self.engine.expected_quantity(orders) > 0:
+                continue
+            entry, cause = self._entry_send(trade.trade_id, final=False)
+            found.append(api.WorkingEntry(
+                trade.symbol, trade.entry_quantity, trade.entry_limit_price, trade.stop_price,
+                trade.planned_loss_usd, entry, cause,
+                any(o.cancelling for o in live)))
+        return tuple(found)
+
     def _daily_money(self) -> tuple[Decimal | None, Decimal, Decimal | None]:
         """(net realized loss today, open reservations, room) as admission computes them;
         loss and room are None when today's money is unknown."""
@@ -835,7 +1029,8 @@ class Service:
             daily_room_usd=room, positions=positions,
             code_version=self.engine.store.run_code_version(self.engine.run_id),
             fees_today_usd=fees, result_today_net_usd=total_net(closed),
-            result_today_broker_usd=self._broker_result_today(closed))
+            result_today_broker_usd=self._broker_result_today(closed),
+            stop_progress=self.stop_progress(), working_entries=self._working_entries())
 
     def check_disk(self) -> None:
         """Each loop pass: below [runtime] min_free_disk_mb free on the data disk (or unknown),
@@ -960,6 +1155,7 @@ class Service:
             if trade.exit_requested is None:
                 self.engine.cancel_entry(trade.trade_id, RESTART_ENTRY_CANCEL)
         self._fence_after_early_watchdog_start()
+        self._close_interrupted_stop()
         # Nothing when the startup reconcile did not read.
         self._disagreed = record_reconcile(self.engine, False)
         if not self._broker_read_failing():
@@ -970,6 +1166,7 @@ class Service:
         last_reconcile = monotonic()
         while not should_stop():
             self.process_commands()
+            self.carry_out_stop()
             if self.stopped_by is not None:
                 break  # an operator stop-bot: nothing more this run, straight to the drain
             self.check_disk()
@@ -990,6 +1187,13 @@ class Service:
         self.day_end.finish()
         clean = drain(self.engine, sleep=sleep, monotonic=monotonic)
         self.state = api.BotState.STOPPED
+        if self._progress is not None and self.stopped_by == self._progress[0]:
+            cid, mode, _, _ = self._progress
+            with self.engine.store.transaction():
+                self.engine.store.append(STOP_PROGRESS, {"mode": mode,
+                                                         "step": api.StopStep.STOPPED},
+                                         key=cid, run_id=self.engine.run_id)
+            self._progress = (cid, mode, api.StopStep.STOPPED, self.now())
         self.write_status()
         if not clean and self.watch is not None:
             pending = self.engine.store.journal("shutdown-deadline", newest=1)[-1].body["pending"]

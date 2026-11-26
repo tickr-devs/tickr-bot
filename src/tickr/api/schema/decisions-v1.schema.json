@@ -188,6 +188,8 @@
                       "QUOTE_STALE",
                       "SPREAD_TOO_WIDE",
                       "PRICE_OUTSIDE_WINDOW",
+                      "PRICE_COLLAR_UNKNOWN",
+                      "PRICE_COLLAR_BREACH",
                       "QUANTITY_BELOW_ONE",
                       "QUANTITY_NOT_WHOLE",
                       "NOTIONAL_OVER_CAP",
@@ -199,6 +201,12 @@
                       "BUYING_POWER_SHORT",
                       "ENTRY_BUDGET_UNAVAILABLE",
                       "STOP_BUDGET_UNAVAILABLE",
+                      "TRADABILITY_BUDGET_UNAVAILABLE",
+                      "TRADABILITY_UNKNOWN",
+                      "INSTRUMENT_HALTED",
+                      "INSTRUMENT_CLOSE_ONLY",
+                      "INSTRUMENT_DENIED",
+                      "INSTRUMENT_NOT_TRADABLE",
                       "ENGINE_REFUSED",
                       "UNKNOWN"
                     ]

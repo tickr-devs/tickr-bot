@@ -9,3 +9,11 @@ atr_period = 2
 session_timezone = "America/New_York"
 # Probability buckets of the calibration table; read by research/calibration.py.
 calibration_buckets = 10
+# Sensitivity check K: months in plus wanted of the gate window; read by research/gate.py.
+gate_positive_months = 2
+# Sensitivity check M: calendar months ending with --end; read by research/gate.py.
+gate_window_months = 3
+# Sensitivity check X: percent of best trades removed before the net is looked at again; read by research/gate.py.
+gate_drop_best_percent = 1
+# Top percents of trades whose share of the net is reported; read by research/gate.py.
+gate_tail_percents = [1, 5, 10]

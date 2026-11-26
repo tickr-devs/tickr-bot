@@ -1,0 +1,11 @@
+# Starts tickr-nightly-fetch.service on the configured weekdays ([runtime]
+# nightly_fetch_start_local, in the zone given to render-systemd).
+[Unit]
+Description=Tickr nightly backtest data schedule
+
+[Timer]
+OnCalendar=Mon,Tue,Wed,Thu,Fri *-*-* 19:00:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

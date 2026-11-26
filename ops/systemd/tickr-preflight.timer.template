@@ -1,0 +1,11 @@
+# Starts tickr-preflight.service on the configured weekdays ([runtime] preflight_start_local, in
+# the zone given to render-systemd). A start missed while the server was down is not caught up.
+[Unit]
+Description=Tickr preflight schedule
+
+[Timer]
+OnCalendar={{PREFLIGHT_CALENDAR}}
+Persistent=false
+
+[Install]
+WantedBy=timers.target

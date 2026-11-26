@@ -4,12 +4,18 @@
 # On Linux preflight refuses with `alert-channel-missing`, so the bot job never starts the bot.
 # A Linux alert channel is an open owner decision.
 #
-# Run from the repo root on the server, with these host variables set (paths only, no values):
-#   TICKR_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the build uid)
+# On the server this file is the host copy /srv/tickr/etc/compose.yaml (deploy-server.sh refuses
+# one that differs from the release image's /app/ops/docker/compose.yaml). Run with these host
+# variables set (paths only, no values):
+#   TICKR_ENV_FILE_HOST  absolute path of the env file (chmod 600, owned by the image's uid)
 #   TICKR_CONFIG_HOST    absolute path of the bot.toml to run with
-#   docker compose -f ops/docker/compose.yaml build \
-#     --build-arg TICKR_UID=$(id -u) --build-arg TICKR_GID=$(id -g) \
-#     --build-arg TICKR_CODE_VERSION=$(git rev-parse HEAD)$(git diff --quiet HEAD || echo -dirty)
+# and render-systemd's limits.env loaded (TICKR_IMAGE, TICKR_DATA_HOST, the host data folder,
+# and the bot's grace period): set -a; . /srv/tickr/etc/limits.env; set +a
+#
+# The image is never built or pulled here. On the server TICKR_IMAGE is the release image
+# <registry>/tickr-bot:<commit>, pulled beforehand by the host helper `tickr-image-pull <commit>`
+# and written into limits.env by deploy-server.sh. Anywhere else, build an image yourself and
+# name it in TICKR_IMAGE (docs/deploy-server.md, "An image built by hand").
 #
 # Jobs, matching the launchd jobs on the Mac (docs/operations.md, "Jobs"):
 #   api        always on, restarted by Docker (launchd KeepAlive)      -> `up -d api`
@@ -18,13 +24,14 @@
 #   watchdog   scheduled by the host, separate from the bot, never restarted -> `up -d watchdog`
 # The host scheduler (systemd timers, see the doc) starts them at the [runtime] times.
 
+# Project name: the host units (tickr-bot-restart.service passes -p tickr) and a person typing
+# compose commands act on the same containers, whatever folder compose runs from.
 name: tickr
 
 x-tickr: &tickr
-  build:
-    context: ../..
-    dockerfile: Dockerfile
-  image: tickr:local
+  image: ${TICKR_IMAGE:?image to run; on the server deploy-server.sh writes it into limits.env}
+  # Only an image already on the host runs: compose never pulls (and has nothing to build).
+  pull_policy: never
   # Host networking: the API's loopback bind (127.0.0.1, enforced by the API itself) is the
   # server's loopback, never a public interface; Docker publishes no ports.
   network_mode: host
@@ -35,7 +42,12 @@ x-tickr: &tickr
       source: ${TICKR_CONFIG_HOST:?absolute path of bot.toml}
       target: /app/config/bot.toml
       read_only: true
-    - tickr-data:/app/data
+    # The data folder ([run] data_dir): the host folder TICKR_DATA_HOST (the server's data disk,
+    # /srv/tickr/data), written by render-systemd into limits.env. A host folder, not a Docker
+    # volume, so host units (tickr-bot-restart.path) see the same files as the containers.
+    - type: bind
+      source: ${TICKR_DATA_HOST:?run render-systemd and load its limits.env}
+      target: /app/data
   logging:
     driver: json-file
     options:
@@ -56,7 +68,12 @@ x-with-env: &with-env
       source: ${TICKR_ENV_FILE_HOST:?absolute path of the env file}
       target: /run/tickr/env
       read_only: true
-    - tickr-data:/app/data
+    # The data folder ([run] data_dir): the host folder TICKR_DATA_HOST (the server's data disk,
+    # /srv/tickr/data), written by render-systemd into limits.env. A host folder, not a Docker
+    # volume, so host units (tickr-bot-restart.path) see the same files as the containers.
+    - type: bind
+      source: ${TICKR_DATA_HOST:?run render-systemd and load its limits.env}
+      target: /app/data
     # Production only: the owner authorization file read by trading_gate(), for example
     # ([environments.production] authorization_file = "authorization/production.toml"):
     # - type: bind
@@ -85,9 +102,11 @@ services:
               "/app/config/bot.toml", "run"]
     # Never relaunched automatically (launchd KeepAlive false): a crash alerts instead.
     restart: "no"
-    # Seconds between SIGTERM and SIGKILL on `docker compose stop bot`: keep equal to
-    # [runtime] bot_exit_timeout_seconds in bot.toml (launchd ExitTimeOut on the Mac).
-    stop_grace_period: 120s
+    # Seconds between SIGTERM and SIGKILL on `docker compose stop bot` = [runtime]
+    # bot_exit_timeout_seconds in bot.toml (launchd ExitTimeOut on the Mac). Never typed here:
+    # `render-systemd` writes TICKR_BOT_EXIT_TIMEOUT into limits.env (units read it; for a
+    # hand-run compose command: set -a; . /srv/tickr/etc/limits.env; set +a).
+    stop_grace_period: ${TICKR_BOT_EXIT_TIMEOUT:?run render-systemd and load its limits.env}s
     # Host PID namespace: the pid the bot writes to its lock file is a pid the watchdog (another
     # container) can check. Without it the watchdog always sees "no live pid".
     pid: host
@@ -100,7 +119,14 @@ services:
     restart: "no"
     pid: host
 
-volumes:
-  # The data folder ([run] data_dir): SQLite database, lock, status file, token folder,
-  # journals, captures, backups.
-  tickr-data:
+  # Nightly backtest data (python -m tickr.backtest nightly, docs/backtest.md): reads market data
+  # only, never trades. The output and seed folders are [runtime] nightly_fetch_out and
+  # nightly_fetch_seed, relative to the repo root (/app); render-systemd writes them into
+  # limits.env as TICKR_NIGHTLY_OUT and TICKR_NIGHTLY_SEED. The container starts in /app/data.
+  nightly-fetch:
+    <<: [*with-env, *tickr]
+    profiles: ["jobs"]
+    command: ["python", "-m", "tickr.backtest", "--config", "/app/config/bot.toml", "nightly",
+              "--out", "/app/${TICKR_NIGHTLY_OUT:?run render-systemd and load its limits.env}",
+              "--seed", "/app/${TICKR_NIGHTLY_SEED:?run render-systemd and load its limits.env}"]
+    restart: "no"
