@@ -6,7 +6,9 @@ HTTP/2 server on a socket pair for the wire framing."""
 from __future__ import annotations
 
 import base64
+import fcntl
 import json
+import os
 import socket
 import stat
 import threading
@@ -28,11 +30,13 @@ from tickr.runtime.alert_routing import LOCKED
 from tickr.runtime.alerts import (
     APNS_PATH,
     PUSH,
+    TELEGRAM,
     Alerter,
     AlertKind,
     ApnsNotifier,
     Channels,
     Delivery,
+    NoRecipient,
     NotifyError,
     ProviderToken,
     apns_missing,
@@ -316,6 +320,116 @@ def test_no_registered_device_and_an_unreadable_store_are_failures(tmp_path, env
     assert IOS_TOKEN not in str(error.value)
 
 
+def test_no_registered_device_is_journaled_once_per_empty_spell(tmp_path, environ, store):
+    """Fable #828 note 4: with push on and no phone yet, the first alert records the failed
+    push; later alerts record nothing for push (no outcome, never `shown`) until a device
+    registers, and an empty store again is named again once."""
+    empty = PushTokenStore(tmp_path / "data" / "empty.json")
+    push = notifier(empty, environ, Wire())
+    alerter = Alerter(CONFIG, "Tickr", Channels((), ((PUSH, push),),
+                                                spawn=lambda run: _Inline(run)))
+    alerter.alert(NORMAL, "first")
+    first = alerter.completed()
+    assert [(o.delivery, o.channel) for o in first] == [(Delivery.FAILED, PUSH)]
+    assert "apns-no-device" in first[0].error
+    alerter.alert(NORMAL, "second")
+    alerter.alert(CRITICAL, "third")
+    assert alerter.completed() == []  # nothing to journal for push, nothing counted as shown
+    alerter.alert(NORMAL, "second")  # not suppressed as a repeat: it was never shown
+    assert alerter.completed() == []
+    # A device registers: pushes go out; it goes away: the empty store is named once more.
+    empty.register("phone", PushToken(ALERT, IOS_TOKEN, "development", "bot.tickr.ios", IOS,
+                                      AT))
+    alerter.alert(NORMAL, "fourth")
+    assert [o.delivery for o in alerter.completed()] == [Delivery.SHOWN]
+    empty.remove("phone")
+    alerter.alert(NORMAL, "fifth")
+    assert [o.delivery for o in alerter.completed()] == [Delivery.FAILED]
+    with pytest.raises(NoRecipient):
+        push.notify_kind(NORMAL.value, "T", "sixth")
+
+
+class _Boom(Exception):
+    pass
+
+
+def test_an_unexpected_error_never_leaves_notify_kind_as_anything_but_notify_error(
+        store, environ):
+    """Fable #828 note 2: the same last-resort wrapper as Telegram, so a direct caller is
+    never broken by a push; only the type is named, the chain is dropped."""
+    def critical(_kind: str) -> bool:
+        raise _Boom(IOS_TOKEN)
+
+    push = ApnsNotifier(APNS, store, environ, Wire(), critical=critical, clock=Clock())
+    with pytest.raises(NotifyError) as error:
+        push.notify_kind(CRITICAL.value, "T", "x")
+    assert str(error.value) == "apns failed: _Boom"
+    assert error.value.__cause__ is None and error.value.__suppress_context__
+    assert IOS_TOKEN not in str(error.value)
+
+
+@pytest.mark.parametrize("answer", [KeyError(":status"), ValueError("abc"), _Boom("x")])
+def test_any_transport_error_is_one_devices_failure(store, environ, answer):
+    wire = Wire({IOS_TOKEN: answer})
+    with pytest.raises(NotifyError) as error:
+        notifier(store, environ, wire).notify_kind(NORMAL.value, "T", "x")
+    assert f"apns did not answer: {type(answer).__name__}" in str(error.value)
+    assert len(wire.calls) == 2  # the other device was still pushed, once
+
+
+def test_the_store_lock_is_held_across_processes(store):
+    """Fable #828 note 1: the API and the bot are different processes. A writer holding the
+    sibling lock file (as another process would) makes a removal wait, so a registration in
+    between is never dropped."""
+    fd = os.open(store.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    done = threading.Event()
+    remover = threading.Thread(target=lambda: (store.remove_token(MAC_TOKEN), done.set()))
+    remover.start()
+    try:
+        assert not done.wait(0.3)  # blocked on the other holder's lock
+        # The other "process" registers while it holds the lock (read-modify-write by hand).
+        other = PushTokenStore(store.path)
+        tokens = other.read()
+        tokens[("tablet", ALERT)] = PushToken(ALERT, "e5" * 32, "development",
+                                              "bot.tickr.ios", IOS, AT)
+        from tickr.runtime import push_tokens
+        push_tokens._write_private(store.path, push_tokens._text(tokens))
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    remover.join(5)
+    assert done.is_set()
+    assert {k: t.token for k, t in store.read().items()} == {
+        ("phone", ALERT): IOS_TOKEN, ("tablet", ALERT): "e5" * 32}
+    assert stat.S_IMODE(store.lock_path.stat().st_mode) == 0o600
+
+
+def test_alerts_imports_without_h2_or_cryptography(tmp_path):
+    """Fable #828 note 3: the bot, the watchdog and the API import runtime/alerts.py; only
+    the APNs code path needs h2 and cryptography."""
+    import subprocess
+    import sys
+    blocker = tmp_path / "block"
+    blocker.mkdir()
+    (blocker / "sitecustomize.py").write_text(
+        "import sys\n"
+        "class _Block:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] in ('h2', 'cryptography'):\n"
+        "            raise ImportError('blocked: ' + name)\n"
+        "sys.meta_path.insert(0, _Block())\n", "utf-8")
+    src = Path(__file__).resolve().parents[2] / "src"
+    code = ("import tickr.runtime.alerts, tickr.runtime.preflight, tickr.runtime.watchdog\n"
+            "import sys\n"
+            "assert not any(m.split('.')[0] in ('h2', 'cryptography') for m in sys.modules)\n")
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                            env={"PYTHONPATH": f"{blocker}{os.pathsep}{src}",
+                                 "PATH": os.environ.get("PATH", "")},
+                            timeout=60, check=False)
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
 # ---------------------------------------------------------------- setup
 
 
@@ -330,10 +444,23 @@ def test_on_and_missing_check_presence_only(environ):
 
 def test_default_notifier_adds_push_once_set_up_and_given_the_data_folder(tmp_path, environ):
     assert default_notifier(APNS, "linux", {}, data_dir=tmp_path) is None
-    channels = default_notifier(APNS, "linux", environ, data_dir=tmp_path)
-    assert isinstance(channels, Channels) and channels.background == (PUSH,)
+    both = replace(APNS, bot_token_variable="TICKR_TEST_TG_TOKEN",
+                   chat_id_variable="TICKR_TEST_TG_CHAT")
+    telegram = {**environ, both.bot_token_variable: "set", both.chat_id_variable: "set"}
+    channels = default_notifier(both, "linux", telegram, data_dir=tmp_path)
+    assert isinstance(channels, Channels) and channels.background == (TELEGRAM, PUSH)
     mac = default_notifier(APNS, "darwin", environ, data_dir=tmp_path)
     assert PUSH in mac.background
+    no_folder = default_notifier(APNS, "darwin", environ)
+    assert PUSH not in no_folder.background
+
+
+def test_push_is_never_the_only_channel(tmp_path, environ):
+    """Push reaches nobody until a phone registered: with no other owner channel there is no
+    notifier at all, so the watchdog and preflight refuse instead of starting deaf."""
+    assert default_notifier(APNS, "linux", environ, data_dir=tmp_path) is None
+    feed = tmp_path / "alerts.jsonl"
+    assert default_notifier(APNS, "linux", environ, feed=feed, data_dir=tmp_path) is None
 
 
 def test_store_file_is_private_and_replaces_per_device(store):
@@ -367,7 +494,7 @@ def test_live_activity_tokens_are_stored_but_never_sent_alerts(store, environ):
 # ---------------------------------------------------------------- HTTP/2 framing
 
 
-def _serve_once(sock: socket.socket, status: int, body: bytes, seen: dict) -> None:
+def _serve_once(sock: socket.socket, status: int | str, body: bytes, seen: dict) -> None:
     """A minimal HTTP/2 server: reads one request, answers `status` with `body`."""
     conn = h2.connection.H2Connection(h2.config.H2Configuration(client_side=False,
                                                                  header_encoding="utf-8"))
@@ -413,6 +540,19 @@ def test_h2_post_speaks_http2(status, body):
     assert seen["headers"][":authority"] == "apns.test"
     assert seen["headers"]["apns-topic"] == "bot.tickr.ios"
     assert seen["body"] == b'{"aps":{}}'
+
+
+def test_h2_post_refuses_an_answer_without_a_numeric_status():
+    client, server = socket.socketpair()
+    thread = threading.Thread(target=_serve_once, args=(server, "abc", b"", {}))
+    thread.start()
+    try:
+        with pytest.raises(NotifyError, match="without a numeric status"):
+            h2_post("apns.test", APNS_PATH + IOS_TOKEN, [], b"{}", 5.0,
+                    connect=lambda _host, _timeout: client)
+    finally:
+        thread.join(5)
+        server.close()
 
 
 def test_h2_post_refuses_a_connection_closed_before_the_answer():

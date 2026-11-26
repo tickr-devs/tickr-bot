@@ -168,8 +168,11 @@ All checks are reported; the first failure is the recorded cause.
    TICKR_APNS_KEY_PATH=<path to AuthKey_<key id>.p8>
    ```
    None set = push is off. Preflight then fails with `alert-push-missing` if one of the three is
-   not set, and `alert-push-key-unreadable` if the path is not a readable file; the key is read
-   only to sign, never logged. Each app registers its device at `POST /push-token`; critical
+   not set, `alert-push-key-unreadable` if the path is not a readable file and
+   `alert-push-key-invalid` if it is not a P-256 `.p8` key; the key is read only to check and
+   sign it, never logged. Push is an extra channel only: it never counts as the alert channel
+   preflight requires (off the Mac that is Telegram), because it reaches nobody until a phone
+   has registered. Until then each process journals `apns-no-device` once, not per alert. Each app registers its device at `POST /push-token`; critical
    alerts always go to every registered device as time-sensitive, the rest follow the routing in
    the app (channel `push`). The API job never gets these variables (it does not push).
    After editing the env file: the launchd jobs source it each time they start (their plists
