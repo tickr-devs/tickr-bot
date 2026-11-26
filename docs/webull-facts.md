@@ -226,6 +226,8 @@ UNPROVEN, to be answered by the Monday probe (`tickr probe-replace-stop`, docs/m
 
 How Tickr uses it now: only the manual `probe-replace-stop` command. Trading code does not replace orders until this section records a probe.
 
+The limit-exit chase (`[exit_chase]`, `tickr.engine.chase`, backlog X3, shipped off) therefore re-prices by cancel-then-place: the working chase LIMIT SELL is cancelled, and the next one is placed only after a Detail read shows the cancel took (or the order finished). It starts only when the trade has no live stop and no other close working, because a closing SELL while a stop reserves the shares is unproven; otherwise it refuses (`stop-resting`, `close-working`) and the close is one MARKET as before. Probe that would lift this (regular session, Sandbox): with a STOP_LOSS SELL for N shares working on a position of N, place a SELL LIMIT for N (refused, and which code, or accepted); then on a position of N + M, with the stop on N, a SELL LIMIT for M. A proven replace of a LIMIT SELL (F5 above, with a LIMIT order) would let the chase re-price without the cancel gap.
+
 ## F7 — stops outside the regular session (probed 2026-11-16 19:06 ET, Sandbox, post-market, `tickr probe-extended SOFI`)
 
 - Every stop is refused outside the regular session, at PLACE, with HTTP 417 and nothing working afterwards (Detail read):

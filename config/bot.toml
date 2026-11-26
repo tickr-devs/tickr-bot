@@ -816,6 +816,27 @@ bundles_dir = "models"
 # tickr.model.bundle.
 bundle = ""
 
+[exit_chase]
+# Limit-exit chase before a market exit (backlog X3): a close is sent as a SELL LIMIT priced through the bid,
+# re-priced by cancel-then-place (each cancel confirmed by a Detail read before the next order), and after the last
+# price a MARKET in the regular session (outside it: no MARKET, an alert and the stop rules). Read by tickr.engine.
+# Every number below is an old-tracker proposal (old Q22, Q110), not an owner decision: reconfirm before enabling.
+# Chase switch: false = every close is one MARKET order as before; config load refuses true until the chase is
+# wired to a live bid and ATR; read by tickr.engine.core.
+enabled = false
+# Ticks below the bid each chase price is set, count (one tick: 0.01 USD at or above 1 USD, 0.0001 below); old-tracker
+# proposal, reconfirm; read by tickr.engine.chase.
+ticks_through_bid = 1
+# Seconds a chase order works before it is cancelled and placed again at the new bid; old-tracker proposal,
+# reconfirm; read by tickr.engine.core.
+reprice_seconds = 10
+# Re-prices after the first chase order, count (0 = one LIMIT, then the market exit); old-tracker proposal,
+# reconfirm; read by tickr.engine.chase.
+max_reprices = 6
+# Worst chase price, in multiples of the symbol's ATR (USD per share) below the bid when the chase started: a price
+# below it ends the chase; old-tracker proposal, reconfirm; read by tickr.engine.chase.
+max_worse_atr = 0.5
+
 [massive]
 # Market data vendor of the model's inputs (owner 2026-11-20: the model's features come live from Massive, the same
 # source as its training; Webull stays for orders, positions and the bot's lists). Read by tickr.model.massive only.
