@@ -37,7 +37,8 @@ from tickr.runtime.alerts import (
 CONFIG = AlertsConfig(dedupe_window_seconds=Decimal(600), notification_timeout_seconds=Decimal(5),
                       fence_alert_after_seconds=Decimal(30),
                       imessage_recipient_variable="TICKR_TEST_TO", mac_app="",
-                      mac_app_timeout_seconds=Decimal(2), feed_file="alerts.jsonl")
+                      mac_app_timeout_seconds=Decimal(2), feed_file="alerts.jsonl",
+                      routing_file="alert-routing.json")
 T0 = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
 
 
@@ -70,7 +71,7 @@ def test_kinds_cover_spec_section_11():
         "bot-down-with-open-trade", "exit-not-filled", "flatten-after-close",
         "fees-unknown", "fees-corrected", "api-credentials-unexpected",
         "watchdog-restarted-bot", "watchdog-restart-refused", "watchdog-restart-failed",
-        "bot-down", "disk-low", "news-lag-high",
+        "bot-down", "disk-low", "news-lag-high", "remote-auth-blocked",
     }
 
 
@@ -284,7 +285,7 @@ def test_an_alert_whose_thread_cannot_start_is_reported_and_sent_again_next_time
 
 def test_a_send_that_raises_leaves_no_alert_marked_as_sending():
     class Broken(Channels):
-        def send(self, title, text, done):
+        def send(self, title, text, done, skip=frozenset()):
             raise RuntimeError("boom")
 
     alerter = Alerter(CONFIG, "Tickr", Broken((), ((MACOS, Recorder()),)), Clock())

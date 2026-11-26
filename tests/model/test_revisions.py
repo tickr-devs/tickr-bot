@@ -94,9 +94,8 @@ def test_a_missing_field_is_refused_per_item_never_filled(tmp_path):
         report("e5", lu=utc("08:31:00"), tk="RR", estimate=None),
     ])])
     snap = s.as_of(at("09:00:00"))
-    assert snap.refused == {"e2": "field_missing:time", "e3": "field_missing:last_updated",
-                            "e4": "stamp_unreadable:last_updated"}
-    assert set(snap.records) == {"e1", "e5"} and snap.placed_only == {"e5"}
+    assert snap.refused == {"e2": "field_missing:time", "e4": "stamp_unreadable:last_updated"}
+    assert set(snap.records) == {"e1", "e3", "e5"} and snap.placed_only == {"e3", "e5"}
     assert snap.records["e5"]["estimated_eps"] is None  # er_surp stays missing in l1bz
 
 
@@ -106,6 +105,82 @@ def test_a_later_report_time_is_never_replaced_by_an_earlier_version(tmp_path):
         ("08:00:00", [report("e1", lu=utc("07:59:00"), actual=None, date="2025-08-19")]),
     ])
     assert s.as_of(at("09:00:00")).refused == {"e1": "report_after_cutoff"}
+
+
+def test_a_rescheduling_correction_supersedes_the_old_schedule(tmp_path):
+    """Codex 109 point 8: the current version is chosen before the report-time check, so a
+    report moved to a later day is not placed from its older (past, complete) version."""
+    s = store_with(tmp_path, [
+        ("08:31:10", [report("e1", lu=utc("08:31:00"), actual=0.25)]),
+        ("08:40:05", [report("e1", lu=utc("08:40:00"), actual=None, date="2025-08-19")]),
+        ("08:31:10", [report("e2", lu=utc("06:00:00"), actual=None, tk="NK",
+                             date="2025-08-19")]),
+        ("08:50:05", [report("e2", lu=utc("08:50:00"), actual=0.4, tk="NK")]),  # moved earlier
+    ])
+    assert s.as_of(at("08:35:00")).records["e1"]["actual_eps"] == 0.25
+    snap = s.as_of(at("08:45:00"))
+    assert snap.refused == {"e1": "report_after_cutoff", "e2": "report_after_cutoff"}
+    snap = s.as_of(at("08:51:00"))
+    assert "e1" in snap.refused and snap.records["e2"]["actual_eps"] == 0.4
+
+
+def test_a_stale_redelivery_is_kept_but_never_wins(tmp_path):
+    old = report("e1", lu=utc("08:31:00"), actual=0.25)
+    new = report("e1", lu=utc("08:45:00"), actual=0.3)
+    s = rv.RevisionStore(tmp_path / "store", rv.EARNINGS)
+    assert s.append([old], at("08:31:10"))["saved"] == 1
+    assert s.append([dict(old)], at("08:31:20"))["unchanged"] == 1  # a retry: not stored
+    assert s.append([new], at("08:45:05"))["saved"] == 1
+    got = s.append([dict(old)], at("08:50:00"))  # the old payload arrives again
+    assert got["saved"] == 1 and got["repeated"] == 1
+    s.append([dict(old, currency="usd")], at("08:55:00"))  # an older update, reworded
+    lines = (tmp_path / "store" / "earnings" / f"{DAY}.jsonl").read_text().splitlines()
+    assert len(lines) == 4  # every observation kept
+    for store in (s, rv.RevisionStore(tmp_path / "store", rv.EARNINGS)):
+        assert store.as_of(at("09:00:00")).records["e1"] == new
+        assert store.as_of(at("08:40:00")).records["e1"] == old
+    by_id = rv.load_versions(sorted(s.folder.glob("*.jsonl")), rv.EARNINGS)
+    assert [v.record["actual_eps"] for v in by_id["e1"]] == [0.25, 0.3, 0.25]
+
+
+def test_different_versions_at_the_same_update_time_are_a_tie(tmp_path):
+    s = store_with(tmp_path, [
+        ("08:31:10", [report("e1", lu=utc("08:31:00"), actual=0.25)]),
+        ("08:31:20", [report("e1", lu=utc("08:31:00"), actual=0.26)]),
+        ("08:31:30", [report("e2", lu=utc("08:31:00"), tk="NK")]),
+    ])
+    snap = s.as_of(at("08:40:00"))
+    assert snap.refused == {"e1": "version_tie"} and set(snap.records) == {"e2"}
+    s.append([report("e1", lu=utc("08:41:00"), actual=0.27)], at("08:41:05"))
+    assert s.as_of(at("08:42:00")).records["e1"]["actual_eps"] == 0.27  # a later update orders
+    # without update stamps the receipt orders; two records in one receipt cannot be ordered
+    t = rv.RevisionStore(tmp_path / "t", rv.EARNINGS)
+    t.append([report("e3", lu="", actual=0.1), report("e3", lu="", actual=0.2)], at("08:31:10"))
+    assert t.as_of(at("08:40:00")).refused == {"e3": "version_tie"}
+
+
+def test_a_past_report_without_eps_or_update_time_keeps_its_timing(tmp_path):
+    no_lu = {k: v for k, v in report("e1", lu="", actual=0.25).items() if k != "last_updated"}
+    s = store_with(tmp_path, [
+        ("08:31:10", [no_lu,
+                      report("e2", lu=utc("08:31:00"), tk="NK", actual=None, estimate=None)]),
+        ("08:31:10", [report("e3", lu=utc("08:31:00"), tk="QQ", actual=0.5)]),
+        ("08:40:05", [report("e3", lu=utc("08:40:00"), tk="QQ", actual=None)]),  # EPS dropped
+        ("08:45:05", [dict(no_lu, actual_eps=0.3)]),  # no stamp: the receipt orders
+    ])
+    snap = s.as_of(at("08:42:00"))
+    assert set(snap.records) == {"e1", "e2", "e3"} and not snap.refused
+    assert snap.placed_only == {"e1", "e2", "e3"}  # er_surp needs EPS and a usable stamp
+    assert snap.records["e3"]["actual_eps"] is None  # never filled from the older version
+    assert s.as_of(at("08:46:00")).records["e1"]["actual_eps"] == 0.3
+    code = full.live_context(inputs.market_day(DAY)).code
+    import pandas as pd
+
+    folder = tmp_path / "l1bz"
+    rv.write_l1bz(snap, rv.EARNINGS, folder, "2025-08-01", DAY, coverage=full_coverage())
+    t = pd.DataFrame({"sym": ["IG", "NK", "QQ"], "m": [281, 281, 281]})  # mark 08:42
+    code.bz.Earnings(str(folder), code.labels.calendar(), DAY, code.settings).add(t)
+    assert list(t.er_since) == [0, 0, 0] and t.er_surp.isna().all()
 
 
 def test_a_replay_recovers_the_record_originally_seen(tmp_path):
@@ -133,7 +208,7 @@ def test_a_torn_line_refuses_the_store(tmp_path):
 def test_rows_without_an_id_are_counted_not_stored(tmp_path):
     s = rv.RevisionStore(tmp_path / "store", rv.NEWS)
     got = s.append([{"published": utc("08:00:00")}, "x", {"benzinga_id": ""}], at("08:01:00"))
-    assert got == {"saved": 0, "unchanged": 0, "unreadable": 3} and not s.by_id
+    assert got == {"saved": 0, "unchanged": 0, "repeated": 0, "unreadable": 3} and not s.by_id
 
 
 def test_vendor_stamps_are_read_as_the_training_reads_them():

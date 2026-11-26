@@ -136,8 +136,11 @@ def test_earnings_poll_by_last_updated_and_news_by_published_window(cfg):
     assert dict(urllib.parse.parse_qsl(earn1.query)) == {
         "last_updated.gte": (sent1 - lookback).strftime(stamp), "sort": "last_updated.asc",
         "limit": str(m.page_limit)}
+    # no rows: the watermark stays at the first bound, and the next poll reaches back the overlap
+    assert events[1]["watermark_utc"] == events[1]["since_utc"]
     assert dict(urllib.parse.parse_qsl(earn2.query))["last_updated.gte"] == (
-        sent1 - datetime.timedelta(seconds=m.revision_poll_overlap_seconds)).strftime(stamp)
+        sent1 - lookback - datetime.timedelta(seconds=m.revision_poll_overlap_seconds)
+    ).strftime(stamp)
     for q, sent in ((news1.query, nsent[0]), (news2.query, nsent[1])):  # the window, every poll
         assert dict(urllib.parse.parse_qsl(q)) == {
             "published.gte": (sent - lookback).strftime(stamp), "sort": "published.asc",
@@ -245,8 +248,9 @@ def test_a_restart_resumes_from_the_stored_state_and_records_a_gap(cfg):
     assert [v.record["actual_eps"] for v in er.by_id["e1"]] == [None, 0.3]
     assert er.by_id["e1"][1].baseline is False  # resumed: not a baseline
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(wire2.requests[0].full_url).query))
-    last_ok = rv.CoverageLog(folder, rv.EARNINGS).events[2]["sent_utc"]
-    want = (datetime.datetime.fromisoformat(last_ok)
+    last_ok = rv.CoverageLog(folder, rv.EARNINGS).events[2]
+    assert last_ok["watermark_utc"].startswith("2026-11-25T15:01:00")  # e1's last_updated
+    want = (datetime.datetime.fromisoformat(last_ok["watermark_utc"])
             - datetime.timedelta(seconds=cfg.massive.revision_poll_overlap_seconds))
     assert q["last_updated.gte"] == want.strftime("%Y-%m-%dT%H:%M:%SZ")
     cov = rv.CoverageLog(folder, rv.EARNINGS).coverage()
@@ -270,3 +274,69 @@ def test_an_unreadable_coverage_log_refuses_the_start(cfg):
     with pytest.raises(ModelRefused) as exc:
         revpoll.Poller(cfg)
     assert exc.value.cause == "revision_store_unreadable"
+
+
+def test_earnings_drain_every_page_with_ties_and_advance_only_after_a_complete_poll(cfg):
+    """codex-109 point 7: inclusive watermark, every page, ties at the watermark, a record
+    listed twice kept once, the watermark advanced only by a complete poll."""
+    m = cfg.massive
+    nxt = f"https://{m.api_host}{m.benzinga_earnings_path}?cursor=2"
+
+    def paged(rows, more):
+        return json.dumps({"results": rows, **({"next_url": nxt} if more else {})}).encode()
+
+    e1, e2 = rep("e1", "2026-11-25T15:01:00.5Z"), rep("e2", "2026-11-25T15:02:00Z")
+    e3 = rep("e3", "2026-11-25T15:02:00.700Z")  # the same whole second as e2: a tie
+    e4 = rep("e4", "2026-11-25T15:09:00Z")
+    wire = wire_for(cfg, [paged([e1, e2], True), paged([e2, e3], False),  # poll 1: two pages
+                          paged([e4], True), 500,  # poll 2: the second page fails
+                          paged([e3, e4], False)],  # poll 3
+                    [page([])] * 3)
+    run(cfg, wire, Clock(), 3)
+    folder, er, _ = stores(cfg)
+    events = rv.CoverageLog(folder, rv.EARNINGS).events
+    assert [e["event"] for e in events] == ["start", "ok", "failed", "ok"]
+    assert events[1]["rows"] == 4 and events[1]["listed_twice"] == 1 and events[1]["saved"] == 3
+    assert events[1]["watermark_utc"].startswith("2026-11-25T15:02:00.000000")  # fraction dropped
+    assert "watermark_utc" not in events[2]
+    queries = [dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(r.full_url).query))
+               for r in wire.requests
+               if urllib.parse.urlsplit(r.full_url).path == m.benzinga_earnings_path]
+    overlap = datetime.timedelta(seconds=m.revision_poll_overlap_seconds)
+    bound = (datetime.datetime(2026, 11, 25, 15, 2, tzinfo=datetime.UTC) - overlap).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    # poll 2 (first page) and poll 3 both list from the poll-1 watermark: the failed poll 2
+    # did not advance it, and its first page was not stored
+    assert queries[2]["last_updated.gte"] == bound and queries[4]["last_updated.gte"] == bound
+    assert "cursor" in queries[1] and "cursor" not in queries[4]
+    assert set(er.by_id) == {"e1", "e2", "e3", "e4"} and len(er.by_id["e4"]) == 1
+    assert events[3]["unchanged"] == 1  # e3 listed again at the watermark, not stored again
+    assert events[3]["watermark_utc"].startswith("2026-11-25T15:09:00")
+
+
+def test_news_windows_overlap_and_each_revision_records_its_first_seen_age(cfg):
+    a1 = art("a1", "2026-11-25T14:00:00Z", last_updated="2026-11-25T14:00:00Z")
+    a1r = dict(a1, last_updated="2026-11-25T15:00:00Z", title="revised")
+    wire = wire_for(cfg, [page([])] * 5, [page([]), page([a1]), page([a1r]), page([a1r]),
+                                          page([a1])])  # the last: a stale redelivery
+    run(cfg, wire, Clock(), 5)
+    folder, _, news = stores(cfg)
+    lines = [json.loads(x) for p in sorted((folder / "news").glob("*.jsonl"))
+             for x in p.read_text().splitlines()]
+    assert [(x["record"]["title"], x["first_seen"]) for x in lines] == [
+        ("kept", True), ("revised", True), ("kept", False)]
+    for x in lines[:2]:
+        received = datetime.datetime.fromisoformat(x["received_utc"])
+        published = datetime.datetime(2026, 11, 25, 14, tzinfo=datetime.UTC)
+        assert x["published_age_s"] == (received - published).total_seconds()
+    assert lines[2]["published_age_s"] is None  # not a first sighting
+    assert news.as_of(T0 + datetime.timedelta(hours=1)).records["a1"]["title"] == "revised"
+    # every news poll re-lists the whole published window, so consecutive windows overlap
+    events = rv.CoverageLog(folder, rv.NEWS).events[1:]
+    since = [datetime.datetime.fromisoformat(e["since_utc"]) for e in events]
+    sent = [datetime.datetime.fromisoformat(e["sent_utc"]) for e in events]
+    assert all(since[i + 1] < sent[i] for i in range(len(events) - 1))
+    # the report gives the distribution of first-seen ages of revisions (to size the window)
+    rep_ = rv.report(sorted((folder / "news").glob("*.jsonl")), [], [0.5], 60)["news"]
+    ages = rep_["delay_values"]["receipt - published (revisions, first seen)"]
+    assert ages == [lines[1]["published_age_s"]]

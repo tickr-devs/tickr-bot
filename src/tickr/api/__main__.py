@@ -1,10 +1,12 @@
-"""Run the local API: `python -m tickr.api [--config config/bot.toml] [serve|pair]`.
+"""Run the local API: `python -m tickr.api [--config config/bot.toml] [serve|pair|devices|revoke]`.
 
 `serve` opens the local port and, when `[api] remote_hosts_file` names a host, the phone-facing
-`[api] remote_port` (bearer token always required). `pair` revokes the phone's token and leaves a
-pairing link with a one-time code in a 0600 file under data_dir for the owner to move to the
-phone; the phone redeems the code once, at POST /pair on the remote port, for its new token.
-Only SHA-256 digests are kept; nothing secret is printed.
+`[api] remote_port` (a paired device's bearer token always required). `pair --name <device>`
+leaves a pairing link with a one-time code in a 0600 file under data_dir for the owner to move to
+the device; the device redeems the code once, at POST /pair on the remote port, for its own token,
+beside the devices already paired (one of the same name is replaced). `devices` lists the paired
+devices and `revoke --name <device>` revokes one. Only SHA-256 digests are kept; nothing secret
+is printed.
 
 With `[chart] webull_enabled`, and once the chart probe C1 is recorded as passed for the
 environment (`python -m tickr.probes chart-client`), `serve` builds the chart's own Webull
@@ -33,12 +35,16 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from tickr import config as config_module
+from tickr.api import contract
+from tickr.api.devices import DeviceFileError, valid_name
 from tickr.api.server import (
     ApiServer,
+    list_devices,
     make_remote_server,
     make_server,
     pair,
     pair_simulator,
+    revoke_device,
     settings_from_config,
     unpair_simulator,
 )
@@ -49,6 +55,7 @@ from tickr.runtime.alerts import (
     MACOS,
     Alerter,
     AlertKind,
+    AlertOutcome,
     Channels,
     FeedNotifier,
     Notifier,
@@ -130,15 +137,40 @@ def unexpected_credentials(cfg: config_module.Config,
 
 
 def _api_notifier(cfg: config_module.Config) -> Notifier | None:
-    """The Mac notification (run without any credential variable) and the alerts feed file; no
-    iMessage (the API has no recipient variable); None off macOS."""
+    """The alerts feed file and, on macOS, the Mac notification (run without any credential
+    variable); no iMessage (the API has no recipient variable). Off macOS (the bot server) the
+    feed is the only channel."""
+    feed = FeedNotifier(feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
     if sys.platform != "darwin":
-        return None
+        return Channels((), ((FEED, feed),))
     run = functools.partial(subprocess.run,
                             env=config_module.environ_without(
                                 config_module.credential_variables(cfg)))
-    feed = FeedNotifier(feed_path(cfg.root, cfg.run.data_dir, cfg.alerts))
     return Channels((), ((MACOS, mac_notifier(cfg.alerts, run)), (FEED, feed)))
+
+
+def _log_outcomes(outcomes: list[AlertOutcome]) -> None:
+    for outcome in outcomes:
+        body = outcome.journal_body()
+        print(f"tickr api: alert {body['kind']} {body['delivery']}"
+              + (f" ({body['error']})" if body["error"] else ""), file=sys.stderr)
+
+
+def auth_alert(cfg: config_module.Config,
+               notifier: Callable[[config_module.Config], Notifier | None] = _api_notifier,
+               ) -> Callable[[str], None]:
+    """The remote port's `remote-auth-blocked` alert (ApiServer.auth_alert): its channels run in
+    the background, so the request never waits for them; each outcome is one line in api.log.
+    The text names the client address and the budget, never a token or code."""
+    alerter = Alerter(cfg.alerts, f"{ALERT_TITLE} {cfg.environment_name}", notifier(cfg))
+    lock = threading.Lock()  # request threads share one alerter
+
+    def send(text: str) -> None:
+        with lock:
+            _log_outcomes([*alerter.completed(),
+                           alerter.alert(AlertKind.REMOTE_AUTH_BLOCKED, text)])
+
+    return send
 
 
 def check_credentials(cfg: config_module.Config, environ: Mapping[str, str] = os.environ,
@@ -156,11 +188,8 @@ def check_credentials(cfg: config_module.Config, environ: Mapping[str, str] = os
     alerter = Alerter(cfg.alerts, f"{ALERT_TITLE} {cfg.environment_name}", notifier(cfg))
 
     def send() -> None:
-        outcomes = [alerter.alert(AlertKind.API_CREDENTIALS_UNEXPECTED, text), *alerter.flush()]
-        for outcome in outcomes:
-            body = outcome.journal_body()
-            print(f"tickr api: alert {body['kind']} {body['delivery']}"
-                  + (f" ({body['error']})" if body["error"] else ""), file=sys.stderr)
+        _log_outcomes([alerter.alert(AlertKind.API_CREDENTIALS_UNEXPECTED, text),
+                       *alerter.flush()])
 
     thread = threading.Thread(target=send, name="credentials-alert", daemon=True)
     thread.start()
@@ -172,16 +201,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=Path("config/bot.toml"),
                         help="path to bot.toml")
     parser.add_argument("command", nargs="?",
-                        choices=("serve", "pair", "pair-simulator", "unpair-simulator"),
+                        choices=("serve", "pair", "devices", "revoke", "pair-simulator",
+                                 "unpair-simulator"),
                         default="serve",
-                        help="serve the API (default), pair a phone, or give the iOS Simulator "
-                             "on this Mac its own token (unpair-simulator revokes it)")
+                        help="serve the API (default), pair a device, list the paired devices, "
+                             "revoke one, or give the iOS Simulator on this Mac its own token "
+                             "(unpair-simulator revokes it)")
+    parser.add_argument("--name", help="the device to pair or revoke (pair, revoke)")
     args = parser.parse_args(argv)
+    if args.command in ("pair", "revoke") and (args.name is None or not valid_name(args.name)):
+        parser.error(f"{args.command} needs --name: letters, digits, space, dot, dash and "
+                     "underscore, starting and ending with a letter or digit")
     try:
         cfg = config_module.load(args.config)
         settings = settings_from_config(cfg, args.config)
         if args.command == "pair":
-            link_file = pair(settings)
+            link_file = pair(settings, args.name)
+        if args.command == "devices":
+            paired = list_devices(settings)
+        if args.command == "revoke":
+            revoked = revoke_device(settings, args.name)
         if args.command == "pair-simulator":
             token_file = pair_simulator(settings)
         if args.command == "unpair-simulator":
@@ -189,6 +228,24 @@ def main(argv: list[str] | None = None) -> int:
     except config_module.ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
+    except (DeviceFileError, OSError) as exc:
+        print(f"the paired devices are unreadable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    if args.command == "devices":
+        if not paired:
+            print("No device is paired; run `python -m tickr.api pair --name <device>`.")
+        for device in paired:
+            last = "never" if device.last_used_at is None \
+                else contract.format_time(device.last_used_at)
+            print(f"{device.name}\tpaired {contract.format_time(device.created_at)}\t"
+                  f"last used {last}")
+        return 0
+    if args.command == "revoke":
+        if not revoked:
+            print(f"No device is named {args.name!r}; `devices` lists them.", file=sys.stderr)
+            return 1
+        print(f"The token of {args.name!r} is revoked; the other devices are unchanged.")
+        return 0
     if args.command == "pair-simulator":
         print("The iOS Simulator has a new token of its own; the phone's token is unchanged.\n"
               f"It is in {token_file} (readable by you only) with the address it opens. Put\n"
@@ -200,9 +257,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "pair":
         minutes = settings.pairing_code_ttl_seconds // SECONDS_PER_MINUTE
-        print("Started a new pairing; any earlier phone token no longer works.\n"
+        print(f"Started pairing {args.name!r}; the devices already paired keep working (one\n"
+              f"named {args.name!r} keeps its token until this code is redeemed, then loses it).\n"
               f"The pairing link is in {link_file} (readable by you only). It holds a one-time\n"
-              f"code, valid for {minutes} min and for one phone only; the API must be running.\n"
+              f"code, valid for {minutes} min and for one device only; the API must be running.\n"
               "Move it to the iPhone by AirDrop and open it there, or paste it in Settings >\n"
               "Pair with Mac. Once the phone has paired, the link is worthless and the API\n"
               "deletes the file.")
@@ -217,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     remote = None
     if settings.remote_hosts:
         remote = make_remote_server(server)
+        remote.auth_alert = auth_alert(cfg)
         threading.Thread(target=remote.serve_forever, daemon=True).start()
         print(f"tickr api for the phone on http://{settings.host}:{remote.server_port}/ "
               "(bearer token required; point tailscale serve here)", file=sys.stderr)

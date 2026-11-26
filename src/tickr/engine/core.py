@@ -24,6 +24,7 @@ from typing import Any
 
 from tickr.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, Refused
 from tickr.config import Config, GateResult
+from tickr.engine import chase
 from tickr.risk.ticks import CENT, tick
 from tickr.risk.timers import WindowKind
 from tickr.store import IN_LIST_LIMIT, Store, marks
@@ -411,7 +412,9 @@ class Engine:
     def __init__(self, store: Store, broker: Broker, config: Config, run_id: str,
                  gate: Callable[[], GateResult],
                  clock: Callable[[], float] = time.time,
-                 close_refusal: Callable[[], str | None] = lambda: None) -> None:
+                 close_refusal: Callable[[], str | None] = lambda: None,
+                 exit_quote: Callable[[str], chase.ExitQuote | None] = lambda _symbol: None,
+                 ) -> None:
         self.store = store
         self.broker = broker
         self.config = config
@@ -421,6 +424,9 @@ class Engine:
         # Why a closing MARKET order may not be sent now, or None (engine.manual.close_refusal
         # with the session calendar; the default never refuses: tests and tools).
         self.close_refusal = close_refusal
+        # The bid and ATR a limit-exit chase prices from (`[exit_chase]`, engine.chase), or
+        # None; the default has none, so an enabled chase refuses and closes by MARKET.
+        self.exit_quote = exit_quote
         self._positions: list[Position] | None = None  # this pass's positions read
         # The latest reconcile's reads; None after a failed read (or when a caller drops it).
         self.broker_view: BrokerView | None = None
@@ -645,11 +651,13 @@ class Engine:
             self.store.append("fence-cleared", {"by": "operator"}, key=str(Fence.ENTRY_STOP),
                               run_id=self.run_id)
 
-    def cancel_entries(self) -> int:
-        """Operator cancel-own-orders: cancel working entry orders only, never stops or exits.
-        Returns how many entries were asked to cancel."""
+    def cancel_entries(self, symbol: str | None = None) -> int:
+        """Operator cancel-own-orders: cancel working entry orders only, never stops or exits;
+        with `symbol`, only that symbol's. Returns how many entries were asked to cancel."""
         asked = 0
         for trade in self.trades():
+            if symbol is not None and trade.symbol != symbol:
+                continue
             for order in self.orders(trade.trade_id):
                 if order.leg is Leg.ENTRY and order.live:
                     self._cancel(order)
@@ -2162,9 +2170,12 @@ class Engine:
         selling = sum((e.open_quantity for e in live_exits), ZERO)
         if live_exits:
             self._watch_exit(trade, live_exits)
-            if (not live_stops and expected <= selling) or self._has_fence(
-                    Fence.EXIT_NOT_FILLED, trade.trade_id):
-                return  # everything held is being sold, or a close waits for the operator
+            if self._has_fence(Fence.EXIT_NOT_FILLED, trade.trade_id):
+                return  # a close waits for the operator
+            if self._chase_working(live_exits):
+                return  # a chase order works: re-priced in its time, never added to
+            if not live_stops and expected <= selling:
+                return  # everything held is being sold
         elif self._has_fence(Fence.EXIT_NOT_FILLED, trade.trade_id):
             # A close that did not fill in time has ended (cancelled or expired): send no other
             # close until the operator has looked; keep what is held under a stop meanwhile.
@@ -2194,9 +2205,21 @@ class Engine:
         # this sale never exceed the agreed quantity.
         uncovered = expected - sum((s.open_quantity for s in live_stops), ZERO) - selling
         if uncovered > 0:
+            close = self._close_order(trade, live_stops, live_exits)
+            if close is None:
+                # The chase ended unfilled where no MARKET may go: the operator is alerted
+                # (exit-not-filled) and the stop rules stay, as for any close not filled.
+                self._protect(trade, stops, expected - selling)
+                return
+            limit, rows = close
             with self.store.transaction():
-                cid = self._write_intent(trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
-                                         OrderType.MARKET, uncovered)
+                cid = self._write_intent(
+                    trade.trade_id, Leg.EXIT, trade.symbol, Side.SELL,
+                    OrderType.MARKET if limit is None else OrderType.LIMIT, uncovered,
+                    limit_price=limit)
+                for kind, body in rows:
+                    self.store.append(kind, {**body, "client_order_id": cid},
+                                      key=trade.trade_id, run_id=self.run_id)
             self._send(cid)
         if self._cancel_in_flight():
             # One stop at a time, across every trade: the next stop is cancelled only once the
@@ -2219,6 +2242,91 @@ class Engine:
                 continue
             self._cancel(stop)
             return
+
+    # --- limit-exit chase (backlog X3, engine.chase) ---------------------------------------
+
+    def _chase_working(self, live_exits: list[OrderRow]) -> bool:
+        """Whether a chase order of this trade still works; cancels it once it is due for a
+        new price. Its successor is placed only after Detail shows it ended (cancelled, or
+        filled in a race with the cancel): never two chase orders at once, never a replace."""
+        working = [e for e in live_exits if e.order_type is OrderType.LIMIT]
+        if not working:
+            return False
+        row = working[-1]
+        if row.cancelling or not row.verified:
+            return True  # a cancel or an unknown send waits for a broker read; nothing is sent
+        decided = [r.body["at"] for r in self.store.journal(chase.CHASE_PRICE, row.trade_id)
+                   if r.body.get("client_order_id") == row.client_order_id]
+        due = float(self.config.exit_chase.reprice_seconds)
+        if (decided and self.clock() - float(decided[-1]) >= due
+                and row.client_order_id in self._detail_answered_ids):
+            self._cancel(row)
+        return True
+
+    def _close_order(self, trade: TradeRow, live_stops: list[OrderRow],
+                     live_exits: list[OrderRow],
+                     ) -> tuple[Decimal | None, list[tuple[str, dict[str, Any]]]] | None:
+        """The limit price of the next close (None: MARKET, the close as before) and the chase
+        rows to record with its intent; None when the chase ended where no MARKET may go (the
+        exit-not-filled fence is then set). With `[exit_chase] enabled` false: MARKET, no rows."""
+        settings = self.config.exit_chase
+        if not settings.enabled:
+            return None, []
+        tid = trade.trade_id
+        if self.store.journal(chase.CHASE_REFUSED, tid) or self.store.journal(
+                chase.CHASE_ENDED, tid):
+            return None, []
+        max_age = self.config.risk.max_quote_age_seconds
+        quote = self.exit_quote(trade.symbol)
+        rows: list[tuple[str, dict[str, Any]]] = []
+        started = self.store.journal(chase.CHASE_STARTED, tid)
+        if started:
+            body = started[0].body
+            begun = chase.Start(Decimal(str(body["reference"])), Decimal(str(body["atr"])),
+                                Decimal(str(body["floor"])))
+        else:
+            first = chase.start(quote, stops_live=bool(live_stops),
+                                closes_live=bool(live_exits), max_quote_age=max_age,
+                                settings=settings)
+            if isinstance(first, chase.Refusal):
+                with self.store.transaction():
+                    self.store.append(chase.CHASE_REFUSED, {"cause": first}, key=tid,
+                                      run_id=self.run_id)
+                return None, []
+            begun = first
+            rows.append((chase.CHASE_STARTED, {"reference": begun.reference, "atr": begun.atr,
+                                               "floor": begun.floor}))
+        # Chase orders decided so far; one our request budget refused never reached Webull.
+        sent = sum(1 for o in self.orders(tid) if o.leg is Leg.EXIT
+                   and o.order_type is OrderType.LIMIT and o.send_state is not SendState.REFUSED)
+        step = chase.next_order(begun, sent, quote, max_quote_age=max_age,
+                                market_allowed=self.close_refusal() is None, settings=settings)
+        if isinstance(step, chase.Price):
+            rows.append((chase.CHASE_PRICE, {"limit_price": step.limit, "bid": step.bid,
+                                             "at": self.clock()}))
+            return step.limit, rows
+        ended = {"cause": step.cause, "market": step.market, "orders": sent}
+        if step.market:
+            rows.append((chase.CHASE_ENDED, ended))
+            return None, rows
+        closes = [o for o in self.orders(tid) if o.leg is Leg.EXIT]
+        last = closes[-1] if closes else None
+        with self.store.transaction():
+            for kind, body in rows:
+                self.store.append(kind, body, key=tid, run_id=self.run_id)
+            self.store.append(chase.CHASE_ENDED, ended, key=tid, run_id=self.run_id)
+            self._fence_row(Fence.EXIT_NOT_FILLED, tid, (
+                f"closing order {last.client_order_id if last else '-'} for "
+                f"{last.quantity if last else ZERO} {trade.symbol} not filled after "
+                f"{int(self.clock() - self._chase_began(tid))} s (filled "
+                f"{last.filled_quantity if last else ZERO}, state "
+                f"{(last.broker_state or last.send_state) if last else 'none'}); "
+                "nothing more is sent: look in the Webull app (halt? no buyers?)"))
+        return None
+
+    def _chase_began(self, trade_id: str) -> float:
+        decided = self.store.journal(chase.CHASE_PRICE, trade_id)
+        return float(decided[0].body["at"]) if decided else self.clock()
 
     def _cancel_in_flight(self) -> bool:
         """Whether a stop's cancel waits for Detail (its shares may have no stop until the read

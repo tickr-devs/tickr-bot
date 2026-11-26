@@ -49,6 +49,8 @@ class AdmissionCause(StrEnum):
     QUOTE_STALE = "QUOTE_STALE"
     SPREAD_TOO_WIDE = "SPREAD_TOO_WIDE"
     PRICE_OUTSIDE_WINDOW = "PRICE_OUTSIDE_WINDOW"
+    PRICE_COLLAR_UNKNOWN = "PRICE_COLLAR_UNKNOWN"
+    PRICE_COLLAR_BREACH = "PRICE_COLLAR_BREACH"
     # 6. Size and money
     QUANTITY_BELOW_ONE = "QUANTITY_BELOW_ONE"
     QUANTITY_NOT_WHOLE = "QUANTITY_NOT_WHOLE"
@@ -62,6 +64,14 @@ class AdmissionCause(StrEnum):
     # 7. Request budget
     ENTRY_BUDGET_UNAVAILABLE = "ENTRY_BUDGET_UNAVAILABLE"
     STOP_BUDGET_UNAVAILABLE = "STOP_BUDGET_UNAVAILABLE"
+    TRADABILITY_BUDGET_UNAVAILABLE = "TRADABILITY_BUDGET_UNAVAILABLE"
+    # Tradability (backlog T8; only with [risk] tradability_check_enabled), read from the
+    # broker after every check above passed, before the buying power
+    TRADABILITY_UNKNOWN = "TRADABILITY_UNKNOWN"
+    INSTRUMENT_HALTED = "INSTRUMENT_HALTED"
+    INSTRUMENT_CLOSE_ONLY = "INSTRUMENT_CLOSE_ONLY"
+    INSTRUMENT_DENIED = "INSTRUMENT_DENIED"
+    INSTRUMENT_NOT_TRADABLE = "INSTRUMENT_NOT_TRADABLE"
 
 
 # Recorded as the cause code when admission passed but the engine refused to open the trade

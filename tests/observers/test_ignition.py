@@ -78,7 +78,8 @@ def test_the_shipped_values_load_and_bad_ones_are_refused():
 
 def test_from_config_off_and_on():
     assert ig.from_config(replace(CFG, observers=replace(CFG.observers, ignition=""))) is None
-    built = ig.from_config(CFG)
+    on = replace(CFG, observers=replace(CFG.observers, ignition="early-thin-ignition-v1"))
+    built = ig.from_config(on)
     assert built is not None and built.rules == RULES
 
 

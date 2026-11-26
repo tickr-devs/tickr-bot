@@ -16,6 +16,9 @@ from typing import Any
 
 from tickr.replay.measured import FORMAT as MEASURED_FORMAT
 from tickr.research import calibration as cal
+from tickr.research import collar as col
+from tickr.research import fill_quality as fq
+from tickr.research import gate as gt
 from tickr.research import latency as lat
 from tickr.research import observer_report as orep
 from tickr.research import outcomes as oc
@@ -24,6 +27,7 @@ from tickr.research import slippage as sl
 from tickr.research import whatif as wi
 from tickr.research.compare import DiffResult
 from tickr.research.records import DecisionRecord
+from tickr.research.settings import ResearchSettings
 
 
 def fmt(value: Any, places: int) -> str:
@@ -210,6 +214,24 @@ def write_latency(result: lat.LatencyReport, source: str, out_dir: Path,
     return _json(out_dir / "latency_summary.json", body, places)
 
 
+COLLAR_COLUMNS = ("entry", "reference", "symbol", "count",
+                  *col.PERCENTILE_NAMES, "max")
+
+
+def write_collar(result: col.CollarReport, out_dir: Path, places: int) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(out_dir / "collar.csv", COLLAR_COLUMNS,
+               ([*key, d.count, *d.percentiles, d.max] for key, d in result.rows.items()),
+               places)
+    overall = {f"{kind}/{reference}": {"count": d.count, **dict(zip(
+        col.PERCENTILE_NAMES, d.percentiles, strict=True)), "max": d.max}
+               for (kind, reference, group), d in result.rows.items() if group == col.OVERALL}
+    body = {"overall": overall,
+            "missing_reference": {f"{k}/{r}": n for (k, r), n in result.missing.items()},
+            "partial_last_lines": result.partial_last_lines}
+    return _json(out_dir / "collar_summary.json", body, places)
+
+
 REFUSAL_COLUMNS = ("day", "strategy", "version", "role", "setup", "kind", "name", "count")
 
 
@@ -269,3 +291,174 @@ def write_calibration(reports: Sequence[cal.ColumnReport], out_dir: Path,
                                    "base_rate": r.base_rate, "brier": r.brier, "ece": r.ece}
                         for r in reports}}
     return _json(out_dir / "calibration_summary.json", body, places)
+
+
+FILL_TRADE_COLUMNS = (
+    "day", "trade_id", "symbol", "entry_shares", "entry_limit", "entry_fill",
+    "entry_vs_limit_usd", "entry_ask", "entry_vs_quote_usd", "entry_quote_age_s",
+    "entry_delay_s", "exit_shares", "exit_fill", "exit_bid", "exit_vs_quote_usd",
+    "exit_delay_s", "shares_filled", "fees_usd", "cause")
+# Compared figures and the replay setting that assumes them (absent: the replay assumes nothing).
+FILL_ASSUMED = {
+    "entry_slippage_vs_quote_percent": "slippage_percent",
+    "stop_slippage_percent": "slippage_percent",
+    "exit_slippage_vs_quote_percent": "slippage_percent",
+}
+FEES_ASSUMPTION = "none: the replay and the backtest are gross of fees (no fee model in config)"
+
+
+def write_fill_quality(sets: Sequence[tuple[str, Sequence[fq.TradeFill],
+                                            Sequence[sl.StoppedTrade]]],
+                       assumed: dict[str, Decimal], out_dir: Path, places: int) -> dict[str, Any]:
+    """Per set (label, trades, stopped trades): `<label>/fill_quality_trades.csv` and
+    `<label>/fill_quality_days.csv` (one row per day, then `all`); `fill_quality_compare.csv`
+    (metric, assumed, one column per set, and the second minus the first when there are two);
+    `fill_quality_summary.json`."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    overall = {}
+    for label, trades, stopped in sets:
+        folder = out_dir / label
+        folder.mkdir(exist_ok=True)
+        _write_csv(folder / "fill_quality_trades.csv", FILL_TRADE_COLUMNS,
+                   ([getattr(t, c) for c in FILL_TRADE_COLUMNS] for t in trades), places)
+        days = sorted({t.day for t in trades})
+        rows = [(d, fq.metrics(trades, stopped, d)) for d in [*days, None]]
+        columns = ("day", *rows[-1][1])
+        _write_csv(folder / "fill_quality_days.csv", columns,
+                   ([d if d is not None else "all", *m.values()] for d, m in rows), places)
+        overall[label] = rows[-1][1]
+    labels = list(overall)
+    names = list(overall[labels[0]])
+    header = ["metric", "assumed", *labels, *(["difference"] if len(labels) == 2 else [])]
+
+    def line(name: str) -> list[Any]:
+        values = [overall[label][name] for label in labels]
+        row = [name, assumed.get(FILL_ASSUMED.get(name, ""))]
+        row.extend(values)
+        if len(labels) == 2:
+            a, b = values
+            row.append(None if a is None or b is None else b - a)
+        return row
+
+    _write_csv(out_dir / "fill_quality_compare.csv", header, (line(n) for n in names), places)
+    body = {"sets": overall, "assumed": assumed, "fees_assumption": FEES_ASSUMPTION,
+            "difference": "second set minus first set" if len(labels) == 2 else None}
+    return _json(out_dir / "fill_quality_summary.json", body, places)
+
+
+GATE_COLUMNS = ("label", "line", "line_label", "check", "kind", "outcome", "measured", "wanted",
+                "inconclusive_because")
+GATE_LINE_COLUMNS = ("label", "line", "line_label", "sizing", "sessions", "trades",
+                     "unknown_cost_trades", "days", "days_in_plus", "earned", "lost", "net", "fees",
+                     "slippage", "spread_in_results", "spread_charged", "same_trade_matched",
+                     "same_trade_spread_cost", "net_before_spread")
+GATE_MONTH_COLUMNS = ("label", "line", "month", "status", "trading_days", "period_days",
+                      "period_fraction_pct", "covered_days", "coverage_pct", "trades", "net",
+                      "in_plus")
+GATE_TAIL_COLUMNS = ("label", "line", "top_percent", "trades", "net", "share_of_net_pct")
+GATE_TRADE_COLUMNS = ("label", "trade_id", "symbol", "session", "day", "entry_time", "exit_time",
+                      "notional_usd", "return_units", "result", "fees", "slippage", "spread",
+                      "spread_in_result", "spread_charged", "cost_provenance", "cost_version",
+                      "net_usd", "spread_usd")
+GATE_BY_HAND = "checked by hand"
+GATE_KIND = {"net_after_costs_above_0": "descriptive", "sensitivity_k_of_m_months": "sensitivity",
+             "sensitivity_without_best": "sensitivity"}
+GATE_NOTICE = ("Offline descriptive report. Nothing is promoted from it: binding promotion "
+               "criteria are set with the owner on open development evidence (docs/promotion.md). "
+               "Dollar "
+               "lines sum per-trade results without a portfolio replay (cash, slots, repeated "
+               "symbols, protection, session limits, actual exits).")
+
+
+def _gate_causes(line: gt.Line, check: str) -> str:
+    if line.checks[check] != gt.INCONCLUSIVE:
+        return ""
+    causes = list(line.causes)
+    if check == "sensitivity_k_of_m_months":
+        causes += [f"{m.month} {m.status}" for m in line.months if m.status != gt.OBSERVED]
+    return "; ".join(causes)
+
+
+def write_gate(result: gt.Gate, version: str, label: str, out_dir: Path, places: int,
+               trades: Sequence[gt.Trade], frozen: dict[str, Any],
+               settings: ResearchSettings) -> dict[str, Any]:
+    """`gate.csv` (each check per line, then the items checked by hand), `gate_lines.csv`,
+    `gate_months.csv`, `gate_tails.csv`, `gate_trades.csv` (the per-trade cost audit) and
+    `gate_summary.json`. Descriptive wording only: a check "holds", "does not hold" or is
+    "inconclusive"; nothing here passes a gate."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    window = len(result.window)
+    rows: list[list[Any]] = []
+    for line in result.lines:
+        measured = {"net_after_costs_above_0": line.net,
+                    "sensitivity_k_of_m_months": f"{line.months_in_plus} of {window}",
+                    "sensitivity_without_best": line.net_without_best}
+        wanted = {"net_after_costs_above_0": "net above 0",
+                  "sensitivity_k_of_m_months": f"at least {settings.gate_positive_months} of the "
+                                               f"last {window} months to --end in plus",
+                  "sensitivity_without_best": f"net above 0 without the best {line.dropped} of "
+                                              f"{line.trades - line.unknown_cost_trades} trades"}
+        rows.extend([label, line.name, line.label, name, GATE_KIND[name], outcome,
+                     measured[name], wanted[name], _gate_causes(line, name)]
+                    for name, outcome in line.checks.items())
+    rows.append([label, "both", "", "paired_baseline", "paired baseline", gt.UNAVAILABLE, "",
+                 "", gt.PAIRED_BASELINE_UNAVAILABLE])
+    rows.extend([label, "both", "", item, "not a number", GATE_BY_HAND, "", "", ""]
+                for item in gt.MANUAL)
+    _write_csv(out_dir / "gate.csv", GATE_COLUMNS, rows, places)
+    _write_csv(out_dir / "gate_lines.csv", GATE_LINE_COLUMNS,
+               ([label, line.name, line.label, *(getattr(line, c) for c in GATE_LINE_COLUMNS[3:])]
+                for line in result.lines), places)
+    coverage = {m.month: m for m in result.window}
+    _write_csv(out_dir / "gate_months.csv", GATE_MONTH_COLUMNS,
+               ([label, line.name, m.month, m.status, c.trading_days, c.period_days,
+                 c.period_fraction * gt.PERCENT, c.covered_days, c.coverage * gt.PERCENT,
+                 m.trades, m.net, m.in_plus]
+                for line in result.lines for m in line.months for c in (coverage[m.month],)),
+               places)
+    _write_csv(out_dir / "gate_tails.csv", GATE_TAIL_COLUMNS,
+               ([label, line.name, t.percent, t.trades, t.net, t.share_pct]
+                for line in result.lines for t in line.tails), places)
+    _write_csv(out_dir / "gate_trades.csv", GATE_TRADE_COLUMNS,
+               ([label, t.trade_id, t.symbol, t.session, t.day, t.entry_time, t.exit_time,
+                 t.notional_usd, t.return_units, t.result, t.fees, t.slippage, t.spread,
+                 t.spread_in_result, t.spread_charged, t.cost_provenance, t.cost_version,
+                 t.net(), t.usd(t.spread)] for t in trades),
+               places)
+    body = {
+        "label": label, "model_version": version, "report": "descriptive", "notice": GATE_NOTICE,
+        "frozen": frozen,
+        "sensitivity_parameters": {
+            "k_positive_months": settings.gate_positive_months,
+            "m_window_months": settings.gate_window_months,
+            "x_drop_best_percent": settings.gate_drop_best_percent},
+        "tail_percents": list(settings.gate_tail_percents),
+        "coverage_rule": "observed only when every calendar trading day inside start..end "
+                         "is in --covered-days; otherwise inconclusive",
+        "coverage": {"trading_days": result.trading_days, "covered_days": result.covered_days,
+                     "coverage_pct": result.coverage * gt.PERCENT,
+                     "window": [{"month": m.month, "status": m.status,
+                                 "trading_days": m.trading_days, "period_days": m.period_days,
+                                 "period_fraction_pct": m.period_fraction * gt.PERCENT,
+                                 "covered_days": m.covered_days,
+                                 "coverage_pct": m.coverage * gt.PERCENT}
+                                for m in result.window]},
+        "costs": {"sign": gt.COST_SIGN, "provenance_version_trades": result.provenance,
+                  "unknown_cell": "empty = unknown (line inconclusive); 0 = a valid zero",
+                  "same_trade_spread_cost": "diagnostic: spread paid on the model's own trades, "
+                                            "over trades with a known net and spread; "
+                                            "net_before_spread only when every trade matches"},
+        "paired_baseline": {"status": gt.UNAVAILABLE, "why": gt.PAIRED_BASELINE_UNAVAILABLE},
+        "conclusive": result.conclusive,
+        "checked_by_hand": {item: GATE_BY_HAND for item in gt.MANUAL},
+        "lines": {line.name: {"line_label": line.label}
+                  | {c: getattr(line, c) for c in GATE_LINE_COLUMNS[3:]}
+                  | {"months_in_plus": line.months_in_plus,
+                     "dropped_best_trades": line.dropped,
+                     "net_without_best": line.net_without_best,
+                     "tails": [{"top_percent": t.percent, "trades": t.trades, "net": t.net,
+                                "share_of_net_pct": t.share_pct} for t in line.tails],
+                     "checks": line.checks, "inconclusive_because": list(line.causes)}
+                  for line in result.lines},
+    }
+    return _json(out_dir / "gate_summary.json", body, places)

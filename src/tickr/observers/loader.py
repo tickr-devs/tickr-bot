@@ -57,7 +57,8 @@ def _read_values(root: Path, folder: str) -> tuple[dict[str, Any], dict[str, Any
         with open(path, "rb") as handle:
             values = tomllib.load(handle)
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise ObserverError(f"{folder}: cannot read {path}: {exc}") from exc
+        raise ObserverError(f"{folder}: cannot read {STRATEGIES_DIR}/{folder}/{STRATEGY_FILE}: "
+                            f"{type(exc).__name__}") from exc
     table = values.get("strategy")
     name = table.get("name") if isinstance(table, dict) else None
     if not isinstance(name, str):
@@ -88,7 +89,8 @@ def load_strategy(root: Path, folder: str, modules: Mapping[str, str]) -> Loaded
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:
-        raise ObserverError(f"{folder}: module {module_name} cannot be imported: {exc}") from exc
+        raise ObserverError(f"{folder}: module {module_name} cannot be imported "
+                            f"({type(exc).__name__})") from exc
     create = getattr(module, "create", None)
     if not callable(create):
         raise ObserverError(f"{folder}: module {module_name} has no create(values)")

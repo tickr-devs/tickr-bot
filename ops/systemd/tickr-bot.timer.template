@@ -1,0 +1,12 @@
+# Starts tickr-bot.service on the configured weekdays ([runtime] bot_start_local, in the zone
+# given to render-systemd). A start missed while the server was down is not caught up: start it
+# by hand after reading the log.
+[Unit]
+Description=Tickr bot schedule
+
+[Timer]
+OnCalendar={{BOT_CALENDAR}}
+Persistent=false
+
+[Install]
+WantedBy=timers.target

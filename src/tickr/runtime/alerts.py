@@ -7,7 +7,9 @@ icon; when the app is missing, not allowed to notify or fails, osascript shows i
 `Alerter.alert(kind, text)` never raises and never retries. It returns an `AlertOutcome` that the
 caller always writes to its journal, whether the notification was shown, suppressed as a repeat,
 or could not be delivered. Repeats of the same kind and text inside the configured window are
-suppressed so that a condition that persists does not flood the owner.
+suppressed so that a condition that persists does not flood the owner. The owner's routing
+(`runtime/alert_routing.py`) may turn a kind off on some channels; critical kinds are never off,
+and what was skipped is named in the outcome.
 
 Alert text must never contain a secret value: callers pass variable NAMES, never contents.
 The iMessage recipient is personal data: Tickr code only knows the NAME of the environment
@@ -127,6 +129,10 @@ class AlertKind(StrEnum):
     # Raised by `tickr news-lag --alert` (R34), at most once a day per feed kind: the median
     # receipt lag of the Benzinga feed is above the training's assumed bz_lag_s. A report only.
     NEWS_LAG_HIGH = "news-lag-high"
+    # Raised by the API when a client address used up its failed-authentication budget on the
+    # remote port (device token or POST /pair), or every new address is refused because the
+    # address table is full of recent failures (api/authlimit.py).
+    REMOTE_AUTH_BLOCKED = "remote-auth-blocked"
 
 
 class Delivery(StrEnum):
@@ -135,6 +141,8 @@ class Delivery(StrEnum):
     NO_NOTIFIER = "no-notifier"
     SENDING = "sending"  # background channels only; their outcomes follow
     FAILED = "failed"
+    # The owner's routing turned this kind off on every channel this process has.
+    ROUTED_OFF = "routed-off"
 
 
 class NotifyError(Exception):
@@ -323,10 +331,21 @@ class Channels:
         self._spawn = spawn
         self._threads: list[threading.Thread] = []
 
-    def send(self, title: str, text: str, done: Done) -> list[tuple[str, str | None]]:
-        """Start the background channels, run the others; (name, error or None) of the latter."""
+    def background_except(self, skip: frozenset[str]) -> tuple[str, ...]:
+        """Names of the background channels a send that skips `skip` starts."""
+        return tuple(name for name in self.background if name not in skip)
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(name for name, _ in self._channels) + self.background
+
+    def send(self, title: str, text: str, done: Done,
+             skip: frozenset[str] = frozenset()) -> list[tuple[str, str | None]]:
+        """Start the background channels, run the others, all but those named in `skip`;
+        (name, error or None) of the ones run in this thread."""
         self._threads = [t for t in self._threads if t.is_alive()]
         for name, channel in self._background:
+            if name in skip:
+                continue
             try:
                 self._threads.append(self._spawn(_once(channel, name, title, text, done)))
             except Exception as exc:  # noqa: BLE001 - a thread that cannot start
@@ -335,6 +354,8 @@ class Channels:
                 done(name, f"not started: {type(exc).__name__}")
         results: list[tuple[str, str | None]] = []
         for name, channel in self._channels:
+            if name in skip:
+                continue
             try:
                 channel.notify(title, text)
             except NotifyError as exc:
@@ -393,7 +414,8 @@ class AlertOutcome:
     """What happened to one alert. The caller journals `journal_body()`.
 
     `pending` names background channels still sending; each later yields its own outcome
-    (from `Alerter.completed`) with `channel` set."""
+    (from `Alerter.completed`) with `channel` set. `routed_off` names the channels the owner's
+    routing skipped for this kind."""
 
     kind: AlertKind
     text: str
@@ -402,6 +424,7 @@ class AlertOutcome:
     error: str | None
     pending: tuple[str, ...] = ()
     channel: str | None = None
+    routed_off: tuple[str, ...] = ()
 
     def journal_body(self) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -415,11 +438,22 @@ class AlertOutcome:
             body["pending"] = list(self.pending)
         if self.channel is not None:
             body["channel"] = self.channel
+        if self.routed_off:
+            body["routed_off"] = list(self.routed_off)
         return body
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+# The channels (by their names in `Channels`) the owner's routing turned off for one kind;
+# `alert_routing.Routing.skipped` reads the routing file on each call.
+Routing = Callable[[AlertKind], frozenset[str]]
+
+
+def route_all(_kind: AlertKind) -> frozenset[str]:
+    return frozenset()
 
 
 class Alerter:
@@ -430,7 +464,10 @@ class Alerter:
     background send of the same alert is still running it is a repeat too, so a condition
     raised on every loop pass starts one send, not one per pass. Background
     results arrive through `completed()`, which the owner of the journal calls regularly (the
-    bot once per loop pass), and `flush()` before a short-lived process exits."""
+    bot once per loop pass), and `flush()` before a short-lived process exits.
+
+    `routing` names the channels to skip for a kind (the owner's routing; never a critical
+    kind). An alert every channel of which is skipped is `routed-off`, never counted as shown."""
 
     def __init__(
         self,
@@ -438,12 +475,14 @@ class Alerter:
         title: str,
         notifier: Notifier | None,
         clock: Callable[[], datetime] = _utc_now,
+        routing: Routing = route_all,
     ) -> None:
         self._window = timedelta(seconds=float(config.dedupe_window_seconds))
         self._title = title
         self._channels = (notifier if isinstance(notifier, Channels) or notifier is None
                           else Channels(((NOTIFIER, notifier),)))
         self._clock = clock
+        self._routing = routing
         self._last_shown: dict[tuple[AlertKind, str], datetime] = {}
         # Background sends of each alert not yet collected by completed().
         self._sending: dict[tuple[AlertKind, str], int] = {}
@@ -464,11 +503,19 @@ class Alerter:
         def done(name: str, error: str | None) -> None:  # on a background thread
             self._done.put((kind, text, name, error))
 
-        pending = self._channels.background
+        try:
+            skip = self._routing(kind)
+        except Exception:  # noqa: BLE001 - an injected routing never drops an alert
+            skip = frozenset()
+        routed_off = tuple(name for name in self._channels.names() if name in skip)
+        if routed_off and len(routed_off) == len(self._channels.names()):
+            return AlertOutcome(kind, text, now, Delivery.ROUTED_OFF, None,
+                                routed_off=routed_off)
+        pending = self._channels.background_except(skip)
         if pending:
             self._sending[key] = len(pending)
         try:
-            results = self._channels.send(f"{self._title}: {kind.value}", text, done)
+            results = self._channels.send(f"{self._title}: {kind.value}", text, done, skip)
         except BaseException:
             # No outcome will follow for sends that never started: the alert must not stay
             # suppressed until the process restarts.
@@ -480,10 +527,13 @@ class Alerter:
             self._last_shown[key] = now
         if failed:
             # The next occurrence tries again (never an automatic retry).
-            return AlertOutcome(kind, text, now, Delivery.FAILED, "; ".join(failed), pending)
+            return AlertOutcome(kind, text, now, Delivery.FAILED, "; ".join(failed), pending,
+                                routed_off=routed_off)
         if not results:  # background channels only: their outcomes follow
-            return AlertOutcome(kind, text, now, Delivery.SENDING, None, pending)
-        return AlertOutcome(kind, text, now, Delivery.SHOWN, None, pending)
+            return AlertOutcome(kind, text, now, Delivery.SENDING, None, pending,
+                                routed_off=routed_off)
+        return AlertOutcome(kind, text, now, Delivery.SHOWN, None, pending,
+                            routed_off=routed_off)
 
     def completed(self) -> list[AlertOutcome]:
         """Outcomes of background sends that finished since the last call."""

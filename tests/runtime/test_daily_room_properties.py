@@ -468,7 +468,7 @@ def _admissible(now: datetime, decision, q: Quote) -> AdmissionInputs:
         entry_stop=False, session=CALENDAR.day(now.date()), now=now, own_open_positions=0,
         own_working_orders=0, open_positions=0, working_entries=0, symbol_last_loss_at=None,
         decision=decision,
-        limit_price=None, stop_price=None, setup_valid=True, quote=q,
-        realized_loss_today_usd=ZERO, open_reservations_usd=ZERO,
+        limit_price=None, stop_price=None, setup_valid=True, quote=q, last_bar=None,
+        previous_quote=None, realized_loss_today_usd=ZERO, open_reservations_usd=ZERO,
         buying_power=BuyingPower(D(4_000_000), now, ZERO), entry_budget_available=True,
         stop_budget_available=True)
