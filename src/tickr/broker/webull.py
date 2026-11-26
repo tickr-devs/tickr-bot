@@ -10,7 +10,8 @@ Layers, outermost first:
 - `SdkTransport` wraps `webull-openapi-python-sdk` (optional dependency group `webull`). It
   pins every request to the configured host, which must be on the allowlist; turns SDK
   retries off; removes the SDK's log handlers (KD-4); never constructs `TradeEventsClient`
-  (KD-3) and never imports the SDK's order enums (KD-5). It holds the account id and adds it
+  (KD-3; probe M3's `SdkTradeEventsSource` signs the same gRPC request itself) and never
+  imports the SDK's order enums (KD-5). It holds the account id and adds it
   to each request; nothing else in the process does.
 
 Known SDK defects KD-1 (streaming close) and KD-2 (tick request limits) concern market data,
@@ -33,7 +34,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -2425,6 +2426,134 @@ class SdkTickProbeStream:
 def tick_probe_stream_from_config(
         config: Config, on_event: Callable[[dict[str, Any]], None]) -> SdkTickProbeStream:
     return SdkTickProbeStream(stream_settings_from_config(config), on_event)
+
+
+# --------------------------------------------------------------------------------------------
+# gRPC trade events (probe M3 only; the bot never subscribes, docs/webull-facts.md)
+# --------------------------------------------------------------------------------------------
+
+# What SDK 3.0.3's TradeEventsClient subscribes to: ORDER_STATUS_CHANGED 1 | POSITION_STATUS_
+# CHANGED 2 | OPTION_STATUS_CHANGED 4 (webull/trade/events/types.py), as its request sends.
+TRADE_EVENTS_SUBSCRIBE_TYPE = 7
+# The gRPC status codes after which SDK 3.0.3's DefaultSubscribeRetryPolicy subscribes again
+# (RetryOnGrpcStatusCondition); a stream the server simply closes is subscribed again too.
+TRADE_EVENTS_RESUBSCRIBE_CODES = frozenset({"UNAVAILABLE", "INTERNAL", "UNKNOWN"})
+TRADE_EVENTS_STREAM_CLOSED = "STREAM_CLOSED"
+ACCOUNT_MARK = "<account>"
+
+
+@dataclass(frozen=True)
+class TradeEventsSettings:
+    events_host: str
+    events_port: int
+    allowed_hosts: frozenset[str]
+    app_key_env: str
+    app_secret_env: str
+    account_id_env: str
+
+
+def trade_event_record(response: Any, event_names: Mapping[int, str],
+                       scrub: Callable[[str], str]) -> dict[str, Any]:
+    """One `SubscribeResponse` (SDK 3.0.3 events.proto: eventType, subscribeType, contentType,
+    payload, requestId, timestamp) as a JSON-safe record, every field as received except that
+    the account id is replaced by `<account>`. `event_name` is the SDK enum's name for the
+    control types (SubscribeSuccess 0, Ping 1, AuthError 2, NumOfConnExceed 3,
+    SubscribeExpired 4), None for any other type (the trade events themselves)."""
+    event_type = int(response.eventType)
+    return {"kind": "event", "event_type": event_type,
+            "event_name": event_names.get(event_type),
+            "subscribe_type": int(response.subscribeType),
+            "content_type": scrub(str(response.contentType)),
+            "payload": scrub(str(response.payload)),
+            "request_id": scrub(str(response.requestId)),
+            "timestamp": int(response.timestamp)}
+
+
+class SdkTradeEventsSource:
+    """Probe-only source of the account's gRPC trade events (`tickr probe-trade-events`).
+
+    It does not construct the SDK's `TradeEventsClient`, which prints the request's signature
+    and metadata (the App Key among them) to stdout (KD-3) and resubscribes forever on its own;
+    it sends the same signed `Subscribe` request through the SDK's own stub and signer. The
+    request is signed with the App Key and secret only (no token is read or written). Each
+    `connect` opens one stream with a deadline and yields its messages as records until the
+    stream ends, then one `ended` record: the gRPC code, the detail with the account id
+    removed, and whether the SDK would subscribe again. It never subscribes again itself:
+    the probe decides. It sends no order and reads nothing else."""
+
+    def __init__(self, settings: TradeEventsSettings) -> None:
+        if settings.events_host not in settings.allowed_hosts:
+            raise AdapterConfigError("events_host is not on the host allowlist")
+        self._target = f"{settings.events_host}:{settings.events_port}"
+        self._app_key = _read_credential(settings.app_key_env)
+        self._app_secret = _read_credential(settings.app_secret_env)
+        self._account_id = _read_credential(settings.account_id_env)
+        silence_sdk_loggers()
+        import webull.trade.events.events_pb2 as pb
+
+        silence_sdk_loggers()  # SDK modules attach handlers at import time
+        self._event_names = {int(number): str(name) for name, number in pb.EventType.items()}
+        self._lock = threading.Lock()
+        self._call: Any = None
+        self._closed = False
+
+    def _scrub(self, text: str) -> str:
+        return text.replace(self._account_id, ACCOUNT_MARK) if text else text
+
+    def _ended(self, code: str | None, detail: str) -> dict[str, Any]:
+        return {"kind": "ended", "code": code, "detail": self._scrub(detail),
+                "resubscribe": code in TRADE_EVENTS_RESUBSCRIBE_CODES
+                or code == TRADE_EVENTS_STREAM_CLOSED}
+
+    def connect(self, seconds: float) -> Iterator[dict[str, Any]]:
+        import grpc
+        import webull.trade.events.events_pb2 as pb
+        import webull.trade.events.events_pb2_grpc as pb_grpc
+        from webull.core.auth.algorithm import sha_hmac256_new
+        from webull.trade.events.signature_composer import calc_signature
+
+        silence_sdk_loggers()
+        request = pb.SubscribeRequest(subscribeType=TRADE_EVENTS_SUBSCRIBE_TYPE,
+                                      timestamp=int(time.time() * MILLISECONDS_PER_SECOND),
+                                      accounts=[self._account_id])
+        _signature, metadata = calc_signature(self._app_key, self._app_secret, request,
+                                              sha_hmac256_new)
+        try:
+            with grpc.secure_channel(self._target, grpc.ssl_channel_credentials()) as channel:
+                call = pb_grpc.EventServiceStub(channel).Subscribe(
+                    request=request, metadata=metadata, timeout=seconds)
+                with self._lock:
+                    if self._closed:
+                        call.cancel()
+                    self._call = call
+                for response in call:
+                    yield trade_event_record(response, self._event_names, self._scrub)
+        except grpc.RpcError as exc:
+            code = exc.code() if callable(getattr(exc, "code", None)) else None
+            detail = exc.details() if callable(getattr(exc, "details", None)) else None
+            yield self._ended(None if code is None else str(code.name), str(detail or ""))
+            return
+        except Exception as exc:  # noqa: BLE001 - anything else ends this stream
+            yield self._ended(None, type(exc).__name__)
+            return
+        finally:
+            with self._lock:
+                self._call = None
+        yield self._ended(TRADE_EVENTS_STREAM_CLOSED, "")
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            if self._call is not None:
+                self._call.cancel()
+
+
+def trade_events_source_from_config(config: Config) -> SdkTradeEventsSource:
+    env = config.environment
+    return SdkTradeEventsSource(TradeEventsSettings(
+        events_host=env.events_host, events_port=env.events_port, allowed_hosts=env.hosts,
+        app_key_env=env.app_key_variable, app_secret_env=env.app_secret_variable,
+        account_id_env=env.account_variable))
 
 
 # --------------------------------------------------------------------------------------------

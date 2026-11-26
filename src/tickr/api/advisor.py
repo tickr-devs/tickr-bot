@@ -19,6 +19,7 @@ from typing import Any
 
 from tickr import advisor_files as files
 from tickr.api import contract as api
+from tickr.api.causes import safe_cause
 
 RUN_PREFIX = re.compile(r"[0-9]{8}T[0-9]{6}Z-")
 """advisor.run names each folder "<%Y%m%dT%H%M%SZ>-<strategy name>"; other folders are not runs."""
@@ -48,7 +49,7 @@ def advisor_document(folder: Path, rows: int) -> api.AdvisorRunsV1:
             run = read_run(folder / run_id)
         except Unreadable as exc:
             if index < rows:
-                unreadable.append(api.AdvisorUnreadableV1(run_id, str(exc)))
+                unreadable.append(api.AdvisorUnreadableV1(run_id, safe_cause(exc)))
             continue
         if run.status in _AWAITING and run.decision is None:
             awaiting += 1
@@ -74,7 +75,7 @@ def record_decision(folder: Path, run_id: str, verdict: api.OwnerVerdict, at: da
     try:
         run = read_run(folder / run_id)
     except Unreadable as exc:
-        raise DecisionRefused(f"run {run_id} is unreadable: {exc}") from exc
+        raise DecisionRefused(f"run {run_id} is unreadable: {safe_cause(exc)}") from exc
     if run.status not in _AWAITING:
         raise DecisionRefused(f"run {run_id} is {run.status.value}: only a proposal or an idea "
                               "takes a decision")
@@ -122,7 +123,7 @@ def read_run(path: Path) -> api.AdvisorRunV1:
             decision=decision,
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise Unreadable(f"{files.RUN_FILE}: {type(exc).__name__}: {exc}") from exc
+        raise Unreadable(f"{files.RUN_FILE}: {type(exc).__name__}") from exc
 
 
 def _json(path: Path, schema: str) -> dict[str, Any]:
@@ -152,7 +153,7 @@ def _judge(path: Path) -> api.AdvisorJudgeV1:
             fitting=_stats(raw["fitting"]),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
-        raise Unreadable(f"{path.name}: {type(exc).__name__}: {exc}") from exc
+        raise Unreadable(f"{path.name}: {type(exc).__name__}") from exc
 
 
 def _decision(path: Path) -> api.AdvisorDecisionV1:
@@ -160,7 +161,7 @@ def _decision(path: Path) -> api.AdvisorDecisionV1:
     try:
         return api.AdvisorDecisionV1(api.OwnerVerdict(raw["verdict"]), _time(raw["at"]))
     except (KeyError, TypeError, ValueError) as exc:
-        raise Unreadable(f"{path.name}: {type(exc).__name__}: {exc}") from exc
+        raise Unreadable(f"{path.name}: {type(exc).__name__}") from exc
 
 
 def _stats(raw: Any) -> api.AdvisorStatsV1 | None:

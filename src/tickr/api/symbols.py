@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from tickr.api import contract as api
+from tickr.api.causes import RowRefused, safe_cause
 from tickr.api.reasons import TENTH_EXPONENT
 from tickr.archive import GZ_SUFFIX, existing, open_text
 from tickr.data.capture import DISCOVERY_FILE, CaptureError
@@ -57,15 +58,15 @@ def _decimal(value: Any, where: str) -> Decimal:
     try:
         return Decimal(value)
     except (InvalidOperation, TypeError) as exc:
-        raise ValueError(f"{where} is not a number: {value!r}") from exc
+        raise RowRefused(f"{where} is not a number: {value!r}") from exc
 
 
 def _time(value: Any, where: str) -> datetime:
     if not isinstance(value, str):
-        raise ValueError(f"{where} is not a time")
+        raise RowRefused(f"{where} is not a time")
     at = datetime.fromisoformat(value)
     if at.tzinfo is None:
-        raise ValueError(f"{where} has no UTC offset")
+        raise RowRefused(f"{where} has no UTC offset")
     return at
 
 
@@ -104,7 +105,7 @@ def _stop_cause(raw: Any) -> api.NotReachedCause:
     try:
         return _STOP_CAUSES[raw]
     except (KeyError, TypeError):
-        raise ValueError(f"unknown stop cause {raw!r}") from None
+        raise RowRefused(f"unknown stop cause {raw!r}") from None
 
 
 def _check(raw: Any) -> Check | None:
@@ -145,9 +146,9 @@ class _Mover:
     def parse(m: dict[str, Any]) -> _Mover:
         for signal in SIGNALS:
             if not isinstance(m[signal]["fired"], bool):
-                raise ValueError(f"{signal} fired is not true or false")
+                raise RowRefused(f"{signal} fired is not true or false")
         if not isinstance(m["spike_up"], bool):
-            raise ValueError("spike_up is not true or false")
+            raise RowRefused("spike_up is not true or false")
         return _Mover(
             _time(m["bar_start"], "bar_start"), _decimal(m["close"], "close"),
             _decimal(m["bar_dollar_volume"], "bar_dollar_volume"),
@@ -203,14 +204,14 @@ class DiscoveryFolded:
             self.latest[symbol] = _Outcome(stage, api.SymbolState.NOT_REACHED, finished, cause)
         for m in raw["movers"]:
             if not isinstance(m["symbol"], str):
-                raise ValueError("a mover's symbol is not text")
+                raise RowRefused("a mover's symbol is not text")
             self.movers[m["symbol"]] = _Mover.parse(m)
         # Records written before the check times were kept carry none: the old ones stay.
         if "checked_symbols" in raw:
             self.checked = {c["symbol"]: _time(c["checked_at"], "checked_at")
                             for c in raw["checked_symbols"]}
         if not isinstance(raw["movers_measured"], bool):
-            raise ValueError("movers_measured is not true or false")
+            raise RowRefused("movers_measured is not true or false")
         self.measured = raw["movers_measured"]
         self.as_of = finished
 
@@ -248,7 +249,7 @@ class DiscoveryDay:
                     self._reset(identity)
                 self._read(path, open_tail)
             except OSError as exc:
-                raise CaptureError(str(exc)) from exc
+                raise CaptureError(f"capture file unreadable ({type(exc).__name__})") from exc
             except CaptureError:
                 self._reset(None)
                 raise
@@ -269,7 +270,7 @@ class DiscoveryDay:
             try:
                 lines = complete.decode("utf-8").splitlines(keepends=True)
             except UnicodeDecodeError as exc:
-                raise CaptureError(f"{path}: {exc}") from exc
+                raise CaptureError(f"capture file is not UTF-8 ({type(exc).__name__})") from exc
             self._offset += len(complete)
         for text in lines:
             self._lines += 1
@@ -278,7 +279,7 @@ class DiscoveryDay:
             try:
                 self._day.fold(json.loads(text))
             except (ValueError, TypeError, KeyError) as exc:
-                raise CaptureError(f"{path}:{self._lines}: {exc}") from exc
+                raise CaptureError(f"line {self._lines}: {safe_cause(exc)}") from exc
 
 
 def _decision_state(record: DecisionRecord, places: int) -> _Outcome:
@@ -404,4 +405,5 @@ def mover_rules(strategy_toml: dict[str, Any]) -> api.FastMoverRulesV1 | None:
             _decimal(str(spike["min_dollar_volume_ratio"]), "spike"),
             _decimal(str(spike["min_bar_dollar_volume_usd"]), "spike"))
     except (KeyError, TypeError, ValueError) as exc:
-        raise ObserverError(f"[spike] of the active strategy unreadable: {exc}") from exc
+        raise ObserverError("[spike] of the active strategy unreadable "
+                            f"({type(exc).__name__})") from exc

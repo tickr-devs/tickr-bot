@@ -188,7 +188,8 @@ class CaptureWriter:
             handle.write(lines)
             handle.flush()
         except OSError as exc:
-            raise CaptureError(f"cannot append to {self.path(day, name)}: {exc}") from exc
+            raise CaptureError(f"cannot append to {self.path(day, name).name}: "
+                               f"{type(exc).__name__}") from exc
 
     def _close_other_days(self, day: date) -> None:
         for key in [k for k in self._handles if k[0] != day]:
@@ -333,14 +334,14 @@ def _captured_bar(captured: Path, number: int, text: str) -> Bar:
     try:
         record = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise CaptureError(f"{captured}:{number}: invalid JSON: {exc.msg}") from exc
+        raise CaptureError(f"{captured.name}:{number}: invalid JSON: {exc.msg}") from exc
     if not isinstance(record, dict) or set(record) != BAR_KEYS | CAPTURE_KEYS:
-        raise CaptureError(f"{captured}:{number}: not a captured bar record")
+        raise CaptureError(f"{captured.name}:{number}: not a captured bar record")
     bar_only = {k: record[k] for k in BAR_KEYS}
     try:
-        return bar_from_record(str(captured), number, bar_only)
+        return bar_from_record(captured.name, number, bar_only)
     except BarFileError as exc:
-        raise CaptureError(str(exc)) from exc
+        raise CaptureError(f"{captured.name}:{number}: {type(exc).__name__}") from exc
 
 
 class _BarsTail:
@@ -399,7 +400,8 @@ class _BarsTail:
                 try:
                     text = raw.decode("utf-8")
                 except UnicodeDecodeError as exc:
-                    raise CaptureError(f"{self.captured}:{number + 1}: {exc}") from exc
+                    raise CaptureError(f"{self.captured.name}:{number + 1}: "
+                                       f"{type(exc).__name__}") from exc
                 consumed += len(raw)
             else:
                 text = raw

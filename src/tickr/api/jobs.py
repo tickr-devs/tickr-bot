@@ -17,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from tickr.api import contract as api
+from tickr.api.causes import safe_cause
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.config import Config
 from tickr.runtime.launchd import NIGHTLY_OUTCOME_FILE, LocalTime, schedule
@@ -149,7 +150,7 @@ def _session(settings: JobsSettings,
         times = day.session_times(settings.last_entry_minutes_before_close,
                                   settings.flatten_minutes_before_close)
     except CalendarRefused as exc:
-        return None, str(exc)
+        return None, safe_cause(exc)
     if day.half_day and not settings.half_days_enabled:  # as preflight and admission decide
         return None, f"no session {day.ny_date}: half day, half_days_enabled = false"
     return api.SessionTimesV1(day.ny_date, day.regular_open, times.last_entry, times.flatten,
@@ -180,6 +181,6 @@ def _next_session(settings: JobsSettings,
                 return api.NextSessionV1(day.ny_date, day.regular_open, day.regular_close,
                                          kind), None
     except CalendarRefused as exc:
-        return None, str(exc)
+        return None, safe_cause(exc)
     return None, (f"no regular session within {settings.next_session_search_days} days after "
                   f"{today.isoformat()}")

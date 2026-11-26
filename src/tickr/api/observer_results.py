@@ -33,6 +33,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from tickr.api.causes import safe_cause
 from tickr.api.contract import ObserverResult, ObserverTradeV1
 from tickr.archive import existing
 from tickr.calendar import CalendarRefused, SessionCalendar
@@ -132,7 +133,7 @@ def _result(row: observer_report.IdentityReport, enters: Sequence[observer_repor
     try:
         trades = tuple(_trade(e, places) for e in ordered[:max_trades])
     except Exception as exc:  # noqa: BLE001 - display only: a cause, never a broken document
-        return ObserverResult(gross, cause, None, f"{type(exc).__name__}: {exc}")
+        return ObserverResult(gross, cause, None, type(exc).__name__)
     return ObserverResult(gross, cause, trades, None, len(ordered) > max_trades)
 
 
@@ -184,10 +185,11 @@ class ObserverResults:
             report = observer_report.report(
                 [r for i in trading for r in groups[i]], bars, settings, clock_for)
         except NoInputs as exc:
-            return out | {i: _failed(str(exc)) for i in trading}, exc.transient
+            return out | {i: _failed(safe_cause(exc)) for i in trading}, exc.transient
         except (ReplayError, ResearchError) as exc:
             # A calendar refusal (date outside the calendar) may be fixed by a new file.
-            return out | {i: _failed(f"simulation refused: {exc}") for i in trading}, True
+            refused = f"simulation refused: {safe_cause(exc)}"
+            return out | {i: _failed(refused) for i in trading}, True
         for row in report.identities:
             enters = report.enters[(row.strategy, row.version, row.role)]
             out[(row.strategy, row.version)] = _result(
@@ -214,16 +216,17 @@ def load_calendar(paths: SimulationPaths) -> SessionCalendar:
     try:
         return SessionCalendar.load(paths.calendar)
     except (CalendarRefused, OSError) as exc:
-        raise NoInputs(f"session calendar unreadable: {exc}", transient=True) from exc
+        raise NoInputs(f"session calendar unreadable: {safe_cause(exc)}", transient=True) from exc
 
 
 def replay_inputs(paths: SimulationPaths) -> tuple[ReplaySettings, ClockFor]:
     try:
         settings = load_settings(paths.replay_settings, paths.history_sessions)
     except ReplayError as exc:
-        raise NoInputs(f"replay settings unreadable: {exc}") from exc
-    except OSError as exc:
-        raise NoInputs(f"replay settings unreadable: {exc}", transient=True) from exc
+        raise NoInputs(f"replay settings unreadable: {safe_cause(exc)}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise NoInputs(f"replay settings unreadable: {type(exc).__name__}",
+                       transient=True) from exc
     return settings, calendar_clock(load_calendar(paths), paths.session)
 
 
@@ -236,6 +239,6 @@ def day_bars(bars: CapturedBarsDays, paths: SimulationPaths, day: date,
         # Today's file may be half way through a line the bot is writing.
         return bars.by_symbol(path, open_tail=day == today)
     except CaptureError as exc:
-        raise NoInputs(f"capture file refused: {exc}") from exc
+        raise NoInputs(f"capture file refused: {safe_cause(exc)}") from exc
     except OSError as exc:
-        raise NoInputs(f"capture file refused: {exc}", transient=True) from exc
+        raise NoInputs(f"capture file refused: {type(exc).__name__}", transient=True) from exc

@@ -117,3 +117,38 @@ jobs:
           TICKR_BOT_EXIT_TIMEOUT: "1"
           TICKR_NIGHTLY_OUT: data/nightly
           TICKR_NIGHTLY_SEED: data/nightly-seed
+  web-tests:
+    # The tickr.bot web app (web/, docs in web/README.md): its own uv project and lock, tested
+    # against a real Postgres like the one on its server.
+    needs: python-changes
+    if: needs.python-changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: web
+    env:
+      TICKR_WEB_DB_NAME: tickrweb
+      TICKR_WEB_DB_USER: postgres
+      TICKR_WEB_DB_PASSWORD: ci-only
+      TICKR_WEB_DB_HOST: 127.0.0.1
+      TICKR_WEB_DB_PORT: "5432"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.11.32"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync python manage.py makemigrations --check --dry-run --settings tickrweb.settings_test
+      - run: uv run --no-sync pytest -q

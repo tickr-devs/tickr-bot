@@ -3070,7 +3070,7 @@ def parse_json(text: str | bytes) -> Any:
     try:
         return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ContractError(f"not valid JSON: {exc}") from exc
+        raise ContractError(f"not valid JSON ({type(exc).__name__})") from exc
 
 
 def loads(cls: type, text: str | bytes) -> Any:
@@ -3246,7 +3246,9 @@ def read_commands(inbox: Path | str, now: datetime, max_age_seconds: Decimal) ->
         try:
             command: CommandV1 = loads(CommandV1, path.read_bytes())
         except (ContractError, OSError) as exc:
-            refused.append(InboxItem(path, None, f"unreadable command file: {exc}"))
+            refused.append(InboxItem(path, None, "unreadable command file: "
+                                           + (str(exc) if isinstance(exc, ContractError)
+                                              else type(exc).__name__)))
             continue
         age = seconds_between(command.requested_at, now)
         if path.name != f"{command.command_id}.json":
