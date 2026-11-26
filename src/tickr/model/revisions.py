@@ -1,5 +1,6 @@
 """Revisions of Benzinga earnings and news as received, and the snapshot as of a cutoff (Codex
-codex-108 point 7, 2026-11-25).
+codex-108 point 7, 2026-11-25; precedence, rescheduling and missing fields per codex-109 point 8,
+2026-11-26).
 
 The training reads Benzinga's archive: one final version of each report and article
 (`l1bz.Earnings` gates er_surp on the FINAL `last_updated`). Live, a report is revised after its
@@ -10,25 +11,35 @@ STORE. `RevisionStore(folder, kind)` appends one JSON line per new version of a 
 the vendor id (`benzinga_id`): the full record exactly as received, our receipt time, the send
 time of the previous successful poll (the version became available between the two) and
 whether it was in the first poll after a start (`baseline`: it was there before we looked, so
-its receipt times nothing). A record equal to the latest stored version of its id is not stored
-again. Lines are append-only, one file per New York receipt day under `<folder>/<kind>/`, each
-append flushed and fsynced. An unreadable line refuses the whole store (`revision_store_
+its receipt times nothing). A record equal to the latest stored line of its id is a retry and is
+not stored again; any other record is kept as an observation, also one equal to an older version
+(a stale redelivery: counted `repeated`, and it never moves that version forward). Lines are
+append-only, one file per New York receipt day under `<folder>/<kind>/`, each append flushed and
+fsynced. An unreadable line refuses the whole store (`revision_store_
 unreadable`), never skipped. Nothing is ever rewritten, so a replay at an old cutoff recovers
 the record originally seen.
 
-AS OF A CUTOFF (the ruling). A version is eligible when our receipt, its report time (earnings:
-`date` + `time`, New York) or published time (news) and its `last_updated` are all at or before
-the cutoff, and the fields the reader needs are present. Vendor stamps are read as `l1bz.utc_s`
-reads them: a fraction of a second rounds UP to the next second. Per id:
+AS OF A CUTOFF (the ruling). The record of an id is rebuilt only from what was received by the
+cutoff. Vendor stamps are read as `l1bz.utc_s` reads them: a fraction of a second rounds UP to
+the next second. Per id:
 
-1. the latest eligible version that also holds every PREFERRED field (earnings: `actual_eps`
-   and `estimated_eps`, the inputs of er_surp) is the record;
-2. else (earnings only), the latest received version, when it is eligible without them: the
-   report is placed (er_since, er_next) and er_surp stays missing, as `l1bz` makes it for a
-   report without an actual or an estimate. An earlier version is never used for placement;
-3. else the id is refused with the one cause of its latest received version
-   (`field_missing:<f>`, `stamp_unreadable:<f>`, `report_after_cutoff`,
-   `published_after_cutoff`, `updated_after_cutoff`). Nothing is filled in.
+1. the versions are the distinct records received by the cutoff, each at its FIRST receipt (a
+   retry or a stale redelivery adds nothing); a version whose readable `last_updated` is after
+   the cutoff is not known yet and is left out (all left out: refused `updated_after_cutoff`);
+2. the CURRENT version is chosen before any report-time check, so a correction that reschedules
+   a report supersedes the old schedule: when every version has a readable `last_updated` the
+   source orders them and the largest wins (a stale redelivery of an older update never wins);
+   otherwise the source gives no order and the latest first receipt wins. Two different records
+   sharing the winning key cannot be ordered: the id is refused `version_tie`;
+3. the current version is placed when its required fields are present and its report time
+   (earnings: `date` + `time`, New York) or published time (news) is at or before the cutoff,
+   else the id is refused with its one cause (`field_missing:<f>`, `stamp_unreadable:<f>`,
+   `report_after_cutoff`, `published_after_cutoff`). An older version is never used instead;
+4. earnings: er_surp needs both EPS values and a usable `last_updated` on the current version.
+   A placed report without them is kept (er_since, er_next) and listed `placed_only`; `l1bz`
+   leaves er_surp missing for it, as for an archive report without them. A missing
+   `last_updated` never erases the report's timing; an unreadable one refuses (the reader
+   could not parse it). Nothing is filled in from another version.
 
 Ids with nothing received by the cutoff are simply unknown.
 
@@ -85,8 +96,8 @@ class Kind:
 
 
 EARNINGS = Kind("earnings", "benzinga_earnings",
-                ("benzinga_id", "ticker", "date", "time", "last_updated"),
-                ("actual_eps", "estimated_eps"))
+                ("benzinga_id", "ticker", "date", "time"),
+                ("actual_eps", "estimated_eps", "last_updated"))
 NEWS = Kind("news", "benzinga_news", ("benzinga_id", "published"), ())
 KINDS = {k.name: k for k in (EARNINGS, NEWS)}
 BY_SOURCE = {k.source: k for k in (EARNINGS, NEWS)}
@@ -108,7 +119,7 @@ class AsOf:
 
     cutoff_ns: int
     records: dict[str, Mapping[str, Any]] = field(default_factory=dict)
-    placed_only: set[str] = field(default_factory=set)  # chosen by step 2 (no er_surp)
+    placed_only: set[str] = field(default_factory=set)  # placed without er_surp inputs
     refused: dict[str, str] = field(default_factory=dict)
 
 
@@ -191,6 +202,11 @@ def check(kind: Kind, record: Mapping[str, Any], cutoff_ns: int) -> str | None:
     return None
 
 
+def _updated_s(record: Mapping[str, Any]) -> int | None:
+    """The readable `last_updated` of a version, else None (missing or unreadable)."""
+    return vendor_s(record["last_updated"]) if _present(record, "last_updated") else None
+
+
 def select(kind: Kind, versions: Sequence[Version], cutoff_ns: int
            ) -> tuple[Version | None, str | None, bool]:
     """(version, refusal cause, placed_only) of one id at the cutoff; versions in receipt
@@ -198,15 +214,26 @@ def select(kind: Kind, versions: Sequence[Version], cutoff_ns: int
     got = [v for v in versions if v.received_ns <= cutoff_ns]
     if not got:
         return None, None, False
-    for v in reversed(got):
-        if (check(kind, v.record, cutoff_ns) is None
-                and all(_present(v.record, f) for f in kind.preferred)):
-            return v, None, False
-    latest = got[-1]
-    cause = check(kind, latest.record, cutoff_ns)
+    first: dict[str, Version] = {}
+    for v in got:  # a retry or a stale redelivery keeps its version's first receipt
+        first.setdefault(_canon(v.record), v)
+    known = [v for v in first.values()
+             if (_updated_s(v.record) or 0) * NS <= cutoff_ns]
+    if not known:
+        return None, check(kind, got[-1].record, cutoff_ns), False
+    stamps = [_updated_s(v.record) for v in known]
+    if all(s is not None for s in stamps):  # the source orders the versions
+        keys = [int(s) for s in stamps if s is not None]
+    else:
+        keys = [v.received_ns for v in known]
+    top = max(keys)
+    if keys.count(top) > 1:
+        return None, "version_tie", False
+    current = known[keys.index(top)]
+    cause = check(kind, current.record, cutoff_ns)
     if cause:
         return None, cause, False
-    return latest, None, True
+    return current, None, not all(_present(current.record, f) for f in kind.preferred)
 
 
 def snapshot(kind: Kind, by_id: Mapping[str, Sequence[Version]], cutoff_ns: int) -> AsOf:
@@ -254,11 +281,12 @@ class RevisionStore:
                previous_poll: datetime.datetime | None = None,
                baseline: bool = False) -> dict[str, int]:
         """Store each row that is new or differs from its id's latest version; one write,
-        flushed and fsynced. Returns counts: saved, unchanged, unreadable (no id; not stored,
-        it cannot be keyed)."""
+        flushed and fsynced. Returns counts: saved, unchanged (a retry of the latest line, not
+        stored), repeated (saved, but equal to an older version of its id: a stale redelivery),
+        unreadable (no id; not stored, it cannot be keyed)."""
         received_ns = ns_of(received)
         prev_ns = ns_of(previous_poll) if previous_poll is not None else None
-        counts = {"saved": 0, "unchanged": 0, "unreadable": 0}
+        counts = {"saved": 0, "unchanged": 0, "repeated": 0, "unreadable": 0}
         lines: list[str] = []
         fresh: list[Version] = []
         pending: dict[str, str] = {}
@@ -273,6 +301,8 @@ class RevisionStore:
                 counts["unchanged"] += 1
                 continue
             pending[key] = canon
+            if any(_canon(old.record) == canon for old in self.by_id.get(key, ())):
+                counts["repeated"] += 1
             v = Version(key, received_ns, dict(row), prev_ns, baseline)
             fresh.append(v)
             lines.append(json.dumps({
@@ -463,15 +493,18 @@ def differences(kind: Kind, by_id: Mapping[str, Sequence[Version]],
 
 
 def load_versions(paths: Iterable[Path], kind: Kind) -> dict[str, list[Version]]:
-    """Versions of one kind from logs, in receipt order (stable for equal receipts); a record
-    equal to its id's previous version is dropped (a probe and a store file may both hold it)."""
+    """Versions of one kind from logs, in receipt order (stable for equal receipts), each at its
+    first receipt: a record equal to an earlier one of its id is dropped (a retry, a stale
+    redelivery, or a probe and a store file both holding it)."""
     allv = [v for p in paths for v in read_log(p, kind)]
     allv.sort(key=lambda v: v.received_ns)
     by_id: dict[str, list[Version]] = {}
+    seen: set[tuple[str, str]] = set()
     for v in allv:
-        got = by_id.setdefault(v.id, [])
-        if not got or _canon(got[-1].record) != _canon(v.record):
-            got.append(v)
+        canon = _canon(v.record)
+        if (v.id, canon) not in seen:
+            seen.add((v.id, canon))
+            by_id.setdefault(v.id, []).append(v)
     return by_id
 
 
