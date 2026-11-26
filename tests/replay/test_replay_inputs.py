@@ -104,7 +104,7 @@ def test_bad_setting_refused(key, value, cause):
     data = _settings_table()
     data["replay"][key] = value
     with pytest.raises(SettingsError, match=cause):
-        settings_from_mapping(data)
+        settings_from_mapping(data, 2)
 
 
 def test_missing_and_unknown_setting_refused():
@@ -114,7 +114,7 @@ def test_missing_and_unknown_setting_refused():
     with pytest.raises(
         SettingsError, match="missing=\\['entry_wait_bars'\\] unknown=\\['surprise'\\]"
     ):
-        settings_from_mapping(data)
+        settings_from_mapping(data, 2)
 
 
 def _commented_keys(text: str) -> tuple[set[str], set[str]]:
@@ -138,4 +138,4 @@ def test_config_replay_toml_is_valid_and_every_key_commented():
     path = HERE.parent.parent / "config" / "replay.toml"
     keys, commented = _commented_keys(path.read_text())
     assert keys == commented == KEYS
-    load_settings(path)
+    load_settings(path, 2)

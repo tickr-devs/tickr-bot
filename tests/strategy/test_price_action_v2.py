@@ -35,6 +35,7 @@ from tickr.strategy.base import PositionView, SymbolContext, Verdict
 from tickr.types import Bar
 
 ROOT = Path(__file__).resolve().parents[2]
+BOT_HISTORY = config.load(ROOT / "config" / "bot.toml").market_data.history_sessions
 
 
 def values(folder: str) -> dict:
@@ -282,7 +283,7 @@ def _flat_day(day: date) -> list[Bar]:
 
 def test_replay_and_diff_against_v1():
     bars = {SYMBOL: [b for day in PRIOR_DAYS for b in _flat_day(day)] + _day()}
-    settings = load_settings(ROOT / "config" / "replay.toml")
+    settings = load_settings(ROOT / "config" / "replay.toml", BOT_HISTORY)
     clock = session_clock(ROOT / "config" / "bot.toml")
     old_values, new_values = values("price-action-v1"), values("price-action-v2")
 

@@ -21,9 +21,26 @@ from tickr.risk.daily import check_daily
 from tickr.risk.sizing import check_size
 from tickr.risk.timers import TradingWindow, WindowKind, trading_windows, window_at
 from tickr.strategy.base import Decision, Verdict
-from tickr.types import Quote
+from tickr.types import (
+    INSTRUMENT_HALTED,
+    TRADE_POLICY_ALL,
+    TRADE_POLICY_CLOSE_ONLY,
+    TRADE_POLICY_DENIED,
+    Bar,
+    Quote,
+    Tradability,
+)
 
 C = AdmissionCause
+
+
+@dataclass(frozen=True)
+class TradabilityRules:
+    """The profile statuses `[risk]` lists (backlog T8): those an entry may go in, and those
+    known to mean not tradable. A status in neither refuses as unknown."""
+
+    entry_profile_statuses: frozenset[str]
+    blocked_profile_statuses: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -54,6 +71,14 @@ class AdmissionLimits:
     """Longest a resting limit entry (`Decision.rest_bars`) may work, in bars."""
     extended_hours_strategies: frozenset[str]
     """Strategies whose ENTER may be admitted outside the regular session."""
+    collar_bar_ratio: Decimal
+    """Farthest the final limit may be from the last completed bar's close, as a ratio of that
+    close (`[risk] entry_collar_bar_ratio`); 0 = off."""
+    collar_quote_ratio: Decimal
+    """Farthest the final limit may be from the previous quote's ask, as a ratio of that ask
+    (`[risk] entry_collar_quote_ratio`); 0 = off."""
+    tradability: TradabilityRules | None = None
+    """None = the tradability check is off (`[risk] tradability_check_enabled = false`)."""
 
     @classmethod
     def from_config(cls, config: Config) -> AdmissionLimits:
@@ -76,6 +101,11 @@ class AdmissionLimits:
                 if risk.symbol_cooldown_after_loss_enabled else None),
             max_entry_rest_bars=risk.max_entry_rest_bars,
             extended_hours_strategies=frozenset(config.strategy.extended_hours_strategies),
+            tradability=(TradabilityRules(frozenset(risk.tradability_entry_profile_statuses),
+                                          frozenset(risk.tradability_blocked_profile_statuses))
+                         if risk.tradability_check_enabled else None),
+            collar_bar_ratio=risk.entry_collar_bar_ratio,
+            collar_quote_ratio=risk.entry_collar_quote_ratio,
         )
 
 
@@ -139,6 +169,12 @@ class AdmissionInputs:
     setup_valid: bool
     """The setup is still valid at `now` (the strategy's latest evaluation still says ENTER)."""
     quote: Quote | None
+    last_bar: Bar | None
+    """The last completed M1 bar of the decision's symbol (the decision bar); None = unknown.
+    Read only by the price collar."""
+    previous_quote: Quote | None
+    """The stream quote of the decision's symbol before `quote`; None = unknown. Read only by
+    the price collar."""
     realized_loss_today_usd: Decimal | None
     """Net realized loss today (wins offset losses) as a non-negative amount; None = unknown."""
     open_reservations_usd: Decimal | None
@@ -146,6 +182,12 @@ class AdmissionInputs:
     buying_power: BuyingPower
     entry_budget_available: bool
     stop_budget_available: bool
+    tradability_budget_available: bool = True
+    """The request budget admits the tradability reads now (check 7; asked only when the
+    tradability check is on)."""
+    tradability: Tradability | None = None
+    """The broker's tradability answers for the decision's symbol, read only when the check is
+    on and every earlier check passed; None = not read."""
 
 
 @dataclass(frozen=True)
@@ -307,8 +349,8 @@ def _check_cooldown(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | Non
 
 
 def _check_quote_and_setup(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
-    """Check 5: the decision and its order prices, then the quote."""
-    return _check_decision(i, lim) or _check_quote(i, lim)
+    """Check 5: the decision and its order prices, then the quote, then the price collar."""
+    return _check_decision(i, lim) or _check_quote(i, lim) or _check_collar(i, lim)
 
 
 def _check_decision(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
@@ -407,6 +449,66 @@ def _check_quote(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     return None
 
 
+def collar_distance(price: Decimal, reference: Decimal) -> Decimal:
+    """|price - reference| / reference: how far an entry price is from a reference price, as a
+    ratio of the reference (the price collar's measure; `tickr.research collar` uses it too)."""
+    return abs(price - reference) / reference
+
+
+def _collar_references(i: AdmissionInputs,
+                       lim: AdmissionLimits) -> tuple[Decimal, Decimal] | str:
+    """(last completed bar's close, previous quote's ask), or why either is not usable. The
+    previous quote may be no older than the window's quote age limit, the one `_check_quote`
+    holds the current quote to."""
+    d, bar, prev, q = i.decision, i.last_bar, i.previous_quote, i.quote
+    assert q is not None  # `_check_quote` passed
+    if bar is None:
+        return "no last completed bar"
+    if bar.symbol != d.symbol:
+        return f"bar {bar.symbol} for decision {d.symbol}"
+    if not (isinstance(bar.close, Decimal) and bar.close.is_finite() and bar.close > 0):
+        return f"bar close {bar.close} not a price"
+    if not _aware(bar.start) or bar.start >= i.now:
+        return f"bar start {bar.start!r} not an aware time before now"
+    if prev is None:
+        return "no previous quote"
+    if prev.symbol != d.symbol:
+        return f"previous quote {prev.symbol} for decision {d.symbol}"
+    if not (isinstance(prev.ask, Decimal) and prev.ask.is_finite() and prev.ask > 0):
+        return f"previous ask {prev.ask} not a price"
+    if not _aware(prev.provider_time) or prev.provider_time > q.provider_time:
+        return "previous quote time not an aware time at or before the quote's"
+    window = _window(i, lim)
+    max_age, _, _ = window_limits(window, lim)
+    age = Decimal(str((i.now - prev.provider_time).total_seconds()))
+    if age > max_age:
+        return f"previous quote {age} s old > {max_age} s ({window.kind})"
+    return bar.close, prev.ask
+
+
+def _check_collar(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Check 5, last part (backlog T10): the final limit price may not be implausibly far from
+    the last completed bar's close or from the previous quote's ask. Each side is off at 0;
+    while either is on, both references are needed and a refusal records both distances.
+    Entries only: exits and stops never pass admission."""
+    bar_max, quote_max = lim.collar_bar_ratio, lim.collar_quote_ratio
+    if bar_max == 0 and quote_max == 0:
+        return None
+    assert i.limit_price is not None  # `_check_decision` passed
+    found = _collar_references(i, lim)
+    if isinstance(found, str):
+        return _refuse(C.PRICE_COLLAR_UNKNOWN, found)
+    close, ask = found
+    bar_distance = collar_distance(i.limit_price, close)
+    quote_distance = collar_distance(i.limit_price, ask)
+    if (bar_max > 0 and bar_distance > bar_max) or (quote_max > 0 and quote_distance > quote_max):
+        return _refuse(C.PRICE_COLLAR_BREACH,
+                       f"limit {i.limit_price} is {bar_distance:.4f} from bar close {close} "
+                       f"(max {bar_max}) and {quote_distance:.4f} from previous ask {ask} "
+                       f"(max {quote_max})")
+    return None
+
+
 def _check_money(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     d = i.decision
     assert d.quantity is not None and i.limit_price is not None and i.stop_price is not None
@@ -473,6 +575,44 @@ def _check_budget(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     if not i.stop_budget_available:
         return _refuse(C.STOP_BUDGET_UNAVAILABLE, "no request budget for the protective stops "
                        "of every working entry and this one")
+    if lim.tradability is not None and not i.tradability_budget_available:
+        return _refuse(C.TRADABILITY_BUDGET_UNAVAILABLE,
+                       "no request budget for the tradability reads (profile, trade instrument)")
+    return None
+
+
+def _check_tradability(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Backlog T8, only when `lim.tradability` is set: the broker must say the symbol may be
+    opened now. HALTED, CLOSE_ONLY and DENIED refuse with their own cause, a profile status
+    known to mean not tradable with INSTRUMENT_NOT_TRADABLE; a missing, unknown or unread
+    answer refuses as TRADABILITY_UNKNOWN (refuse, never guess). Entries only: an exit never
+    goes through admission."""
+    rules = lim.tradability
+    if rules is None:
+        return None
+    t, symbol = i.tradability, i.decision.symbol
+    if t is None:
+        return _refuse(C.TRADABILITY_UNKNOWN, f"tradability of {symbol} not read")
+    if t.read_error is not None:
+        return _refuse(C.TRADABILITY_UNKNOWN, f"tradability of {symbol}: {t.read_error}")
+    if t.symbol != symbol:
+        return _refuse(C.TRADABILITY_UNKNOWN, f"tradability read for {t.symbol}, not {symbol}")
+    reason = "" if t.forbid_reason is None else f" ({t.forbid_reason})"
+    if INSTRUMENT_HALTED in (t.trade_policy, t.profile_status):
+        return _refuse(C.INSTRUMENT_HALTED, f"{symbol} is halted{reason}")
+    if t.trade_policy == TRADE_POLICY_CLOSE_ONLY:
+        return _refuse(C.INSTRUMENT_CLOSE_ONLY, f"{symbol} is close only{reason}")
+    if t.trade_policy == TRADE_POLICY_DENIED:
+        return _refuse(C.INSTRUMENT_DENIED, f"{symbol} trading is denied{reason}")
+    if t.trade_policy != TRADE_POLICY_ALL:
+        return _refuse(C.TRADABILITY_UNKNOWN, f"{symbol} trade_policy {t.trade_policy!r}")
+    if t.forbid_reason is not None:
+        return _refuse(C.TRADABILITY_UNKNOWN,
+                       f"{symbol} trade_policy ALL with forbid_reason {t.forbid_reason!r}")
+    if t.profile_status in rules.blocked_profile_statuses:
+        return _refuse(C.INSTRUMENT_NOT_TRADABLE, f"{symbol} profile status {t.profile_status}")
+    if t.profile_status not in rules.entry_profile_statuses:
+        return _refuse(C.TRADABILITY_UNKNOWN, f"{symbol} profile status {t.profile_status!r}")
     return None
 
 
@@ -484,9 +624,12 @@ CHECKS = (
     _check_quote_and_setup,
     _check_money,
     _check_budget,
+    _check_tradability,
     _check_buying_power,
 )
-"""Spec section 7 checks 1..7, in order; the buying power part of check 6 runs last."""
+"""Spec section 7 checks 1..7, in order, then the tradability check (backlog T8, off unless
+configured); the buying power part of check 6 runs last. The last two need broker reads, which
+the entry desk makes only for an entry every check before them admits."""
 
 SIMULATED_CHECKS = (
     _check_session,
@@ -500,10 +643,11 @@ working-entry limits, one trade per symbol, the pause after a loss, the decision
 prices, size and the daily loss ceiling. The same functions as `CHECKS`, in the same order,
 never a copy."""
 
-NOT_SIMULATED = ("gate", "reconciliation", "quote", "request_budget", "buying_power")
+NOT_SIMULATED = ("gate", "reconciliation", "quote", "request_budget", "tradability",
+                 "buying_power")
 """The checks a simulation has no counterpart for: the trading gate, broker reads and the
 entry-stop flag, the live quote (a simulation fills on bars), the request budget and the
-account's buying power."""
+tradability read and the account's buying power."""
 
 
 def admit_simulated(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admission:
@@ -514,6 +658,17 @@ def admit_simulated(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admissi
         if refused is not None:
             return refused
     return _admitted(inputs, limits)
+
+
+def refusal_before_broker_reads(inputs: AdmissionInputs,
+                                limits: AdmissionLimits) -> Admission | None:
+    """The first refusal of every check before the tradability and buying power ones, or
+    None: the entry desk reads the broker's tradability answers and balance only then."""
+    for check in CHECKS[:-2]:
+        refused = check(inputs, limits)
+        if refused is not None:
+            return refused
+    return None
 
 
 def refusal_before_buying_power(inputs: AdmissionInputs,

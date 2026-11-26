@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from tickr.api import contract as api
+from tickr.api.causes import safe_cause
 from tickr.backtest.errors import BacktestError
 from tickr.backtest.universe import POOL_FILE, read_pool
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar
@@ -138,7 +139,8 @@ class LabReplay:
             try:
                 name, version = read_identity(s.root, folder)
             except ObserverError as exc:
-                out.append(api.LabVersionV1(folder, None, None, role, self._relative(str(exc))))
+                out.append(api.LabVersionV1(folder, None, None, role,
+                                            self._relative(safe_cause(exc))))
                 continue
             cause = None
             if modules is None:
@@ -322,7 +324,7 @@ class LabReplay:
         try:
             modules = parse_modules(s.modules)
         except ObserverError as exc:
-            raise LabReplayRefused(str(exc)) from exc
+            raise LabReplayRefused(safe_cause(exc)) from exc
         legs = []
         for name, sub in zip(chosen, LEGS, strict=False):
             found = versions.get(name)
@@ -414,7 +416,7 @@ class LabReplay:
         except CalendarRefused as exc:
             if exc.cause in NO_SESSION:
                 return
-            raise LabReplayRefused(f"calendar: {exc}") from exc
+            raise LabReplayRefused(f"calendar: {safe_cause(exc)}") from exc
         if day.in_regular_session(now):
             raise LabReplayRefused(f"refused during the regular session until "
                                    f"{api.format_time(day.regular_close)} "
@@ -443,7 +445,7 @@ class LabReplay:
                     child = later[index]()
                 except OSError as exc:
                     following = run / legs[index + 1]["dir"]
-                    _refused(following, f"cannot start: {exc}")
+                    _refused(following, f"cannot start ({type(exc).__name__})")
                     self._exit(following, -1)
                     stop = True
             self._exit(run / leg["dir"], code)

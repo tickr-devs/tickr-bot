@@ -51,7 +51,7 @@ names. The first response of each kind and every failed one are kept in `<out>/r
    gainer pool only holds symbols whose day ended up as a gainer). Symbols delisted since are
    still missing: the universe is Webull's current instrument list.
 4. **Minute bars** (`minutes/<SYMBOL>.jsonl`, replay bar format; `minutes_status.jsonl`): each
-   pool day plus replay.toml `history_sessions` sessions before it, merged into contiguous runs
+   pool day plus `[market_data] history_sessions` (bot.toml) sessions before it, merged into contiguous runs
    and paged back with `end_time` (probe M4). Symbols that page from the same end share a request.
    A run that cannot be completed (no older bars, page limit, conflict) is recorded with its cause.
 5. **Run** (`trades.csv`, `signals.csv`, `summary.json`, `skipped.csv`, `report.json`,

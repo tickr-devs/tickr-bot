@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from tickr.api.history import close_window, closed_trades, orders_of, total_net
-from tickr.broker.base import BrokerError
+from tickr.broker.base import BrokerError, TradabilityReader
 from tickr.calendar import (
     NEW_YORK,
     CalendarCause,
@@ -43,12 +43,13 @@ from tickr.risk.admission import (
     BuyingPower,
     Reconciliation,
     admit,
+    refusal_before_broker_reads,
     refusal_before_buying_power,
 )
 from tickr.risk.causes import ENGINE_REFUSED
 from tickr.risk.ticks import round_to_tick
 from tickr.strategy.base import Decision, Role, Verdict
-from tickr.types import Quote
+from tickr.types import Bar, Quote, Tradability
 
 ZERO = Decimal(0)
 # A strategy's partial EXIT the engine did not take (trade not open, entry still working, an
@@ -382,9 +383,33 @@ class EntryDesk:
             return BuyingPower(None, None, committed)
         return BuyingPower(self._balance[0], self._balance[1], committed)
 
+    # --- tradability ------------------------------------------------------------------------
+
+    def _tradability_budget(self) -> bool:
+        """Check 7: the budget admits the tradability reads (only asked when the check is on;
+        a broker that cannot read tradability is left to the tradability check's refusal)."""
+        broker = self.engine.broker
+        if self.limits.tradability is None or not isinstance(broker, TradabilityReader):
+            return True
+        return broker.can_read_tradability()
+
+    def _read_tradability(self, symbol: str) -> Tradability:
+        """The broker's tradability answers for `symbol` (backlog T8), read once per entry
+        that reaches the check; a failed read or a broker that cannot say is recorded as the
+        read error, which admission refuses. Never retried."""
+        broker = self.engine.broker
+        if not isinstance(broker, TradabilityReader):
+            return Tradability(symbol, None, None, None, "this broker cannot read tradability")
+        try:
+            return broker.tradability(symbol)
+        except BrokerError as exc:
+            return Tradability(symbol, None, None, None, f"{type(exc).__name__}: {exc}")
+
     # --- admission -------------------------------------------------------------------------
 
-    def _inputs(self, decision: Decision, quote: Quote | None, now: datetime) -> AdmissionInputs:
+    def _inputs(self, decision: Decision, quote: Quote | None, now: datetime, *,
+                last_bar: Bar | None = None,
+                previous_quote: Quote | None = None) -> AdmissionInputs:
         engine = self.engine
         fences = [name.split(":", 1)[0] for name in engine.fences()]
         own_positions, working = own_exposure(engine, decision.symbol)
@@ -416,24 +441,35 @@ class EntryDesk:
             stop_price=stop,
             setup_valid=True,  # the decision was made from the latest bar and this quote
             quote=quote,
+            last_bar=last_bar,
+            previous_quote=previous_quote,
             realized_loss_today_usd=realized_loss_today(engine, now),
             open_reservations_usd=self._reservations(),
             buying_power=self._buying_power(),
             entry_budget_available=engine.broker.can_place(1),
             stop_budget_available=engine.broker.can_place(1 + stop_requests_owed(engine)),
+            tradability_budget_available=self._tradability_budget(),
         )
 
     # --- the one entry point ---------------------------------------------------------------
 
     def on_decision(self, decision: Decision, *, bar_start: datetime, quote: Quote | None,
-                    now: datetime) -> DecisionRecord:
-        """Act on one decision of the active strategy and record it."""
+                    now: datetime, last_bar: Bar | None = None,
+                    previous_quote: Quote | None = None) -> DecisionRecord:
+        """Act on one decision of the active strategy and record it. `last_bar` (the decision
+        bar) and `previous_quote` (the stream quote before `quote`) are the price collar's
+        references; None refuses an entry while the collar is on."""
         admission = RecordAdmission.NOT_APPLICABLE
         cause: str | None = None
         if decision.verdict is Verdict.ENTER:
-            inputs = self._inputs(decision, quote, now)
-            # The balance is read only for an entry every other check admits.
-            refused = refusal_before_buying_power(inputs, self.limits)
+            inputs = self._inputs(decision, quote, now, last_bar=last_bar,
+                                  previous_quote=previous_quote)
+            # Tradability (when on) and then the balance are read only for an entry every
+            # check before them admits.
+            refused = refusal_before_broker_reads(inputs, self.limits)
+            if refused is None and self.limits.tradability is not None:
+                inputs = replace(inputs, tradability=self._read_tradability(decision.symbol))
+                refused = refusal_before_buying_power(inputs, self.limits)
             if refused is None:
                 self._read_balance(now)
                 inputs = replace(inputs, buying_power=self._buying_power())

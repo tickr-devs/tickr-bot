@@ -1,0 +1,21 @@
+# Tickr local API: always on (compose service `api`, restart: unless-stopped). It needs no
+# credential: no env file is mounted into it. Docker publishes no port (network_mode: host,
+# loopback bind from [api] in bot.toml).
+# Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
+[Unit]
+Description=Tickr local API
+RequiresMountsFor=/srv/tickr/data
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=tickr
+EnvironmentFile=/srv/tickr/etc/limits.env
+Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml
+ExecStart=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml up -d api
+ExecStop=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml stop api
+
+[Install]
+WantedBy=multi-user.target

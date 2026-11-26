@@ -63,6 +63,8 @@ def inputs(**changes) -> AdmissionInputs:
         stop_price=D("9.80"),
         setup_valid=True,
         quote=quote(),
+        last_bar=None,
+        previous_quote=None,
         realized_loss_today_usd=D("0"),
         open_reservations_usd=D("0"),
         buying_power=BuyingPower(D("4000000"), NOW - timedelta(seconds=2), D("0")),

@@ -469,3 +469,17 @@ def test_open_trades_entry_value_is_taken_off_the_buying_power(tmp_path):
     assert desk.decide(decision()).admission == "taken"
     later = desk.desk._inputs(decision(symbol="XYZ"), quote(), NOW).buying_power
     assert later.committed_usd == D("101.00")  # 10 x 10.10
+
+
+def test_the_collar_blocks_entries_only(tmp_path):
+    """Price collar on (backlog T10) with no references: an ENTER is refused and sends nothing;
+    an EXIT of an open trade still goes out, and nothing about its stop changes."""
+    desk = Desk(tmp_path)
+    desk.desk.limits = replace(desk.desk.limits, collar_bar_ratio=D("0.01"),
+                               collar_quote_ratio=D("0.01"))
+    refused = desk.decide(decision())
+    assert refused.refusal_cause == "PRICE_COLLAR_UNKNOWN: no last completed bar"
+    assert desk.broker.sent == [] and desk.engine.trades() == []
+    trade = desk.engine.open_trade("ABC", D(1), D(10), D(9), D(1))
+    assert desk.decide(decision(Verdict.EXIT)).admission == "not_applicable"
+    assert desk.engine.trade(trade).exit_requested == "strategy-exit"

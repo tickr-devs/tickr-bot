@@ -25,6 +25,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from tickr.api import contract as api
+from tickr.api.causes import safe_cause
 from tickr.api.observer_results import NoInputs, SimulationPaths, day_bars, replay_inputs
 from tickr.calendar import CalendarCause, CalendarRefused, SessionCalendar, ny_date_of
 from tickr.config import Config
@@ -81,11 +82,11 @@ def refuse_in_session(settings: TradeWhatIfSettings, now: datetime) -> None:
     try:
         today = SessionCalendar.load(settings.paths.calendar).day_at(now)
     except OSError as exc:
-        raise TradeWhatIfRefused(f"calendar unreadable: {exc}") from exc
+        raise TradeWhatIfRefused(f"calendar unreadable: {type(exc).__name__}") from exc
     except CalendarRefused as exc:
         if exc.cause in NO_SESSION:
             return
-        raise TradeWhatIfRefused(f"calendar: {exc}") from exc
+        raise TradeWhatIfRefused(f"calendar: {safe_cause(exc)}") from exc
     if today.in_regular_session(now):
         raise TradeWhatIfRefused(f"refused during the regular session until "
                                  f"{api.format_time(today.regular_close)} "
@@ -108,17 +109,13 @@ def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,
         loaded = load_strategy(settings.root, folder, modules)
         check_history(loaded, settings.history_sessions)
     except ObserverError as exc:
-        return failed(str(exc))
+        return failed(safe_cause(exc))
     name, version = loaded.strategy.name, loaded.strategy.version
     try:
         today_bars = day_bars(bars, settings.paths, day, ny_date_of(now)).get(symbol, ())
         replay_settings, clock_for = replay_inputs(settings.paths)
     except NoInputs as exc:
-        return failed(str(exc), name, version)
-    if replay_settings.history_sessions != settings.history_sessions:
-        return failed(f"replay settings history_sessions {replay_settings.history_sessions} "
-                      f"differ from [market_data] history_sessions {settings.history_sessions}: "
-                      "the version would not see the history the bot cached", name, version)
+        return failed(safe_cause(exc), name, version)
     today_bars = tuple(b for b in today_bars if ny_date_of(b.start) == day)
     if not today_bars:
         return failed(f"no captured bars for {symbol} on {day.isoformat()}", name, version)
@@ -129,7 +126,7 @@ def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,
     try:
         prior = load_bars([cache]).get(symbol, ())
     except (OSError, ReplayError, UnicodeDecodeError) as exc:
-        return failed(f"cached prior sessions refused: {exc}", name, version)
+        return failed(f"cached prior sessions refused: {type(exc).__name__}", name, version)
     if not prior:
         return failed(f"cached prior sessions hold no bar of {symbol}", name, version)
     if prior and prior[-1].start >= today_bars[0].start:
@@ -139,9 +136,9 @@ def what_if(settings: TradeWhatIfSettings, folder: str, symbol: str, day: date,
                         {symbol: prior + today_bars}, replay_settings, clock_for,
                         settings.sizing)
     except (ReplayError, ObserverError) as exc:
-        return failed(f"simulation refused: {exc}", name, version)
+        return failed(f"simulation refused: {safe_cause(exc)}", name, version)
     except Exception as exc:  # noqa: BLE001 - a version's own bug is a cause, never a 500
-        return failed(f"simulation failed: {type(exc).__name__}: {exc}", name, version)
+        return failed(f"simulation failed: {type(exc).__name__}", name, version)
     places = replay_settings.output_decimal_places
     trades = tuple(t for t in result.trades if t.session_date == day)
     signals = tuple(s for s in result.signals if s.session_date == day)

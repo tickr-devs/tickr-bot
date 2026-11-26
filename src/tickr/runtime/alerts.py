@@ -158,6 +158,10 @@ class AlertKind(StrEnum):
     # give it (any, while [chart] webull_enabled is false; any but the active environment's app
     # key and secret while it is true): its plist is stale or hand-edited (runtime/launchd.py).
     API_CREDENTIALS_UNEXPECTED = "api-credentials-unexpected"
+    # Raised by the API when a client address used up its failed-authentication budget on the
+    # remote port (device token or POST /pair), or every new address is refused because the
+    # address table is full of recent failures (api/authlimit.py).
+    REMOTE_AUTH_BLOCKED = "remote-auth-blocked"
 
 
 class Delivery(StrEnum):
@@ -355,6 +359,16 @@ class TelegramNotifier:
         self._opener = opener
 
     def notify(self, title: str, text: str) -> None:
+        try:
+            self._send(title, text)
+        except NotifyError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a Telegram failure never breaks the caller
+            # Only the type: the message or the traceback of an unexpected error may hold the
+            # request address (with the token) or the chat id. `from None` drops the chain.
+            raise NotifyError(f"telegram failed: {type(exc).__name__}") from None
+
+    def _send(self, title: str, text: str) -> None:
         missing = telegram_missing(self._config, self._environ)
         if missing:
             raise NotifyError("telegram-missing: " + ", ".join(missing) + " not set")

@@ -5,6 +5,8 @@ the object one has seen). The converter is a stub: it needs the day's two raw fi
 day's table and adds a line to a ledger, so a day converted twice is visible.
 """
 
+import io
+import json
 import os
 import signal
 import subprocess
@@ -460,6 +462,31 @@ class _FakeS3:
     def __init__(self):
         self.objects = {}
         self.deletes = []
+        self.puts = []  # every write the runner sent
+        self.holder = {}  # key -> the "by" field of the stored claim
+        # None, or the write's answer is lost: "after" it was applied, or "before" it was
+        self.put_fault = None
+        self.fail_reads = False
+
+    def put_object(self, Bucket, Key, Body, IfMatch=None, IfNoneMatch=None):
+        self.puts.append((Key, IfMatch))
+        if self.put_fault == "before":
+            raise TimeoutError("read timeout, the write never arrived")
+        if IfMatch is not None and self.objects.get(Key) != IfMatch:
+            raise _ClientError("PreconditionFailed")
+        self.objects[Key] = f'"e{len(self.puts)}"'
+        self.holder[Key] = json.loads(Body)["by"]
+        if self.put_fault == "after":
+            raise TimeoutError("read timeout after the write was applied")
+        return {"ETag": self.objects[Key]}
+
+    def get_object(self, Bucket, Key):
+        if self.fail_reads:
+            raise TimeoutError("read timeout")
+        if Key not in self.objects:
+            raise _ClientError("NoSuchKey")
+        body = json.dumps({"by": self.holder.get(Key)}).encode()
+        return {"ETag": self.objects[Key], "Body": io.BytesIO(body)}
 
     def delete_object(self, Bucket, Key, IfMatch):
         self.deletes.append((Bucket, Key, IfMatch))
@@ -492,6 +519,7 @@ def _s3_release(fake):
         ),
         "MINE": {},
         "L": threading.Lock(),
+        "CLK": threading.Lock(),
         "say": lambda *a: said.append(" ".join(str(x) for x in a)),
     }
     exec(compile(ast.Module(body=picked, type_ignores=[]), str(RUNNER), "exec"), ns)
@@ -528,3 +556,131 @@ def test_s3_release_of_a_claim_already_gone_is_quiet():
     ns["MINE"]["2021-11-15"] = '"e-mine"'
     ns["release"]("2021-11-15")
     assert said == [] and len(fake.deletes) == 1
+
+
+def _s3_refresh_and_stop(fake):
+    """The runner's S3 claim store, refresher(), release() and stop_now(), compiled from the
+    file with a fake client. The refresher runs one round: its second sleep ends it."""
+    import ast
+    import threading
+    import types
+
+    tree = ast.parse(RUNNER.read_text())
+    s3_block = next(
+        n for n in tree.body if isinstance(n, ast.If) and getattr(n.test, "id", "") == "S3"
+    )
+    names = {"cput", "cread", "cdel"}
+    picked = [n for n in s3_block.body if isinstance(n, ast.FunctionDef) and n.name in names]
+    picked += [
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name in ("release", "refresher", "stop_now")
+    ]
+    sleeps = []
+
+    class _OneRound(Exception):
+        pass
+
+    def sleep(_):
+        sleeps.append(1)
+        if len(sleeps) > 1:
+            raise _OneRound
+
+    said = []
+    ns = {
+        "s3": lambda: fake,
+        "ob": "bucket",
+        "CPRE": "claims/ticks",
+        "ME": "host-mine",
+        "CLAIM_SEC": 60.0,
+        "botocore": types.SimpleNamespace(
+            exceptions=types.SimpleNamespace(ClientError=_ClientError)
+        ),
+        "json": json,
+        "os": os,
+        "signal": signal,
+        "time": types.SimpleNamespace(sleep=sleep, time=time.time),
+        "MINE": {},
+        "LOST": set(),
+        "PROCS": {},
+        "ST": {"stop": False},
+        "L": threading.Lock(),
+        "CLK": threading.Lock(),
+        "say": lambda *a: said.append(" ".join(str(x) for x in a)),
+    }
+    exec(compile(ast.Module(body=picked, type_ignores=[]), str(RUNNER), "exec"), ns)
+
+    def one_round():
+        try:
+            ns["refresher"]()
+        except _OneRound:
+            pass
+
+    return ns, said, one_round
+
+
+KEY = "claims/ticks/2021-11-17.json"
+
+
+def _held(fake, ns, holder="host-mine"):
+    fake.objects[KEY] = '"e0"'
+    fake.holder[KEY] = holder
+    ns["MINE"]["2021-11-17"] = '"e0"'
+
+
+def test_refresh_write_applied_but_answer_lost_is_still_released_on_sigterm():
+    fake = _FakeS3()
+    ns, said, one_round = _s3_refresh_and_stop(fake)
+    _held(fake, ns)
+    fake.put_fault = "after"
+    one_round()  # the rewrite lands (new etag), its answer is lost
+    assert fake.objects[KEY] == '"e1"' and fake.puts == [(KEY, '"e0"')]  # sent once, no resend
+    assert ns["MINE"] == {"2021-11-17": '"e1"'}  # the stored etag of my own claim is adopted
+    ns["stop_now"]("SIGTERM")
+    assert KEY not in fake.objects  # released: no machine waits for it to go stale
+    assert fake.deletes == [("bucket", KEY, '"e1"')]
+    assert not any(s.startswith("REFUSED") for s in said)
+
+
+def test_refresh_failure_with_another_holder_drops_the_day_without_deleting():
+    fake = _FakeS3()
+    ns, said, one_round = _s3_refresh_and_stop(fake)
+    _held(fake, ns, holder="host-other")  # another machine took the stale claim over
+    fake.put_fault = "before"
+    one_round()
+    assert ns["MINE"] == {} and ns["LOST"] == {"2021-11-17"}
+    assert any(s.startswith("CLAIM LOST 2021-11-17") for s in said)
+    ns["stop_now"]("SIGTERM")
+    assert fake.objects[KEY] == '"e0"' and fake.deletes == []  # left to its holder
+    assert fake.puts == [(KEY, '"e0"')]
+
+
+def test_refresh_failure_with_the_claim_gone_drops_the_day():
+    fake = _FakeS3()
+    ns, said, one_round = _s3_refresh_and_stop(fake)
+    ns["MINE"]["2021-11-17"] = '"e0"'
+    fake.put_fault = "before"
+    one_round()
+    assert ns["MINE"] == {} and ns["LOST"] == {"2021-11-17"}
+
+
+def test_refresh_failure_with_the_write_not_applied_keeps_my_claim():
+    fake = _FakeS3()
+    ns, said, one_round = _s3_refresh_and_stop(fake)
+    _held(fake, ns)
+    fake.put_fault = "before"
+    one_round()
+    assert ns["MINE"] == {"2021-11-17": '"e0"'} and ns["LOST"] == set()
+    ns["stop_now"]("SIGTERM")
+    assert KEY not in fake.objects
+
+
+def test_refresh_failure_and_read_back_failure_keep_the_held_etag():
+    fake = _FakeS3()
+    ns, said, one_round = _s3_refresh_and_stop(fake)
+    _held(fake, ns)
+    fake.put_fault = "after"
+    fake.fail_reads = True
+    one_round()
+    assert ns["MINE"] == {"2021-11-17": '"e0"'} and ns["LOST"] == set()  # as before the fix
+    assert fake.puts == [(KEY, '"e0"')]  # one send, no resend

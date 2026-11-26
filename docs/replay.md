@@ -54,7 +54,8 @@ measured from the bot's own stopped trades (`python -m tickr.research slippage`,
 measured trades is refused.
 
 **History.** The strategy gets the same shape of input as live: `bars` = the last
-`history_sessions` sessions of the symbol plus today's completed bars (oldest first), and the
+`[market_data] history_sessions` (config/bot.toml, the only place of that number) sessions of
+the symbol plus today's completed bars (oldest first), and the
 same sessions in `prior_sessions`. Indicators therefore warm up as they do live.
 
 **Sizing.** The strategy sizes on the bot's own planned loss and notional cap, read from
