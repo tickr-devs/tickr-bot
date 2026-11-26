@@ -13,7 +13,9 @@ time of the previous successful poll (the version became available between the t
 whether it was in the first poll after a start (`baseline`: it was there before we looked, so
 its receipt times nothing). A record equal to the latest stored line of its id is a retry and is
 not stored again; any other record is kept as an observation, also one equal to an older version
-(a stale redelivery: counted `repeated`, and it never moves that version forward). Lines are
+(a stale redelivery: counted `repeated`, and it never moves that version forward). Each line
+says whether it is the version's FIRST observed receipt (`first_seen`) and, for news, the age at
+which that version was first seen (`published_age_s`, receipt - published). Lines are
 append-only, one file per New York receipt day under `<folder>/<kind>/`, each append flushed and
 fsynced. An unreadable line refuses the whole store (`revision_store_
 unreadable`), never skipped. Nothing is ever rewritten, so a replay at an old cutoff recovers
@@ -143,9 +145,10 @@ def ns_of(moment: datetime.datetime) -> int:
     return (moment - EPOCH) // datetime.timedelta(microseconds=1) * 1000
 
 
-def vendor_s(text: Any) -> int | None:
+def vendor_s(text: Any, *, up: bool = True) -> int | None:
     """A vendor stamp as l1bz.utc_s reads it: the first whole second at which it is in the
-    past (a non-zero fraction rounds up). None when it is not of that form."""
+    past (a non-zero fraction rounds up). `up=False` drops the fraction instead (an inclusive
+    lower bound of a listing). None when it is not of that form."""
     m = STAMP.match(text) if isinstance(text, str) else None
     if not m:
         return None
@@ -160,7 +163,8 @@ def vendor_s(text: Any) -> int | None:
     except ValueError:
         return None
     frac = m.group(7)
-    return calendar.timegm((y, mo, d, hh, mi, ss)) - off + (1 if frac and frac.strip("0") else 0)
+    fraction = 1 if up and frac and frac.strip("0") else 0
+    return calendar.timegm((y, mo, d, hh, mi, ss)) - off + fraction
 
 
 def report_s(record: Mapping[str, Any]) -> int | None:
@@ -312,14 +316,20 @@ class RevisionStore:
                 counts["unchanged"] += 1
                 continue
             pending[key] = canon
-            if any(_canon(old.record) == canon for old in self.by_id.get(key, ())):
-                counts["repeated"] += 1
+            first_seen = not any(_canon(old.record) == canon for old in self.by_id.get(key, ()))
+            counts["repeated"] += int(not first_seen)
+            published = vendor_s(row.get("published")) if self.kind is NEWS else None
             v = Version(key, received_ns, dict(row), prev_ns, baseline)
             fresh.append(v)
             lines.append(json.dumps({
                 "kind": self.kind.name, "id": key, "received_utc": _stamp(received_ns),
                 "previous_poll_sent_utc": _stamp(prev_ns) if prev_ns is not None else None,
-                "baseline": baseline, "record": row}) + "\n")
+                "baseline": baseline, "first_seen": first_seen,
+                # news: the age (receipt - published, seconds) at which this version was first
+                # seen; its distribution sizes the re-polled published window (codex-109 pt 7)
+                "published_age_s": ((received_ns - published * NS) / NS
+                                    if first_seen and published is not None else None),
+                "record": row}) + "\n")
         if lines:
             self.folder.mkdir(parents=True, exist_ok=True)
             day = received.astimezone(NEW_YORK).date().isoformat()
@@ -551,6 +561,11 @@ def delays(kind: Kind, by_id: Mapping[str, Sequence[Version]]) -> dict[str, list
             for v in versions[1:]:
                 add("receipt - last_updated (revisions)", v,
                     vendor_s(v.record.get("last_updated")))
+                # the age at which a revision was first seen: what the re-polled published
+                # window must reach (a revision older than the window is never seen, so the
+                # largest values are censored at news_probe_news_lookback_seconds)
+                add("receipt - published (revisions, first seen)", v,
+                    vendor_s(v.record.get("published")))
     return {k: sorted(v) for k, v in out.items()}
 
 

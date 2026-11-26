@@ -843,19 +843,21 @@ calendar_lookback_days = 60
 # Benzinga delay (receipt - last_updated, receipt - report time, receipt - published); a description of the measured
 # distribution, never a guard (`--out` writes every value); read by tickr.model.revisions.
 revision_report_quantiles = [0.5, 0.9, 0.99]
-# Whether `tickr poll-revisions` may run: it polls Massive's Benzinga earnings and news by last_updated and keeps every
-# version it receives (with coverage) for the live er_surp and bz features; false = the command refuses to start, and
-# nothing else reads this key; read by tickr.model.revpoll.
+# Whether `tickr poll-revisions` may run: it polls Massive's Benzinga earnings (by last_updated) and news (by published
+# window) and keeps every version it receives (with coverage) for the live er_surp and bz features; false = the command
+# refuses to start, and nothing else reads this key; read by tickr.model.revpoll.
 revision_poll_enabled = false
 # Folder, relative to [run] data_dir, of the revision store: one append-only JSON-lines file per New York receipt day
 # under <folder>/earnings and <folder>/news, and the poll coverage log under <folder>/coverage; read by
 # tickr.model.revpoll.
 revision_store_dir = "massive/revisions"
-# Seconds the last_updated.gte of an earnings poll reaches back before the previous successful poll's send time. A tool setting
-# (not a guard): the vendor stamps last_updated with its own clock, and a record listed twice is stored once, so a
-# margin costs only a longer answer; MEASURE it with `python -m tickr.model.revisions report` (receipt - last_updated
-# minimum and quantiles) before relying on it; news polls re-list a published window instead
-# (news_probe_news_lookback_seconds); read by tickr.model.revpoll. The poll pace is news_probe_poll_seconds.
+# EXPERIMENTAL, UNMEASURED setting (codex-109 point 7): seconds the last_updated.gte of an earnings poll reaches back
+# before the update watermark (the largest last_updated of the complete polls so far; ties at it are listed again in any
+# case). A margin for versions that become visible late with an older last_updated (patchy delivery) and for vendor
+# clock offset; a record listed twice is stored once, so it costs only a longer answer. Not sized yet: size it from
+# `python -m tickr.model.revisions report` (receipt - last_updated), the poll cadence (news_probe_poll_seconds) and
+# observed outages before relying on it. News polls re-list a published window instead
+# (news_probe_news_lookback_seconds); read by tickr.model.revpoll.
 revision_poll_overlap_seconds = 300
 # Path of Massive's general news listing on api_host, the training's own fetch of the nw_* news (owner's fetch_ref2.py
 # and reftopup.py: GET /v2/reference/news); read by tickr.model.newsprobe.

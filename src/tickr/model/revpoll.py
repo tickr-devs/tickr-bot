@@ -1,20 +1,35 @@
 """Poller that fills the Benzinga revision store (Codex codex-108 point 7): `tickr poll-revisions`.
 
 Every `[massive] news_probe_poll_seconds` (the probe's pacing key) it lists Benzinga earnings
-changed since the previous successful poll (`last_updated.gte`, reaching back
-`revision_poll_overlap_seconds` more) and Benzinga news published in the last
-`news_probe_news_lookback_seconds` (`published.gte`, `sort=published.asc`, as the probe does; the
-endpoints and the key are the probe's). The news endpoint does not filter or sort by
-`last_updated` (measured 2026-11-25: HTTP 400 on the sort, the filter silently ignored), so a
-news revision after publication is seen only while the article is inside the re-polled window.
+and news (the endpoints and the key are the probe's). Codex codex-109 point 7:
+
+EARNINGS by an inclusive update WATERMARK: the largest `last_updated` (whole seconds, the
+fraction dropped) of every complete poll so far. A poll lists `last_updated.gte` the watermark
+minus `revision_poll_overlap_seconds` (an experimental, unmeasured margin for patchy delivery and
+vendor clock offset), `sort=last_updated.asc`, and drains every page (`massive.Reference.listing`
+follows `next_url` to the end or refuses), so records tied at the watermark are listed again. Rows
+listed twice (same id and the same full record) are kept once. The new watermark is logged in the
+poll's `ok` event, so it advances only after a complete poll; a failed poll leaves it, and a
+restart resumes from the last `ok`. Before any `ok`, the bound is now minus
+`news_probe_news_lookback_seconds`.
+
+NEWS by published window: the endpoint does not filter or sort by `last_updated` (measured
+2026-11-25: HTTP 400 on the sort, the filter silently ignored), so every poll re-lists the
+articles published in the last `news_probe_news_lookback_seconds` (`published.gte`,
+`sort=published.asc`): consecutive windows overlap, and a revision is seen only while its article
+is inside the window. Each stored version records the age at which it was first seen (receipt -
+published, `published_age_s`), and the revision report prints its distribution, so the window
+can be sized from data.
+
 `listing_query` refuses a news `last_updated` filter (`news_last_updated_unsupported`) and a poll
 whose rows fall below the bound it asked for is failed (`bound_ignored`) and stores nothing.
 Every full record that differs from the latest stored version of its id is appended to
-`tickr.model.revisions.RevisionStore`, with our receipt time and the send time of the previous
-successful poll. The
-first poll after the very first start is `baseline`: those records were there before we looked.
+`tickr.model.revisions.RevisionStore`, with our receipt time, the send time of the previous
+successful poll and whether it is the version's first observed receipt. The first poll after the
+very first start is `baseline`: those records were there before we looked.
 
-COVERAGE. Each poll is logged (`CoverageLog`): `ok` after its records are stored, `failed` with
+COVERAGE. Each poll is logged (`CoverageLog`): `ok` after its records are stored (with the bound
+it listed from, `since_utc`, and for earnings the new `watermark_utc`), `failed` with
 its typed cause when the listing was refused, ended early or held a row without an id (the
 readable rows are stored, the poll still counts as failed: that row's version is lost). A
 restart is logged as `start`. The next successful poll lists the state it finds, so a version
@@ -39,7 +54,18 @@ from typing import Any
 from tickr.config import Config
 from tickr.model import massive
 from tickr.model.errors import ModelRefused
-from tickr.model.revisions import EARNINGS, EPOCH, NEWS, Coverage, CoverageLog, Kind, RevisionStore
+from tickr.model.revisions import (
+    EARNINGS,
+    EPOCH,
+    NEWS,
+    NS,
+    Coverage,
+    CoverageLog,
+    Kind,
+    RevisionStore,
+    _canon,
+    vendor_s,
+)
 
 KINDS = (EARNINGS, NEWS)
 STOP_STATUSES = ("401 ", "403 ")  # http_status details of a key or plan the API refuses
@@ -109,16 +135,28 @@ class Poller:
     def _path(self, kind: Kind) -> str:
         return self.m.benzinga_earnings_path if kind is EARNINGS else self.m.benzinga_news_path
 
+    def watermark(self, kind: Kind) -> datetime.datetime | None:
+        """The earnings update watermark of the last complete poll; None before any."""
+        last = next((e for e in reversed(self.logs[kind.name].events) if e["event"] == "ok"),
+                    None)
+        if last is None:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(last["watermark_utc"])
+        except (KeyError, TypeError, ValueError):
+            raise ModelRefused("revision_store_unreadable",
+                               f"{kind.name} ok event without a watermark") from None
+
     def poll(self, kind: Kind) -> dict[str, int]:
         """One poll of one kind; returns the counts (`failed` 1 on a failed poll)."""
         log, store = self.logs[kind.name], self.stores[kind.name]
         before_ns = log.coverage().last_ok_ns
         sent = self.now()
-        if before_ns is None or kind is NEWS:
+        mark = self.watermark(kind) if kind is EARNINGS else None
+        if mark is None:
             since = sent - datetime.timedelta(seconds=self.m.news_probe_news_lookback_seconds)
         else:
-            since = _moment(before_ns) - datetime.timedelta(
-                seconds=self.m.revision_poll_overlap_seconds)
+            since = mark - datetime.timedelta(seconds=self.m.revision_poll_overlap_seconds)
         query = listing_query(kind, since)
         try:
             rows = self.reference.listing(self._path(kind), query)
@@ -135,15 +173,38 @@ class Poller:
             log.add({"event": "failed", "sent_utc": _stamp(sent), "cause": "bound_ignored",
                      "detail": ignored})
             return {"failed": 1}
+        seen: set[tuple[Any, str]] = set()
+        unique = []
+        for row in rows:  # a record listed twice (overlap, ties across pages) is kept once
+            key = (row.get(kind.id_field) if isinstance(row, dict) else None, _canon(row))
+            if key not in seen:
+                seen.add(key)
+                unique.append(row)
         counts: dict[str, Any] = store.append(
-            rows, received, previous_poll=_moment(before_ns), baseline=before_ns is None)
+            unique, received, previous_poll=_moment(before_ns), baseline=before_ns is None)
+        counts["listed_twice"] = len(rows) - len(unique)
         if counts["unreadable"]:
             log.add({"event": "failed", "sent_utc": _stamp(sent), "cause": "row_unreadable",
                      "detail": f"{counts['unreadable']} rows without {kind.id_field}"})
             return {**counts, "failed": 1}
-        log.add({"event": "ok", "sent_utc": _stamp(sent), "received_utc": _stamp(received),
-                 "rows": len(rows), **counts})
+        ok: dict[str, Any] = {"event": "ok", "sent_utc": _stamp(sent),
+                              "received_utc": _stamp(received), "since_utc": _stamp(since),
+                              "rows": len(rows), **counts}
+        if kind is EARNINGS:
+            ok["watermark_utc"] = _stamp(_new_watermark(mark or since, unique))
+        log.add(ok)
         return counts
+
+
+def _new_watermark(old: datetime.datetime, rows: list[Any]) -> datetime.datetime:
+    """The largest readable `last_updated` of a complete poll's rows, never below `old`; the
+    fraction of a second is dropped so a `gte` bound at it lists the ties again."""
+    stamps = [vendor_s(row.get("last_updated"), up=False) for row in rows
+              if isinstance(row, dict)]
+    best = max((s for s in stamps if s is not None), default=None)
+    if best is None:
+        return old
+    return max(old, _moment(best * NS))
 
 
 def _moment(ns: int | None) -> Any:
