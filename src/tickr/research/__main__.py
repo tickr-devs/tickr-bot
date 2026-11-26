@@ -36,7 +36,12 @@ from tickr.research.errors import ResearchError
 from tickr.research.latency import NOTICE_KEYS, QUOTE_KEYS, capture_times, latency_report
 from tickr.research.outcomes import outcomes
 from tickr.research.records import DecisionRecord, load_records, write_records
-from tickr.research.sealed import refuse_sealed
+from tickr.research.sealed import (
+    check_command,
+    refuse_sealed,
+    refuse_sealed_own_records,
+    sealed_day,
+)
 from tickr.research.settings import load_research_settings
 from tickr.research.whatif import what_if
 from tickr.types import Bar
@@ -174,6 +179,9 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Every command of the parser; each is named in one [sealed] list of config/research.toml.
+COMMANDS = frozenset({"outcomes", "whatif", "decide", "observers", "diff", "latency", "collar",
+                      "refusals", "slippage", "calibration", "fill-quality", "gate"})
 # Commands whose reports round to the replay settings' output_decimal_places (its only home).
 REPORT_COMMANDS = frozenset({"outcomes", "diff", "latency", "collar", "refusals", "slippage",
                              "calibration"})
@@ -227,7 +235,8 @@ def _fill_quality(args: argparse.Namespace) -> dict:
                   if quote_files else None)
         fills = fill_quality.trade_fills(database, zone, quotes, environment)
         stopped = slippage.stopped_trades(database, zone, environment)
-        refuse_sealed(f"trades of {label}", days=[t.day for t in (*fills, *stopped)])
+        refuse_sealed_own_records(args.command, f"trades of {label}",
+                                  days=[t.day for t in (*fills, *stopped)])
         sets.append((label, fills, stopped))
     return report.write_fill_quality(sets, {"slippage_percent": replay.slippage_percent},
                                      args.out, replay.output_decimal_places)
@@ -296,7 +305,9 @@ def _run(args: argparse.Namespace) -> dict:
     if args.command == "latency":
         settings = load_research_settings(args.settings)
         _captured("--quotes", args.quotes, QUOTE_KEYS)
-        _captured("--notices", args.notices, NOTICE_KEYS)
+        # Stream notices are the bot's own timing records; the quotes above are market data.
+        refuse_sealed_own_records(args.command, "--notices",
+                                  days=capture_times(args.notices, NOTICE_KEYS))
         result = latency_report(args.quotes, args.notices, args.source,
                                 settings.session_timezone)
         return report.write_latency(result, args.source, args.out,
@@ -309,7 +320,10 @@ def _run(args: argparse.Namespace) -> dict:
         return report.write_collar(result, args.out, places)
     if args.command == "refusals":
         settings = load_research_settings(args.settings)
-        rows = refusals.table(_filter(_records("--decisions", args.decisions), args.strategy),
+        records = load_records(args.decisions)  # the bot's own admission records
+        refuse_sealed_own_records(args.command, "--decisions",
+                                  days=[t for r in records for t in (r.bar_start, r.time)])
+        rows = refusals.table(_filter(records, args.strategy),
                               settings.session_timezone)
         return report.write_refusals(rows, args.out, places)
     if args.command == "calibration":
@@ -325,9 +339,10 @@ def _run(args: argparse.Namespace) -> dict:
         settings = load_research_settings(args.settings)
         trades = slippage.stopped_trades(args.database, settings.session_timezone,
                                          args.environment)
-        refuse_sealed("--database trades", days=[t.day for t in trades])
+        refuse_sealed_own_records(args.command, "--database trades",
+                                  days=[t.day for t in trades])
         return report.write_slippage(trades, args.environment, args.out,
-                                     places)
+                                     places, sealed_day)
     replay_settings = load_settings(args.replay_settings, _history_sessions(args))
     clock_for = session_clock(args.config)
     places = replay_settings.output_decimal_places
@@ -359,6 +374,7 @@ def _run(args: argparse.Namespace) -> dict:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        check_command(args.command, COMMANDS)
         summary = _run(args)
     except (
         ResearchError,

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import csv
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -256,22 +257,36 @@ SLIPPAGE_DAY_COLUMNS = (
     "stop_slippage_usd", "stop_slippage_percent")
 
 
+# The P&L column of the slippage outputs: withheld (empty) for a day of the sealed exam window.
+REALIZED = "realized_loss_usd"
+
+
 def write_slippage(trades: Sequence[sl.StoppedTrade], environment: str | None, out_dir: Path,
-                   places: int) -> dict[str, Any]:
+                   places: int, withhold: Callable[[date], bool]) -> dict[str, Any]:
     """`slippage_trades.csv`, `slippage_days.csv` and `slippage_summary.json`, the file the
-    replay's `measured_slippage_file` selects (`tickr.replay.measured`)."""
+    replay's `measured_slippage_file` selects (`tickr.replay.measured`).
+
+    `withhold(day)` is true for a day of the sealed exam window (research/sealed.py): the stop
+    slippage of its trades is execution evidence and stays, its realized P&L is left empty, in
+    the trade and day rows and in the total, and the days are listed in the summary."""
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    def value(row: Any, column: str) -> Any:
+        return None if column == REALIZED and withhold(row.day) else getattr(row, column)
+
     _write_csv(out_dir / "slippage_trades.csv", SLIPPAGE_TRADE_COLUMNS,
-               ([getattr(t, c) for c in SLIPPAGE_TRADE_COLUMNS] for t in trades), places)
+               ([value(t, c) for c in SLIPPAGE_TRADE_COLUMNS] for t in trades), places)
     days = sl.by_day(trades)
     _write_csv(out_dir / "slippage_days.csv", SLIPPAGE_DAY_COLUMNS,
-               ([getattr(d, c) for c in SLIPPAGE_DAY_COLUMNS] for d in days), places)
+               ([value(d, c) for c in SLIPPAGE_DAY_COLUMNS] for d in days), places)
     total = sl.group(trades, None)
+    withheld = [d.day.isoformat() for d in days if d.day is not None and withhold(d.day)]
     body = {"format": MEASURED_FORMAT, "label": "measured", "environment": environment,
             "days": [d.day.isoformat() for d in days if d.day is not None],
             "stopped_trades": total.stopped_trades, "measured_trades": total.measured_trades,
             "planned_loss_usd": total.planned_loss_usd,
-            "realized_loss_usd": total.realized_loss_usd,
+            "realized_loss_usd": None if withheld else total.realized_loss_usd,
+            "realized_loss_withheld_days": withheld,
             "stop_slippage_usd": total.stop_slippage_usd,
             "stop_slippage_percent": total.stop_slippage_percent}
     return _json(out_dir / "slippage_summary.json", body, places)

@@ -6,10 +6,19 @@ a first date on. A day is the exchange-time-zone date (`[research] session_timez
 file) of the input's time. There is no override flag; the exam unseals only when the owner
 changes that table.
 
-Every research command passes the dates it was asked for, or the days of the inputs it loaded,
-to `refuse_sealed` before it computes anything. A range or a date set that touches the window is
-refused as a whole with `SealedWindowRefused` (cause `sealed_window`): a sealed day is never
-dropped and the rest reported, since a report that silently skips days would look complete.
+What is sealed (owner ruling 2026-11-26): market data (bars, ticks, quotes, news, earnings),
+feature tables, labels, model scores, decision records with their outcomes, and any P&L or
+return of a decision. Every research command passes the dates it was asked for, or the days of
+the inputs it loaded, to `refuse_sealed` before it computes anything. A range or a date set that
+touches the window is refused as a whole with `SealedWindowRefused` (cause `sealed_window`): a
+sealed day is never dropped and the rest reported, since a report that silently skips days would
+look complete.
+
+Every command is named in exactly one of two lists of the table. `sealed_commands` refuse every
+sealed input. `execution_commands` are the platform's execution reports: they may read the bot's
+OWN order, fill and timing records of sealed days (`refuse_sealed_own_records`), still refuse
+every sealed market-data input (a captured quote or bar), and print no P&L of a sealed day
+(`sealed_day`, used by the writers to withhold it). A command in neither list is refused.
 
 A broken or missing `[sealed]` table is refused too (`ResearchSettingsError`): without a known
 window nothing can be proven open.
@@ -30,7 +39,7 @@ from tickr.research.settings import settings_from_mapping
 
 # The repository's research settings: <root>/src/tickr/research/sealed.py -> <root>/config.
 SEALED_FILE = Path(__file__).resolve().parents[3] / "config" / "research.toml"
-KEYS = frozenset({"ranges", "every_day_from"})
+KEYS = frozenset({"ranges", "every_day_from", "sealed_commands", "execution_commands"})
 PAIR = 2  # a range is [first, last]
 
 
@@ -53,6 +62,10 @@ class SealedWindow:
     """Closed ranges, first and last day both sealed."""
     every_day_from: date
     """This day and every later one is sealed."""
+    sealed_commands: frozenset[str]
+    """Commands that refuse every sealed input."""
+    execution_commands: frozenset[str]
+    """Execution reports: the bot's own order, fill and timing records of sealed days pass."""
 
     def first_sealed(self, first: date, last: date) -> date | None:
         """The first sealed day of first..last (both ends), or None when all of it is open."""
@@ -83,7 +96,19 @@ def window_from_mapping(data: dict[str, Any]) -> SealedWindow:
         if first > last:
             raise ResearchSettingsError(f"[sealed] range {first}..{last} ends before it starts")
         ranges.append((first, last))
-    return SealedWindow(tuple(ranges), _day("every_day_from", table["every_day_from"]))
+    lists = {key: _names(key, table[key]) for key in ("sealed_commands", "execution_commands")}
+    both = lists["sealed_commands"] & lists["execution_commands"]
+    if both:
+        raise ResearchSettingsError(f"[sealed] commands in both lists: {sorted(both)}")
+    return SealedWindow(tuple(ranges), _day("every_day_from", table["every_day_from"]),
+                        lists["sealed_commands"], lists["execution_commands"])
+
+
+def _names(key: str, raw: Any) -> frozenset[str]:
+    if not isinstance(raw, list) or not all(isinstance(n, str) and n for n in raw) \
+            or len(set(raw)) != len(raw):
+        raise ResearchSettingsError(f"[sealed] {key} must be a list of distinct command names")
+    return frozenset(raw)
 
 
 def load(path: Path = SEALED_FILE) -> tuple[SealedWindow, ZoneInfo]:
@@ -116,3 +141,33 @@ def refuse_sealed(what: str, *, first: date | None = None, last: date | None = N
             item = item.astimezone(zone).date()
         if window.first_sealed(item, item) is not None:
             raise SealedWindowRefused(what, item)
+
+
+def check_command(command: str, known: Iterable[str]) -> None:
+    """Refuse a command named in neither list, and lists naming a command that does not exist."""
+    window, _ = load()
+    listed = window.sealed_commands | window.execution_commands
+    unknown = sorted(listed - set(known))
+    if unknown:
+        raise ResearchSettingsError(f"[sealed] names commands that do not exist: {unknown}")
+    if command not in listed:
+        raise ResearchSettingsError(
+            f"{command}: not in [sealed] sealed_commands or execution_commands; refused")
+
+
+def refuse_sealed_own_records(command: str, what: str, *,
+                              days: Iterable[date | datetime]) -> None:
+    """The bot's own order, fill and timing records: they pass on sealed days for an execution
+    command, and are refused like any sealed input for every other command."""
+    window, _ = load()
+    if command in window.execution_commands:
+        return
+    if command not in window.sealed_commands:
+        raise ResearchSettingsError(f"{command}: not in a [sealed] command list; refused")
+    refuse_sealed(what, days=days)
+
+
+def sealed_day(day: date) -> bool:
+    """True when `day` lies in the window (an execution report withholds its P&L)."""
+    window, _ = load()
+    return window.first_sealed(day, day) is not None

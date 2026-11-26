@@ -32,35 +32,53 @@ a move without height has none, with its cause.
 Outcomes are price moves, never called profit. What-if results are simulated with the replay's
 conservative fill model and prove nothing about real fills.
 
-## Sealed exam window: refused by every dated command
+## Sealed exam window: what no research command reads
 
-The sealed exam data (backlog R20, `docs/promotion.md` rung 0) is never read by a research
-command. Its one home is the `[sealed]` table of the repository's `config/research.toml`:
-`ranges` (closed `[first, last]` date ranges, today 2026-07-01 to 2026-08-14) and
-`every_day_from` (2026-11-20: that day and every later one). A day is the exchange-time-zone date
-(`[research] session_timezone` of the same file) of an input's time. `research/sealed.py` reads
-that fixed file, never a `--settings` argument, and there is no override flag: the exam unseals
-only when the owner edits the table.
+The sealed exam data (backlog R20, `docs/promotion.md` rung 0) has one home, the `[sealed]` table
+of the repository's `config/research.toml`: `ranges` (closed `[first, last]` date ranges, today
+2026-07-01 to 2026-08-14) and `every_day_from` (2026-11-20: that day and every later one). A day
+is the exchange-time-zone date (`[research] session_timezone` of the same file) of an input's
+time. `research/sealed.py` reads that fixed file, never a `--settings` argument, and there is no
+override flag: the exam unseals only when the owner edits the table.
 
-Each command checks before it computes anything and refuses the whole run with
+**Sealed** (owner ruling 2026-11-26): market data (bars, ticks, quotes, news, earnings), feature
+tables, labels, model scores, decision records with their outcomes, and any P&L or return of a
+decision. `model/features/full.py` keeps refusing live inputs on its own.
+
+**Not sealed**: the platform's execution reports may read the bot's OWN order, fill and timing
+records of sealed days (what was sent, when, and its fill). They open no market-data file of a
+sealed day, print no per-decision or per-symbol return, no model score and nothing grouped by
+model output, and their numbers are operational evidence only, never used to choose a model,
+label, threshold or feature.
+
+The table names every command in exactly one list; a command in neither (or a list naming a
+command that does not exist) is refused:
+
+- `sealed_commands`: `calibration`, `collar`, `decide`, `diff`, `gate`, `observers`,
+  `outcomes`, `whatif`. Every input of a sealed day is refused.
+- `execution_commands`: `fill-quality`, `latency`, `refusals`, `slippage`. The bot's own
+  records of sealed days pass; a sealed market-data input is still refused.
+
+Each command checks before it computes anything. A refusal stops the whole run with
 `research refused: sealed_window: <input> touches the sealed exam window on <day>` (exit 2, no
-output written). A sealed day is never dropped while the rest is reported.
+output written); a sealed day is never dropped while the rest is reported.
 
-| Command | What is checked |
-|---|---|
-| `gate` | `--start..--end` (before any file is opened), then every trade's day and every `--covered-days` day |
-| `outcomes`, `whatif`, `observers` | every decision's `time` and `bar_start`, every bar of `--bars` |
-| `decide` | every bar of `--bars` |
-| `diff`, `refusals` | every decision of each record set |
-| `latency` | the receipt time of every captured quote and notice |
-| `collar` | every captured quote and bar, and `--decisions` |
-| `slippage` | the day of every stopped trade of `--database` |
-| `fill-quality` | the day of every trade of each database, and the receipt time of every quote |
-| `calibration` | nothing: stored answers carry no day, so the caller must keep sealed answers out |
+| Command | Refused on a sealed day | Passes on a sealed day (own records) |
+|---|---|---|
+| `gate` | `--start..--end` (before any file is opened), every trade day, every `--covered-days` day | - |
+| `outcomes`, `whatif`, `observers` | every decision's `time` and `bar_start`, every bar | - |
+| `decide` | every bar | - |
+| `diff` | every decision of each record set | - |
+| `collar` | every captured quote and captured bar (both are market data), `--decisions` | - |
+| `calibration` | nothing can be checked: stored answers carry no day, so the caller keeps sealed answers out | - |
+| `latency` | every captured quote (`--quotes` is market data and required, so in practice the whole command) | stream notices (`--notices`) |
+| `fill-quality` | every captured quote (`--quotes`) | the database's trades, orders and fills; run it without `--quotes` |
+| `slippage` | - | the database's stopped trades; their realized P&L is withheld (below) |
+| `refusals` | - | the bot's decision records: admission causes and failed-check counts per day and setup, no prices or returns |
 
-The window also covers the bot's own records of live days from 2026-11-20 (captures, decision
-logs, the database), so the daily reports above refuse those days until the owner moves the
-window.
+`slippage` keeps the stop slippage of a sealed day's trades (execution evidence) but leaves its
+`realized_loss_usd` empty in `slippage_trades.csv` and `slippage_days.csv`, sets the summary's
+total to null and lists those days in `realized_loss_withheld_days`.
 
 ## Decision records (input)
 
@@ -478,8 +496,9 @@ refused): `horizons_minutes`, `atr_period`, `session_timezone`
 `gate_positive_months`, `gate_window_months` and `gate_drop_best_percent` (`gate` reads them as
 SENSITIVITY parameters K, M and X, never pass or fail; the backlog R23 numbers: 2 of 3 months,
 best 1%) and `gate_tail_percents` (`gate`).
-`[sealed]` holds the sealed exam window (see "Sealed exam window" above); the `--settings`
-file may leave it out, because only the repository's own file is read for it.
+`[sealed]` holds the sealed exam window and the two command lists (see "Sealed exam window"
+above); the `--settings` file may leave it out, because only the repository's own file is read
+for it.
 What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay. Every
 report also rounds to its `output_decimal_places` (`--replay-settings` with `--config`, default
 `config/replay.toml`): that number has one home.
