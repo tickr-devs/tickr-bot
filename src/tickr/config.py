@@ -406,6 +406,7 @@ class ModelConfig:
     enabled: bool
     bundles_dir: str
     bundle: str
+    tick_groups: int
 
 
 @dataclass(frozen=True)
@@ -792,6 +793,8 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[model] enabled must stay false: the trained model is not wired into "
                           "the trading loop yet (the bundle loader and the shared feature code "
                           "are; the live data feed and the decision path follow)")
+    if model.tick_groups < 1:
+        raise ConfigError("[model] tick_groups must be at least 1")
     trailing: TrailingStopConfig = built["trailing_stop"]
     if trailing.enabled:
         raise ConfigError("[trailing_stop] enabled must stay false: stop replacement is not in "

@@ -12,7 +12,8 @@ webull = ["webull-openapi-python-sdk==3.0.3"]
 # Anthropic SDK, imported only by src/tickr/advisor/client.py (the offline advisor, never the bot).
 advisor = ["anthropic==2.8.0"]
 # The trained model: LightGBM scoring and the shared feature code, imported only under
-# src/tickr/model/. Versions are the training stack's pins (research boot scripts, 2026-11-25).
+# src/tickr/model/. Versions are the training stack's pins (research boot scripts, 2026-11-25);
+# duckdb runs the pinned tick converter (tickr.model.features.ticks).
 model = ["duckdb==2.0.0", "lightgbm==4.7.0", "numba==0.68.1", "numpy==2.5.3", "pandas==3.0.5",
          "websockets==15.0.1"]
 

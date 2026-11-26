@@ -891,6 +891,12 @@ bundles_dir = "models"
 # Bundle folder name <name>-<version> under bundles_dir that the bot loads when enabled; empty = none chosen; read by
 # tickr.model.bundle.
 bundle = ""
+# Stock groups the frozen tick converter v11 works one after another (its TICK_GROUPS, set by the bot, never
+# inherited): 24 = the converter's default, as in the training's runs, pinned (codex-109 point 1 withdrew one group:
+# with one engine thread 1 and 24 gave equal tables on the test day and at 500 synthetic stocks, but one stock-minute
+# differed in the last bit at 1,000, tests/model/tick_memory.py); any other value is refused; read by config.load,
+# passed to tickr.model.features.ticks.tick_rows.
+tick_groups = 24
 
 [exit_chase]
 # Limit-exit chase before a market exit (backlog X3): a close is sent as a SELL LIMIT priced through the bid,
