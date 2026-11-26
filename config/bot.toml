@@ -745,8 +745,9 @@ forget_symbol_seconds = 600
 history_sends_per_pass = 30
 # Screener-signal observer folder under strategies/ (observers.ignition: paper trades only, signal from the screener rows,
 # exit on the L1 stream's observer tier and the discovery snapshots; records in <decisions_dir>/<environment>/<NY
-# date>/ignition.jsonl); "" = off; read by cli (run) and runtime.market.
-ignition = "early-thin-ignition-v1"
+# date>/ignition.jsonl); "" = off; read by cli (run) and runtime.market. Off since 2026-11-25 (owner: it spent Webull request
+# budget on paper trades nobody uses after the re-scope to trading the model; the code stays until R28).
+ignition = ""
 
 [advisor]
 # NAME of the environment variable holding the Anthropic API key (the SDK reads it itself; only ANTHROPIC_API_KEY works);
