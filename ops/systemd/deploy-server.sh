@@ -23,7 +23,10 @@
 # image-missing): this script never pulls, the host helper `tickr-image-pull COMMIT` does; the
 # registry address (it holds the AWS account id) is never printed; (d) refuse unless ETC_DIR and
 # DATA_DIR are absolute (path-not-absolute) and ETC_DIR holds bot.toml and compose.yaml
-# (config-missing, compose-missing); (0) refuse unless DATA_DIR is an existing folder (never
+# (config-missing, compose-missing); (d2) refuse unless ETC_DIR is owned by the service
+# user and its primary group (tickr:tickr on the server) with mode 700 (etc-dir-unsafe) and
+# bot.toml and compose.yaml there are owned the same way with mode 644 (etc-file-unsafe): an
+# exact check, never fixed here; (0) refuse unless DATA_DIR is an existing folder (never
 # created here) and a mount point (the data disk is in fstab with nofail: an unmounted disk
 # leaves an empty folder on the root disk, and a bot started there has no state; the units also
 # carry RequiresMountsFor=DATA_DIR); (1) refuse unless the data folder's owner uid:gid is the
@@ -107,6 +110,24 @@ if [ ! -f "$compose" ]; then
   echo "refused: compose-missing: $compose is not a file (ops/docker/compose.yaml of $commit, copied to the server); nothing was changed" >&2
   exit 1
 fi
+
+# ETC_DIR is the service user's alone (mode 700) and its two host files are the service user's,
+# readable, never writable by anyone else (mode 644): checked exactly, never fixed here (no
+# chmod, no chown). A symlink shows mode 777 and is refused too.
+if ! owner_uid=$(id -u "$user") || ! owner_gid=$(id -g "$user"); then
+  echo "refused: service-user-unknown: cannot read the uid and gid of the service user $user; nothing was changed" >&2
+  exit 1
+fi
+if [ "$(stat -c '%u:%g %a' "$etc")" != "$owner_uid:$owner_gid 700" ] || [ -L "$etc" ]; then
+  echo "refused: etc-dir-unsafe: $etc must be owned by $user:$(id -gn "$user") with mode 700 (it is $(stat -c '%U:%G %a' "$etc")); fix it by hand, docs/deploy-server.md; nothing was changed" >&2
+  exit 1
+fi
+for f in "$config" "$compose"; do
+  if [ "$(stat -c '%u:%g %a' "$f")" != "$owner_uid:$owner_gid 644" ] || [ -L "$f" ]; then
+    echo "refused: etc-file-unsafe: $f must be owned by $user:$(id -gn "$user") with mode 644 (it is $(stat -c '%U:%G %a' "$f")); fix it by hand, docs/deploy-server.md; nothing was changed" >&2
+    exit 1
+  fi
+done
 
 if [ ! -d "$data" ] || [ -L "$data" ]; then
   echo "refused: data-missing: $data is not an existing folder (it is never created here); nothing was changed" >&2
