@@ -19,12 +19,14 @@ error; `short_hash` names one in a journal line instead.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
 import re
 import threading
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -154,13 +156,27 @@ def _write_private(path: Path, text: str) -> None:
 
 
 class PushTokenStore:
-    """Read-modify-write under one lock in this process. The API registers and deletes; the
-    sender removes a token APNs refused, re-reading first so a registration in between is kept
-    (an entry is removed only while it still holds that same token)."""
+    """Read-modify-write under a lock held across processes: the API (register, delete) and
+    the bot or watchdog (removing a token APNs refused) are different processes writing the
+    same file. Each read-modify-write holds this process's lock and an exclusive `flock` on a
+    sibling lock file (the store itself is replaced atomically, so it cannot carry the lock).
+    An entry is removed only while it still holds that same token."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.lock_path = path.with_name(f".{path.name}.lock")
         self._lock = threading.Lock()
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, PRIVATE_MODE)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)  # released when fd is closed
+                yield
+            finally:
+                os.close(fd)
 
     def read(self) -> dict[Key, PushToken]:
         """Every (device, kind)'s token; empty when the file is missing; StoreError when
@@ -181,7 +197,7 @@ class PushTokenStore:
         """Store `token` for `device` and its kind, replacing only that kind's earlier one. The
         same token of that kind under another device key (the device paired again, so its
         bearer token changed) is dropped: one device is pushed once."""
-        with self._lock:
+        with self._locked():
             tokens = {k: t for k, t in self.read().items()
                       if not (t.kind is token.kind and t.token == token.token)}
             tokens[(device, token.kind)] = token
@@ -189,7 +205,7 @@ class PushTokenStore:
 
     def remove(self, device: str, kind: Kind = Kind.ALERT) -> bool:
         """Drop `device`'s token of `kind`; whether there was one."""
-        with self._lock:
+        with self._locked():
             tokens = self.read()
             if tokens.pop((device, kind), None) is None:
                 return False
@@ -198,7 +214,7 @@ class PushTokenStore:
 
     def remove_token(self, token: str) -> bool:
         """Drop every entry still holding `token` (APNs said it is gone); whether any was."""
-        with self._lock:
+        with self._locked():
             devices = self.read()
             kept = {k: t for k, t in devices.items() if t.token != token}
             if len(kept) == len(devices):

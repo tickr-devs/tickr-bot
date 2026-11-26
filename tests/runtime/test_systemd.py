@@ -274,6 +274,10 @@ def _fake_server(tmp_path: Path, flat: bool) -> tuple[Path, Path, Path, Path]:
     etc.mkdir()
     (etc / "bot.toml").write_text("# the server's copy\n", "utf-8")
     (etc / "compose.yaml").write_text("name: tickr\n", "utf-8")
+    # As on the server: the folder is the service user's only, its files read-only to others.
+    etc.chmod(0o700)
+    for name in ("bot.toml", "compose.yaml"):
+        (etc / name).chmod(0o644)
     (tmp_path / "registry.env").write_text(f"TICKR_IMAGE_REPOSITORY={REGISTRY}\n", "utf-8")
     return docker, systemctl, units, etc
 
@@ -327,6 +331,91 @@ def test_deploy_script_refuses_and_never_creates_a_missing_data_folder(tmp_path,
     assert not (tmp_path / "systemctl.log").exists()
     assert make is not None or not data.exists()
     assert not (tmp_path / "elsewhere" / "control").exists()
+
+
+def _other_user() -> str:
+    """A real account of this machine that is not the one running the tests."""
+    return next(p.pw_name for p in pwd.getpwall() if p.pw_uid != os.getuid())
+
+
+def _deploy_etc(tmp_path: Path, change, **extra: str) -> subprocess.CompletedProcess:
+    """Deploy after `change(etc)` altered the etc folder made by the fake server."""
+    docker, systemctl, units, etc = _fake_server(tmp_path, True)
+    change(etc)
+    (tmp_path / "data").mkdir()
+    return subprocess.run(
+        [str(SCRIPT), COMMIT, str(etc), str(tmp_path / "data")], capture_output=True,
+        text=True, check=False, env=_script_env(units, systemctl, docker, **extra))
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o750, 0o711, 0o701, 0o770, 0o500, 0o1700])
+def test_deploy_script_refuses_an_etc_folder_that_is_not_mode_700(tmp_path, mode):
+    done = _deploy_etc(tmp_path, lambda etc: etc.chmod(mode))
+    assert done.returncode == 1 and "refused: etc-dir-unsafe" in done.stderr
+    etc = tmp_path / "etc"
+    assert stat.S_IMODE(etc.stat().st_mode) == mode  # never fixed by the script
+    etc.chmod(0o700)
+    _nothing_changed(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["bot.toml", "compose.yaml"])
+@pytest.mark.parametrize("mode", [0o664, 0o666, 0o600, 0o640, 0o444, 0o755, 0o2644])
+def test_deploy_script_refuses_an_etc_file_that_is_not_mode_644(tmp_path, name, mode):
+    done = _deploy_etc(tmp_path, lambda etc: (etc / name).chmod(mode))
+    assert done.returncode == 1 and "refused: etc-file-unsafe" in done.stderr
+    assert name in done.stderr
+    assert stat.S_IMODE((tmp_path / "etc" / name).stat().st_mode) == mode  # never fixed
+    _nothing_changed(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["bot.toml", "compose.yaml"])
+def test_deploy_script_refuses_an_etc_file_that_is_a_link(tmp_path, name):
+    def link(etc: Path) -> None:
+        target = tmp_path / f"real-{name}"
+        target.write_text((etc / name).read_text("utf-8"), "utf-8")
+        target.chmod(0o644)
+        (etc / name).unlink()
+        (etc / name).symlink_to(target)
+    done = _deploy_etc(tmp_path, link)
+    assert done.returncode == 1 and "refused: etc-file-unsafe" in done.stderr
+    assert list((tmp_path / "units").iterdir()) == []
+    assert not (tmp_path / "systemctl.log").exists()
+
+
+def test_deploy_script_refuses_an_etc_folder_that_is_a_link(tmp_path):
+    docker, systemctl, units, etc = _fake_server(tmp_path, True)
+    real = tmp_path / "real-etc"
+    etc.rename(real)
+    etc.symlink_to(real)
+    (tmp_path / "data").mkdir()
+    done = subprocess.run(
+        [str(SCRIPT), COMMIT, str(etc), str(tmp_path / "data")], capture_output=True,
+        text=True, check=False, env=_script_env(units, systemctl, docker))
+    assert done.returncode == 1 and "refused: etc-dir-unsafe" in done.stderr
+    assert list(units.iterdir()) == [] and not (tmp_path / "systemctl.log").exists()
+
+
+def test_deploy_script_refuses_an_etc_folder_owned_by_another_user(tmp_path):
+    # The folder and files are this test's user's, the service user is another account.
+    done = _deploy_etc(tmp_path, lambda etc: None, TICKR_SERVICE_USER=_other_user())
+    assert done.returncode == 1 and "refused: etc-dir-unsafe" in done.stderr
+    _nothing_changed(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["bot.toml", "compose.yaml"])
+def test_deploy_script_refuses_an_etc_file_owned_by_another_user(tmp_path, name):
+    if os.getuid() != 0:
+        pytest.skip("giving a file to another account needs root")
+    other = pwd.getpwnam(_other_user())
+    done = _deploy_etc(tmp_path, lambda etc: os.chown(etc / name, other.pw_uid, other.pw_gid))
+    assert done.returncode == 1 and "refused: etc-file-unsafe" in done.stderr
+    _nothing_changed(tmp_path)
+
+
+def test_deploy_script_refuses_an_unknown_service_user(tmp_path):
+    done = _deploy_etc(tmp_path, lambda etc: None, TICKR_SERVICE_USER="tickr-no-such-user")
+    assert done.returncode == 1 and "refused: service-user-unknown" in done.stderr
+    _nothing_changed(tmp_path)
 
 
 def test_deploy_script_refuses_when_the_data_disk_is_not_mounted(tmp_path):

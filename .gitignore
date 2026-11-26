@@ -32,3 +32,10 @@ xcuserdata/
 /demo-record.lock
 # SwiftPM pins Xcode writes for the root workspace; each project and package commits its own.
 /Tickr.xcworkspace/xcshareddata/swiftpm/
+
+# Terraform in ops/aws/*: local state holds resource ids and the alert address (personal data),
+# tfvars may hold it too; neither is ever committed.
+ops/aws/**/.terraform/
+ops/aws/**/*.tfstate
+ops/aws/**/*.tfstate.*
+ops/aws/**/*.tfvars

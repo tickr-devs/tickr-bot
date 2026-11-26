@@ -168,8 +168,11 @@ All checks are reported; the first failure is the recorded cause.
    TICKR_APNS_KEY_PATH=<path to AuthKey_<key id>.p8>
    ```
    None set = push is off. Preflight then fails with `alert-push-missing` if one of the three is
-   not set, and `alert-push-key-unreadable` if the path is not a readable file; the key is read
-   only to sign, never logged. Each app registers its device at `POST /push-token`; critical
+   not set, `alert-push-key-unreadable` if the path is not a readable file and
+   `alert-push-key-invalid` if it is not a P-256 `.p8` key; the key is read only to check and
+   sign it, never logged. Push is an extra channel only: it never counts as the alert channel
+   preflight requires (off the Mac that is Telegram), because it reaches nobody until a phone
+   has registered. Until then each process journals `apns-no-device` once, not per alert. Each app registers its device at `POST /push-token`; critical
    alerts always go to every registered device as time-sensitive, the rest follow the routing in
    the app (channel `push`). The API job never gets these variables (it does not push).
    After editing the env file: the launchd jobs source it each time they start (their plists
@@ -639,7 +642,7 @@ straight to the supervisor. Limits:
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
 `exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`,
-`flatten-after-close`, from the API `api-credentials-unexpected` (Mac notification and feed only, see
+`flatten-after-close`, from the API `api-credentials-unexpected` and `risk-command-used` (Mac notification and feed only, see
 "The API job and the Webull keys") and `remote-auth-blocked` (an address used up its
 failed-authentication budget on the remote port, docs/api.md; Mac notification and feed, feed only
 off macOS), and from
@@ -676,6 +679,16 @@ It reads only that file (no credentials, no environment). After each wake it rep
 lines and starts waiting again. The feed works only while that session runs; the Mac notification
 and iMessage do not depend on it. A feed line that cannot be written (a full disk) is recorded as
 a failed `feed` channel like any other.
+
+### `risk-command-used`
+
+The API raises one of these for every accepted command that raises risk: `entry-stop` with
+`off` (entries allowed again) and `start-bot`. The alert names the paired device (the name
+`python -m tickr.api devices` lists, or `local` for the local port), the port (local or
+remote) and the time; never a token. If you did not do this, the device's token is stolen or
+the phone is not yours: revoke that device now (`python -m tickr.api revoke --name <device>`),
+then pair again. Refused commands raise nothing. It goes to the Mac notification (macOS only)
+and the alerts feed.
 
 ### `broker-reads-failing`
 

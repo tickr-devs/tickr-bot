@@ -148,6 +148,7 @@ alert. See "Preflight checks" in [operations.md](operations.md#preflight-checks)
 | `alert-telegram-missing` | Only one of the two Telegram variables is set (bot token or chat id). | Set both named variables, or neither to turn Telegram off. |
 | `alert-push-missing` | Some of the three APNs variables (key id, team id, key path) are set, not all. | Set all three named variables, or none to turn push off. |
 | `alert-push-key-unreadable` | The APNs key file named by the key-path variable is not a readable file. | Put the `.p8` key at that path, readable by the bot's account. |
+| `alert-push-key-invalid` | The APNs key file is readable but is not a P-256 `.p8` private key. | Put the `.p8` key downloaded from Apple (AuthKey_<key id>.p8) at that path. |
 | `token-dir-missing` | The folder for the broker token does not exist. | Create it. |
 | `token-dir-open` | The token folder can be read by other users. | Restrict its permissions. |
 | `token-unusable` | The broker token is missing, expired or rejected. | Renew it and confirm it in the Webull app (see the `token-needs-confirmation` alert). |
@@ -267,3 +268,4 @@ risk). **Today** means look before the next session. **Info** means no action is
 | `fees-corrected` | Info | The account's cash activity showed the recorded fees were wrong, and they were replaced. |
 | `remote-auth-blocked` | Today | The API's remote port refuses an address (or, with a full table, every new address) after too many failed token or pairing-code checks. If it is not one of your devices, nothing to do: the limit holds. If it is yours, wait the time in the alert, then re-pair the device (or revoke a stale one sharing its address). Always sent on every channel: it cannot be switched off. See [api.md](api.md#failed-authentication-limit). |
 | `api-credentials-unexpected` | Today | The local API holds a credential variable it must not have. See [operations.md](operations.md#the-api-job-and-the-webull-keys). |
+| `risk-command-used` | Today | A paired device (or the local port) turned entries back on or started the bot. If you did not do this, revoke that device. Always sent on every channel: it cannot be switched off. See [operations.md](operations.md#risk-command-used). |

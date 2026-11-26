@@ -17,8 +17,10 @@ Checks, all reported, the first failure is the single cause:
 4c'. when Telegram is set up (`[alerts] bot_token_variable` or `chat_id_variable` present), both
    are present (presence only; neither = off, no check); off the Mac Telegram is then the channel;
 4c''. when APNs push is set up (any `[alerts] apns_*_variable` present), all three are present
-   and the key path names a readable file (its content is never read here); off the Mac the
-   push is then a channel too;
+   and the key path names a readable P-256 `.p8` key (loaded, never printed). The push is only
+   ever an extra channel: it never satisfies 4b or 4c, because it reaches nobody until a phone
+   registered, its token is valid and notifications are allowed, none of which preflight can
+   prove;
 4c. the iMessage recipient variable (`[alerts] imessage_recipient_variable`) present, the same
    way: it is personal data;
 5. broker token folder present;
@@ -57,10 +59,12 @@ from tickr.observers.loader import load_active
 from tickr.runtime import stopmarker
 from tickr.runtime.alerts import (
     DARWIN,
+    NotifyError,
     apns_missing,
     apns_names,
     apns_on,
     default_notifier,
+    load_key,
     recipient_missing,
     telegram_missing,
     telegram_on,
@@ -100,6 +104,7 @@ class PreflightCause(StrEnum):
     ALERT_TELEGRAM_MISSING = "alert-telegram-missing"
     ALERT_PUSH_MISSING = "alert-push-missing"
     ALERT_PUSH_KEY_UNREADABLE = "alert-push-key-unreadable"
+    ALERT_PUSH_KEY_INVALID = "alert-push-key-invalid"
     TOKEN_DIR_MISSING = "token-dir-missing"
     TOKEN_DIR_OPEN = "token-dir-open"
     TOKEN_UNUSABLE = "token-unusable"
@@ -334,8 +339,10 @@ def _check_alert_telegram(cfg: config_module.Config,
 
 def _check_alert_push(cfg: config_module.Config,
                       environ: Mapping[str, str]) -> tuple[Check, ...]:
-    """The check exists only once APNs is set up (any of its variables present). Presence of
-    the variables and of a readable key file only: the key itself is never read here."""
+    """The check exists only once APNs is set up (any of its variables present): the three
+    variables present, and the key path a readable file holding a P-256 private key. The key
+    is loaded the way the sender loads it (`alerts.load_key`), so a wrong file refuses the
+    start rather than the first alert; its content never reaches the check's text."""
     if not apns_on(cfg.alerts, environ):
         return ()
     missing = apns_missing(cfg.alerts, environ)
@@ -349,16 +356,24 @@ def _check_alert_push(cfg: config_module.Config,
         return (Check(CheckName.ALERT_PUSH, False,
                       f"the APNs key file named by {names[2]} is not a readable file",
                       PreflightCause.ALERT_PUSH_KEY_UNREADABLE),)
+    try:
+        load_key(key_path)
+    except NotifyError as exc:  # the failure kind only (`load_key` never puts content in it)
+        unreadable = str(exc).startswith("apns-key-unreadable")
+        return (Check(CheckName.ALERT_PUSH, False,
+                      f"the APNs key file named by {names[2]} "
+                      + ("cannot be read" if unreadable else "is not a P-256 .p8 private key"),
+                      PreflightCause.ALERT_PUSH_KEY_UNREADABLE if unreadable
+                      else PreflightCause.ALERT_PUSH_KEY_INVALID),)
     return (Check(CheckName.ALERT_PUSH, True, "set: " + ", ".join(names)),)
 
 
 def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str],
                            platform: str) -> Check:
-    if platform != DARWIN and (telegram_on(cfg.alerts, environ)
-                               or apns_on(cfg.alerts, environ)):
-        # iMessage is a Mac channel; Telegram or the apps' push is this machine's channel.
+    if platform != DARWIN and telegram_on(cfg.alerts, environ):
+        # iMessage is a Mac channel; Telegram is this machine's channel (never the push).
         return Check(CheckName.ALERT_RECIPIENT, True,
-                     f"not used on platform {platform!r} (Telegram or push is the channel)")
+                     f"not used on platform {platform!r} (Telegram is the channel)")
     # Presence only, like the credentials: the iMessage address is personal data.
     missing = recipient_missing(cfg.alerts, environ)
     if missing is not None:
@@ -370,11 +385,13 @@ def _check_alert_recipient(cfg: config_module.Config, environ: Mapping[str, str]
 
 def _check_alert_channel(cfg: config_module.Config, platform: str,
                          environ: Mapping[str, str]) -> Check:
-    if default_notifier(cfg.alerts, platform, environ,
-                        data_dir=cfg.root / cfg.run.data_dir) is None:
+    # No data folder: the apps' push is left out, so it can never be the channel that lets
+    # the bot start (it is an extra one; `default_notifier` never returns it alone either).
+    if default_notifier(cfg.alerts, platform, environ) is None:
         return Check(CheckName.ALERT_CHANNEL, False,
                      f"no alert channel on platform {platform!r}: the Mac notification and "
-                     "iMessage need macOS (see docs/deploy-server.md)",
+                     "iMessage need macOS, elsewhere set up Telegram; the apps' push never "
+                     "counts (see docs/deploy-server.md)",
                      PreflightCause.ALERT_CHANNEL_MISSING)
     return Check(CheckName.ALERT_CHANNEL, True, f"platform {platform}")
 

@@ -223,6 +223,11 @@ NETWORK_IMPORTERS = {
                          "by the bot (checked below)",
     "model/massive.py": "the model's market data (Massive REST, flat files, stream): every host "
                         "comes from [massive] in config, credentials by variable name only",
+    "model/ticks.py": "the model's trades and quotes (Massive stream T/Q and REST backfill): "
+                      "every host comes from [massive] in config, credentials by variable name "
+                      "only",
+    "model/stream.py": "the model's one Massive stocks connection (AM, T, Q on one socket): "
+                       "host from [massive] in config, credentials by variable name only",
     "demo/record.py": "`tickr demo --record`: reads the demo's own API on the loopback port it "
                       "opened itself (127.0.0.1, port 0), never another host",
     "runtime/alerts.py": "the Telegram alert channel: one HTTPS POST to [alerts] telegram_host "
@@ -230,6 +235,10 @@ NETWORK_IMPORTERS = {
                          "the apps' APNs push: one HTTP/2 POST per registered device to the "
                          "[alerts] apns_hosts host of its environment, key by variable name "
                          "only, never retried",
+    "model/features/pinned/l1labels.py": "byte copy of the training's label builder (md5 "
+                                         "0a22137f, never edited): socket only for "
+                                         "gethostname() in its build claim files, which the "
+                                         "feature path never calls; no connection is opened",
 }
 
 

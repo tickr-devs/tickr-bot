@@ -78,7 +78,9 @@ deploy (`render-systemd`, `require-flat`) runs inside the release image with `do
 --pull never`.
 
 Layout (`/srv/tickr/etc` is the bootstrap's folder, mode 700, owner `tickr:tickr`; the units
-run as `tickr` and read it):
+run as `tickr` and read it). `deploy-server.sh` checks that folder and its `compose.yaml` and
+`bot.toml` for exactly the mode and owner below and refuses otherwise (`etc-dir-unsafe`,
+`etc-file-unsafe`); it never fixes them:
 
 | Host path | What | Comes from | Mode, owner |
 |---|---|---|---|
@@ -246,6 +248,14 @@ refuses (exit 1, nothing changed), in this order:
 - `path-not-absolute`: `ETC` or `DATA` is not an absolute path.
 - `config-missing`, `compose-missing`: `ETC/bot.toml` or `ETC/compose.yaml` is not a file (copy
   them first, "Server files").
+- `service-user-unknown`: the service user (`TICKR_SERVICE_USER`, default `tickr`) has no uid or
+  gid on this host (`id -u`, `id -g`).
+- `etc-dir-unsafe`: `ETC` is not owned by the service user and its primary group (`tickr:tickr`)
+  with mode exactly 700, or is a symbolic link.
+- `etc-file-unsafe`: `ETC/bot.toml` or `ETC/compose.yaml` is not owned by `tickr:tickr` with mode
+  exactly 644, or is a symbolic link. The script never fixes owners or modes (no `chown`, no
+  `chmod`): fix them by hand as in "Server files" (`install -m 644 -o tickr -g tickr`, the
+  bootstrap's `install -d -m 700 -o tickr -g tickr /srv/tickr/etc`) and deploy again.
 
 - `data-missing`: `DATA` (default `/srv/tickr/data`) is not an existing folder. It is never
   created here.
