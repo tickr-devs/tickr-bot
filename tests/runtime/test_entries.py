@@ -471,6 +471,26 @@ def test_open_trades_entry_value_is_taken_off_the_buying_power(tmp_path):
     assert later.committed_usd == D("101.00")  # 10 x 10.10
 
 
+def test_a_percent_limit_reads_the_equity_and_refuses_when_it_is_unknown(tmp_path):
+    """X2: with a percent limit on the desk reads the balance for its equity (once per
+    `buying_power_max_age_seconds`); a failing read refuses EQUITY_UNKNOWN, a read admits."""
+    cfg = replace(CFG, risk=replace(CFG.risk, max_daily_loss_percent=D(50)))
+    broker = FakeBroker()  # no funds: the balance read fails
+    store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
+    engine = Engine(store, broker, cfg, "desk0002", lambda: GateResult(True, "t"))
+    engine.recover()
+    desk = EntryDesk(engine, cfg, calendar=CALENDAR, last_broker_read_at=lambda: NOW,
+                     log=DecisionLog(tmp_path / "decisions"))
+    refused = desk.on_decision(decision(), bar_start=BAR, quote=quote(), now=NOW)
+    assert refused.refusal_cause == "EQUITY_UNKNOWN: no equity read"
+    assert broker.balance_reads == 1 and not broker.sent
+    broker.funds = FUNDS
+    at = NOW + timedelta(seconds=float(CFG.risk.buying_power_max_age_seconds))
+    q = replace(quote(), provider_time=at, receipt_time=at)
+    desk2 = desk.on_decision(decision(), bar_start=BAR, quote=q, now=at)
+    assert desk2.admission == "taken", desk2.refusal_cause
+
+
 def test_the_collar_blocks_entries_only(tmp_path):
     """Price collar on (backlog T10) with no references: an ENTER is refused and sends nothing;
     an EXIT of an open trade still goes out, and nothing about its stop changes."""

@@ -18,6 +18,7 @@ from tickr.calendar import CalendarRefused, MarketDay, ny_date_of
 from tickr.config import Config, GateResult, SessionConfig
 from tickr.risk.causes import AdmissionCause
 from tickr.risk.daily import check_daily
+from tickr.risk.equity import effective_limit
 from tickr.risk.sizing import check_size
 from tickr.risk.timers import TradingWindow, WindowKind, trading_windows, window_at
 from tickr.strategy.base import Decision, Verdict
@@ -79,6 +80,16 @@ class AdmissionLimits:
     (`[risk] entry_collar_quote_ratio`); 0 = off."""
     tradability: TradabilityRules | None = None
     """None = the tradability check is off (`[risk] tradability_check_enabled = false`)."""
+    planned_loss_percent: Decimal = Decimal(0)
+    position_notional_cap_percent: Decimal = Decimal(0)
+    max_daily_loss_percent: Decimal = Decimal(0)
+    """The `[risk]` percent-of-equity limits: 0 = off; on, the effective limit is the smaller of
+    the USD limit and the percent of the broker's equity (`risk.equity`)."""
+
+    @property
+    def percent_limits_on(self) -> bool:
+        return bool(self.planned_loss_percent or self.position_notional_cap_percent
+                    or self.max_daily_loss_percent)
 
     @classmethod
     def from_config(cls, config: Config) -> AdmissionLimits:
@@ -101,6 +112,9 @@ class AdmissionLimits:
                 if risk.symbol_cooldown_after_loss_enabled else None),
             max_entry_rest_bars=risk.max_entry_rest_bars,
             extended_hours_strategies=frozenset(config.strategy.extended_hours_strategies),
+            planned_loss_percent=risk.planned_loss_percent,
+            position_notional_cap_percent=risk.position_notional_cap_percent,
+            max_daily_loss_percent=risk.max_daily_loss_percent,
             tradability=(TradabilityRules(frozenset(risk.tradability_entry_profile_statuses),
                                           frozenset(risk.tradability_blocked_profile_statuses))
                          if risk.tradability_check_enabled else None),
@@ -136,6 +150,16 @@ class BuyingPower:
     """The entry value (quantity x entry limit) of every open trade of ours. The read may
     predate any of them, so all are taken off; when the broker already counts one, it is
     counted twice, the stricter answer."""
+
+
+@dataclass(frozen=True)
+class Equity:
+    """The account's net liquidation value from the broker's latest balance read."""
+
+    usd: Decimal | None = None
+    """None = no successful read."""
+    read_at: datetime | None = None
+    """When that read was made (aware); None = no successful read."""
 
 
 @dataclass(frozen=True)
@@ -182,6 +206,8 @@ class AdmissionInputs:
     buying_power: BuyingPower
     entry_budget_available: bool
     stop_budget_available: bool
+    equity: Equity = Equity()
+    """Read by `_check_money` only when a percent limit is on."""
     tradability_budget_available: bool = True
     """The request budget admits the tradability reads now (check 7; asked only when the
     tradability check is on)."""
@@ -449,6 +475,27 @@ def _check_quote(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     return None
 
 
+def _equity_refusal(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """With a percent limit on, the equity must be a fresh read of a positive number (same
+    age limit as the buying power read); anything else refuses, never falls back to USD."""
+    if not lim.percent_limits_on:
+        return None
+    eq = i.equity
+    if eq.usd is None or eq.read_at is None:
+        return _refuse(C.EQUITY_UNKNOWN, "no equity read")
+    if not _aware(eq.read_at):
+        return _refuse(C.CLOCK_INVALID, "equity read time is not an aware datetime")
+    age = Decimal(str((i.now - eq.read_at).total_seconds()))
+    if age < 0:
+        return _refuse(C.CLOCK_INVALID, f"equity read is {-age} s in the future")
+    if age > lim.buying_power_max_age_seconds:
+        return _refuse(C.EQUITY_UNKNOWN,
+                       f"equity read {age} s ago > {lim.buying_power_max_age_seconds} s")
+    if not isinstance(eq.usd, Decimal) or not eq.usd.is_finite() or eq.usd <= 0:
+        return _refuse(C.EQUITY_UNKNOWN, f"equity figure invalid: {eq.usd}")
+    return None
+
+
 def collar_distance(price: Decimal, reference: Decimal) -> Decimal:
     """|price - reference| / reference: how far an entry price is from a reference price, as a
     ratio of the reference (the price collar's measure; `tickr.research collar` uses it too)."""
@@ -512,17 +559,25 @@ def _check_collar(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
 def _check_money(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
     d = i.decision
     assert d.quantity is not None and i.limit_price is not None and i.stop_price is not None
+    refused = _equity_refusal(i, lim)
+    if refused is not None:
+        return refused
+    equity = i.equity.usd
+    planned_limit = effective_limit(lim.planned_loss_usd, lim.planned_loss_percent, equity)
+    cap = effective_limit(lim.position_notional_cap_usd, lim.position_notional_cap_percent,
+                          equity)
+    ceiling = effective_limit(lim.max_daily_loss_usd, lim.max_daily_loss_percent, equity)
     # Outside the regular session the platform, not the strategy, sizes down (design 2026-11-17).
     _, _, fraction = window_limits(_window(i, lim), lim)
-    size = check_size(d.quantity, i.limit_price, i.stop_price, lim.planned_loss_usd * fraction,
-                      lim.position_notional_cap_usd * fraction)
+    size = check_size(d.quantity, i.limit_price, i.stop_price, planned_limit * fraction,
+                      cap * fraction)
     if not size.ok:
         assert size.cause is not None
         return _refuse(size.cause, size.detail)
     assert size.planned_loss_usd is not None
     reserve = _reservation(i, lim) or size.planned_loss_usd
     daily = check_daily(i.realized_loss_today_usd, i.open_reservations_usd,
-                        reserve, lim.max_daily_loss_usd, lim.min_daily_room_usd)
+                        reserve, ceiling, lim.min_daily_room_usd)
     if not daily.ok:
         assert daily.cause is not None
         return _refuse(daily.cause, daily.detail)

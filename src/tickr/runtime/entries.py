@@ -41,6 +41,7 @@ from tickr.risk.admission import (
     AdmissionInputs,
     AdmissionLimits,
     BuyingPower,
+    Equity,
     Reconciliation,
     admit,
     refusal_before_broker_reads,
@@ -349,8 +350,8 @@ class EntryDesk:
         self.last_broker_read_at = last_broker_read_at
         self.log = log
         self.limits = AdmissionLimits.from_config(config)
-        # The latest successful balance read: (day buying power, when).
-        self._balance: tuple[Decimal, datetime] | None = None
+        # The latest successful balance read: (day buying power, net liquidation, when).
+        self._balance: tuple[Decimal, Decimal, datetime] | None = None
         # When the desk last tried to read the balance, whatever the outcome.
         self._balance_tried_at: datetime | None = None
 
@@ -370,7 +371,8 @@ class EntryDesk:
             return
         self._balance_tried_at = now
         try:
-            self._balance = (self.engine.broker.balance().day_buying_power, now)
+            balance = self.engine.broker.balance()
+            self._balance = (balance.day_buying_power, balance.net_liquidation, now)
         except BrokerError:
             pass
 
@@ -381,7 +383,13 @@ class EntryDesk:
                         ZERO)
         if self._balance is None:
             return BuyingPower(None, None, committed)
-        return BuyingPower(self._balance[0], self._balance[1], committed)
+        return BuyingPower(self._balance[0], self._balance[2], committed)
+
+    def _equity(self) -> Equity:
+        """The latest balance read's net liquidation (no read here)."""
+        if self._balance is None:
+            return Equity()
+        return Equity(self._balance[1], self._balance[2])
 
     # --- tradability ------------------------------------------------------------------------
 
@@ -446,6 +454,7 @@ class EntryDesk:
             realized_loss_today_usd=realized_loss_today(engine, now),
             open_reservations_usd=self._reservations(),
             buying_power=self._buying_power(),
+            equity=self._equity(),
             entry_budget_available=engine.broker.can_place(1),
             stop_budget_available=engine.broker.can_place(1 + stop_requests_owed(engine)),
             tradability_budget_available=self._tradability_budget(),
@@ -462,6 +471,8 @@ class EntryDesk:
         admission = RecordAdmission.NOT_APPLICABLE
         cause: str | None = None
         if decision.verdict is Verdict.ENTER:
+            if self.limits.percent_limits_on:
+                self._read_balance(now)  # the percent limits need a fresh equity (X2)
             inputs = self._inputs(decision, quote, now, last_bar=last_bar,
                                   previous_quote=previous_quote)
             # Tradability (when on) and then the balance are read only for an entry every

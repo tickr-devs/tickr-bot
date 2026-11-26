@@ -247,6 +247,10 @@ _REFUSAL = {
         ("", r"notional (?P<notional>" + _NUM + r") > cap (?P<cap>" + _NUM + r")")),
     "PLANNED_LOSS_OVER_LIMIT": _shapes(
         ("", r"planned loss (?P<planned_loss>" + _NUM + r") > limit (?P<limit>" + _NUM + r")")),
+    "EQUITY_UNKNOWN": _shapes(
+        ("", r"no equity read"),
+        ("", r"equity read (?P<age>" + _NUM + r") s ago > (?P<limit>" + _NUM + r") s"),
+        ("", r"equity figure invalid: (?P<value>.+)")),
     "DAILY_MONEY_UNKNOWN": _shapes(("", r"unknown: (?P<missing>.+)")),
     "DAILY_CEILING": _shapes(
         ("", r"room (?P<room>" + _NUM + r") = ceiling (?P<ceiling>" + _NUM + r") - realized "

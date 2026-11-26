@@ -101,6 +101,9 @@ class RiskConfig:
     symbol_cooldown_minutes_after_loss: int
     max_entry_rest_bars: int
     entry_snapshot_interval_seconds: Decimal
+    planned_loss_percent: Decimal
+    position_notional_cap_percent: Decimal
+    max_daily_loss_percent: Decimal
     tradability_check_enabled: bool
     tradability_entry_profile_statuses: tuple[str, ...]
     tradability_blocked_profile_statuses: tuple[str, ...]
@@ -898,6 +901,10 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
     if risk.buying_power_max_age_seconds <= 0:
         raise ConfigError("[risk] buying_power_max_age_seconds must be above 0")
+    for name in ("planned_loss_percent", "position_notional_cap_percent",
+                 "max_daily_loss_percent"):
+        if not 0 <= getattr(risk, name) <= 100:
+            raise ConfigError(f"[risk] {name} must be between 0 (off) and 100")
     if built["orders"].detail_unreadable_seconds <= 0:
         raise ConfigError("[orders] detail_unreadable_seconds must be above 0")
     if built["orders"].stop_held_proof_seconds <= 0:

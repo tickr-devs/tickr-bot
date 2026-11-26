@@ -52,6 +52,17 @@ position_notional_cap_usd = 1000
 # Daily loss ceiling in USD: today's NET realized loss (wins offset losses) + open reservations + new planned loss (owner
 # 2026-11-17: 5000, so the reservations of 20 trades at planned_loss_usd fit); read by safety.
 max_daily_loss_usd = 5000
+# Optional percent-of-equity limits (backlog X2), 0 = off (as shipped: behavior is exactly the USD limits above; the owner
+# picks the values). Unit: percent of the account's net liquidation value (cash plus positions at market) as the broker
+# reported it. When a percent is above 0 its effective limit is the SMALLER of the USD limit and percent / 100 x equity, so
+# a percent can only tighten, never loosen. With any of them on, an entry is refused (EQUITY_UNKNOWN) when the equity is
+# unread, older than buying_power_max_age_seconds or not a positive number: never a fallback to the USD limit. Read by
+# admission (risk.admission) and runtime.entries. Planned loss per trade, percent of equity:
+planned_loss_percent = 0
+# Maximum notional per position, percent of equity (same rules as planned_loss_percent); read by admission.
+position_notional_cap_percent = 0
+# Daily loss ceiling, percent of equity (same rules as planned_loss_percent); read by admission.
+max_daily_loss_percent = 0
 # Smallest daily-loss room a new trade is sized into, USD: near the ceiling a trade is sized down to the room left
 # (owner 2026-11-14), but below this room entries stop and status says "daily ceiling" (a smaller trade is not worth
 # its costs; owner confirmed 2026-11-14); read by runtime.entries (strategy loss budget and status).

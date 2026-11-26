@@ -69,6 +69,7 @@ cause. Each blocks that one entry only; the bot tries again at the next signal.
 | `DAILY_MONEY_UNKNOWN` | Today's profit and loss is not known (for example the broker fees are missing). | See the `fees-unknown` alert. |
 | `DAILY_MONEY_INVALID` | A money figure for the day is not a valid amount. | Report it. |
 | `DAILY_CEILING` | The most the bot may lose today is reached (or would be). | Nothing; trading resumes the next day. |
+| `EQUITY_UNKNOWN` | A percent-of-equity limit is on, but the account's equity (net liquidation) has no fresh, positive broker read. | Nothing; the next balance read usually fixes it. If it stays, check the broker connection. |
 | `BUYING_POWER_UNKNOWN` | The broker did not say how much buying power there is. | Nothing; it retries. |
 | `BUYING_POWER_SHORT` | There is not enough buying power for the trade. | Nothing, or add funds. |
 | `ENTRY_BUDGET_UNAVAILABLE` | The broker request budget has no room for the entry order. | Nothing. |
