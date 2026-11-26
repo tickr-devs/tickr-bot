@@ -891,6 +891,12 @@ bundles_dir = "models"
 # Bundle folder name <name>-<version> under bundles_dir that the bot loads when enabled; empty = none chosen; read by
 # tickr.model.bundle.
 bundle = ""
+# Stock groups the frozen tick converter v11 works one after another (its TICK_GROUPS, set by the bot, never
+# inherited): 24 = the converter's default, as in the training's runs, pinned (codex-109 point 1 withdrew one group:
+# with one engine thread 1 and 24 gave equal tables on the test day and at 500 synthetic stocks, but one stock-minute
+# differed in the last bit at 1,000, tests/model/tick_memory.py); any other value is refused; read by config.load,
+# passed to tickr.model.features.ticks.tick_rows.
+tick_groups = 24
 
 [exit_chase]
 # Limit-exit chase before a market exit (backlog X3): a close is sent as a SELL LIMIT priced through the bid,
@@ -960,8 +966,22 @@ max_pages = 100
 stream_max_message_bytes = 16777216
 # Seconds before the stream connects again after it dropped (the day is marked gapped either way), also the longest
 # wait of one read before the stop flag is checked again; a convenience pause, not a measured value, no decision
-# depends on it; read by tickr.model.massive.
+# depends on it; read by tickr.model.massive (tickr.model.stream reads it as its read wait only).
 stream_reconnect_seconds = 5
+# Seconds the shared stream (tickr.model.stream: minute bars AM.* and trades/quotes T/Q on one connection) waits after
+# a drop before it connects again. Documented, not invented: Massive's knowledge base ("Why do Massive WebSocket
+# disconnects happen?", read 2026-11-25) says the server takes roughly 10 to 30 seconds to release a dropped connection
+# and a client that retries at once can be refused for the allowance it just lost (max_connections); 30 is the top of
+# that window. Every second of it is inside the gap the decisions see; read by tickr.model.stream.
+stream_release_pause_seconds = 30
+# Seconds the shared stream (tickr.model.stream) waits for Massive's acknowledgment of a subscribe parameter before it
+# re-sends that parameter once on the same connection (logged), and again after the re-send before it closes the
+# connection and reconnects with every subscription (a controlled reconnect: the gap is recorded like any drop).
+# EXPERIMENTAL, UNMEASURED: no acknowledgment delay has been measured on the real feed yet; 0 turns the resend and the
+# controlled reconnect off (an unacknowledged channel then stays refused until the next connection). The stream records
+# every send-to-acknowledgment wait on the monotonic clock (SharedStream.ack_waits) so this can be set from a
+# measurement; read by tickr.model.stream.
+stream_ack_timeout_seconds = 0
 # Calendar days searched back from today for the history sessions (20 sessions span about 28 calendar days with weekends
 # and holidays; a search that finds fewer refuses); read by tickr.model.massive.
 calendar_lookback_days = 60

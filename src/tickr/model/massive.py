@@ -53,6 +53,7 @@ from tickr.model.errors import ModelRefused
 
 NEW_YORK = zoneinfo.ZoneInfo("America/New_York")
 NS_PER_MS = 10**6
+MS_PER_S = 1000
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 # The flat-file columns the feature code reads (features.BAR_COLUMNS). The day file also holds
 # `transactions`, which the AM stream does not send and no feature reads, so the live frame
@@ -306,10 +307,34 @@ class Reference:
 # --- today: the real-time minute aggregates -----------------------------------------------------
 
 
+@dataclass(frozen=True)
+class BarRepair:
+    """A repair of today's minute bars over the minute starts [from_ms, to_ms), Unix ms, received
+    at `recv` (the clock of the DayBars' arrivals). `market` is True only when the repair holds
+    the complete market of those minutes (every ticker, so ranks, breadth and membership are
+    restored); `cause` is None only when its source proved pagination exhausted, else why it is
+    incomplete. A cohort-only repair is refused (codex-109 point 6)."""
+
+    from_ms: int
+    to_ms: int
+    recv: Any
+    pages: int
+    market: bool
+    cause: str | None
+
+
 @dataclass
 class DayBars:
     """Today's full-market minute bars from the stream, as flat-file rows. Thread-safe: the
-    stream thread adds, the decision side reads."""
+    stream thread adds, the decision side reads.
+
+    A gap (codex-109 point 6) is bounded in event time, never by receipt times: from the minute
+    of the last bar received before the drop (day start when none: so the minutes before 04:00
+    count) through the minute of the first bar received after the reconnect, both inclusive (a
+    minute's bars arrive as a burst, so both edge minutes may be partial). Only a complete
+    market-wide `BarRepair` that covers that whole range ends it; until then every decision that
+    depends on the bars refuses (`bars_gap`: unavailable). No source of such a repair exists
+    yet: `repair` is the hook, `needed` the ranges it has to cover."""
 
     day: str
     rows: dict[tuple[str, int], tuple[Any, ...]] = field(default_factory=dict)
@@ -317,11 +342,26 @@ class DayBars:
     # (down, up) monotonic times and the type of what ended the connection
     gaps: list[tuple[float, float, str]] = field(default_factory=list)
     other_day: int = 0
+    # (down, cause) of the drop the shared stream (tickr.model.stream) has not resubscribed yet
+    open_gap: tuple[Any, str] | None = None
+    # every gap: [down, up or None, cause, last minute ms before it, first minute ms after it
+    # or None, that first bar's arrival or None]
+    holes: list[list[Any]] = field(default_factory=list)
+    latest_ms: int | None = None  # the latest minute start received from the stream
+    repairs: list[BarRepair] = field(default_factory=list)
+    refused_repairs: list[BarRepair] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def _day_start_ms(self) -> int:
+        start = datetime.datetime.fromisoformat(self.day).replace(tzinfo=NEW_YORK)
+        return int(start.timestamp()) * MS_PER_S
 
     def add(self, message: Mapping[str, Any], arrived: float) -> None:
         """One AM message; a bar of another New York day is counted and dropped (a stream
         that runs past midnight), a malformed one refused."""
+        self._put(message, arrived, stream=True)
+
+    def _put(self, message: Mapping[str, Any], arrived: Any, stream: bool) -> None:
         try:
             start_ms = int(message["s"])
             row = tuple(message[k] for k in AM_KEYS)
@@ -336,10 +376,79 @@ class DayBars:
             self.rows[(ticker, start_ms)] = (ticker, volume, o, c, h, low,
                                              start_ms * NS_PER_MS)
             self.arrivals[start_ms] = max(self.arrivals.get(start_ms, 0.0), arrived)
+            if not stream:
+                return
+            self.latest_ms = start_ms if self.latest_ms is None else max(self.latest_ms,
+                                                                         start_ms)
+            for hole in self.holes:
+                if hole[1] is not None and hole[4] is None and arrived >= hole[1]:
+                    hole[4], hole[5] = start_ms, arrived
+
+    def _last_ms(self) -> int:
+        return self.latest_ms if self.latest_ms is not None else self._day_start_ms()
 
     def gap(self, down: float, up: float, cause: str) -> None:
         with self._lock:
             self.gaps.append((down, up, cause))
+            self.open_gap = None
+            if self.holes and self.holes[-1][1] is None and self.holes[-1][0] == down:
+                self.holes[-1][1] = up
+            else:  # MinuteStream reports a gap only once it is back
+                self.holes.append([down, up, cause, self._last_ms(), None, None])
+
+    def down(self, down: Any, cause: str) -> None:
+        """The connection dropped at `down`: the gap is open (and visible) until `gap` closes it."""
+        with self._lock:
+            self.open_gap = (down, cause)
+            self.holes.append([down, None, cause, self._last_ms(), None, None])
+
+    def repair(self, repair: BarRepair, messages: list[Mapping[str, Any]]) -> None:
+        """The hook for a complete-market repair: keeps its bars (AM-shaped messages) and the
+        record. A cohort-only repair cannot restore market-wide ranks, breadth or membership:
+        it is recorded and refused (`bars_repair_not_market`), its bars not kept."""
+        if (isinstance(repair.from_ms, bool) or not isinstance(repair.from_ms, int)
+                or isinstance(repair.to_ms, bool) or not isinstance(repair.to_ms, int)
+                or repair.from_ms >= repair.to_ms):
+            raise ModelRefused("bars_repair_range", f"{repair.from_ms!r}..{repair.to_ms!r}")
+        if not repair.market:
+            with self._lock:
+                self.refused_repairs.append(repair)
+            raise ModelRefused("bars_repair_not_market",
+                               f"{repair.from_ms}..{repair.to_ms}: a cohort cannot restore "
+                               "market-wide ranks, breadth or membership")
+        for message in messages:
+            if not isinstance(message, Mapping) or not isinstance(message.get("s"), int) or not (
+                    repair.from_ms <= message["s"] < repair.to_ms):
+                raise ModelRefused("bars_repair_unreadable", "a bar outside the repair range")
+        for message in messages:
+            self._put(message, repair.recv, stream=False)
+        with self._lock:
+            self.repairs.append(repair)
+
+    def _repaired(self, last: int, first: int | None, cutoff: Any) -> bool:
+        return first is not None and any(
+            r.market and r.cause is None and r.recv <= cutoff and r.from_ms <= last
+            and r.to_ms > first for r in self.repairs)
+
+    def needed(self, cutoff: Any) -> list[tuple[int, int | None]]:
+        """The minute ranges (first, last minute start ms, both inclusive; last None while no
+        bar after the reconnect arrived) a complete-market repair still has to cover."""
+        out = []
+        with self._lock:
+            for down, _, _, last, first, first_at in self.holes:
+                if down > cutoff:
+                    continue
+                # a first bar arrives only after the reconnect, so its arrival bounds both
+                known = first if first_at is not None and first_at <= cutoff else None
+                if not self._repaired(last, known, cutoff):
+                    out.append((last, known))
+        return out
+
+    def refusal(self, cutoff: Any) -> str | None:
+        """`bars_gap` (the bars are unavailable) when a drop began by `cutoff` and no complete
+        market repair received by then covers its whole event-time range (class text), else
+        None."""
+        return "bars_gap" if self.needed(cutoff) else None
 
     def frame(self) -> Any:
         """Every bar so far as a flat-file frame (the shared feature code checks it)."""
