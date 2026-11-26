@@ -307,6 +307,43 @@ How Tickr uses it now: only the probe (`WebullBroker.place_combo`; tests/test_in
 names the one sender). The engine sends no combo yet. An entry path that uses it is new work,
 with its own review.
 
+## M3 trade events — gRPC order and position events (SDK reading 2026-11-25; NOT probed yet)
+
+From SDK 3.0.3 (`webull/trade/trade_events_client.py`, `trade/events/*`), read, not run:
+- One server-streaming gRPC call `/grpc.trade.event.EventService/Subscribe` on `events_host`
+  (`events-api.sandbox.webull.com` / `events-api.webull.com`), port 443, TLS. Request
+  `SubscribeRequest{subscribeType, timestamp ms, contentType, payload, accounts[]}`; the SDK sends
+  `subscribeType` 7 (ORDER_STATUS_CHANGED 1 | POSITION_STATUS_CHANGED 2 | OPTION_STATUS_CHANGED 4)
+  and our account id in `accounts`.
+- Signed in gRPC metadata only: App Key, HMAC-SHA256 signature over the request's SHA-256, nonce
+  and timestamp (`trade/events/signature_composer.py`). No token: the token folder is not read.
+- Responses `SubscribeResponse{eventType, subscribeType, contentType, payload, requestId,
+  timestamp}`. Control `eventType`s: SubscribeSuccess 0, Ping 1, AuthError 2, NumOfConnExceed 3,
+  SubscribeExpired 4; anything else is a trade event whose `payload` is text (JSON when
+  `contentType` is `application/json`). `types.py` names EVENT_TYPE_ORDER 1024,
+  EVENT_TYPE_POSITION 1028, EVENT_TYPE_OPTION 1032; the payload's fields are not documented in
+  the SDK.
+- The SDK's client resubscribes forever, 5 s apart, after gRPC UNAVAILABLE, INTERNAL or UNKNOWN or
+  a closed stream, and prints the request, signature and metadata to stdout (KD-3). Tickr never
+  constructs it: probe M3's `SdkTradeEventsSource` (broker/webull.py) sends the same signed
+  request through the SDK's stub and signer, once per connection, and leaves resubscribing to the
+  probe.
+
+Open questions (probe `tickr probe-trade-events`, docs/manual-trade.md):
+- E1 latency vs polling: seconds an event arrives before the Detail / open-orders poll (or the
+  bot's `order-observed` row) that sees the same change, for accepted, partly filled, filled,
+  cancelled.
+- E2 missed events: does every change polling sees come as an event? Does a payload name the
+  order by `client_order_id`?
+- E3 reconnect: how often the stream ends and with which code; does a new subscription work at
+  once, and are events lost or repeated across it? NumOfConnExceed: how many subscriptions per
+  App Key?
+- E4 ordering: do one order's events arrive in the order of its changes (and position events
+  after the fill)?
+- E5 the payload's shape per event type (raw bodies in `events.jsonl`).
+
+How Tickr uses it now: nothing; the engine keeps polling until E1-E4 are answered.
+
 ## Known SDK defects (3.0.3)
 - KD-1: streaming `SnapshotResult.close` is filled from `open`. Never use it.
 - KD-2: tick request docstring/default disagree. Use measured limits only.

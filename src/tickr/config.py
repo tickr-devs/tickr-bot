@@ -212,6 +212,8 @@ class ProbeConfig:
     paging_send_interval_seconds: int
     open_orders_paging_orders: int
     open_orders_end_margin_minutes: int
+    trade_events_minutes: int
+    trade_events_reconnect_seconds: int
     prev_day_window_start: str
     prev_day_window_end: str
     prev_day_poll_seconds: int
@@ -498,6 +500,7 @@ class EnvironmentConfig:
     mqtt_host: str
     mqtt_port: int
     events_host: str
+    events_port: int
     app_key_variable: str
     app_secret_variable: str
     account_variable: str
