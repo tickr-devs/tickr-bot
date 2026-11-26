@@ -1,0 +1,28 @@
+# Tickr bot restart on request: started by tickr-bot-restart.path when the watchdog asked for a
+# restart. The request file (request time in UTC and cause): /srv/tickr/data/control/restart-request
+# Steps, each once: (1) take the request (rename it to .taken, so a request written during the
+# restart is a new event); (2) recreate the compose service `bot` (`up -d --force-recreate`: a
+# running container is stopped within its own stop_grace_period from compose.yaml, [runtime]
+# bot_exit_timeout_seconds, read when this unit was rendered; a crashed or removed one is
+# created again; the image is never pulled or built here, a missing image fails the step);
+# (3) log the request to the journal. Never retried: no Restart=, no loop. A failed step stops
+# the rest and stays visible in `systemctl status tickr-bot-restart.service`.
+# The env file is the path /run/tickr/env on the host, written by tickr-secrets.service; only its
+# path is named here, never a value.
+# Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
+[Unit]
+Description=Tickr bot restart on request
+RequiresMountsFor=/srv/tickr/data
+Requires=docker.service tickr-secrets.service
+After=docker.service tickr-secrets.service
+
+[Service]
+Type=oneshot
+User=tickr
+WorkingDirectory=/srv/tickr/repo
+EnvironmentFile=/srv/tickr/etc/limits.env
+Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml
+Environment=TICKR_ENV_FILE_HOST=/run/tickr/env
+ExecStart=/bin/mv -fT /srv/tickr/data/control/restart-request /srv/tickr/data/control/restart-request.taken
+ExecStart=/usr/bin/docker compose -f /srv/tickr/repo/ops/docker/compose.yaml -p tickr --profile jobs up -d --force-recreate --no-deps --pull never --no-build -t 120 bot
+ExecStart=/bin/cat /srv/tickr/data/control/restart-request.taken

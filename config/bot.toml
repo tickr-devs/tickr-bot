@@ -1041,6 +1041,12 @@ watchdog_restart_file = "watchdog-restart.json"
 # time above, so its startup cancels that entry and protects any fill; written before the command runs and never removed;
 # separate from watchdog_restart_file, so the flatten restart stays available; read by runtime.watchdog.
 watchdog_entry_restart_file = "watchdog-entry-restart.json"
+# Server only (docs/deploy-server.md): the restart request file, relative to data_dir. On the server the watchdog's
+# restart command (`python -m tickr.runtime request-restart`, inside its container) writes it atomically with the request
+# time (UTC) and cause; the host unit tickr-bot-restart.path watches the same file under the server's data folder and
+# tickr-bot-restart.service restarts the bot container once. Its folder must already exist (deploy-server.sh creates
+# it); read by runtime.restartrequest and runtime.systemd.
+server_restart_request_file = "control/restart-request"
 # Seconds one loop pass may spend on market upkeep and the strategy before an evaluation-slow journal row (the next
 # Detail read waits for it; keep it near [orders] detail_poll_seconds). Discovery runs on its own thread and is not part
 # of it: its duration is the `seconds` of each discovery journal row; read by runtime.service.

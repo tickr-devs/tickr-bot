@@ -4,6 +4,7 @@
 # Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
 [Unit]
 Description=Tickr local API
+RequiresMountsFor=/srv/tickr/data
 Requires=docker.service
 After=docker.service
 
