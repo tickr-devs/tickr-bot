@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import tomllib
 from collections.abc import Sequence
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from tickr.research import (
     report,
     slippage,
 )
+from tickr.research import gate as gate_report
 from tickr.research.collar import collar_report
 from tickr.research.errors import ResearchError
 from tickr.research.latency import latency_report
@@ -149,6 +151,23 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--settings", type=Path, required=True, help="research TOML (time zone)")
     places_source(p)
     p.add_argument("--out", type=Path, required=True, help="output directory")
+
+    p = sub.add_parser("gate", help="R23 Step 0: descriptive gate report, both money lines")
+    p.add_argument("--trades", type=Path, required=True,
+                   help="CSV, one row per actual sized trade (docs/research.md, research/gate.py)")
+    p.add_argument("--covered-days", type=Path, required=True,
+                   help="CSV `day`: calendar trading days with data, the rest is missing coverage")
+    p.add_argument("--start", required=True, help="first day of the frozen period, YYYY-MM-DD")
+    p.add_argument("--end", required=True,
+                   help="last day of the frozen period, YYYY-MM-DD; the months are anchored here")
+    p.add_argument("--all-sessions-usd", required=True,
+                   help="position size of the hypothetical all-sessions money line, USD")
+    p.add_argument("--model-version", required=True, help="the model version's name")
+    p.add_argument("--results", choices=("simulated", "real"), required=True,
+                   help="what the trades are: simulated (exam) or real fills")
+    p.add_argument("--settings", type=Path, required=True, help="research TOML (gate keys)")
+    places_source(p)
+    p.add_argument("--out", type=Path, required=True, help="output directory")
     return parser
 
 
@@ -177,6 +196,32 @@ def _fill_quality(args: argparse.Namespace) -> dict:
                      slippage.stopped_trades(database, zone, environment)))
     return report.write_fill_quality(sets, {"slippage_percent": replay.slippage_percent},
                                      args.out, replay.output_decimal_places)
+
+
+def _gate(args: argparse.Namespace) -> dict:
+    settings = load_research_settings(args.settings)
+    places = load_settings(args.replay_settings, _history_sessions(args)).output_decimal_places
+    try:
+        all_sessions = Decimal(args.all_sessions_usd)
+    except InvalidOperation as exc:
+        raise ResearchError(f"--all-sessions-usd is not a number: {args.all_sessions_usd!r}") \
+            from exc
+    try:
+        start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+    except ValueError as exc:
+        raise ResearchError("--start and --end must be YYYY-MM-DD") from exc
+    cfg = bot_config.load(args.config)
+    directory = (cfg.root / cfg.session.calendar_file).parent
+    calendar = SessionCalendar.load(directory)
+    frozen = {"start": start.isoformat(), "end": end.isoformat(),
+              "calendar_files_sha256": gate_report.calendar_fingerprint(directory),
+              "calendar_coverage": [[a.isoformat(), b.isoformat()] for a, b in calendar.coverage]}
+    trades = gate_report.load_trades(args.trades)
+    result = gate_report.gate(trades, gate_report.load_covered_days(args.covered_days), start, end,
+                              gate_report.market_day_lookup(calendar),
+                              cfg.risk.position_notional_cap_usd, all_sessions, settings)
+    return report.write_gate(result, args.model_version, args.results, args.out, places, trades,
+                             frozen, settings)
 
 
 def _filter(records, spec: str | None):
@@ -231,6 +276,8 @@ def _run(args: argparse.Namespace) -> dict:
 
     if args.command == "fill-quality":
         return _fill_quality(args)
+    if args.command == "gate":
+        return _gate(args)
     if args.command == "slippage":
         settings = load_research_settings(args.settings)
         trades = slippage.stopped_trades(args.database, settings.session_timezone,
