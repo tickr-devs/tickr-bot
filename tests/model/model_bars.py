@@ -46,10 +46,10 @@ def day_bars(day: str, seed: int, closes: dict[str, float], late: bool) -> pd.Da
     return pd.DataFrame(rows, columns=cols)
 
 
-def market(days: int, seed: int = 7) -> list[tuple[str, pd.DataFrame]]:
+def market(days: int, seed: int = 7, last: str = "2026-11-18") -> list[tuple[str, pd.DataFrame]]:
     closes: dict[str, float] = {}
     return [(d, day_bars(d, seed + i, closes, i == days - 1))
-            for i, d in enumerate(trading_days(days))]
+            for i, d in enumerate(trading_days(days, last))]
 
 
 def cut(frame: pd.DataFrame, day: str, minute: int) -> pd.DataFrame:

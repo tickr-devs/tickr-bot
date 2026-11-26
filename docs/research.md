@@ -16,6 +16,7 @@ format (`records.py`), through the observers (`docs/observers.md`).
 | `calibration` | Does a model answer of 0.7 come true 70% of the time? | `measured` |
 | `slippage` | How far below the planned stop did stops fill? Planned against realized loss per day? | `measured` |
 | `fill-quality` | Entry, exit and stop slippage, fees and fill delay of real fills; one record set or two side by side | `measured` |
+| `gate` | Descriptive R23 Step 0 report on one model version's sized trades: net, sensitivity checks, tail concentration, same-trade spread cost (never a promotion) | `simulated` or `real` |
 
 Live observers see only the symbols discovery kept, and discovery applies the active strategy's
 liquidity rules, so observer results are comparable only while the active strategy (and its
@@ -319,11 +320,134 @@ then `all`), `fill_quality_compare.csv` (metric, assumed, a column per set, and 
 second minus first when two sets are given, e.g. Sandbox now against the assumptions, Production
 against Sandbox later) and `fill_quality_summary.json`.
 
+## gate: R23 Step 0 descriptive report
+
+```
+python -m tickr.research gate --trades trades.csv --covered-days days.csv \
+  --start 2026-08-01 --end 2026-10-31 --all-sessions-usd 4000 \
+  --model-version NAME --results simulated --settings config/research.toml --out out/gate
+```
+
+An offline, DESCRIPTIVE report on one model version's closed trades, simulated (the exam) or real
+(`--results` labels which). Nothing is promoted from it and it never says a gate is passed: each
+check "holds", "does not hold" or is "inconclusive". Binding promotion criteria are set with the
+owner on open development evidence before any exam read (`docs/promotion.md`).
+
+**Frozen before evaluation.** `--start` and `--end` (inclusive) and the repository's session
+calendar (`[session] calendar_file` of `--config`) are fixed before anything is read; the summary
+records both dates, the calendar's coverage and the sha256 of each calendar file. A trade or a
+covered day outside `--start..--end` is refused (`outside_period`); a day the calendar does not
+cover is refused with the calendar's cause. The caller picks the rows: the tool cannot tell which
+months the model saw.
+
+**Coverage.** `--covered-days` is a CSV with a `day` column: the calendar trading days (half days
+count as one) on which the producer had data and ran the model. A calendar trading day missing from
+it is missing coverage; a covered day without a trade is an observed day with zero trades. A
+non-trading or repeated day is refused, and so is a trade on a day not in the file
+(`not_covered`). There is no coverage threshold, the rule is structural: a window month is
+`observed` only when EVERY calendar trading day of that month inside `--start..--end` is in
+`--covered-days`; otherwise it is `insufficient_coverage`; a window month that ends before
+`--start` is `outside_period`. The whole period follows the same rule: one in-period trading day
+without data makes every check inconclusive. A partial month stays visible: each window month
+reports its trading days, its in-period days and `period_fraction_pct` (in-period trading days /
+the whole month's trading days, e.g. a month cut by `--end`), its covered days and `coverage_pct`
+(covered / in-period trading days). An observed month with zero trades has net 0 (not in plus); a
+month that is not observed makes the months check inconclusive.
+
+**Trades CSV**, one row per actual sized trade; header required, other columns ignored:
+
+- `trade_id` (unique), `symbol`, `session` (`regular` or `extended`);
+- `entry_time`, `exit_time`: ISO 8601 with a UTC offset; the trade's day is the New York date of
+  its entry. Both entry and exit must be inside `--start..--end` (`outside_period`, e.g. an exit a
+  year after a report's end). Same-day flatten: the exit must be on the entry's New York day, by
+  that day's extended close in the calendar (`not_same_day`); an exit before the entry is refused;
+- `session` must match where the entry falls in that day's calendar sessions: `regular` in
+  regular_open..regular_close, `extended` in premarket_open..regular_open or
+  regular_close..extended_close (half days use their own closes); otherwise `session_mismatch`;
+- `notional_usd`: the trade's actual sized notional, above 0 and at most
+  `[risk] position_notional_cap_usd` (above it: `limit_breach`);
+- `return_units`: `pct_of_notional` (percent of `notional_usd`) or `usd`; `result` and the three
+  cost columns are in these units;
+- `result`: the trade's result AFTER the costs listed in this row (signed);
+- `fees`, `slippage`: the fees and slippage already taken off `result`;
+- `spread`: the bid/ask spread cost of the round trip (entry and exit);
+- `spread_in_result`: `true` when `result` already includes the spread (fills at bid/ask, every
+  real fill): the report charges nothing more. `false` (a result priced at the midpoint): the report
+  takes `spread` off once. So the spread is never charged twice;
+- `cost_provenance`: `broker_fills` (real fills, broker fees; must have `spread_in_result` true) or
+  `simulated` (a cost model); `cost_version`: the cost model's or export's version (required).
+
+Cost sign: every cost is positive when it reduced the result; `fees` and `spread` are never below 0,
+`slippage` below 0 is a price improvement. An EMPTY cost cell is unknown, `0` is a valid zero. An
+unknown fee or slippage (or an unknown spread on a `spread_in_result` false row) makes the trade's
+net unknown: it is left out of the sums, counted in `unknown_cost_trades`, and its line is
+inconclusive. The report never fills in a cost. The repository has no fee model (the replay and the
+backtest are gross); for real trades the costs are the broker's recorded fees (`fill-quality`).
+Nothing writes this file yet: the exam job or a later export must.
+
+**Money lines** (dollars only DESCRIPTIVE: summed per-trade results, no replay of cash, slots,
+repeated symbols, protection, session limits or actual exits, so they cannot count for promotion):
+
+- `main_session`, label `descriptive`: `regular` rows at their actual `notional_usd`;
+- `all_sessions`, label `hypothetical`: every row rescaled to `--all-sessions-usd` (the hypothetical
+  4,000 USD line), shown "regular only" while the file has no extended trade.
+
+Each line shows earned on winners, lost on losers, net, fees, slippage, the spread already in the
+results, the spread the report charged, days in plus, and the same-trade spread cost.
+
+**Same-trade spread cost** (a cost DIAGNOSTIC, not a baseline): the spread paid on the model's own
+trades at an unchanged midpoint. `same_trade_matched` counts the trades with a known net AND a
+known spread; `same_trade_spread_cost` is the spread in dollars over those trades only, so both
+sides of any comparison use the same rows; `net_before_spread` (net plus that cost) is shown only
+when every trade on the line is matched and is empty otherwise (an incomplete delta is never
+printed: with two trades, one of unknown cost, a 10 USD net is not compared with the spread of
+both).
+
+**Paired baseline: unavailable.** A real paired baseline (for example tightest spread) must select
+independently from the same pre-outcome candidates each minute with the same execution, dates,
+costs, quota and constraints. The trade rows cannot reconstruct those opportunities, so `gate.csv`
+and the summary report `paired_baseline` as `unavailable`; a version-bound matched-baseline input
+is future work.
+
+**Checks**, per line (`gate.csv`, kind in brackets):
+
+1. `net_after_costs_above_0` (descriptive);
+2. `sensitivity_k_of_m_months` (sensitivity): net above 0 in at least `gate_positive_months` (K) of
+   the last `gate_window_months` (M) calendar months, anchored to the month of `--end`, months after
+   the last trade included;
+3. `sensitivity_without_best` (sensitivity): net still above 0 after removing the best
+   `gate_drop_best_percent` (X) percent of the line's trades by after-cost result (count rounded up,
+   so 1% of 150 trades removes 2).
+
+A check is `inconclusive` when an in-period trading day has no data, the line has zero assessable
+trades, or a cost is unknown (and, for the months check, when a window month is not observed); an
+empty trades file is inconclusive, not refused. **Tail concentration** (`gate_tails.csv`): for each
+of `gate_tail_percents` (1, 5, 10), the top that percent of trades by after-cost result (count
+rounded up), their net in dollars and their share of the line's net (empty when the net is not
+above 0), because the model targets rare large gainers. The other R23 items (every feature
+available live, stop chosen, decision frequency chosen) are not numbers: they are listed as
+"checked by hand".
+
+Refused with a typed cause: `missing_column`, `not_finite`, `bad_value` (not a number, a bad
+time, session, unit, provenance or flag, a negative fee or spread, a notional not above 0,
+`--start` after `--end`, a trade on a non-trading day), `duplicate`, `outside_period`,
+`not_covered`, `not_same_day`, `session_mismatch`, `limit_breach`, and the calendar's causes. Outputs: `gate.csv` (line, check, kind, outcome, measured, wanted, why
+inconclusive; then the unavailable paired baseline and the items checked by hand), `gate_lines.csv`, `gate_months.csv` (status,
+trading, in-period and covered days, period fraction and coverage percent, trades and net per
+window month and line),
+`gate_tails.csv`, `gate_trades.csv` (the per-trade cost audit: identity, times, notional, units,
+every cost as given, the spread charged, net and spread in dollars) and `gate_summary.json` (the
+frozen inputs, sensitivity parameters, coverage, cost provenance and versions with trade counts,
+`conclusive`, and each line).
+
 ## Settings
 
 `config/research.toml` `[research]` (one comment per key, tested; missing or unknown keys are
 refused): `horizons_minutes`, `atr_period`, `session_timezone`
-(`latency` reads only the last), `calibration_buckets` (`calibration` reads it).
+(`latency` reads only the last), `calibration_buckets` (`calibration` reads it),
+`gate_positive_months`, `gate_window_months` and `gate_drop_best_percent` (`gate` reads them as
+SENSITIVITY parameters K, M and X, never pass or fail; the backlog R23 numbers: 2 of 3 months,
+best 1%) and `gate_tail_percents` (`gate`).
 What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay. Every
 report also rounds to its `output_decimal_places` (`--replay-settings` with `--config`, default
 `config/replay.toml`): that number has one home.

@@ -38,7 +38,8 @@ def test_every_alert_at_once_fence_and_order_conflict_is_locked():
 
 
 def test_security_and_risk_alerts_are_locked():
-    assert {AlertKind.API_CREDENTIALS_UNEXPECTED, AlertKind.REMOTE_AUTH_BLOCKED} <= LOCKED
+    assert {AlertKind.API_CREDENTIALS_UNEXPECTED, AlertKind.REMOTE_AUTH_BLOCKED,
+            AlertKind.RISK_COMMAND_USED} <= LOCKED
 
 
 def test_every_kind_has_a_group_and_only_locked_kinds_are_critical():
@@ -86,6 +87,7 @@ def test_a_cell_turned_off_and_on_again(tmp_path):
     ("unknown-order-status", "mac", False, RefusalCause.LOCKED_KIND),
     ("bot-down", "mac", False, RefusalCause.LOCKED_KIND),
     ("remote-auth-blocked", "imessage", False, RefusalCause.LOCKED_KIND),
+    ("risk-command-used", "imessage", False, RefusalCause.LOCKED_KIND),
     ("no-such-kind", "mac", False, RefusalCause.UNKNOWN_KIND),
     ("disk-low", "fax", False, RefusalCause.UNKNOWN_CHANNEL),
 ])

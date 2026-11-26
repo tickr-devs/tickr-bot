@@ -23,6 +23,8 @@ def test_repository_settings_load():
     settings = load_research_settings(CONFIG)
     assert settings.horizons_minutes == (1, 5, 15, 30, 60)
     assert settings.atr_period >= 1
+    assert (settings.gate_positive_months, settings.gate_window_months) == (2, 3)
+    assert settings.gate_tail_percents == (1, 5, 10)
 
 
 def _table(**changes):
@@ -40,6 +42,14 @@ def _table(**changes):
         ({"atr_period": 1.5}, "must be an integer"),
         ({"session_timezone": "Mars/Base"}, "unknown"),
         ({"surprise": 1}, r"unknown=\['surprise'\]"),
+        ({"gate_window_months": 1}, "gate_window_months must be at least 2"),
+        ({"gate_positive_months": 0}, "gate_positive_months must be at least 1"),
+        ({"gate_drop_best_percent": 100}, "0..100"),
+        ({"gate_drop_best_percent": -1}, "0..100"),
+        ({"gate_drop_best_percent": "1"}, "must be a number"),
+        ({"gate_tail_percents": []}, "non-empty list"),
+        ({"gate_tail_percents": [5, 1]}, "strictly increase"),
+        ({"gate_tail_percents": [0, 5]}, "gate_tail_percents must be in"),
     ],
 )
 def test_bad_settings_refused(changes, cause):

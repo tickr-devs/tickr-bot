@@ -965,6 +965,13 @@ stream_reconnect_seconds = 5
 # Calendar days searched back from today for the history sessions (20 sessions span about 28 calendar days with weekends
 # and holidays; a search that finds fewer refuses); read by tickr.model.massive.
 calendar_lookback_days = 60
+# Trades and quotes stream (channels T and Q, tickr.model.ticks): "symbols" subscribes each symbol as it joins the
+# day's set, "market" subscribes every symbol (T.*, Q.*). Which one runs is a measurement decision (stream capacity is
+# not measured yet); read by tickr.model.ticks.
+tick_subscription = "symbols"
+# Rows asked per REST page of a symbol's trades or quotes backfill (Massive's documented largest page for /v3/trades
+# and /v3/quotes); read by tickr.model.ticks.
+tick_page_limit = 50000
 # Path of Massive's general news listing on api_host, the training's own fetch of the nw_* news (owner's fetch_ref2.py
 # and reftopup.py: GET /v2/reference/news); read by tickr.model.newsprobe.
 massive_news_path = "/v2/reference/news"

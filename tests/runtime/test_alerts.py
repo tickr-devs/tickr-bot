@@ -78,7 +78,7 @@ def test_kinds_cover_spec_section_11():
         "bot-down-with-open-trade", "exit-not-filled", "flatten-after-close",
         "fees-unknown", "fees-corrected", "api-credentials-unexpected",
         "watchdog-restarted-bot", "watchdog-restart-refused", "watchdog-restart-failed",
-        "bot-down", "disk-low", "remote-auth-blocked",
+        "bot-down", "disk-low", "remote-auth-blocked", "risk-command-used",
     }
 
 
