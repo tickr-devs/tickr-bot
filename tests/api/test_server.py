@@ -214,6 +214,7 @@ def test_invalid_status_file_is_reported_not_guessed(api, settings):
     ("/commands/cancel-own-orders", {}, CommandKind.CANCEL_OWN_ORDERS),
     ("/commands/flatten", {}, CommandKind.FLATTEN),
     ("/commands/flatten", {"symbol": "ABCD"}, CommandKind.FLATTEN),
+    ("/commands/cancel-own-orders", {"symbol": "ABCD"}, CommandKind.CANCEL_OWN_ORDERS),
     ("/commands/stop-bot", {}, CommandKind.STOP_BOT),
     ("/commands/stop-bot", {"mode": "close_and_stop"}, CommandKind.STOP_BOT),
     ("/commands/stop-bot", {"mode": "leave_open"}, CommandKind.STOP_BOT),
@@ -270,7 +271,9 @@ def test_command_warns_when_bot_looks_down(api, settings):
     ("/commands/flatten", {"mode": "leave_open"}),
     ("/commands/emergency", {"mode": "close_and_stop"}),
     ("/commands/emergency", {"symbol": "ABCD"}),
-    ("/commands/cancel-own-orders", {"symbol": "ABCD"}),
+    ("/commands/cancel-own-orders", {"symbol": None}),  # never read as "everything"
+    ("/commands/cancel-own-orders", {"symbol": "abcd"}),
+    ("/commands/cancel-own-orders", {"symbol": "ABCD", "mode": "leave_open"}),
 ])
 def test_bad_command_body_refused(api, settings, path, body):
     server, _ = api

@@ -133,6 +133,7 @@
     "result_today_net_usd": "-1.67",
     "result_today_broker_usd": "-1.64",
     "stop_progress": null,
+    "working_entries": [],
     "schema_version": 1
   },
   "age_seconds": "2.000",

@@ -59,9 +59,9 @@ class Bot:
                                        strategy=service.strategy_id(CFG), paths=self.paths)
 
     def command(self, kind: api.CommandKind, offset_seconds: int = 0,
-                mode: api.StopMode | None = None) -> api.CommandV1:
+                mode: api.StopMode | None = None, symbol: str | None = None) -> api.CommandV1:
         cmd = api.new_command(kind, self.now + timedelta(seconds=offset_seconds), "test",
-                              mode=mode)
+                              symbol=symbol, mode=mode)
         api.write_command(self.paths.inbox, cmd)
         return cmd
 
@@ -277,6 +277,56 @@ def test_cancel_own_orders_cancels_entries_never_stops(tmp_path):
     assert bot.broker.orders[entry].state.terminal
     stops = [o for o in bot.broker.open_orders() if o.order_type == "STOP_LOSS"]
     assert sum(o.quantity for o in stops) == D(1)
+
+
+def test_status_lists_a_working_entry_until_any_part_fills(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1))
+    bot.engine.step()
+    (working,) = bot.service.status().working_entries
+    assert (working.symbol, working.quantity, working.limit_price, working.stop_price,
+            working.planned_loss_usd, working.cancel_requested) == (
+        "ABC", D(2), D(10), D("9.80"), D(1), False)
+    assert working.entry.sent_at is not None
+    assert bot.service.status().positions == ()
+    bot.broker.fill(bot.engine.orders(t)[0].client_order_id, D(1), D(10))
+    for _ in range(3):
+        bot.engine.step()
+    status = bot.service.status()
+    assert status.working_entries == () and [p.symbol for p in status.positions] == ["ABC"]
+
+
+def test_cancel_own_orders_for_one_symbol_cancels_only_that_entry(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    wider = replace(CFG, risk=replace(CFG.risk, max_open_positions=2))
+    bot.engine.config = bot.service.config = wider
+    abc = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1))
+    xyz = bot.engine.open_trade("XYZ", D(2), D(20), D("19.80"), D(1))
+    bot.engine.step()
+    cmd = bot.command(api.CommandKind.CANCEL_OWN_ORDERS, symbol="ABC")
+    bot.service.process_commands()
+    (rec,) = bot.service.status().recent_commands
+    assert (rec.command_id, rec.outcome) == (cmd.command_id, api.CommandOutcome.DONE)
+    status = bot.service.status()
+    assert {w.symbol: w.cancel_requested for w in status.working_entries} == {
+        "ABC": True, "XYZ": False}
+    for _ in range(3):
+        bot.engine.step()
+    assert bot.broker.orders[bot.engine.orders(abc)[0].client_order_id].state.terminal
+    assert not bot.broker.orders[bot.engine.orders(xyz)[0].client_order_id].state.terminal
+    assert [w.symbol for w in bot.service.status().working_entries] == ["XYZ"]
+
+
+def test_cancel_own_orders_for_a_symbol_without_a_working_entry_is_refused(tmp_path):
+    bot = Bot(tmp_path, broker=FakeBroker())
+    xyz = bot.engine.open_trade("XYZ", D(2), D(20), D("19.80"), D(1))
+    bot.engine.step()
+    cmd = bot.command(api.CommandKind.CANCEL_OWN_ORDERS, symbol="ABC")
+    bot.service.process_commands()
+    (rec,) = bot.service.status().recent_commands
+    assert (rec.command_id, rec.outcome, rec.cause) == (
+        cmd.command_id, api.CommandOutcome.REFUSED, "no working entry in ABC")
+    assert not bot.broker.orders[bot.engine.orders(xyz)[0].client_order_id].state.terminal
 
 
 def test_session_flatten_time_exits_open_trades(tmp_path):

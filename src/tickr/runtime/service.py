@@ -84,6 +84,8 @@ STOP_PROGRESS = "stop-progress"
 # replace unresolved, and so on. None of them is ever resent by the flow.
 CLOSE_FAILED_FENCES = tuple(sorted(OPERATOR_FENCES))
 STOP_RUNNING = "a close-and-stop is already running ({command})"
+# A cancel-own-orders for one symbol with no entry of it working (Cancel entry, 2026-11-26).
+NO_WORKING_ENTRY = "no working entry in {symbol}"
 TRADES_LEFT_OPEN = ("{count} trade(s) left open: nothing closes them; their broker stops are "
                     "DAY orders")
 # A close_and_stop that a fence ended: one `; `-joined part per kind of fence, saying what is
@@ -329,6 +331,13 @@ class Service:
                                       f"operator command {command.command_id}")
             return
         if kind is api.CommandKind.CANCEL_OWN_ORDERS:
+            if command.symbol is not None and not any(
+                    o.leg is Leg.ENTRY and o.live for t in engine.trades()
+                    if t.symbol == command.symbol for o in engine.orders(t.trade_id)):
+                with store.transaction():
+                    self._record(command, api.CommandOutcome.REFUSED,
+                                 NO_WORKING_ENTRY.format(symbol=command.symbol))
+                return
             with store.transaction():
                 self._record(command, api.CommandOutcome.DONE, None)
             self._cancel_entries(command)
@@ -549,7 +558,7 @@ class Service:
                     f"{name}: {body['cause'] or 'done'}" for name, body in done.items()))
 
     def _cancel_entries(self, command: api.CommandV1) -> None:
-        asked = self.engine.cancel_entries()
+        asked = self.engine.cancel_entries(command.symbol)
         with self.engine.store.transaction():
             self.engine.store.append(COMMAND_EFFECT, {"entries_cancel_requested": asked},
                                      key=command.command_id, run_id=self.engine.run_id)
@@ -881,6 +890,23 @@ class Service:
                                       entry, cause))
         return tuple(found)
 
+    def _working_entries(self) -> tuple[api.WorkingEntry, ...]:
+        """Every own trade whose entry order is working with nothing filled yet, oldest first;
+        a fill of any part makes it a position (`_positions`)."""
+        found = []
+        for trade in self.engine.trades():
+            orders = self.engine.orders(trade.trade_id)
+            entries = [o for o in orders if o.leg is Leg.ENTRY]
+            live = [o for o in entries if o.live]
+            if not live or self.engine.expected_quantity(orders) > 0:
+                continue
+            entry, cause = self._entry_send(trade.trade_id, final=False)
+            found.append(api.WorkingEntry(
+                trade.symbol, trade.entry_quantity, trade.entry_limit_price, trade.stop_price,
+                trade.planned_loss_usd, entry, cause,
+                any(o.cancelling for o in live)))
+        return tuple(found)
+
     def _daily_money(self) -> tuple[Decimal | None, Decimal, Decimal | None]:
         """(net realized loss today, open reservations, room) as admission computes them;
         loss and room are None when today's money is unknown."""
@@ -1004,7 +1030,7 @@ class Service:
             code_version=self.engine.store.run_code_version(self.engine.run_id),
             fees_today_usd=fees, result_today_net_usd=total_net(closed),
             result_today_broker_usd=self._broker_result_today(closed),
-            stop_progress=self.stop_progress())
+            stop_progress=self.stop_progress(), working_entries=self._working_entries())
 
     def check_disk(self) -> None:
         """Each loop pass: below [runtime] min_free_disk_mb free on the data disk (or unknown),

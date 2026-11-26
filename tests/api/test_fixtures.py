@@ -202,6 +202,14 @@ def documents() -> dict[str, object]:
             stop_progress=contract.StopProgress(
                 "6e3b8d0f-2c4a-4b7e-9f1d-8a0c3e5b7d9f", contract.StopMode.LEAVE_OPEN,
                 contract.StopStep.STOPPED, T0, 1)), Decimal("3600.000"), True),
+        # Cancel entry: one entry working at the broker with nothing filled yet (2026-11-26).
+        "status-response-v1.working-entry": _response(status(working_entries=(
+            contract.WorkingEntry("KLMN", Decimal("15"), Decimal("9.02"), Decimal("8.78"),
+                                  Decimal("3.60"), EntrySend(
+                                      "ap-0002-e", T0, T0 + timedelta(milliseconds=2),
+                                      contract.SendOutcome.ACKNOWLEDGED,
+                                      contract.SendOutcome.ACKNOWLEDGED, 1, None),
+                                  None, False),)), Decimal("2.000"), False),
         "status-response-v1.unavailable": _response(
             None, None, False, "the bot has not written a status file"),
         "command-accepted-v1": CommandAcceptedV1(command=command, warning=None),
