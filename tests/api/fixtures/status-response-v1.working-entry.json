@@ -81,6 +81,11 @@
         },
         "code_version": "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty",
         "result_exact_usd": "-1.67",
+        "decider": {
+          "kind": "strategy",
+          "name": "price-action-v1",
+          "version": "1"
+        },
         "entry_cause_codes": []
       }
     ],
@@ -154,7 +159,12 @@
         "entry_cause_codes": []
       }
     ],
-    "schema_version": 1
+    "schema_version": 1,
+    "decider": {
+      "kind": "strategy",
+      "name": "price-action-v1",
+      "version": "1"
+    }
   },
   "age_seconds": "2.000",
   "stale": false,

@@ -89,6 +89,7 @@ def test_endpoint_answers_its_schema_with_nothing_recorded(cfg):
     assert body["morning_check"] is None and body["morning_check_cause"] == NO_PREFLIGHT
     assert body["training"] is None and body["training_cause"] == NO_TRAINING
     assert body["host"]["kind"] == "mac" and body["host"]["watchdog"]["restarts"] == []
+    assert body["model"] == {"enabled": False, "bundle": None, "state": "off", "cause": None}
 
 
 @pytest.mark.parametrize(("past", "state"), [("warn", LinkState.FRESH),
@@ -276,3 +277,22 @@ def test_unknown_system_services_is_a_config_error(tmp_path):
     path.write_text(text, "utf-8")
     with pytest.raises(config.ConfigError, match="system_services"):
         config.load(path, root=tmp_path)
+
+
+def test_model_is_off_with_the_configured_bundle(cfg):
+    assert _doc(cfg).model == contract.ModelV1(False, None, contract.ModelState.OFF, None)
+    settings = replace(SystemSettings.from_config(cfg), model_bundle="l1-2026-12-01a")
+    document = system_document(settings, _response(RUNNING), _runner())
+    assert document.model == contract.ModelV1(False, "l1-2026-12-01a",
+                                              contract.ModelState.OFF, None)
+
+
+def test_model_state_while_enabled_is_unknown_never_guessed(cfg):
+    """Config load refuses `[model] enabled = true` today; were it on, the API process would
+    not know whether the bot loaded the bundle: null with its cause (rule 7)."""
+    settings = replace(SystemSettings.from_config(cfg), model_enabled=True, model_bundle="")
+    document = system_document(settings, _response(RUNNING), _runner())
+    assert document.model == contract.ModelV1(True, None, None,
+                                              contract.MODEL_LOAD_NOT_RECORDED)
+    raw = json.loads(contract.dumps(document))
+    assert errors(contract.json_schema(contract.SystemV1), raw) == []

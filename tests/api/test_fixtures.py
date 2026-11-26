@@ -355,7 +355,8 @@ def documents() -> dict[str, object]:
                          Decimal("10")),
             SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL,
             Decimal("30"), Decimal("15"), live_quote_max_age_seconds=Decimal("60"),
-            quotes_poll_seconds=Decimal("1"), command_max_age_seconds=Decimal("60")),
+            quotes_poll_seconds=Decimal("1"), command_max_age_seconds=Decimal("60"),
+            decider=contract.strategy_decider("price-action", "1")),
         # 10:00 New York on a Monday: the bot runs, its last broker read was 4 s ago.
         "jobs-v1": JobsV1(
             T0, BotState.RUNNING, False, T0.replace(hour=13, minute=12, second=4),
@@ -432,7 +433,8 @@ def documents() -> dict[str, object]:
                                                "stop marker stopped-by-operator.json exists; "
                                                "the watchdog never starts a bot the operator "
                                                "stopped")), 2, None),
-                contract.SleepV1(contract.SleepState.HELD, 2, None)), None),
+                contract.SleepV1(contract.SleepState.HELD, 2, None)), None,
+            model=contract.ModelV1(False, None, contract.ModelState.OFF, None)),
         # Before the open with problems: no broker read in 2 minutes, the token needed
         # confirmation, no training job, the watchdog's restart command failed once.
         "system-v1.attention": contract.SystemV1(
@@ -451,14 +453,18 @@ def documents() -> dict[str, object]:
                     contract.WatchdogRestartV1(T0 - timedelta(days=3, minutes=15),
                                                contract.RestartOutcome.FAILED, True, 1,
                                                "restart command exited 113"),), 1, None),
-                contract.SleepV1(contract.SleepState.NOT_HELD, 0, None)), None),
+                contract.SleepV1(contract.SleepState.NOT_HELD, 0, None)), None,
+            model=contract.ModelV1(False, "l1-2026-12-01a", contract.ModelState.OFF, None)),
         # A server without the Mac's services, before any preflight record or status file.
         "system-v1.server": contract.SystemV1(
             T0, None, False,
             contract.BrokerLinkV1(None, Decimal("30"), Decimal("90"), contract.LinkState.UNKNOWN,
                                   None, "the bot has not written a status file"),
             None, "no preflight recorded yet", None, "no training job is reporting",
-            None, "no machine services on this host ([api] system_services = none)"),
+            None, "no machine services on this host ([api] system_services = none)",
+            # [model] enabled is refused by config load today; were it on, the API would not
+            # know the bot's load: null with its cause.
+            model=contract.ModelV1(True, None, None, contract.MODEL_LOAD_NOT_RECORDED)),
         # The notification settings: disk-low kept off iMessage; push not built yet.
         "alerts-v1": contract.AlertsV1((
             contract.AlertChannelV1(contract.AlertChannel.MAC, True, None),
@@ -924,19 +930,28 @@ _LAUNCHD = (LaunchdJobV1("preflight", "08:30", (1, 2, 3, 4, 5)),
             LaunchdJobV1("nightly-fetch", "19:00", (1, 2, 3, 4, 5)))
 
 
-def _text(document: object) -> str:
-    return json.dumps(contract.to_jsonable(document), indent=2, ensure_ascii=False) + "\n"
+# Fixtures of files the bot writes (not API responses): encoded as stored, without derived keys.
+STORED = ("status-v1",)
+
+
+def _derived(name: str) -> bool:
+    return name.split(".", 1)[0] not in STORED
+
+
+def _text(name: str, document: object) -> str:
+    return json.dumps(contract.to_jsonable(document, derived=_derived(name)), indent=2,
+                      ensure_ascii=False) + "\n"
 
 
 def test_fixtures_are_current():
     docs = documents()
     if os.environ.get("TICKR_WRITE_FIXTURES") == "1":
         for name, document in docs.items():
-            (FIXTURES / f"{name}.json").write_text(_text(document), "utf-8")
+            (FIXTURES / f"{name}.json").write_text(_text(name, document), "utf-8")
     on_disk = {p.stem for p in FIXTURES.glob("*.json")}
     assert on_disk == set(docs), "fixtures on disk differ from documents()"
     for name, document in docs.items():
-        assert (FIXTURES / f"{name}.json").read_text("utf-8") == _text(document), (
+        assert (FIXTURES / f"{name}.json").read_text("utf-8") == _text(name, document), (
             f"{name}: regenerate with TICKR_WRITE_FIXTURES=1 and review the diff")
 
 
@@ -946,4 +961,5 @@ def test_fixture_matches_schema_and_parses(path):
     cls = contract.SCHEMA_TYPES[schema_name]
     raw = json.loads(path.read_text("utf-8"))
     assert errors(contract.json_schema(cls), raw) == []
-    assert contract.to_jsonable(contract.from_jsonable(cls, raw)) == raw
+    assert contract.to_jsonable(contract.from_jsonable(cls, raw),
+                                derived=_derived(path.stem)) == raw

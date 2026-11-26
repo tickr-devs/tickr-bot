@@ -571,6 +571,63 @@
       "type": "integer",
       "const": 1
     },
+    "model": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "bundle": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "not_loaded",
+                    "refused"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cause": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "bundle",
+            "state",
+            "cause"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "morning_check_cause_codes": {
       "type": "array",
       "items": {

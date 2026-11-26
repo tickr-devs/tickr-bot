@@ -91,6 +91,11 @@
         "cause": null,
         "cause_codes": []
       },
+      "decider": {
+        "kind": "strategy",
+        "name": "price-action-v1",
+        "version": "1"
+      },
       "prices_after_cause_codes": []
     },
     {
@@ -174,6 +179,11 @@
         "cause": null,
         "cause_codes": []
       },
+      "decider": {
+        "kind": "strategy",
+        "name": "price-action-v1",
+        "version": "1"
+      },
       "prices_after_cause_codes": []
     },
     {
@@ -214,6 +224,11 @@
             }
           }
         ]
+      },
+      "decider": {
+        "kind": "strategy",
+        "name": "price-action-v1",
+        "version": "1"
       },
       "prices_after_cause_codes": [
         {

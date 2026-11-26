@@ -185,13 +185,13 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, whether they matched its records, and the latest balances. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/quotes` | `200` `quotes-response-v1`: the newest valid L1 quote of every symbol on the bot's quote stream (`quotes-v1`, see "GET /quotes" below); `503` `unavailable` while the bot has written no quotes file or it is invalid. |
-| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. `command_max_age_seconds` is the age past which the bot refuses a command as expired: the apps keep a lost send's `Idempotency-Key` at most this long (`null` from an older API, and then they keep none). |
+| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. `command_max_age_seconds` is the age past which the bot refuses a command as expired: the apps keep a lost send's `Idempotency-Key` at most this long (`null` from an older API, and then they keep none). `decider` / `decider_cause`: see Decider below. |
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
 | GET | `/settings/schema` | `200` `settings-schema-v1`: every owner setting of the settings schema with its kind, unit, bounds, step, group, words in English and Spanish, when a change applies, the direction that needs Face ID and whether it needs retraining, plus the rules across settings (read-only; see Owner settings below). `503 unavailable` when `[api] settings_schema_file` cannot be read. |
 | GET | `/settings/values` | `200` `settings-values-v1`: each schema setting's value in its owner's file as it is on disk now (TOML text), with each file's SHA-256. `503 unavailable` without a config file path (the demo) or when a file cannot be read. |
 | POST | `/settings/validate` | Body `{"changes": [{"owner", "key", "value"}, ...]}`. `200` `settings-draft-v1`: typed refusals and, per key, when the change would apply and whether it needs Face ID. Writes and applies nothing. `400` for any other body, `503` as GET /settings/values. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
-| GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
+| GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, the trained model's switch and state (`model`), and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
 | GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
 | PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "mac"\|"imessage"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
@@ -924,6 +924,15 @@ machine's own services follow under `host`, so a bot on a server keeps the rest 
     PreventUserIdleSystemSleep or PreventSystemSleep (`held` or `not_held`; nothing else of the
     output is kept). `unknown` with `cause` when the command fails. A hold is expected while
     the bot runs.
+- `model` (added after version 1 shipped; null from an older API): the trained model.
+  `enabled` is `[model] enabled` and `bundle` `[model] bundle` (null when none is chosen), as
+  the API loaded them. `state`: `off` while `enabled` is false (nothing is loaded, the strategy
+  decides). `not_loaded` (enabled, no bundle loaded yet) and `refused` (the load was refused,
+  `cause` the loader's ModelRefused code, e.g. `bundle_file_sha256`) are reserved for when the
+  bot records its loads; until then an enabled model is `state` null with `cause`
+  `model_load_not_recorded`, because the API process never loads a bundle itself. Config load
+  refuses `enabled = true` today, so the API sends `off`. The model's live data feed is not
+  part of this block yet: it comes as its own key once the feed is wired (R24).
 
 No part of this document is per user: a later bot or account identity is one more key.
 
@@ -1199,6 +1208,25 @@ and drawdowns are `0` for a range without trades, never `null`.
 `from` after `to`, a range longer than `[api] performance_max_range_days` days (both ends
 counted), a missing, repeated, extra or malformed parameter is `400 bad_request`. An
 unreadable database is `503 unavailable`, as for `/days`.
+
+### Decider
+
+Who made a decision, so a client can show a strategy and later the trained model the same way:
+`decider` `{kind, name, version}`, `kind` `strategy` (a module under `strategies/`) or `model` (a
+trained bundle, backlog R26). It sits next to the strategy identity it comes from: GET /status
+top level (`status.decider`, who decides this run's entries) and each `trades_today[]` (who
+decided its entry; null with a null `strategy`, a manual trade), each `/decisions` row, each
+`/skipped` signal, and `/explain`. Today every decision is a strategy's, so it is always `kind`
+`strategy` with the `strategy` name and version beside it; it is built from them when the
+document is served, and `model` is never sent
+until the model decides and the decision records say so. GET /settings has it too (the active
+strategy's `[strategy]` name and version from its strategy.toml, read when the API starts), null
+with `decider_cause` `strategy_file_unreadable` when that file cannot be read. Added after
+version 1 shipped: a reader takes a document without it as null; the existing `strategy` keys
+stay. It is only in API responses, never in a file the bot writes: status.json has no `decider`
+(a reader from before it refuses unknown keys, and the watchdog takes an unreadable status file
+as a bot not running), so a rollback or a mixed-version run still reads the file; the API adds
+it when it serves the status.
 
 ### GET /explain (read-only)
 

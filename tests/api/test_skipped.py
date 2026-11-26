@@ -124,6 +124,8 @@ def _research_total(cfg, records, path):
 
 NO_BARS = "no captured bars for 2026-11-16"
 NO_BARS_CODES = [{"code": "no_captured_bars", "params": {"day": "2026-11-16"}}]
+# Every decision today is the active strategy's: its decider is that strategy (never a model).
+DECIDER = {"kind": "strategy", "name": "price-action-v1", "version": "1"}
 
 
 def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
@@ -148,7 +150,7 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
          "prices_after": [], "prices_after_cause": NO_BARS,
          "what_if": {"result_gross_usd": None, "result_r": None, "exit_reason": None,
                      "cause": NO_BARS, "cause_codes": NO_BARS_CODES},
-         "prices_after_cause_codes": NO_BARS_CODES},
+         "decider": DECIDER, "prices_after_cause_codes": NO_BARS_CODES},
         {"at": "2026-11-16T15:07:00.000Z", "symbol": "ABCD",
          "strategy": {"name": "price-action-v1", "version": "1"},
          "admission": "refused",
@@ -162,7 +164,7 @@ def test_skipped_lists_refused_and_not_evaluated_enters_only(api, cfg):
          "prices_after": [], "prices_after_cause": NO_BARS,
          "what_if": {"result_gross_usd": None, "result_r": None, "exit_reason": None,
                      "cause": NO_BARS, "cause_codes": NO_BARS_CODES},
-         "prices_after_cause_codes": NO_BARS_CODES},
+         "decider": DECIDER, "prices_after_cause_codes": NO_BARS_CODES},
     ]
     # /decisions carries the same admission and cause
     decisions = _get(api, "/decisions?symbol=ABCD&date=2026-11-16", "decisions-v1")

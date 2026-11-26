@@ -40,5 +40,10 @@
       "against_trigger": false
     }
   ],
-  "api_version": 1
+  "api_version": 1,
+  "decider": {
+    "kind": "strategy",
+    "name": "price_action_v1",
+    "version": "1"
+  }
 }

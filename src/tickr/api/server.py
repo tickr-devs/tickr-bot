@@ -368,8 +368,14 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
 
 
 def shown_settings(cfg: Config) -> SettingsV1:
-    """The config numbers clients show, exactly as loaded."""
+    """The config numbers clients show, exactly as loaded, and the active strategy's identity
+    as its strategy.toml declares it (null with a cause code when that file is unreadable)."""
     risk, session = cfg.risk, cfg.session
+    try:
+        decider, decider_cause = (contract.strategy_decider(
+            *read_identity(cfg.root, cfg.strategy.active)), None)
+    except ObserverError:
+        decider, decider_cause = None, contract.DECIDER_UNREADABLE
     return SettingsV1(
         environment=cfg.environment_name,
         active_strategy=cfg.strategy.active,
@@ -393,6 +399,8 @@ def shown_settings(cfg: Config) -> SettingsV1:
         live_quote_max_age_seconds=cfg.api.live_quote_max_age_seconds,
         quotes_poll_seconds=cfg.api.quotes_poll_seconds,
         command_max_age_seconds=cfg.api.command_max_age_seconds,
+        decider=decider,
+        decider_cause=decider_cause,
     )
 
 

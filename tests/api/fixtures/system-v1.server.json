@@ -23,6 +23,12 @@
   "host": null,
   "host_cause": "no machine services on this host ([api] system_services = none)",
   "api_version": 1,
+  "model": {
+    "enabled": true,
+    "bundle": null,
+    "state": null,
+    "cause": "model_load_not_recorded"
+  },
   "morning_check_cause_codes": [
     {
       "code": "no_preflight_record",
