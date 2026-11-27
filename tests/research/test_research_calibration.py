@@ -17,8 +17,10 @@ CLOCK = ["--replay-settings", str(HERE / "replay_settings.toml"),
          "--config", str(HERE.parent.parent / "config" / "bot.toml")]
 
 
-def _answers(path, header, rows):
-    path.write_text("\n".join([",".join(header), *(",".join(r) for r in rows)]) + "\n")
+def _answers(path, header, rows, day="2026-06-30"):
+    """Stored answers with a `day` column (the day before the sealed window) added last."""
+    lines = [",".join([*header, "day"]), *(",".join([*r, day]) for r in rows)]
+    path.write_text("\n".join(lines) + "\n")
     return path
 
 
@@ -83,3 +85,18 @@ def test_cli_writes_csv_and_json(tmp_path):
     assert rows[2]["gap"] == "0.3000"
     summary = json.loads((out / "calibration_summary.json").read_text())
     assert summary["columns"]["p_layer1"]["answers"] == 3
+
+
+def test_answers_need_a_day_column(tmp_path, capsys):
+    path = tmp_path / "a.csv"
+    path.write_text("p_a,outcome\n0.5,1\n")
+    assert main(["calibration", "--answers", str(path), "--settings", SETTINGS,
+                 "--out", str(tmp_path / "o"), *CLOCK]) == 2
+    assert "no 'day' column" in capsys.readouterr().err
+
+
+def test_a_bad_day_is_refused(tmp_path, capsys):
+    path = _answers(tmp_path / "a.csv", ["p_a", "outcome"], [("0.5", "1")], day="30/06/2026")
+    assert main(["calibration", "--answers", str(path), "--settings", SETTINGS,
+                 "--out", str(tmp_path / "o"), *CLOCK]) == 2
+    assert "is not a YYYY-MM-DD date" in capsys.readouterr().err

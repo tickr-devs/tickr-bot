@@ -367,6 +367,7 @@ def _run(args: argparse.Namespace) -> dict:
         return report.write_refusals(rows, args.out, places, sealed_days)
     if args.command == "calibration":
         settings = load_research_settings(args.settings)
+        refuse_sealed("--answers", days=calibration.answer_days(args.answers))
         reports = calibration.calibration(args.answers, settings.calibration_buckets)
         return report.write_calibration(reports, args.out, places)
 

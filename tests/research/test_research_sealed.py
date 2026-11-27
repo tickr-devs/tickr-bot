@@ -256,6 +256,12 @@ def _sizing(tmp_path, days):
             "--max-usd", "1000", *PLACES]
 
 
+def _calibration(tmp_path, days):
+    answers = tmp_path / "answers.csv"
+    answers.write_text("p_a,outcome,day\n" + "".join(f"0.8,1,{d.isoformat()}\n" for d in days))
+    return ["calibration", "--answers", str(answers), *SETTINGS, *PLACES]
+
+
 def _gate_covered(tmp_path, days):
     # The range is open; one covered day outside it lies in the window.
     return _gate(tmp_path, days, start=date(2026, 6, 1), end=OPEN)
@@ -265,6 +271,7 @@ def _gate_covered(tmp_path, days):
 # strategies, model trades. The execution reports are here only with a market-data file.
 REFUSED = {"decide": _decide, "outcomes": _outcomes, "whatif": _whatif,
            "observers": _observers, "diff": _diff, "gate": _gate, "sizing": _sizing,
+           "calibration": _calibration,
            "collar": _collar, "collar --bars": _collar_bars,
            "latency": _latency, "fill-quality --quotes": _fill_quality_quotes}
 # Execution reports reading only the bot's own order, fill and timing records of sealed days.
@@ -419,11 +426,3 @@ def test_gate_refuses_a_covered_day_in_the_window(tmp_path, capsys):
     argv = [*_gate_covered(tmp_path, [OPEN, date(2026, 7, 1)]), "--out", str(tmp_path / "o")]
     assert main(argv) == 2
     assert "sealed_window: --covered-days" in capsys.readouterr().err
-
-
-def test_calibration_takes_no_dates(tmp_path):
-    # Stored answers carry no day (docs/research.md): the command is not guarded; see the doc.
-    answers = tmp_path / "a.csv"
-    answers.write_text("outcome,p_layer1\n1,0.9\n0,0.1\n")
-    assert main(["calibration", "--answers", str(answers), *SETTINGS, *PLACES,
-                 "--out", str(tmp_path / "o")]) == 0

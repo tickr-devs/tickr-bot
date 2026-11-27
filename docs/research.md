@@ -55,7 +55,7 @@ The table names every command in exactly one list; a command in neither (or a li
 command that does not exist) is refused:
 
 - `sealed_commands`: `calibration`, `collar`, `decide`, `diff`, `gate`, `observers`,
-  `outcomes`, `whatif`. Every input of a sealed day is refused.
+  `outcomes`, `sizing`, `whatif`. Every input of a sealed day is refused.
 - `execution_commands`: `fill-quality`, `latency`, `refusals`, `slippage`. The bot's own
   records of sealed days pass; a sealed market-data input is still refused.
 
@@ -70,7 +70,7 @@ output written); a sealed day is never dropped while the rest is reported.
 | `decide` | every bar | - |
 | `diff` | every decision of each record set | - |
 | `collar` | every captured quote and captured bar (both are market data), `--decisions` | - |
-| `calibration` | nothing can be checked: stored answers carry no day, so the caller keeps sealed answers out | - |
+| `calibration`, `sizing` | every answer's `day` (the answers file must carry the column) | - |
 | `latency` | every captured quote (`--quotes` is market data and required, so in practice the whole command) | stream notices (`--notices`) |
 | `fill-quality` | every captured quote (`--quotes`) | the database's trades, orders and fills (run it without `--quotes`); absolute prices withheld (below) |
 | `slippage` | - | the database's stopped trades; absolute prices and P&L withheld, never in the replay feed (below) |
@@ -335,7 +335,8 @@ python -m tickr.research calibration --answers answers.csv --settings config/res
 
 Input: one CSV of stored model answers on months the model never saw (the caller picks the
 months; the tool cannot tell). Header row; `outcome` = 1 if the event the probabilities predict
-happened, else 0; every column named `p_<name>` is a probability in 0..1 (for example `p_layer1`,
+happened, else 0; `day` = the answer's trading day (YYYY-MM-DD; an answer on a sealed day
+refuses the whole run, see "Sealed exam window" above); every column named `p_<name>` is a probability in 0..1 (for example `p_layer1`,
 `p_layer2`); other columns are ignored. A blank probability cell means that layer gave no
 answer for the row and is skipped (counted). Nothing writes this file yet: the training job or
 the bot must export it. A bad value is refused with file and line, never clipped.
