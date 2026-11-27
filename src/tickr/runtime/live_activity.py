@@ -14,8 +14,8 @@ content-state, and compares what makes an event with what it last pushed:
 - end when flat: state `flat`, with `dismissal-date` = now + `end_linger_seconds` when above 0.
 
 A start with no `activity_start` token of the app (or no way to read the tokens) is not sent:
-the activity stays not live, the journal names the cause once per such spell, and the next look
-tries again.
+the activity stays not live, the journal names the cause once (again only when the cause changes,
+or after a start was sent), and the next look tries again.
 
 What it pushed is written to `[live_activity] state_file` before the push, so a restarted
 watchdog neither starts a second activity nor repeats an event. Each push is one attempt per
@@ -202,7 +202,8 @@ class Publisher:
         self._state_path = data / self._live.state_file
         self._sent = self._load()
         # Why the last start found no device to push to, once journaled; None once a start had
-        # one. A start with no device is never sent, so the journal names each empty spell once.
+        # one. A start with no device is never sent; the journal names a cause once until it
+        # changes or a start is sent.
         self._no_start: str | None = None
 
     def _load(self) -> Sent | None:
