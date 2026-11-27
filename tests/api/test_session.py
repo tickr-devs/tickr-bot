@@ -284,3 +284,85 @@ def test_config_with_accounts_pins_the_key_file(tmp_path):
     built = settings_from_config(cfg)
     assert built.signin_key == _key() and built.signin_rules.accounts == frozenset({"1"})
     json.dumps(built.signin_rules.issuer)  # a plain string from bot.toml
+
+
+PUSH = "/push-token"
+APNS_TOKEN = "a1" * 32  # a device token in hex, as APNs hands it to the app
+
+
+def push_body(token=APNS_TOKEN, kind="alert"):
+    return {"token": token, "environment": "development", "bundle_id": "bot.tickr.ios",
+            "platform": "ios", "kind": kind}
+
+
+def push_tokens(settings):
+    """The stored push tokens: {device name: {kind: token}}."""
+    path = settings.alerts.push_tokens.path
+    if not path.exists():
+        return {}
+    devices_ = json.loads(path.read_text("utf-8"))["devices"]
+    return {name: {kind: entry["token"] for kind, entry in kinds_.items()}
+            for name, kinds_ in devices_.items()}
+
+
+def test_a_push_registration_survives_a_refresh_and_delete_still_finds_it(settings, serve):
+    clock = Clock(ISSUED + timedelta(seconds=1))
+    server = serve(settings, clock=clock)
+    first = doc(sign_in(server)[1])
+    resp, payload = remote(server, "POST", PUSH, token=first["access_token"], body=push_body())
+    assert resp.status == 200, payload
+    clock.now += timedelta(seconds=settings.session_lifetimes.access_seconds)
+    second = doc(refresh(server, first["refresh_token"])[1])
+    # Still this device's registration: the key is its name, not its rotated token.
+    assert push_tokens(settings) == {NAME: {"alert": APNS_TOKEN}}
+    resp, payload = remote(server, "POST", PUSH, token=second["access_token"],
+                           body=push_body("b2" * 32))
+    assert resp.status == 200, payload
+    assert push_tokens(settings) == {NAME: {"alert": "b2" * 32}}
+    resp, payload = remote(server, "DELETE", PUSH, token=second["access_token"])
+    assert resp.status == 200 and doc(payload)["registered"] is False
+    assert push_tokens(settings) == {}
+
+
+def test_signing_out_drops_that_devices_push_tokens_only(settings, serve, alerts):
+    server = serve(settings)
+    token = doc(sign_in(server)[1])["access_token"]
+    other = doc(sign_in(server, "valid_mac_list_audience", name="Mac")[1])["access_token"]
+    for kind in ("alert", "activity_start"):
+        remote(server, "POST", PUSH, token=token, body=push_body(kind=kind))
+    remote(server, "POST", PUSH, token=other, body=push_body("c3" * 32))
+    assert remote(server, "DELETE", "/session", token=token)[0].status == 204
+    assert push_tokens(settings) == {"Mac": {"alert": "c3" * 32}}
+    assert "push tokens" not in alerts.shown[-1][1]
+
+
+def test_a_reused_refresh_token_drops_the_devices_push_tokens(settings, serve):
+    server = serve(settings)
+    first = doc(sign_in(server)[1])
+    remote(server, "POST", PUSH, token=first["access_token"], body=push_body())
+    doc(refresh(server, first["refresh_token"])[1])
+    assert refresh(server, first["refresh_token"])[0].status == 401
+    assert push_tokens(settings) == {}
+
+
+def test_an_expired_sign_in_drops_the_devices_push_tokens(settings, serve):
+    clock = Clock(ISSUED + timedelta(seconds=1))
+    server = serve(settings, clock=clock)
+    first = doc(sign_in(server)[1])
+    remote(server, "POST", PUSH, token=first["access_token"], body=push_body())
+    clock.now += timedelta(seconds=settings.session_lifetimes.refresh_seconds)
+    assert refresh(server, first["refresh_token"])[0].status == 401
+    assert push_tokens(settings) == {}
+
+
+def test_signing_out_with_an_unreadable_push_store_still_signs_out(settings, serve, alerts):
+    server = serve(settings)
+    token = doc(sign_in(server)[1])["access_token"]
+    path = settings.alerts.push_tokens.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", "utf-8")
+    assert remote(server, "DELETE", "/session", token=token)[0].status == 204
+    assert remote(server, "GET", "/status", token=token)[0].status == 401
+    assert path.read_text("utf-8") == "{"
+    text = alerts.shown[-1][1]
+    assert f"'{NAME}' signed out" in text and "push tokens could not be dropped" in text

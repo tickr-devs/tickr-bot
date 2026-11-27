@@ -5,8 +5,8 @@
 leaves a pairing link with a one-time code in a 0600 file under data_dir for the owner to move to
 the device; the device redeems the code once, at POST /pair on the remote port, for its own token,
 beside the devices already paired (one of the same name is replaced). `devices` lists the paired
-devices and `revoke --name <device>` revokes one. Only SHA-256 digests are kept; nothing secret
-is printed.
+devices and `revoke --name <device>` revokes one and drops its push tokens. Only SHA-256
+digests are kept; nothing secret is printed.
 
 With `[chart] webull_enabled`, and once the chart probe C1 is recorded as passed for the
 environment (`python -m tickr.probes chart-client`), `serve` builds the chart's own Webull
@@ -59,6 +59,7 @@ from tickr.runtime.alerts import (
     feed_path,
 )
 from tickr.runtime.launchd import api_credential_variables
+from tickr.runtime.push_tokens import StoreError
 
 SECONDS_PER_MINUTE = 60
 # Alert title prefix, the same as the runtime commands' (runtime/__main__.py TITLE).
@@ -214,6 +215,10 @@ def main(argv: list[str] | None = None) -> int:
             token_file = pair_simulator(settings)
         if args.command == "unpair-simulator":
             unpair_simulator(settings)
+    except StoreError as exc:  # revoked all the same; only the push tokens are kept
+        print(f"The token is revoked, but its push tokens could not be dropped: {exc}; delete "
+              "that file (each app registers again at its next launch).", file=sys.stderr)
+        return 1
     except config_module.ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2

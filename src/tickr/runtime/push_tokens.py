@@ -6,15 +6,19 @@ sender pushes to), `activity_start` (a Live Activity push-to-start token) or `ac
 are stored for the planned Live Activity sender.
 
 The store is one JSON file under data_dir (`[alerts] push_tokens_file`, 0600, written atomically):
-`{"schema_version": 1, "devices": {"<device key>": {"<kind>": {"token", "environment",
+`{"schema_version": 2, "devices": {"<device name>": {"<kind>": {"token", "environment",
 "bundle_id", "platform", "registered_at"}}}}`. The API is its writer; the push sender reads it on
 each alert and removes a token APNs says is gone (410 or BadDeviceToken).
 
-A device key says which paired device registered the token: the SHA-256 of the bearer token it
-presented on the remote port (the digest the API already keeps, and the one each device of
-`api/devices.py` (#794) carries as `sha256`), or `LOCAL` for the Mac's own app on the local
-port, which needs no token. A device token is personal data: it is never logged or put in an
-error; `short_hash` names one in a journal line instead.
+A device key is the name of the device that registered the token, as the API authorized it: the
+paired or signed-in device's name in `api/devices.py`, `LOCAL` for the Mac's own app on the local
+port (no token there), or the Simulator's reserved name. The name stays the same while a signed-in
+device's access tokens rotate at each refresh, so its registration survives a refresh; signing the
+device out or revoking it drops its tokens (`remove_device`). Schema 1 keyed devices by the SHA-256
+of their bearer token, which changes at every refresh; such a file is refused (`OldSchema`), never
+mapped to names by guessing: delete it and each app registers again at its next launch. A device
+token is personal data: it is never logged or put in an error; `short_hash` names one in a journal
+line instead.
 """
 
 from __future__ import annotations
@@ -36,8 +40,10 @@ from tickr.api import contract
 from tickr.api.contract import PushPlatform as Platform
 from tickr.api.contract import PushTokenKind as Kind
 
-SCHEMA_VERSION = 1
-LOCAL = "local"  # the device key of the Mac's own app (the local port has no bearer token)
+SCHEMA_VERSION = 2
+# The schema that keyed devices by their bearer token's SHA-256; refused, never migrated.
+DIGEST_KEYED_SCHEMA = 1
+LOCAL = "local"  # the device key of the Mac's own app: the API's LOCAL_DEVICE name
 PRIVATE_MODE = 0o600  # owner read and write only (POSIX mode bits)
 # An APNs device token: hex, an even number of digits. Apple documents no fixed length (32 bytes
 # today), so any non-empty whole-byte hex up to the HTTP/2 path limit Apple allows is taken.
@@ -50,6 +56,10 @@ Key = tuple[str, Kind]  # (device key, token kind): one token each
 
 class StoreError(Exception):
     """The store file cannot be read as written."""
+
+
+class OldSchema(StoreError):
+    """A schema-1 file, keyed by bearer-token digests that no longer name a device."""
 
 
 class BadRegistration(ValueError):
@@ -105,6 +115,8 @@ def _parse(text: str) -> dict[Key, PushToken]:
     body = json.loads(text)
     if not isinstance(body, dict) or set(body) != {"schema_version", "devices"}:
         raise ValueError("keys must be exactly schema_version and devices")
+    if body["schema_version"] == DIGEST_KEYED_SCHEMA:
+        raise OldSchema("schema 1")
     if body["schema_version"] != SCHEMA_VERSION:
         raise ValueError(f"schema_version {body['schema_version']!r}")
     if not isinstance(body["devices"], dict):
@@ -189,14 +201,18 @@ class PushTokenStore:
             raise StoreError(f"{self.path.name} unreadable: {type(exc).__name__}") from None
         try:
             return _parse(text)
+        except OldSchema:
+            raise OldSchema(f"{self.path.name} is schema 1, keyed by bearer-token digests that "
+                            "change at every refresh; delete it, each app registers again at "
+                            "its next launch") from None
         except (ValueError, TypeError, KeyError, contract.ContractError) as exc:
             # The message never holds file content: a ValueError above names a field only.
             raise StoreError(f"{self.path.name} out of shape: {type(exc).__name__}") from None
 
     def register(self, device: str, token: PushToken) -> None:
         """Store `token` for `device` and its kind, replacing only that kind's earlier one. The
-        same token of that kind under another device key (the device paired again, so its
-        bearer token changed) is dropped: one device is pushed once."""
+        same token of that kind under another device name (the device signed in again under
+        a new name) is dropped: one device is pushed once."""
         with self._locked():
             tokens = {k: t for k, t in self.read().items()
                       if not (t.kind is token.kind and t.token == token.token)}
@@ -211,6 +227,15 @@ class PushTokenStore:
                 return False
             _write_private(self.path, _text(tokens))
             return True
+
+    def remove_device(self, device: str) -> int:
+        """Drop every token of `device` (signed out or revoked); how many there were."""
+        with self._locked():
+            tokens = self.read()
+            kept = {k: t for k, t in tokens.items() if k[0] != device}
+            if len(kept) < len(tokens):
+                _write_private(self.path, _text(kept))
+            return len(tokens) - len(kept)
 
     def remove_token(self, token: str) -> bool:
         """Drop every entry still holding `token` (APNs said it is gone); whether any was."""

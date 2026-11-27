@@ -1551,13 +1551,14 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, alerts_document(settings, routing))
 
     def _push_device(self) -> str:
-        """Which paired device is calling: the SHA-256 of the bearer token `_guard` accepted on
-        the remote port (each paired device has its own token, the digest #794's device
-        registry keeps), or `LOCAL` for the Mac's own app on the local port."""
+        """Which device is calling: the name `_guard` authorized (a paired or signed-in device,
+        the same across its token refreshes, or the Simulator's), or `LOCAL` for the Mac's own
+        app on the local port. Never empty: `_guard` sets it before any route runs."""
         if not self.server.remote:
             return LOCAL
-        header = self.headers.get("Authorization") or ""
-        return hashlib.sha256(header[len(BEARER):].encode("utf-8")).hexdigest()
+        if not self.device_name:
+            raise RuntimeError("no authorized device name")  # answered as a typed 500
+        return self.device_name
 
     def _register_push_token(self) -> None:
         """POST /push-token with {"token", "environment", "bundle_id", "platform"} and an
@@ -1769,6 +1770,7 @@ class Handler(BaseHTTPRequestHandler):
         settings = self.server.settings
         ended: sessions.RefreshRefused | None = None
         issued: sessions.Issued | None = None
+        self._push_kept = ""  # set by `_refresh_locked` when it signs a device out
         with self.server.pair_lock, _pairing_lock(settings):
             refused = self._admit(PAIR_ROUTE_KIND)
             if refused is None:
@@ -1784,7 +1786,8 @@ class Handler(BaseHTTPRequestHandler):
             why = ("a refresh token that was already used came back, so a copy of it may exist "
                    "(or the app lost the answer to its own refresh)" if ended.reused
                    else "its sign-in expired")
-            self._device_session_alert(f"device {ended.revoked!r} signed out: {why}")
+            self._device_session_alert(f"device {ended.revoked!r} signed out: {why}"
+                                       f"{self._push_kept}")
         if issued is not None:
             self._json(200, self._session_answer(issued))
 
@@ -1807,6 +1810,8 @@ class Handler(BaseHTTPRequestHandler):
                 kept = devices.without(paired, exc.revoked)
                 if kept is not None:
                     _write_private(settings.devices_path, devices.render(kept))
+                # Before the answer, so the app never sees its tokens outlive the sign-out.
+                self._push_kept = drop_push_tokens(settings, exc.revoked)
             self._error("unauthorized", exc.cause)
             return None, exc
         # One write retires the presented token and records the new one, before the answer.
@@ -1829,8 +1834,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if kept is not None:
                 _write_private(settings.devices_path, devices.render(kept))
+        left = drop_push_tokens(settings, name)
         self._send(204, b"", "application/json", {})
-        self._device_session_alert(f"device {name!r} signed out")
+        self._device_session_alert(f"device {name!r} signed out{left}")
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated
@@ -2298,10 +2304,12 @@ def pair_simulator(settings: ApiSettings) -> Path:
 
 def unpair_simulator(settings: ApiSettings) -> None:
     """Revoke the Simulator's token: delete its hash (the api server refuses it at once) and the
-    file holding it. The phone's token is untouched."""
+    file holding it, and drop the Simulator's push tokens (StoreError after the revocation when
+    they could not be). The phone's token is untouched."""
     with _pairing_lock(settings):
         settings.simulator_token_hash_path.unlink(missing_ok=True)
         settings.simulator_token_path.unlink(missing_ok=True)
+    settings.alerts.push_tokens.remove_device(SIMULATOR_DEVICE)  # StoreError: kept, see revoke
 
 
 def pair(settings: ApiSettings, name: str, now: datetime | None = None) -> Path:
@@ -2365,12 +2373,26 @@ def list_devices(settings: ApiSettings) -> tuple[devices.Device, ...]:
         return load_devices(settings)
 
 
+def drop_push_tokens(settings: ApiSettings, name: str) -> str:
+    """Drop the APNs tokens of `name`, a device just signed out or revoked, so nothing is pushed
+    to it again. "" when done; otherwise a clause for the caller's alert or message naming why
+    they are kept (the device is revoked all the same)."""
+    try:
+        settings.alerts.push_tokens.remove_device(name)
+    except StoreError as exc:
+        return (f"; its push tokens could not be dropped ({safe_cause(exc)}): delete "
+                f"{settings.alerts.push_tokens.path.name}")
+    return ""
+
+
 def revoke_device(settings: ApiSettings, name: str) -> bool:
-    """Revoke one device's token: the api server refuses it from the next request on; the other
-    devices keep working. False when no device has that name (nothing changes)."""
+    """Revoke one device's token and drop its push tokens: the api server refuses it from the
+    next request on; the other devices keep working. False when no device has that name (any
+    push tokens left under the name are dropped all the same). StoreError, after the device is
+    revoked, when its push tokens could not be dropped."""
     with _pairing_lock(settings):
         kept = devices.without(load_devices(settings), name)
-        if kept is None:
-            return False
-        _write_private(settings.devices_path, devices.render(kept))
-        return True
+        if kept is not None:
+            _write_private(settings.devices_path, devices.render(kept))
+    settings.alerts.push_tokens.remove_device(name)
+    return kept is not None
