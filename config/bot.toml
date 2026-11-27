@@ -1223,32 +1223,22 @@ release_poll_seconds = 1
 [alerts]
 # Same alert (kind + text) repeated within this many seconds is not shown again (still returned for the journal); read by runtime.alerts.
 dedupe_window_seconds = 600
-# Seconds to wait for the macOS notification command before giving up; read by runtime.alerts.
+# Seconds to wait for a Telegram send before giving up (the alert is sent on a background thread, so the bot's loop does not wait for it); read by runtime.alerts.
 notification_timeout_seconds = 5
 # Seconds a self-clearing fence (broker read failed, unknown order, foreign exposure, ...) must last before the bot alerts;
 # fences that need the operator alert at once; read by runtime.watch.
 fence_alert_after_seconds = 30
-# NAME of the environment variable holding the owner's iMessage address (phone number or Apple ID email); the value is
-# personal data, set only in the owner's env file, never here; presence checked by preflight; read by runtime.alerts.
-imessage_recipient_variable = "TICKR_IMESSAGE_TO"
-# The Tickr Mac app that shows the Mac notification with its own icon (path to the .app, on a Mac
-# "/Applications/Tickr.app"; empty = none). When it is missing, not allowed to notify or fails, the notification goes
-# through osascript instead; read by runtime.alerts (macOS only). Server (2026-11-26 cutover): empty, no Mac app.
-mac_app = ""
-# Seconds to wait for the Tickr app to hand the notification over before osascript shows it instead (the alert is sent
-# on a background thread, so the bot's loop does not wait for it); read by runtime.alerts.
-mac_app_timeout_seconds = 2
 # Alerts feed: one JSON line per alert ({at, title, text}) appended by every process that alerts (bot, supervisor,
-# preflight, watchdog, API), relative to [run] data_dir; a Claude session on the Mac waits on it so the project learns
+# preflight, watchdog, API), relative to [run] data_dir; a Claude session waits on it so the project learns
 # of an alert within seconds, not only the owner's phone (docs/operations.md "Alerts"); read by runtime.alerts.
 feed_file = "alerts.jsonl"
-# Owner's alert routing: which alert kinds go to which channel (Mac notification, iMessage, push), a JSON file
+# Owner's alert routing: which alert kinds go to which channel (Telegram, push), a JSON file
 # relative to [run] data_dir written by PUT /alerts/routing; a preference, never a trading setting. Missing or
 # unreadable = every kind on every channel; critical kinds are always on; read by runtime.alert_routing.
 routing_file = "alert-routing.json"
-# Telegram alerts, so the owner is told away from the Mac. NAMES of the environment variables holding the Telegram bot
+# Telegram alerts, so the owner is told wherever he is; it is the one alert channel (preflight refuses a start without it, alert-channel-missing). NAMES of the environment variables holding the Telegram bot
 # token (from @BotFather) and the owner's chat id; the values are secrets and personal data, set only in the owner's env
-# file, never here. Neither variable set = the Telegram channel is off; one without the other fails preflight
+# file, never here. Neither variable set = no alert channel; one without the other fails preflight
 # (alert-telegram-missing); read by runtime.alerts and preflight.
 bot_token_variable = "TICKR_TELEGRAM_BOT_TOKEN"
 # NAME of the environment variable holding the owner's Telegram chat id (see bot_token_variable); read by runtime.alerts and preflight.

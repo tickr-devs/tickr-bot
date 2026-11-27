@@ -199,7 +199,6 @@ closed_keys = [
   "massive.api_key_variable",
   "massive.files_key_id_variable",
   "massive.files_secret_variable",
-  "alerts.imessage_recipient_variable",
   "alerts.bot_token_variable",
   "alerts.chat_id_variable",
   "api.remote_token_hash_file",

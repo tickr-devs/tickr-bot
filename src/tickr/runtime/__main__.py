@@ -12,7 +12,7 @@
   `release` and `rollback` require just before they switch.
 - `require-flat`: `broker-flat` plus the database's open trades; exit 0 only when flat (the
   server deploy's gate, ops/systemd/deploy-server.sh).
-- `alert <kind> <text>`: show one alert (used to test notifications on the Mac).
+- `alert <kind> <text>`: show one alert (used to test notifications).
 - `render-launchd`: write filled-in plists from ops/launchd into a folder; installs nothing.
 - `render-systemd`: write the systemd units and timers from ops/systemd (Linux server); installs
   nothing.
@@ -55,7 +55,6 @@ from tickr.runtime.alerts import (
     Routing,
     default_notifier,
     feed_path,
-    recipient_missing,
     route_all,
     token_pending_text,
 )
@@ -116,7 +115,7 @@ def _data_dir(config_path: Path) -> Path | None:
 
 def _feed(config_path: Path, alerts: config_module.AlertsConfig) -> Path | None:
     """The alerts feed file even when the rest of the config is invalid; None when [run]
-    itself is not readable (the Mac notification and iMessage still go out)."""
+    itself is not readable (Telegram still goes out)."""
     data = _data_dir(config_path)
     return None if data is None else data / alerts.feed_file
 
@@ -137,7 +136,7 @@ def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: st
     alerter = Alerter(alerts, title, default_notifier(alerts, feed=_feed(config_path, alerts)),
                       routing=_routing(config_path, alerts))
     _emit("alert", alerter.alert(kind, text).journal_body())
-    for outcome in alerter.flush():  # background channels (iMessage) before this process exits
+    for outcome in alerter.flush():  # background channels before this process exits
         _emit("alert", outcome.journal_body())
 
 
@@ -281,17 +280,11 @@ def _watchdog(config_path: Path) -> int:
     alerter = Alerter(cfg.alerts, f"{TITLE} {cfg.environment_name}", notifier,
                       clock=WATCHDOG_NOW, routing=skipped_by(routing_path(cfg)))
     if notifier is None:
-        # No channel on this machine (not macOS): every alert is journaled "no-notifier" only.
+        # No channel (Telegram is not set up): every alert is journaled "no-notifier" only.
         # Recorded once at the start so the journal says why nobody was told; the exit code is
         # then never 0, so the host scheduler shows a failed job.
         journal.write(watchdog.CHANNEL_REFUSED, {"cause": PreflightCause.ALERT_CHANNEL_MISSING,
                                                  "platform": sys.platform})
-    missing = recipient_missing(cfg.alerts, os.environ)
-    if missing is not None:
-        # Recorded, and every iMessage attempt fails with the same cause; the watchdog still
-        # runs, because the Mac notification is the remaining channel.
-        journal.write(watchdog.CHANNEL_REFUSED, {"cause": PreflightCause.ALERT_RECIPIENT_MISSING,
-                                                 "variable": missing})
 
     def token_pending() -> None:
         sentinel.alert(AlertKind.TOKEN_NEEDS_CONFIRMATION,

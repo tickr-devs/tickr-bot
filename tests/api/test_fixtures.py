@@ -465,22 +465,14 @@ def documents() -> dict[str, object]:
             # [model] enabled is refused by config load today; were it on, the API would not
             # know the bot's load: null with its cause.
             model=contract.ModelV1(True, None, None, contract.MODEL_LOAD_NOT_RECORDED)),
-        # The notification settings: disk-low kept off iMessage; push not built yet.
+        # The notification settings: disk-low kept off Telegram; push not built yet.
         "alerts-v1": contract.AlertsV1((
-            contract.AlertChannelV1(contract.AlertChannel.MAC, True, None),
-            contract.AlertChannelV1(contract.AlertChannel.IMESSAGE, False,
-                                    contract.AlertChannelCause.CHECK_FAILED),
-            contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
-                                    contract.AlertChannelCause.NOT_CONFIGURED),
+            contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, True, None),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
                                     contract.AlertChannelCause.NOT_BUILT)),
             alerts_api._kinds(Routing(frozenset({(AlertKind.DISK_LOW,
-                                                  contract.AlertChannel.IMESSAGE)}))), None),
+                                                  contract.AlertChannel.TELEGRAM)}))), None),
         "alerts-v1.unreadable": contract.AlertsV1((
-            contract.AlertChannelV1(contract.AlertChannel.MAC, False,
-                                    contract.AlertChannelCause.NO_PREFLIGHT),
-            contract.AlertChannelV1(contract.AlertChannel.IMESSAGE, False,
-                                    contract.AlertChannelCause.NO_PREFLIGHT),
             contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
                                     contract.AlertChannelCause.NO_PREFLIGHT),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,

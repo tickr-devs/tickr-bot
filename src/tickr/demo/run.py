@@ -85,7 +85,7 @@ class FixtureRefused(DemoRefused):
 
 
 class Notifier:
-    """Alerts of the demo bot go to the terminal, never to Notification Center or iMessage."""
+    """Alerts of the demo bot go to the terminal, never to a real alert channel."""
 
     def notify(self, title: str, text: str) -> None:
         print(f"demo alert: {title}: {text}", file=sys.stderr, flush=True)

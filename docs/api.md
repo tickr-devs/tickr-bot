@@ -193,7 +193,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, the trained model's switch and state (`model`), and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
 | GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
-| PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "mac"\|"imessage"\|"telegram"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
+| PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "telegram"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
 | GET | `/advisor` | `200` `advisor-runs-v1`: the AI advisor's newest `[api] advisor_runs` runs with their proposals, ideas, hold-out verdicts and the owner's decision (read-only; see GET /advisor below). |
 | POST | `/advisor/decision` | Body `{"run": "<run id>", "verdict": "accepted"\|"rejected"}`. Records the owner's review of a proposal or idea (a note, nothing is deployed): `200` `advisor-runs-v1`; `404 not_found` without that run; `409 conflict` for a refused, no-change or unreadable run. Not a bot command. |
@@ -898,7 +898,7 @@ machine's own services follow under `host`, so a bot on a server keeps the rest 
   strategy alone does not block); `cause` the first failed check's cause code
   (`runtime/preflight.py` PreflightCause, e.g. `token-unusable`). `checks[].name` is a check
   code: `config`, `code-version`, `disk`, `calendar`, `credentials`, `alert-channel`,
-  `alert-recipient`, `token-dir`, `stop-marker`, `database`, `strategy`, `token`; `cause` is a
+  `alert-telegram`, `token-dir`, `stop-marker`, `database`, `strategy`, `token`; `cause` is a
   failed check's cause code, null when it passed (the checks' own words stay in the job's log:
   they hold paths and the config digest). Null with
   `morning_check_cause` when no record exists yet or it cannot be read. A preflight whose config
@@ -946,13 +946,14 @@ Which alert kinds go to which channel (backlog T14). Code: `src/tickr/api/alerts
 `src/tickr/runtime/alert_routing.py`. Alerts go through the channel interface of
 `runtime/alerts.py` (`Channels`); the routing only tells it which channels to skip for a kind.
 
-- `channels`: `mac` (the Mac notification), `imessage`, `push` (the iPhone app's push, not built
+- `channels`: `telegram`, `push` (the iPhone app's push, not built
   yet: always `configured` false, `cause` `not-built`). `configured` comes from the latest
-  preflight record's checks (`alert-channel` for `mac`; that and `alert-recipient` for
-  `imessage`); `cause` `no-preflight`, `preflight-unreadable` or `check-failed` when false.
+  preflight record's checks (`alert-channel` and `alert-telegram` for `telegram`); `cause`
+  `no-preflight`, `preflight-unreadable`, `not-configured` (Telegram's variables are not set) or
+  `check-failed` when false. The `mac` and `imessage` channels were removed (owner 2026-11-25).
   The alerts feed file (`[alerts] feed_file`) is not a routable channel: it gets every alert.
 - `kinds`: every `AlertKind` value in code order, each with `group` (`critical`, `trading`,
-  `day`, `lab`), `locked` and `channels` `{mac, imessage, push}` (true: it goes there).
+  `day`, `lab`), `locked` and `channels` `{telegram, push}` (true: it goes there).
   `locked` kinds need the owner now and are on everywhere whatever the file says: every kind an
   alert-at-once fence raises (`runtime/watch.py` `ALERT_AT_ONCE`, which includes the operator
   fences), plus unprotected position, unknown order status and order conflicts, foreign

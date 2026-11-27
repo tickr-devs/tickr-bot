@@ -42,7 +42,6 @@ MAC_HOST: dict[tuple[str, str], str] = {
     ("api", "sleep_check_command"): '["/usr/bin/pmset", "-g", "assertions"]',
     ("runtime", "watchdog_restart_command"):
         '["/bin/launchctl", "kickstart", "gui/{uid}/local.tickr.bot"]',
-    ("alerts", "mac_app"): '"/Applications/Tickr.app"',
 }
 
 _SECTION = re.compile(r"^\[([A-Za-z0-9_.]+)\]\s*$")

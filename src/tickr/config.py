@@ -517,9 +517,6 @@ class AlertsConfig:
     dedupe_window_seconds: Decimal
     notification_timeout_seconds: Decimal
     fence_alert_after_seconds: Decimal
-    imessage_recipient_variable: str
-    mac_app: str
-    mac_app_timeout_seconds: Decimal
     feed_file: str
     routing_file: str
     bot_token_variable: str
@@ -1140,9 +1137,8 @@ def _authorization_valid(config: Config, env: EnvironmentConfig) -> GateResult:
 def credential_variables(config: Config) -> frozenset[str]:
     """The NAMES of every environment variable the configuration says holds a credential or a
     private detail (rule 4): processes that need none of them are started without them."""
-    names = {config.advisor.api_key_variable, config.alerts.imessage_recipient_variable,
-             config.massive.api_key_variable, config.massive.files_key_id_variable,
-             config.massive.files_secret_variable}
+    names = {config.advisor.api_key_variable, config.massive.api_key_variable,
+             config.massive.files_key_id_variable, config.massive.files_secret_variable}
     names |= {name for name in (config.alerts.bot_token_variable,
                                 config.alerts.chat_id_variable) if name}
     for env in config.environments.values():

@@ -4,16 +4,16 @@ Today Tickr runs on the owner's Mac under launchd (`docs/operations.md`). This p
 changes on an always-on Linux server, gives a Docker setup for it, and lists what the owner must
 decide first.
 
-**Status: not ready to trade.** The only alert channels are the macOS notification and iMessage,
-both driven by `osascript`. A Linux host has neither, so preflight refuses the start with
-`alert-channel-missing` and the bot job never starts the bot. Everything else below works; the
-alert channel is an owner decision (see "Open owner decisions").
+**Alerts.** The alert channel is Telegram, which works on any host (the iMessage and Mac
+notification channels were removed, owner 2026-11-25). Set `TICKR_TELEGRAM_BOT_TOKEN` and
+`TICKR_TELEGRAM_CHAT_ID` in the env file; without them preflight refuses the start with
+`alert-channel-missing` and the bot job never starts the bot. App push (APNs) comes later.
 
 ## Audit: what is Mac-only
 
 | Area | On the Mac | On Linux / in Docker | Done here |
 |---|---|---|---|
-| Alert channels | `runtime/alerts.py`: Mac notification and iMessage through `/usr/bin/osascript` and Messages.app. | `default_notifier` returns no channel off macOS. Before this change every alert was journaled `"delivery": "no-notifier"` and preflight still passed: the bot would have run with nobody told. Nothing crashed (no import of `osascript`, it is only a path). | Preflight check `alert-channel` (before `alert-recipient`, so it is the reported cause) refuses with `alert-channel-missing` (blocks the start, exit 1). The watchdog journals `watchdog-alert-channel-refused` with that cause, still runs and journals, and never exits 0 (1 instead of 0; 3 on a closed day), so its unit shows failed. **Blocker**, unless Telegram is configured: `TICKR_TELEGRAM_BOT_TOKEN` and `TICKR_TELEGRAM_CHAT_ID` (`[alerts] bot_token_variable`, `chat_id_variable`) give the server its own alert channel (`runtime/alerts.py` `TelegramNotifier`); preflight checks them (`alert-telegram`) and the iMessage recipient check no longer blocks off macOS. On the AWS server both names go into the `tickr-bot/env` secret with the Webull variables; `tickr-secrets.service` writes every name in it to the env file `/run/tickr/env`, which the bot, preflight and watchdog containers source (`ops/aws/bot/README.md`, "Fill the secret"). |
+| Alert channels | `runtime/alerts.py`: Telegram (`TelegramNotifier`, one HTTPS POST) and the alerts feed file; the same on every OS. | No change: nothing depends on the platform. | Preflight check `alert-channel` refuses with `alert-channel-missing` (blocks the start, exit 1) when Telegram is not set up; `alert-telegram` checks that both variables are set. The watchdog journals `watchdog-alert-channel-refused` with that cause, still runs and journals, and never exits 0 (1 instead of 0; 3 on a closed day), so its unit shows failed. Solved by Telegram. On the AWS server both names go into the `tickr-bot/env` secret with the Webull variables; `tickr-secrets.service` writes every name in it to the env file `/run/tickr/env`, which the bot, preflight and watchdog containers source (`ops/aws/bot/README.md`, "Fill the secret"). |
 | caffeinate | `/usr/bin/caffeinate` in the bot and watchdog plists' shell line. | Not needed: a server does not sleep. Not called anywhere in Python. | Nothing. |
 | launchd | Five plists rendered by `render-launchd` from `[runtime]` times. | No launchd. `render-launchd` still works but its output is useless. | `ops/docker/compose.yaml` plus host systemd timers (below). `render-systemd` writes the units and timers from `[runtime]` (below). |
 | Paths | Logs in `~/Library/Logs/Tickr`; env file `~/.config/tickr/env`; repo root = parent of `config/`. | Logs are the container logs (`docker compose logs`), rotated by the json-file driver. Env file: any host path, mounted read-only at `/run/tickr/env`. Repo root is `/app` in the image. Preflight's hint still names `~/.config/tickr/env` (text only). | Compose file. |
@@ -24,7 +24,7 @@ alert channel is an owner decision (see "Open owner decisions").
 | API binding | `[api] host` = 127.0.0.1, enforced by the API (refuses a non-loopback host). | With Docker's bridge network a 127.0.0.1 bind inside the container is unreachable from the host, and publishing a port would need a 0.0.0.0 bind, which the API refuses. | `network_mode: host`: the API is on the server's own loopback only; Docker publishes no ports. Phone access works as on the Mac (`tailscale serve` on the host to `[api] remote_port`). |
 | Env file | Sourced by `/bin/sh` (`set -a; . file`) in the plist; Tickr never reads it. | Compose `env_file:` would put the values into `docker inspect`. | Bind-mounted read-only; the entrypoint sources it the same way. Only its path is in the container environment. A set-but-unreadable file refuses the start (exit 2). |
 | Stopping | `launchctl kill TERM`; launchd `ExitTimeOut` = `bot_exit_timeout_seconds`. | `docker compose stop bot` sends SIGTERM; `stop_grace_period` is the SIGKILL delay. `init: true` (tini) forwards the signal to the supervisor. | `stop_grace_period: ${TICKR_BOT_EXIT_TIMEOUT}s`, from `[runtime] bot_exit_timeout_seconds` through the rendered `limits.env`. |
-| Token approval | `token-needs-confirmation` alert, approve in the Webull app. | Same, but without an alert channel nobody is asked. | Covered by the blocker. |
+| Token approval | `token-needs-confirmation` alert, approve in the Webull app. | Same; the alert reaches you on Telegram. | Nothing. |
 
 ## Files
 
@@ -438,8 +438,7 @@ change ends hosting on the Mac (its launchd jobs no longer work with it):
   server");
 - `[api] system_services = "none"` with `sleep_check_command = []` (no launchd, no caffeinate);
 - `[api] training_progress_file = "training-progress.json"` under the data folder (no training
-  job runs on the server: "no training job is reporting");
-- `[alerts] mac_app = ""`.
+  job runs on the server: "no training job is reporting").
 
 Then run `deploy-server.sh` (creates `/srv/tickr/data/control`, installs and starts the path
 units) and check `systemctl status tickr-bot-restart.path tickr-bot-start.path` shows both
@@ -515,15 +514,16 @@ Delete the zip from the data folder after copying it.
   cannot pull a different Python or Debian without a reviewed change.
 - **Render the times from `[runtime]`.** Use `render-systemd` (above) for the timers; the compose
   `stop_grace_period` (`bot_exit_timeout_seconds`) comes from `bot.toml` through `limits.env`.
-- **Until an alert channel exists, a failed systemd unit is the only signal.** Preflight and the
-  bot job exit 1 and the watchdog never exits 0 without a channel; nothing reaches the phone.
-  Watch `systemctl list-units --failed` and the container logs yourself.
+- **Without Telegram a failed systemd unit is the only signal.** Preflight and the bot job exit
+  1 and the watchdog never exits 0 without a channel. Set the Telegram variables before the
+  first run; watch `systemctl list-units --failed` and the container logs as well.
 
 ## Open owner decisions
 
-1. **Linux alert channel.** iMessage needs Messages.app on a signed-in Mac. Telegram
-   (`TelegramNotifier`, above) is the channel that works from Linux: preflight refuses on Linux
-   until both Telegram variables are set, and step 6 proves the send before the first start.
+1. **Linux alert channel: decided** (owner 2026-11-25): Telegram now, app push later. The
+   removal of iMessage and the Mac notification ships in the same release as the server move, so
+   critical alerts are never without a channel. Steps, step 6 proves the send before the first
+   start.
 2. **Where the server runs** (home box, VPS and its region; latency to Webull; who else has root
    on it, since root can read the env file and the token folder).
 3. **How its clock is synced** (chrony or systemd-timesyncd, which servers), and whether

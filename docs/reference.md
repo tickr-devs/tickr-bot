@@ -144,8 +144,7 @@ alert. See "Preflight checks" in [operations.md](operations.md#preflight-checks)
 | `disk-low` | Too little free disk space. | Free space. |
 | `calendar-unknown` | Cannot tell if today is a trading day. | See the calendar causes. |
 | `credentials-missing` | A broker key variable is not set. | Set the named variable (the message names it, never its value). |
-| `alert-recipient-missing` | The variable holding the iMessage recipient is not set. | Set the named variable. |
-| `alert-channel-missing` | No alert channel is working. | Fix the notification setup. |
+| `alert-channel-missing` | No alert channel is set up: neither Telegram variable is set. | Set both Telegram variables (operations.md, setup step 2). |
 | `alert-telegram-missing` | Only one of the two Telegram variables is set (bot token or chat id). | Set both named variables, or neither to turn Telegram off. |
 | `token-dir-missing` | The folder for the broker token does not exist. | Create it. |
 | `token-dir-open` | The token folder can be read by other users. | Restrict its permissions. |
@@ -228,8 +227,8 @@ Why a settings change from the app or the site was declined. Nothing was changed
 
 ## Alerts
 
-Every alert goes to a Mac notification, to iMessage and to the alerts feed `data/alerts.jsonl`
-(the kind is the title). The same kind and text inside the repeat window is shown once. See
+Every alert goes to Telegram and to the alerts feed `data/alerts.jsonl` (the kind is the
+title), unless the owner's routing turned a non-critical kind off on Telegram. The same kind and text inside the repeat window is shown once. See
 [Alerts in operations.md](operations.md#alerts).
 
 Urgency: **Now** means act as soon as you see it (money or an unprotected position may be at

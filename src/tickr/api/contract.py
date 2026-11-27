@@ -1703,9 +1703,7 @@ class SystemV1:
 class AlertChannel(StrEnum):
     """An owner-facing alert channel the routing switches (runtime/alert_routing.py)."""
 
-    MAC = "mac"  # the Mac notification (the Tickr app, else osascript)
-    IMESSAGE = "imessage"  # an iMessage to the owner's phone
-    TELEGRAM = "telegram"  # a Telegram message: works away from the Mac
+    TELEGRAM = "telegram"  # a Telegram message: works on the server and away from the desk
     PUSH = "push"  # the iPhone app's push: needs the Apple Developer Program and APNs (backlog)
 
 
@@ -1723,7 +1721,7 @@ class AlertChannelCause(StrEnum):
 
     NO_PREFLIGHT = "no-preflight"  # no preflight record yet
     PREFLIGHT_UNREADABLE = "preflight-unreadable"  # the record cannot be read
-    CHECK_FAILED = "check-failed"  # the latest preflight's alert-channel or alert-recipient check
+    CHECK_FAILED = "check-failed"  # the latest preflight's alert-channel or alert-telegram check
     NOT_BUILT = "not-built"  # no delivery in the bot yet (push)
     NOT_CONFIGURED = "not-configured"  # the owner has not set its variable names in bot.toml
 
@@ -1741,8 +1739,6 @@ class AlertChannelV1:
 class AlertRoutesV1:
     """Whether one kind goes to each channel (a locked kind: true everywhere)."""
 
-    mac: bool
-    imessage: bool
     telegram: bool
     push: bool
 

@@ -26,7 +26,7 @@ def _record(settings, checks):  # noqa: F811 - the fixture is passed in
     path.write_text(json.dumps({
         "schema_version": 1, "job": "preflight", "started_at": "2026-11-16T08:30:00+00:00",
         "finished_at": "2026-11-16T08:30:05+00:00", "ny_date": "2026-11-16",
-        "outcome": "failed", "blocks_start": True, "cause": "alert-recipient-missing",
+        "outcome": "failed", "blocks_start": True, "cause": "alert-channel-missing",
         "checks": [{"name": name, "passed": passed, "cause": None} for name, passed in checks],
     }), "utf-8")
 
@@ -42,39 +42,42 @@ def test_everything_is_on_before_the_owner_changes_anything(api):  # noqa: F811
     assert {k["kind"] for k in body["kinds"] if k["locked"]} == {k.value for k in LOCKED}
     assert body["routing_cause"] is None
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
-        ("mac", False, "no-preflight"), ("imessage", False, "no-preflight"),
         ("telegram", False, "no-preflight"), ("push", False, "not-built")]
 
 
 def test_channels_come_from_the_latest_preflight_checks(api, settings):  # noqa: F811
     server, _ = api
-    _record(settings, [("alert-channel", True), ("alert-recipient", False)])
+    _record(settings, [("alert-channel", False)])
     body = doc(request(server, "GET", "/alerts")[1])
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
-        ("mac", True, None), ("imessage", False, "check-failed"),
         ("telegram", False, "not-configured"), ("push", False, "not-built")]
+    _record(settings, [("alert-channel", True), ("alert-telegram", True)])
+    body = doc(request(server, "GET", "/alerts")[1])
+    assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
+        ("telegram", True, None), ("push", False, "not-built")]
 
 
 def test_a_cell_is_switched_off_and_on_and_the_answer_is_the_new_settings(api, settings):  # noqa: F811
     server, _ = api
     resp, payload = request(server, "PUT", ROUTING,
-                            {"kind": "disk-low", "channel": "imessage", "on": False})
+                            {"kind": "disk-low", "channel": "telegram", "on": False})
     assert resp.status == 200, payload
     assert errors(schema("alerts-v1"), doc(payload)) == []
     assert _kind(doc(payload), "disk-low")["channels"] == {
-        "mac": True, "imessage": False, "telegram": True, "push": True}
-    assert _kind(doc(request(server, "GET", "/alerts")[1]), "disk-low")["channels"]["imessage"] \
+        "telegram": False, "push": True}
+    assert _kind(doc(request(server, "GET", "/alerts")[1]), "disk-low")["channels"]["telegram"] \
         is False
     assert settings.alerts.routing.path.exists()
     resp, payload = request(server, "PUT", ROUTING,
-                            {"kind": "disk-low", "channel": "imessage", "on": True})
-    assert resp.status == 200 and _kind(doc(payload), "disk-low")["channels"]["imessage"]
+                            {"kind": "disk-low", "channel": "telegram", "on": True})
+    assert resp.status == 200 and _kind(doc(payload), "disk-low")["channels"]["telegram"]
 
 
 @pytest.mark.parametrize("kind", ["unprotected-position", "unknown-order-status", "bot-down"])
 def test_a_critical_kind_cannot_be_turned_off(api, settings, kind):  # noqa: F811
     server, _ = api
-    resp, payload = request(server, "PUT", ROUTING, {"kind": kind, "channel": "mac", "on": False})
+    resp, payload = request(server, "PUT", ROUTING,
+                            {"kind": kind, "channel": "telegram", "on": False})
     assert resp.status == 409
     assert doc(payload)["error"] == "conflict"
     assert doc(payload)["cause"].startswith("locked-kind:")
@@ -82,11 +85,11 @@ def test_a_critical_kind_cannot_be_turned_off(api, settings, kind):  # noqa: F81
 
 
 @pytest.mark.parametrize(("body", "cause"), [
-    ({"kind": "no-such-kind", "channel": "mac", "on": False}, "unknown-kind:"),
+    ({"kind": "no-such-kind", "channel": "telegram", "on": False}, "unknown-kind:"),
     ({"kind": "disk-low", "channel": "fax", "on": False}, "unknown-channel:"),
-    ({"kind": "disk-low", "channel": "mac", "on": "false"}, "body must be"),
-    ({"kind": "disk-low", "channel": "mac"}, "body must be"),
-    ({"kind": "disk-low", "channel": "mac", "on": False, "extra": 1}, "body must be"),
+    ({"kind": "disk-low", "channel": "telegram", "on": "false"}, "body must be"),
+    ({"kind": "disk-low", "channel": "telegram"}, "body must be"),
+    ({"kind": "disk-low", "channel": "telegram", "on": False, "extra": 1}, "body must be"),
 ])
 def test_a_malformed_write_is_a_bad_request(api, settings, body, cause):  # noqa: F811
     server, _ = api
@@ -105,7 +108,7 @@ def test_an_unreadable_routing_file_is_shown_and_never_overwritten(api, settings
     assert body["routing_cause"].startswith("routing-file-unreadable")
     assert all(all(k["channels"].values()) for k in body["kinds"])
     resp, payload = request(server, "PUT", ROUTING,
-                            {"kind": "disk-low", "channel": "mac", "on": False})
+                            {"kind": "disk-low", "channel": "telegram", "on": False})
     assert resp.status == 409 and path.read_text("utf-8") == "{broken"
 
 
@@ -130,11 +133,11 @@ def test_other_methods_are_refused(api, method, path):  # noqa: F811
 
 
 def test_the_phone_needs_its_token_to_change_routing(remote_api, remote_settings):  # noqa: F811
-    body = {"kind": "disk-low", "channel": "mac", "on": False}
+    body = {"kind": "disk-low", "channel": "telegram", "on": False}
     resp, _ = remote(remote_api, "PUT", ROUTING, body=body)
     assert resp.status == 401
     assert not remote_settings.alerts.routing.path.exists()
     token = paired(remote_api, remote_settings)
     resp, payload = remote(remote_api, "PUT", ROUTING, token=token, body=body)
     assert resp.status == 200, payload
-    assert _kind(doc(payload), "disk-low")["channels"]["mac"] is False
+    assert _kind(doc(payload), "disk-low")["channels"]["telegram"] is False

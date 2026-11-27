@@ -1396,7 +1396,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error("internal", type(exc).__name__)
 
     def _alert_routing(self) -> None:
-        """PUT /alerts/routing with {"kind": "<alert kind>", "channel": "mac"|"imessage"|"push",
+        """PUT /alerts/routing with {"kind": "<alert kind>", "channel": "telegram"|"push",
         "on": true|false}: change that one cell of the owner's alert routing, 200 alerts-v1;
         400 for an unknown kind or channel, 409 for a critical kind turned off or a routing
         file that cannot be used. A preference about where to be told, never a bot command."""
@@ -1406,7 +1406,7 @@ class Handler(BaseHTTPRequestHandler):
         if (set(body) != {"kind", "channel", "on"} or not isinstance(body["kind"], str)
                 or not isinstance(body["channel"], str) or not isinstance(body["on"], bool)):
             self._error("bad_request", 'body must be exactly {"kind": "<alert kind>", '
-                        '"channel": "mac" | "imessage" | "push", "on": true | false}')
+                        '"channel": "telegram" | "push", "on": true | false}')
             return
         settings = self.server.settings.alerts
         try:

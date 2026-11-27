@@ -299,14 +299,13 @@ def test_cli_watchdog_day_through_the_read_only_broker(config_path, monkeypatch,
     monkeypatch.setattr(runtime_main, "WATCHDOG_NOW", clock)
     monkeypatch.setattr(runtime_main, "WATCHDOG_SLEEP", clock.sleep)
     monkeypatch.setattr(runtime_main, "WATCHDOG_BROKER", lambda c, hook: broker)
-    monkeypatch.setitem(os.environ, cfg.alerts.imessage_recipient_variable, "")
-    # No channel on this machine (as on Linux, where CI runs), whatever the test host is.
+    # No channel (Telegram not set up), whatever the test host is.
     monkeypatch.setattr(runtime_main, "default_notifier", lambda cfg, **kwargs: None)
     assert runtime_main.main(["--config", str(config_path), "watchdog"]) == 1
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     kinds = [x["record"] for x in lines]
-    assert kinds[:2] == [watchdog.CHANNEL_REFUSED] * 2
-    assert [x["cause"] for x in lines[:2]] == ["alert-channel-missing", "alert-recipient-missing"]
+    assert kinds[:1] == [watchdog.CHANNEL_REFUSED]
+    assert [x["cause"] for x in lines[:1]] == ["alert-channel-missing"]
     assert {x["delivery"] for x in lines if x["record"] == "alert"} == {"no-notifier"}
     assert kinds.count("alert") == 2 and broker.sent == []
     journal = cfg.root / cfg.run.data_dir / cfg.runtime.watchdog_journal_file
