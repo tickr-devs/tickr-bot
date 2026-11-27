@@ -1261,7 +1261,9 @@ sender).
   expires early (the app registers again). A paired device's, the Simulator's and the Mac app's
   registrations carry none. From that time on no sender (alerts or Live Activity, both through
   `ApnsClient.devices`) pushes to it, and it is dropped, so a device that stopped refreshing
-  stops receiving pushes without calling the API.
+  stops receiving pushes without calling the API. The sender that drops a device's tokens writes
+  one `device-session` line for it to the alerts feed ("device '<name>' signed out: it stopped
+  refreshing…"), which the watchdog relays to Telegram.
 - `kind` (Apple's token types): `alert`, the device token alerts are pushed to (the default);
   `activity_start`, a Live Activity push-to-start token; `activity_update`, one Live Activity's
   update token. The activity kinds are pushed to by the Live Activity publisher (below).
@@ -1305,8 +1307,8 @@ default (`[live_activity] enabled = false`); config load refuses `enabled = true
   the first after the activity ended); `update` when the state, the day's result, the positions,
   a stop price or a stop's confirmation changes, and, with `pnl_refresh_seconds` above 0, at
   most that often for prices alone; `end` when flat. A start with no `activity_start`
-  token of the app is not sent: the activity stays not live, the journal names the cause once per
-  such spell, and the next look tries again. A missing or stale status file pushes
+  token of the app is not sent: the activity stays not live, the journal names the cause once
+  (again only when it changes, or after a start was sent), and the next look tries again. A missing or stale status file pushes
   nothing. The last push is kept in `[live_activity] state_file`, written before the push.
 - content-state (agreed with the app, mockup v138; `ContentState` is the one place it lives):
   `state` (`open`, `paused` = an entry block with `attention`, `alarm` = a position's stop not

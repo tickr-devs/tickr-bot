@@ -26,9 +26,11 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 from tickr import config as config_module
 from tickr.api.contract import PushPlatform, PushTokenKind
+from tickr.runtime import watchdog
 from tickr.runtime.alert_routing import LOCKED
 from tickr.runtime.alerts import (
     APNS_PATH,
+    ENDED_TITLE,
     PUSH,
     TELEGRAM,
     Alerter,
@@ -44,6 +46,7 @@ from tickr.runtime.alerts import (
     apns_on,
     apns_payload,
     default_notifier,
+    ended_to_feed,
     h2_post,
 )
 from tickr.runtime.push_tokens import PushToken, PushTokenStore, short_hash
@@ -617,6 +620,58 @@ def test_only_ended_sign_ins_left_is_no_device(tmp_path, environ):
     assert wire.calls == [] and only.read() == {}
 
 
+def test_an_ended_sign_in_is_said_once_in_the_feed_and_the_watchdog_relays_it(
+        store, environ, tmp_path):
+    """Fable on #13: a device whose pushes end because it stopped refreshing is not silent. The
+    sender that drops its tokens writes one device-session line to the alerts feed, which the
+    watchdog relays to the owner; a later alert finds nothing to drop and writes nothing."""
+    clock = Clock()
+    feed = tmp_path / "alerts.jsonl"
+    for kind in (ALERT, PushTokenKind.ACTIVITY_START):
+        store.register("tablet", PushToken(kind, f"{kind.value[:1]}e" * 32, "development",
+                                           "bot.tickr.ios", IOS, AT, _ended_at(clock)))
+    push = ApnsNotifier(APNS, store, environ, Wire(), clock=clock, ended=ended_to_feed(feed))
+    push.notify_kind(NORMAL.value, "T", "x")
+    push.notify_kind(NORMAL.value, "T", "y")
+    lines = feed.read_text("utf-8").splitlines()
+    assert len(lines) == 1  # one device, two kinds, two alerts: said once
+    line = json.loads(lines[0])
+    assert line["title"] == ENDED_TITLE
+    assert line["text"].startswith("device 'tablet' signed out: it stopped refreshing")
+    assert "e" * 64 not in lines[0]  # never a token
+    assert watchdog._relayed_text(lines[0].encode()) == f"{line['text']} (at {line['at']})"
+
+
+def test_the_default_push_channel_says_ended_sign_ins_in_its_feed(store, environ, tmp_path):
+    both = replace(APNS, bot_token_variable="TICKR_TEST_TG_TOKEN",
+                   chat_id_variable="TICKR_TEST_TG_CHAT")
+    telegram = {**environ, both.bot_token_variable: "set", both.chat_id_variable: "set"}
+    feed = tmp_path / "alerts.jsonl"
+    channels = default_notifier(both, telegram, feed=feed, data_dir=store.path.parent)
+    (push,) = [channel for name, channel in channels._background if name == PUSH]
+    clock = Clock()
+    store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
+                                       AT, _ended_at(clock)))
+    push._client._clock = clock
+    push._client._transport = Wire()
+    push.notify_kind(NORMAL.value, "T", "x")
+    assert json.loads(feed.read_text("utf-8"))["title"] == ENDED_TITLE
+
+
+def test_an_ended_sign_in_that_cannot_be_said_is_a_failure_and_still_skipped(
+        store, environ, tmp_path):
+    clock = Clock()
+    store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
+                                       AT, _ended_at(clock)))
+    feed = tmp_path / "missing-folder" / "alerts.jsonl"
+    wire = Wire()
+    push = ApnsNotifier(APNS, store, environ, wire, clock=clock, ended=ended_to_feed(feed))
+    with pytest.raises(NotifyError, match="an ended sign-in not reported: feed not written"):
+        push.notify_kind(NORMAL.value, "T", "x")
+    assert APNS_PATH + "e5" * 32 not in [path for _, path, _, _ in wire.calls]
+    assert ("tablet", ALERT) not in store.read()
+
+
 def test_a_sign_in_expiry_is_stored_and_a_registration_again_keeps_its_own(store):
     end = AT + timedelta(days=1)
     store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
@@ -626,8 +681,8 @@ def test_a_sign_in_expiry_is_stored_and_a_registration_again_keeps_its_own(store
     # Signed in again (a later end) before the drop ran: the new registration is kept.
     store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
                                        AT, end + timedelta(days=1)))
-    assert store.drop_expired(end) == 0 and ("tablet", ALERT) in store.read()
-    assert store.drop_expired(end + timedelta(days=1)) == 1
+    assert store.drop_expired(end) == () and ("tablet", ALERT) in store.read()
+    assert store.drop_expired(end + timedelta(days=1)) == ("tablet",)
     assert sorted(store.read()) == [("local", ALERT), ("phone", ALERT)]
 
 

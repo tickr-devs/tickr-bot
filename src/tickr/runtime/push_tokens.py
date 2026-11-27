@@ -16,7 +16,9 @@ token's end (`Session.refresh_expires_at` in api/devices.py, which never passes 
 each refresh (`renew`). It is null for a device whose access does not expire (a paired device,
 `LOCAL`, the Simulator). A token past it is never pushed to: the senders skip it and drop it
 (`drop_expired`), so a signed-in device that stopped refreshing stops receiving pushes when it
-could no longer refresh, whether or not it ever calls the API again.
+could no longer refresh, whether or not it ever calls the API again. The sender that drops them
+says so once, as a `device-session` line in the alerts feed (`alerts.ended_to_feed`), which the
+watchdog relays.
 
 A device key is the name of the device that registered the token, as the API authorized it: the
 paired or signed-in device's name in `api/devices.py`, `LOCAL` for the Mac's own app on the local
@@ -277,15 +279,17 @@ class PushTokenStore:
                 _write_private(self.path, _text(tokens | renewed))
             return len(renewed)
 
-    def drop_expired(self, now: datetime) -> int:
-        """Drop every token whose device is signed out by `now`; how many there were. An entry
-        registered again or renewed meanwhile carries its later expiry and is kept."""
+    def drop_expired(self, now: datetime) -> tuple[str, ...]:
+        """Drop every token whose device is signed out by `now`; the names of the devices whose
+        tokens were dropped, sorted (each once). An entry registered again or renewed meanwhile
+        carries its later expiry and is kept. Under the store lock, so of two senders that see
+        the same ended sign-in only one drops it and gets its name."""
         with self._locked():
             tokens = self.read()
             kept = {k: t for k, t in tokens.items() if not t.expired(now)}
             if len(kept) < len(tokens):
                 _write_private(self.path, _text(kept))
-            return len(tokens) - len(kept)
+            return tuple(sorted({k[0] for k in tokens if k not in kept}))
 
     def remove_token(self, token: str) -> bool:
         """Drop every entry still holding `token` (APNs said it is gone); whether any was."""
