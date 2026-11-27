@@ -84,37 +84,9 @@ when a read confirms it, exactly as for other orders (rule 3). An alert kind `st
 
 ## 3. Production gate
 
-Screens: Settings › Environment (Mac), Settings › Safety (iOS). The trading gate as a shield,
-Sandbox/Production as a read-only switch, a readiness checklist with a meter, the authorization
-record checked field by field, and a "Copy digest" button. There is no button that enables
-Production; the screen explains the config edit and the authorization file.
-
-### `GET /production` → `production-readiness-v1` (read-only)
-
-| Key | Type | Meaning |
-|---|---|---|
-| `environment` | string | The environment the API process loaded (`[environment]` name). |
-| `gate` | `{open, cause, code, params}` | `trading_gate()` for that environment, as `status.trading_gate`. |
-| `production` | object | The same gate evaluated for the production environment section, without switching to it: `{trading_enabled, requires_owner_authorization, keys_present, authorization}`. |
-| `production.keys_present` | bool | Both credential variables of the production section are set. Names only; values are never read. |
-| `production.authorization` | object | `{file, present, valid, cause, environment, approved_on, digest_matches}`; `statement` is not served. |
-| `config_digest` | string | `config.digest` the authorization must carry. Not a secret: it is a hash of the committed config. |
-| `checklist` | list | `{code, done, value, params}` in a fixed order (below). |
-
-Checklist codes, each computed from data the bot already writes:
-
-- `clean_sandbox_days`: clean days (`GET /days` verdict `clean`) against `[production]
-  required_clean_days` (new config key); `value` is "N / M".
-- `backtest_verdict`: the latest `judge` verdict of the active strategy (`edge` is done).
-- `unattended_safeguard`: the watchdog launchd job is configured and ran today.
-- `production_keys`: `production.keys_present`.
-- `production_data_probes`: the chart-client probes C1 and C2 recorded for production
-  (`docs/webull-facts.md` section C).
-- `trading_enabled`: `[environments.production] trading_enabled`.
-- `authorization`: `production.authorization.valid`.
-
-The readiness list only informs. The single barrier stays `trading_gate()` (rule 5); the API never
-writes the config or the authorization file.
+Built: `GET /readiness` (`readiness-v1`), see `docs/api.md`. Not built yet: the
+checklist item `backtest_verdict` (the latest `judge` verdict of the active strategy) and the
+apps' screens. There is no route that writes the authorization file: the owner creates it.
 
 ## 4. Notification settings
 

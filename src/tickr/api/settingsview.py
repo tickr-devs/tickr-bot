@@ -7,7 +7,7 @@
   with each file's SHA-256 (a later apply can refuse a draft made against an older file).
 - POST /settings/validate: a draft checked against the schema and the files now, with typed
   refusals and, per key, the change's effect. Nothing is written, journaled or applied here:
-  apply, history and rollback are later slices of S4.
+  apply, history and rollback are in api/settingsapply.py.
 
 Owner `platform` is the config file this API was started with; any other owner is a folder
 under strategies/. The schema file is read on every request, so a bad edit answers 503 with its
@@ -73,6 +73,13 @@ def load_schema(path: Path) -> tuple[Setting, ...]:
         raise SettingsUnavailable(f"settings schema unreadable: {_cause(exc, path)}") from exc
 
 
+def load_classes(path: Path) -> schema.Classes:
+    try:
+        return schema.load_classes(path)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, schema.SchemaError) as exc:
+        raise SettingsUnavailable(f"settings schema unreadable: {_cause(exc, path)}") from exc
+
+
 def _cause(exc: Exception, path: Path) -> str:
     if isinstance(exc, OSError):
         return type(exc).__name__
@@ -133,10 +140,18 @@ def _text(value: Any) -> str | None:
 def parse_draft(body: Mapping[str, Any]) -> tuple[tuple[str, str, str], ...]:
     """`{"changes": [{"owner", "key", "value"}, ...]}`, each a string, at least one, no
     (owner, key) twice; BadDraft otherwise."""
-    shape = ('body must be {"changes": [{"owner": "...", "key": "...", "value": "..."}, ...]} '
-             "with at least one change, each field a string")
-    changes = body.get("changes")
-    if set(body) != {"changes"} or not isinstance(changes, list) or not changes:
+    if set(body) != {"changes"}:
+        raise BadDraft(DRAFT_SHAPE)
+    return parse_changes(body["changes"])
+
+
+DRAFT_SHAPE = ('body must be {"changes": [{"owner": "...", "key": "...", "value": "..."}, ...]} '
+               "with at least one change, each field a string")
+
+
+def parse_changes(changes: Any, shape: str = DRAFT_SHAPE) -> tuple[tuple[str, str, str], ...]:
+    """A draft's `changes` list (see `parse_draft`); BadDraft with `shape` otherwise."""
+    if not isinstance(changes, list) or not changes:
         raise BadDraft(shape)
     parsed: list[tuple[str, str, str]] = []
     for change in changes:
@@ -165,9 +180,19 @@ def _value_of(spec: Setting, text: str) -> int | Decimal | bool | None:
     return value
 
 
+_NOT_FROM_APP = {
+    schema.SettingClass.ENGINEERING: (Cause.ENGINEERING_KEY,
+                                      "is an engineering setting: file only"),
+    schema.SettingClass.CLOSED: (Cause.CLOSED_KEY,
+                                 "is a closed setting: never changed from an app"),
+}
+
+
 def draft_document(settings: tuple[Setting, ...], changes: tuple[tuple[str, str, str], ...],
-                   config_file: Path, root: Path) -> SettingsDraftV1:
+                   config_file: Path, root: Path, classes: schema.Classes) -> SettingsDraftV1:
     """Check `changes` (owner, dotted key, value text) against the schema and the files now.
+    A key of the closed class is refused whatever its value or depth, an engineering key in the
+    file likewise, and a key with no class as UNKNOWN_KEY (`classes`, fail closed).
     Raises SettingsUnavailable when an owner's file cannot be read."""
     owners = owners_of(settings)
     refusals: list[SettingRefusalV1] = []
@@ -184,7 +209,14 @@ def draft_document(settings: tuple[Setting, ...], changes: tuple[tuple[str, str,
         draft: dict[str, Any] = {}
         found: list[Refusal] = []
         for _, key, text in mine:
-            spec = specs.get(key)
+            # The class is decided first, on the whole key path, so a closed key is refused even
+            # when a record names it; only an OWNER key reaches its record.
+            klass = schema.classify(classes, owner, key)
+            refused = None if klass is None else _NOT_FROM_APP.get(klass)
+            if refused is not None and (klass is schema.SettingClass.CLOSED or key in current):
+                found.append(Refusal(key, refused[0], f"{key} {refused[1]}"))
+                continue
+            spec = specs.get(key) if klass is schema.SettingClass.OWNER else None
             if spec is None:
                 draft[key] = text  # validate refuses it as UNKNOWN_KEY
                 continue

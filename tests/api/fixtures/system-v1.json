@@ -97,6 +97,12 @@
   },
   "host_cause": null,
   "api_version": 1,
+  "model": {
+    "enabled": false,
+    "bundle": null,
+    "state": "off",
+    "cause": null
+  },
   "morning_check_cause_codes": [],
   "training_cause_codes": [],
   "host_cause_codes": []

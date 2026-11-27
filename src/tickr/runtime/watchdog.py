@@ -57,6 +57,12 @@ continuously: launchd starts it at load, at `watchdog_start_local` and again whe
 - free space on the data disk below `[runtime] disk_warn_free_mb` alerts `disk-low` once, and
   once more below `min_free_disk_mb` (where preflight refuses to start the bot); back above the
   warning level re-arms it.
+- the API's `device-session` alerts (a device signed in with tickr.bot, signed out, or signed
+  out by the bot) are relayed to Telegram: the API holds no credential variable, so it writes
+  them only to the alerts feed, which a device signed in with a stolen key could read too. Each
+  check reads the feed's new lines (from the offset kept in the state file; a first run starts
+  at the end, a shorter file from its start) and alerts every `device-session` line again, its
+  text marked `RELAYED` so the copy the watchdog's own alert adds to the feed is never relayed.
 Every broker check, every "bot down" finding and every alert is one JSON line on stdout (the
 job log) and in `<data_dir>/<watchdog_journal_file>`.
 """
@@ -80,7 +86,7 @@ from tickr.config import Config
 from tickr.engine.core import Leg, SendState, TradeState
 from tickr.lock import recorded_holder
 from tickr.runtime import stopmarker
-from tickr.runtime.alerts import Alerter, AlertKind, AlertOutcome
+from tickr.runtime.alerts import Alerter, AlertKind, AlertOutcome, feed_path
 from tickr.store import Store
 from tickr.types import OrderDetail, OrderState, Position
 
@@ -267,6 +273,28 @@ class Journal:
                   flush=True)
 
 
+RELAY_OFFSET = "relay_offset"  # state-file key: bytes of the alerts feed already relayed
+RELAYED = "RELAYED from the API:"  # marks the watchdog's copy, so it is never relayed again
+
+
+def _relayed_text(raw: bytes) -> str | None:
+    """The text the watchdog relays for a feed line: the API's `device-session`, never its own
+    copy; None for any other line, or one that is not JSON."""
+    try:
+        line = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(line, dict):
+        return None
+    title, text, at = line.get("title"), line.get("text"), line.get("at")
+    if not isinstance(title, str) or not isinstance(text, str):
+        return None
+    if not title.endswith(f" {AlertKind.DEVICE_SESSION.value}") or text.startswith(RELAYED):
+        return None
+    # The API's time keeps two same-text sign-ins apart (the alerter drops a repeat of a text).
+    return f"{text} (at {at})" if isinstance(at, str) else text
+
+
 def _ny(instant: datetime) -> str:
     return instant.astimezone(NEW_YORK).strftime("%H:%M:%S ET")
 
@@ -336,12 +364,48 @@ class Sentinel:
         self.alert(kind, text)
 
     def completed(self, flush: bool = False) -> list[AlertOutcome]:
-        """Finished background sends (iMessage); with `flush`, after waiting for them."""
+        """Finished background sends (Telegram); with `flush`, after waiting for them."""
         return self._alerter.flush() if flush else self._alerter.completed()
 
     def check(self, now: datetime) -> None:
         self.bot(now)
         self.disk(now)
+        self.relay()
+
+    # --- the API's device-session alerts, to Telegram ---------------------------------------
+
+    def relay(self) -> None:
+        """Alert again each `device-session` line the API added to the alerts feed since the
+        last check; a feed that cannot be read is journaled and tried at the next check."""
+        path = feed_path(self.config.root, self.config.run.data_dir, self.config.alerts)
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            self.journal.write(STATE_FAILED, {"feed": type(exc).__name__})
+            return
+        offset = self._state.get(RELAY_OFFSET)
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            self._remember(RELAY_OFFSET, size)  # a first run relays nothing from before it
+            return
+        if size < offset:
+            offset = 0  # the feed was replaced: read it from its start
+        if size == offset:
+            return
+        try:
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                chunk = handle.read(size - offset)
+        except OSError as exc:
+            self.journal.write(STATE_FAILED, {"feed": type(exc).__name__})
+            return
+        complete = chunk.rfind(b"\n") + 1  # a line still being written waits for the next check
+        self._remember(RELAY_OFFSET, offset + complete)
+        for raw in chunk[:complete].splitlines():
+            text = _relayed_text(raw)
+            if text is not None:
+                self.alert(AlertKind.DEVICE_SESSION, f"{RELAYED} {text}")
 
     # --- the bot ---------------------------------------------------------------------------
 
@@ -484,7 +548,7 @@ class Watchdog:
         self.journal.write(ALERT, self._alerter.alert(kind, text).journal_body())
 
     def _background_outcomes(self, flush: bool = False) -> None:
-        """Journal finished background sends (iMessage); at exit wait for them first."""
+        """Journal finished background sends (Telegram); at exit wait for them first."""
         for outcome in self._alerter.flush() if flush else self._alerter.completed():
             self.journal.write(ALERT, outcome.journal_body())
 

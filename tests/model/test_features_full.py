@@ -18,6 +18,7 @@ import sys
 import model_bars as synthetic
 import model_inputs as inputs
 import numpy as np
+import pandas as pd
 import pytest
 
 from tickr.model import features
@@ -264,7 +265,7 @@ def test_no_pinned_file_can_reach_the_bot():
 
 
 @pytest.mark.parametrize(("day", "cause"), [("2026-07-15", "sealed_day"),
-                                            ("2027-01-04", "unknown_trading_day")])
+                                            ("2029-01-02", "unknown_trading_day")])
 def test_a_sealed_or_uncovered_day_has_no_context(day, cause):
     with pytest.raises(ModelRefused) as exc:
         full.live_context(inputs.market_day(day))
@@ -716,3 +717,36 @@ def test_a_report_scheduled_later_today_is_left_out_then_admitted(setup, tmp_pat
         assert _same(got, out.loc[out.m == minute, cols]), minute
         since[minute] = float(got.loc[got.sym == sym, "er_since"].iloc[0])
     assert since[400] > 0 and since[408] > 0 and since[409] == since[415] == 0
+
+
+def test_table_rows_then_assemble_rows_are_minute_rows(live, tmp_path):
+    """The two halves a live caller uses (the cohort first, the features after the ticks are
+    converted) give exactly `minute_rows`, and each half keeps every bound of the minute."""
+    today, bars, state, _, snap = live
+    ctx = full.live_context(inputs.market_day(today))
+    held = inputs.capture(snap, today, tmp_path / "c")
+    rows = inputs.received_bars(bars)
+    cutoff = ctx.mark(LIVE_MINUTE) + CUTOFF_LAG
+    whole = ctx.minute_rows(rows, LIVE_MINUTE, state, None, held, cutoff)
+    t = ctx.table_rows(rows, LIVE_MINUTE, state, None, cutoff)
+    assert len(t) > 0 and (t.m == LIVE_MINUTE).all()
+    assert sorted(t.sym) == sorted(whole.sym)
+    got = ctx.assemble_rows(t, LIVE_MINUTE, state, held, cutoff)
+    pd.testing.assert_frame_equal(got, whole, check_exact=True)
+    halves = {
+        "table_rows": lambda m, c: ctx.table_rows(rows, m, state, None, c),
+        "assemble_rows": lambda m, c: ctx.assemble_rows(t, m, state, held, c),
+    }
+    early = ctx.mark(LIVE_MINUTE) - datetime.timedelta(seconds=1)
+    for name, half in halves.items():
+        for minute, when, cause in (
+                (LIVE_MINUTE, early, "cutoff_before_mark"),
+                (LIVE_MINUTE, cutoff.replace(tzinfo=None), "cutoff_not_aware"),
+                (ctx.end_minute, cutoff, "after_exchange_close")):
+            with pytest.raises(ModelRefused) as exc:
+                half(minute, when)
+            assert exc.value.cause == cause, name
+    later = LIVE_MINUTE + 1
+    with pytest.raises(ModelRefused) as exc:
+        ctx.assemble_rows(t, later, state, held, ctx.mark(later) + CUTOFF_LAG)
+    assert exc.value.cause == "table_rows_of_another_minute"

@@ -17,9 +17,10 @@ import pytest
 from tickr import config
 from tickr.api import contract
 from tickr.api.contract import CommandKind
-from tickr.api.server import ApiSettings, make_server, settings_from_config
+from tickr.api.server import ApiSettings, make_server, settings_from_config, shown_settings
+from tickr.runtime.service import strategy_id
 
-from .samples import T0, status
+from .samples import PROTECTION, T0, run_facts, status
 from .schema_check import errors
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -173,9 +174,49 @@ def test_status_served_with_age(api, settings):
     assert body["stale"] is False
     assert body["summary"] == status().entry_block.text
     assert body["poll_seconds"] == format(settings.poll_seconds, "f")
-    assert contract.from_jsonable(contract.StatusResponseV1, body).status == status()
+    assert (contract.from_jsonable(contract.StatusResponseV1, body).status
+            == contract.served_status(status(), None))
     # The API's own start, so the apps read /settings again after a restart.
     assert body["api_started_at"] == contract.to_jsonable(server.started_at)
+    assert errors(schema("status-response-v1"), body) == []
+    # The file holds no derived key (an older reader refuses unknown keys); the API adds it.
+    assert "decider" not in json.loads(settings.status_path.read_text("utf-8"))
+    assert body["status"]["decider"] == {"kind": "strategy", "name": "price-action-v1",
+                                         "version": "1"}
+    assert [t["decider"] for t in body["status"]["trades_today"]] == [body["status"]["decider"]]
+
+
+def test_status_shows_the_run_facts_of_its_own_run(api, settings):
+    server, _ = api
+    contract.write_status(settings.status_path, status())
+    contract.write_run_facts(settings.run_facts_path, replace(
+        run_facts("run-1"), settings_version="a" * 64, trade_settings_versions=(
+            contract.TradeSettingsVersion("ap-0002-e", "b" * 64),)))
+    body = doc(request(server, "GET", "/status")[1])
+    assert body["status"]["protection_in_force"] == contract.to_jsonable(PROTECTION)
+    assert body["status"]["strategy"]["settings_version"] == "a" * 64
+    assert [t["strategy"]["settings_version"] for t in body["status"]["trades_today"]] == [
+        "b" * 64]
+    assert errors(schema("status-response-v1"), body) == []
+    # status.json itself carries none of them: a reader from before them still reads it.
+    assert "protection_in_force" not in json.loads(settings.status_path.read_text("utf-8"))
+
+
+@pytest.mark.parametrize("facts", ["stale", "missing", "unreadable"])
+def test_run_facts_of_another_run_or_unreadable_are_not_shown(api, settings, facts):
+    server, _ = api
+    contract.write_status(settings.status_path, status())
+    if facts == "stale":  # the previous run's file, never rewritten by this run
+        contract.write_run_facts(settings.run_facts_path, replace(
+            run_facts("run-0"), settings_version="a" * 64, trade_settings_versions=(
+                contract.TradeSettingsVersion("ap-0002-e", "b" * 64),)))
+    elif facts == "unreadable":
+        settings.run_facts_path.write_text('{"schema_version": 1}', "utf-8")
+    body = doc(request(server, "GET", "/status")[1])
+    assert body["status"]["protection_in_force"] == []
+    assert body["status"]["strategy"]["settings_version"] is None
+    assert [t["strategy"]["settings_version"] for t in body["status"]["trades_today"]] == [None]
+    assert body["status"]["run_id"] == "run-1"
     assert errors(schema("status-response-v1"), body) == []
 
 
@@ -355,7 +396,18 @@ def test_settings_endpoint_shows_the_loaded_config(api, settings):
     assert body["session"]["flatten_minutes_before_close"] == (
         cfg.session.flatten_minutes_before_close)
     assert body["active_strategy"] == cfg.strategy.active
+    # This test's root holds no strategies/: the identity is unknown, never guessed.
+    assert (body["decider"], body["decider_cause"]) == (None, contract.DECIDER_UNREADABLE)
     assert request(server, "POST", "/settings", {})[0].status == 405
+
+
+def test_settings_decider_is_the_active_strategy_the_bot_reports():
+    cfg = config.load(ROOT / "config" / "bot.toml")
+    shown = shown_settings(cfg)
+    bot = strategy_id(cfg)  # what the bot writes as status `strategy`
+    assert shown.decider == contract.DeciderV1(contract.DeciderKind.STRATEGY, bot.name,
+                                               bot.version)
+    assert shown.decider_cause is None
 
 
 def test_schema_endpoint(api):

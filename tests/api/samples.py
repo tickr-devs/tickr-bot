@@ -20,13 +20,17 @@ from tickr.api.contract import (
     Freshness,
     Gate,
     Position,
+    ProtectionValue,
+    RunFactsV1,
     SendOutcome,
+    ServedStatusV1,
     StatusV1,
     Stop,
     StopState,
-    StrategyId,
+    StrategyName,
     StreamHealth,
     Trade,
+    served_status,
 )
 
 T0 = datetime(2026, 11, 16, 15, 0, 0, 123000, tzinfo=UTC)
@@ -50,7 +54,7 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
         run_id="run-1",
         environment="sandbox",
         trading_gate=Gate(True, "trading enabled by configuration"),
-        strategy=StrategyId("price-action-v1", "1"),
+        strategy=StrategyName("price-action-v1", "1"),
         entry_stop=False,
         entry_block=EntryBlock("own_trade_open",
                                "The bot already has a trade open.", attention=False),
@@ -64,7 +68,7 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
                             EntrySend("ap-0002-e", T0, T0 + timedelta(milliseconds=2),
                                       SendOutcome.UNKNOWN, SendOutcome.ACKNOWLEDGED, 1,
                                       T0 + timedelta(seconds=4)),
-                            None, StrategyId("price-action-v1", "1"),
+                            None, StrategyName("price-action-v1", "1"),
                             "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty",
                             Decimal("-1.67")),),
         result_today_gross_usd=Decimal("-1.60"),
@@ -83,6 +87,21 @@ def status(written_at: datetime = T0, **overrides) -> StatusV1:
     )
     values.update(overrides)
     return StatusV1(**values)
+
+
+PROTECTION = (ProtectionValue("risk.max_daily_loss_usd", "300", None),
+              ProtectionValue("risk.max_open_positions", "1", T0 - timedelta(minutes=5)))
+
+
+def run_facts(run_id: str = "run-1", written_at: datetime = T0,
+              protection: tuple[ProtectionValue, ...] = PROTECTION) -> RunFactsV1:
+    return RunFactsV1(written_at=written_at, run_id=run_id, protection_in_force=protection,
+                      realized_loss_week_usd=Decimal("41.20"), stop_out_streak=1)
+
+
+def served(st: StatusV1) -> ServedStatusV1:
+    """`st` as GET /status serves it, with the run facts of its run."""
+    return served_status(st, run_facts(st.run_id or "", st.written_at))
 
 
 def account(read_at: datetime = T0, **overrides) -> AccountV1:

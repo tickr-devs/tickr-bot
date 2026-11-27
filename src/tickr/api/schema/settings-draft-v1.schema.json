@@ -27,7 +27,9 @@
               "ABOVE_MAXIMUM",
               "OFF_STEP",
               "RULE_BROKEN",
-              "VALUE_MISSING"
+              "VALUE_MISSING",
+              "ENGINEERING_KEY",
+              "CLOSED_KEY"
             ]
           },
           "detail": {

@@ -1,5 +1,7 @@
 # Tickr local API: always on (compose service `api`, restart: unless-stopped). It needs no
-# credential: no env file is mounted into it. Docker publishes no port (network_mode: host,
+# credential: no env file is mounted into it (compose service `api` has no x-with-env). Compose
+# still interpolates the whole file, so the env file's PATH must be set here like in every unit,
+# or `up -d api` refuses (TICKR_ENV_FILE_HOST is required by x-with-env). Docker publishes no port (network_mode: host,
 # loopback bind from [api] in bot.toml).
 # Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
 [Unit]
@@ -14,6 +16,7 @@ RemainAfterExit=yes
 User=tickr
 EnvironmentFile=/srv/tickr/etc/limits.env
 Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml
+Environment=TICKR_ENV_FILE_HOST=/run/tickr/env
 ExecStart=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml up -d api
 ExecStop=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml stop api
 

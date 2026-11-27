@@ -16,6 +16,14 @@ step = 1
 # Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
 step = 1
 
+[platform."risk.max_weekly_loss_usd"]
+# Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.stop_out_streak_limit"]
+# Step of this setting in the app forms and the validator, count; read by tickr.settings_schema.
+step = 1
+
 [platform."risk.buying_power_max_age_seconds"]
 # Step of this setting in the app forms and the validator, seconds; read by tickr.settings_schema.
 step = 0.1
@@ -153,3 +161,63 @@ step = 1000
 ["price-action-v3"."spike.signal_valid_bars"]
 # Step of this setting in the app forms and the validator, bars; read by tickr.settings_schema.
 step = 1
+
+# Setting classes (backlog S2) of every key in config/bot.toml: owner = changeable from the apps,
+# engineering = file only, closed = environment, Production authorization and secrets, never
+# changed from an app. A key with a record in tickr.settings_schema is owner (a future [model]
+# setting becomes owner by getting a record; nothing here changes). Any other key takes the class
+# of its table unless closed_keys names it. Every table of bot.toml must be listed in one of the
+# two table lists (tests/test_settings_schema.py), so a new table without a class fails a test.
+# Read by tickr.settings_schema.load_classes and the settings API draft check.
+
+[classes]
+# Tables of config/bot.toml whose keys are file only (engineering) unless a record or closed_keys
+# says otherwise; read by tickr.settings_schema.classify.
+engineering_tables = [
+  "run",
+  "strategy",
+  "risk",
+  "session",
+  "orders",
+  "probe",
+  "api",
+  "market_data",
+  "observers",
+  "advisor",
+  "trailing_stop",
+  "exit_chase",
+  "model",
+  "confidence_sizing",
+  "massive",
+  "runtime",
+  "alerts",
+  "live_activity",
+  "chart",
+  "parity",
+]
+# Tables of config/bot.toml whose keys are all closed (the per-environment tables: hosts, secret
+# variable names, authorization); read by tickr.settings_schema.classify.
+closed_tables = [
+  "environments.sandbox",
+  "environments.production",
+]
+# Single keys closed inside an engineering table: the active environment and the names of the
+# environment variables and files that hold secrets or pairing; read by tickr.settings_schema.classify.
+closed_keys = [
+  "run.environment",
+  "advisor.api_key_variable",
+  "massive.api_key_variable",
+  "massive.files_key_id_variable",
+  "massive.files_secret_variable",
+  "alerts.bot_token_variable",
+  "alerts.chat_id_variable",
+  "alerts.apns_key_id_variable",
+  "alerts.apns_team_id_variable",
+  "alerts.apns_key_path_variable",
+  "alerts.push_tokens_file",
+  "api.remote_token_hash_file",
+  "api.remote_simulator_token_hash_file",
+  "api.remote_simulator_token_file",
+  "api.remote_pairing_file",
+  "api.remote_pairing_code_file",
+]

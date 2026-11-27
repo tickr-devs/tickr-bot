@@ -18,10 +18,12 @@ from tickr.observers.loader import (
     load_active,
     load_observers,
     parse_modules,
+    read_values,
 )
 from tickr.observers.log import DecisionLog
 from tickr.observers.runner import Limits, ObserverSet, ProcessSpec, _Encoder
 from tickr.research.records import Admission, load_records
+from tickr.settings_version import for_observer, platform_part
 from tickr.strategy.base import (
     Decision,
     PositionView,
@@ -534,7 +536,7 @@ def _process_set(tmp_path, folder="pa-lookback-8"):
     return ObserverSet(load_observers(cfg), log, Decimal(5), cfg.observers.queue_size,
                        cfg.risk.max_quote_age_seconds, cfg.risk.max_clock_skew_seconds,
                        process=ProcessSpec(tmp_path, tuple(cfg.observers.strategy_modules),
-                                           log.directory)), log
+                                           log.directory, platform_part(cfg))), log
 
 
 def test_a_real_strategy_runs_in_the_observer_process(tmp_path):
@@ -549,6 +551,10 @@ def test_a_real_strategy_runs_in_the_observer_process(tmp_path):
     assert [(r.decision.strategy, r.decision.version, r.role, r.decision.verdict)
             for r in records] == [("price-action-v1", "2", Role.OBSERVER, Verdict.IGNORE)]
     assert records[0].bar_start == START + 2 * M1
+    # The child tags its records with the settings version of the values it loaded (S3).
+    platform = platform_part(config.load(ROOT / "config" / "bot.toml"))
+    assert records[0].settings_version == for_observer(
+        platform, read_values(tmp_path, "pa-lookback-8")).value
 
 
 def test_an_observer_process_that_ends_is_reported_once(tmp_path):

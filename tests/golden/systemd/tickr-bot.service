@@ -2,7 +2,10 @@
 # again first (compose service `bot`, profile jobs, restart: "no": a crash alerts, never a
 # relaunch). The unit only starts the container; stop it with `docker compose -f
 # /srv/tickr/etc/compose.yaml stop bot` (its stop_grace_period is
-# [runtime] bot_exit_timeout_seconds, from limits.env).
+# [runtime] bot_exit_timeout_seconds, from limits.env). The compose step holds the compose lock
+# (`flock`, waiting for it; shared with tickr-bot-restart.service, tickr-bot-start.service and
+# deploy-server.sh), so no other compose command acts on the bot at the same time:
+# /srv/tickr/data/control/compose.lock
 # The env file is the path /run/tickr/env on the host, written by tickr-secrets.service; only its
 # path is named here, never a value.
 # Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
@@ -18,4 +21,4 @@ User=tickr
 EnvironmentFile=/srv/tickr/etc/limits.env
 Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml
 Environment=TICKR_ENV_FILE_HOST=/run/tickr/env
-ExecStart=/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml --profile jobs up -d bot
+ExecStart=/usr/bin/flock /srv/tickr/data/control/compose.lock /usr/bin/docker compose -f /srv/tickr/etc/compose.yaml --profile jobs up -d bot

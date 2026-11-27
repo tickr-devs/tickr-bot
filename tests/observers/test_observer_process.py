@@ -26,6 +26,7 @@ M1 = timedelta(minutes=1)
 START = datetime.combine(date(2026, 11, 10), dtime(10, 0), ZoneInfo("America/New_York")
                          ).astimezone(UTC)
 SECRET = "TICKR_TEST_SECRET_VARIABLE"
+PLATFORM = {"risk.max_open_positions": 1}  # the platform part of settings versions
 
 MODULE = '''
 import os
@@ -56,7 +57,8 @@ def _setup(tmp_path: Path, hang: bool = False) -> tuple[ProcessSpec, tuple[str, 
     folder.joinpath("strategy.toml").write_text(
         f'[strategy]\nname = "probe"\nversion = "1"\n[probe]\nhang = {str(hang).lower()}\n')
     modules = ("probe=probe_strategy",)
-    return ProcessSpec(tmp_path, modules, tmp_path / "decisions", frozenset({SECRET})), modules
+    return ProcessSpec(tmp_path, modules, tmp_path / "decisions", PLATFORM,
+                       frozenset({SECRET})), modules
 
 
 def _bars(n: int, symbol: str = "ABC") -> tuple[Bar, ...]:
@@ -127,7 +129,7 @@ from tickr.observers.runner import ObserverSet, ProcessSpec
 from tickr.strategy.base import SymbolContext
 from tickr.types import Bar
 root = Path.cwd()
-spec = ProcessSpec(root, ("probe=probe_strategy",), root / "decisions")
+spec = ProcessSpec(root, ("probe=probe_strategy",), root / "decisions", {})
 loaded = [load_strategy(root, "probe", parse_modules(spec.modules))]
 M1 = timedelta(minutes=1)
 NY = ZoneInfo("America/New_York")

@@ -1,0 +1,19 @@
+{
+  "source_url": "https://www.nyse.com/trade/hours-calendars",
+  "fetched_on": "2026-11-25",
+  "source_note": "Read through a page-summarizing fetch; the page's own bytes were not hashed, so the digests below are of the extension files built from it.",
+  "covers": {
+    "first": "2027-01-04",
+    "last": "2028-12-29"
+  },
+  "early_close_time_new_york": {
+    "2027-11-26": "13:00",
+    "2028-07-03": "13:00",
+    "2028-11-24": "13:00"
+  },
+  "md5": {
+    "trading-days-ext.txt": "9b11bd443b482c3ba8f6ac2908fa06fc",
+    "early-close-days-ext.txt": "012834ee072149608e2dc03404727a94",
+    "exchange-closures-ext.txt": "843d4eba5058ce0c3a285d66c7b0c4a7"
+  }
+}

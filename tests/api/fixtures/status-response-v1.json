@@ -13,7 +13,8 @@
     },
     "strategy": {
       "name": "price-action-v1",
-      "version": "1"
+      "version": "1",
+      "settings_version": null
     },
     "entry_stop": false,
     "entry_block": {
@@ -77,10 +78,16 @@
         "entry_cause": null,
         "strategy": {
           "name": "price-action-v1",
-          "version": "1"
+          "version": "1",
+          "settings_version": null
         },
         "code_version": "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6-dirty",
         "result_exact_usd": "-1.67",
+        "decider": {
+          "kind": "strategy",
+          "name": "price-action-v1",
+          "version": "1"
+        },
         "entry_cause_codes": []
       }
     ],
@@ -134,7 +141,26 @@
     "result_today_broker_usd": "-1.64",
     "stop_progress": null,
     "working_entries": [],
-    "schema_version": 1
+    "schema_version": 1,
+    "decider": {
+      "kind": "strategy",
+      "name": "price-action-v1",
+      "version": "1"
+    },
+    "protection_in_force": [
+      {
+        "key": "risk.max_daily_loss_usd",
+        "value": "300",
+        "adopted_at": null
+      },
+      {
+        "key": "risk.max_open_positions",
+        "value": "1",
+        "adopted_at": "2026-11-16T14:55:00.123Z"
+      }
+    ],
+    "realized_loss_week_usd": "41.20",
+    "stop_out_streak": 1
   },
   "age_seconds": "2.000",
   "stale": false,

@@ -5,8 +5,9 @@ broker read and quote stream), the latest preflight (its record file, written by
 and bot launchd jobs) and model training (the training job's own progress file). Then `host`:
 the machine's own services, behind `[api] system_services` so a server without launchd or
 caffeinate reports none instead of guessing. On a Mac: the watchdog job's journal and restarts,
-and caffeinate's no-sleep hold read from the power assertions. Nothing here is written, and the
-bot neither reads nor writes anything for it.
+and caffeinate's no-sleep hold read from the power assertions. `model`: the trained model's switch
+and bundle from `[model]`, and its state only where the API can know it. Nothing here is
+written, and the bot neither reads nor writes anything for it.
 """
 
 from __future__ import annotations
@@ -57,6 +58,8 @@ class SystemSettings:
     sleep_command: tuple[str, ...]
     sleep_timeout_seconds: Decimal
     restart_rows: int
+    model_enabled: bool  # [model] enabled
+    model_bundle: str  # [model] bundle, "" = none chosen
 
     @classmethod
     def from_config(cls, config: Config) -> SystemSettings:
@@ -71,6 +74,8 @@ class SystemSettings:
             sleep_command=config.api.sleep_check_command,
             sleep_timeout_seconds=config.api.sleep_check_timeout_seconds,
             restart_rows=config.api.system_restart_rows,
+            model_enabled=config.model.enabled,
+            model_bundle=config.model.bundle,
         )
 
 
@@ -93,7 +98,18 @@ def system_document(settings: SystemSettings, response: api.StatusResponseV1,
         training_cause=training_cause,
         host=host,
         host_cause=host_cause,
+        model=_model(settings),
     )
+
+
+def _model(settings: SystemSettings) -> api.ModelV1:
+    """Off while `[model] enabled` is false. While it is true the bot is the one that loads the
+    bundle, and it records no load result yet, so the state is unknown here: null with its cause
+    (rule 7), never `not_loaded` or `refused` guessed from the config."""
+    bundle = settings.model_bundle or None
+    if not settings.model_enabled:
+        return api.ModelV1(False, bundle, api.ModelState.OFF, None)
+    return api.ModelV1(True, bundle, None, api.MODEL_LOAD_NOT_RECORDED)
 
 
 def _link(settings: SystemSettings, response: api.StatusResponseV1) -> api.BrokerLinkV1:

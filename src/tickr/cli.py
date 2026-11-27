@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import signal
 import sqlite3
@@ -842,9 +843,10 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     trading calendar: entries are refused without one anyway. Observers that cannot be
     loaded are reported to `observers_refused` and left out: a shadow strategy never stops
     trading."""
+    from tickr import settings_version
     from tickr.data.history import HistoryReader
     from tickr.observers.errors import ObserverError
-    from tickr.observers.loader import load_active, load_observers
+    from tickr.observers.loader import load_active, load_observers, with_settings_version
     from tickr.observers.log import DecisionLog
     from tickr.observers.runner import Limits, ObserverSet, ProcessSpec
     from tickr.runtime.entries import EntryDesk
@@ -853,9 +855,16 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     if calendar is None:
         return None
     loaded = load_active(cfg)  # ObserverError: caller refuses entries
+    # No settings version, or one recorded with other contents: SettingsVersionError (an
+    # ObserverError), so entries are refused, journaled and alerted like a strategy that
+    # cannot load.
+    loaded = with_settings_version(
+        loaded, lambda: settings_version.for_active(cfg, loaded.values), engine.store)
+    platform = settings_version.platform_part(cfg)
     log = DecisionLog.from_config(cfg)
     desk = EntryDesk(engine, cfg, calendar=calendar, last_broker_read_at=last_broker_read_at,
-                     log=log)
+                     log=log, settings_version=loaded.settings_version,
+                     versions=lambda c: settings_version.for_active(c, loaded.values))
     evaluator = Evaluator(engine, cfg, source, strategy=loaded.strategy, desk=desk,
                           history=HistoryReader.from_config(cfg, source, calendar),
                           inbox=inbox, calendar=calendar, today_bars=today_bars, now=NOW)
@@ -864,19 +873,46 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     except ObserverError as exc:
         observers_refused(str(exc))
         shadows = ()
+    kept = []
+    for shadow in shadows:  # an observer without a settings version is left out alone
+        try:
+            kept.append(with_settings_version(
+                shadow, lambda s=shadow: settings_version.for_observer(platform, s.values),
+                engine.store))
+        except ObserverError as exc:
+            observers_refused(str(exc))
+    shadows = tuple(kept)
     # The observers run in a child process the bot owns, built again there from their folders
     # (observers.runner), so they never share the trading thread's interpreter lock.
     observers = ObserverSet(shadows, log, cfg.observers.max_evaluation_seconds,
                             cfg.observers.queue_size, cfg.risk.max_quote_age_seconds,
                             cfg.risk.max_clock_skew_seconds,
                             process=ProcessSpec(cfg.root, tuple(cfg.observers.strategy_modules),
-                                                log.directory,
+                                                log.directory, platform,
                                                 config_module.credential_variables(cfg)),
                             limits=Limits(timedelta(seconds=float(
                                 cfg.observers.forget_symbol_seconds)),
                                 cfg.observers.history_sends_per_pass),
                             slow_in_row=cfg.observers.max_slow_evaluations_in_row)
     return evaluator, observers
+
+
+def _entries_off(store: Store, watch: Any, run_id: str, exc: Exception) -> str:
+    """The active strategy or its settings version was refused at start: no entries this run.
+    Journaled (`strategy-not-loaded`, with the settings version's refusal word when that is
+    the cause) and alerted, never a silent disable; the status shows it as the entry block."""
+    from tickr.runtime.alerts import AlertKind
+    from tickr.runtime.service import STRATEGY_NOT_LOADED
+
+    cause = str(exc)
+    refusal = getattr(exc, "cause", None)
+    with store.transaction():
+        store.append(STRATEGY_NOT_LOADED, {"cause": cause,
+                                           **({} if refusal is None
+                                              else {"settings_version_refused": refusal})},
+                     run_id=run_id)
+    watch.alert(AlertKind.STRATEGY_NOT_LOADED, f"entries off for this run: {cause}")
+    return cause
 
 
 def _closer(observers: ObserverSet, cfg: config_module.Config) -> Callable[[], None]:
@@ -890,6 +926,7 @@ def _run(path: Path) -> int:
     """The launchd bot job (via `tickr.runtime run-bot`): run until SIGTERM, then drain.
     Exit 0 after a clean drain (SIGTERM or a stop-bot command), 3 refused while the operator's
     stop marker exists, 5 when the drain hit its deadline."""
+    from tickr.api.settingsapply import promote_at_start
     from tickr.data.capture import BOT_START, BOT_STOP, CaptureError, CaptureWriter
     from tickr.data.health import StreamHealth
     from tickr.data.todaybars import TodayBars
@@ -899,6 +936,7 @@ def _run(path: Path) -> int:
     from tickr.runtime.account import AccountReads
     from tickr.runtime.alert_routing import routing_path, skipped_by
     from tickr.runtime.alerts import Alerter, AlertKind, token_pending_text
+    from tickr.runtime.liveprotection import LiveProtection
     from tickr.runtime.market import (
         IGNITION_NOT_LOADED,
         MarketRuntime,
@@ -914,10 +952,17 @@ def _run(path: Path) -> int:
     if stopped is not None:
         print(f"refused: {stopped}", file=sys.stderr)
         return 3
-    strategy = service.strategy_id(cfg)
-    version = _code_version(cfg)
     database, lock_path = data_paths(cfg)
     with SingleInstanceLock(lock_path):
+        # Loosening settings changes wait for the next session (backlog S5): the first start
+        # on a later New York date writes them, then the config is loaded again.
+        note, written = promote_at_start(cfg, path, NOW())
+        if note is not None:
+            print(note, file=sys.stderr, flush=True)
+        if written:
+            cfg = config_module.load(path)
+        strategy = service.strategy_id(cfg)
+        version = _code_version(cfg)
         store = Store.open(database, busy_timeout_seconds=cfg.run.database_busy_timeout_seconds,
                            now=NOW)
         _require_environment(store, cfg)
@@ -985,12 +1030,12 @@ def _run(path: Path) -> int:
                 wired = _evaluator(cfg, engine, adapters.market, inbox, calendar, today_bars,
                                    lambda: bot.last_broker_read_at, observers_refused)
             except ObserverError as exc:  # the bot still protects and exits; no entries
-                wired, entries_off = None, str(exc)
-                with store.transaction():
-                    store.append(service.STRATEGY_NOT_LOADED, {"cause": entries_off},
-                                 run_id=run_id)
+                wired, entries_off = None, _entries_off(store, watch, run_id, exc)
             if wired is not None:
                 evaluator, observers = wired
+                # The status shows the settings version the desk records (None: entries off).
+                strategy = dataclasses.replace(
+                    strategy, settings_version=evaluator.desk.settings_version)
                 market.screen = evaluator.strategy  # discovery applies its liquidity rules
             # Display reads (balance, account kind, today's fills) on their own thread.
             if adapters.display_reads is not None:
@@ -1004,7 +1049,8 @@ def _run(path: Path) -> int:
                                   evaluator=evaluator, entries_off=entries_off,
                                   observers=observers, watch=watch,
                                   account_reads=account_reads, quote_file=quote_file,
-                                  disk_free=DISK_FREE)
+                                  disk_free=DISK_FREE,
+                                  protection=LiveProtection(cfg, Path(path)))
             market.bind()
             adapters.start_stream()
             quote_file.start()
@@ -1174,6 +1220,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("probe-news-delay", help="read-only, runs until Ctrl-C: polls Massive news, "
                    "Benzinga news and earnings and records each record's receipt time "
                    "(docs/operations.md)")
+    sub.add_parser("poll-revisions", help="runs until Ctrl-C, only when [massive] "
+                   "revision_poll_enabled: polls Benzinga earnings and news and keeps every "
+                   "version received, with the poll coverage (docs/operations.md)")
     demo_parser = sub.add_parser("demo", help="a made-up trading day in its own folder "
                                  "(config/demo.toml) served on [api] demo_port; never talks to "
                                  "Webull")
@@ -1182,7 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
                              "demo-fixture/ (`tickr demo` does this on its own; docs/demo.md)")
     demo_parser.add_argument("--record", action="store_true",
                              help="record the demo day the apps carry (their \"Demo day\" "
-                             "switch) into TickrKit's resources (docs/demo.md)")
+                             "switch) into contract/DemoDay.jsonl.xz (docs/demo.md)")
     args = parser.parse_args(argv)
     try:
         if args.command == "trade":
@@ -1240,6 +1289,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "probe-news-delay":
             from tickr.model import newsprobe
             return newsprobe.main(config_module.load(args.config))
+        if args.command == "poll-revisions":
+            from tickr.model import revpoll
+            return revpoll.main(config_module.load(args.config))
         if args.command == "demo":
             from tickr.demo.run import main as demo_main
             repo = config_module.load(args.config).root

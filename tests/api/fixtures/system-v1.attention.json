@@ -72,6 +72,12 @@
   },
   "host_cause": null,
   "api_version": 1,
+  "model": {
+    "enabled": false,
+    "bundle": "l1-2026-12-01a",
+    "state": "off",
+    "cause": null
+  },
   "morning_check_cause_codes": [],
   "training_cause_codes": [
     {

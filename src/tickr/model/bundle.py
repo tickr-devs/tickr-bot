@@ -107,6 +107,9 @@ class Bundle:
     training: dict[str, Any]
     live_availability: dict[str, str]
     session_policy: str
+    manifest_sha256: str
+    """SHA-256 of the manifest bytes that were verified. The manifest pins every model file's
+    sha256, so this names the whole bundle (the model part of the settings version, S3)."""
 
     @property
     def identity(self) -> str:
@@ -127,12 +130,14 @@ def feature_list_md5(names: list[str] | tuple[str, ...]) -> str:
     return hashlib.md5("\n".join(names).encode("utf-8")).hexdigest()
 
 
-def _manifest(folder: Path) -> dict[str, Any]:
+def _manifest(folder: Path) -> tuple[dict[str, Any], str]:
+    """The manifest and the sha256 of the very bytes it was parsed from."""
     path = folder / MANIFEST
     if not path.is_file():
         raise ModelRefused("manifest_missing", str(folder))
+    raw = path.read_bytes()
     try:
-        data = json.loads(path.read_text("utf-8"))
+        data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ModelRefused("manifest_unreadable", type(exc).__name__) from exc
     if not isinstance(data, dict):
@@ -143,7 +148,7 @@ def _manifest(folder: Path) -> dict[str, Any]:
         extra = sorted(set(data) - KEYS - OPTIONAL_KEYS)
         missing = sorted(KEYS - set(data))
         raise ModelRefused("manifest_keys", f"unknown {extra}, missing {missing}")
-    return data
+    return data, hashlib.sha256(raw).hexdigest()
 
 
 def _text(data: dict[str, Any], key: str) -> str:
@@ -157,7 +162,7 @@ def open_bundle(folder: Path | str) -> Bundle:
     """Verify every file and promise of the bundle in `folder`; nothing is loaded into LightGBM
     yet (`Scorer` does that)."""
     folder = Path(folder)
-    data = _manifest(folder)
+    data, manifest_sha256 = _manifest(folder)
     name, version = _text(data, "name"), _text(data, "version")
     if (not (_NAME.fullmatch(name) and _VERSION.fullmatch(version))
             or folder.name != f"{name}-{version}"):
@@ -207,7 +212,7 @@ def open_bundle(folder: Path | str) -> Bundle:
     if not isinstance(training, dict):
         raise ModelRefused("manifest_keys", "training is not an object")
     return Bundle(folder, name, version, _text(data, "lightgbm"), tuple(names), tuple(heads),
-                  training, disclosed, policy)
+                  training, disclosed, policy, manifest_sha256)
 
 
 def _live_availability(data: dict[str, Any], names: list[str]) -> dict[str, str]:

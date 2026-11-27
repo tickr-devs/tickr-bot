@@ -142,6 +142,8 @@ class SimulatedBook:
             buying_power=_NO_BUYING_POWER,
             entry_budget_available=False,
             stop_budget_available=False,
+            realized_loss_week_usd=None,
+            stop_out_streak=None,
         )
 
     def entered(self, symbol: str, at: datetime, admission: Admission) -> int:

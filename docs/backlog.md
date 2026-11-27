@@ -180,6 +180,12 @@ losses go down, on both validation periods.
   a conservative value until the monitor has measured the real one. The same first-seen log for the
   earnings calendar builds a point-in-time history for later top-ups. Status: in progress; the monitor is
   built on the live-features revision store (#833, #835, in review).
+- **R37** (part of R33) Live tick snapshot cost: every live close takes the tick store's snapshot
+  and reads it with a Python pass over every version of the day (`TickStore.snapshot`,
+  `LiveFeatures._read_snapshot`); measured 1.1 s of a 4.6 s close at 09:35 (`tests/model/time_live.py`,
+  181 cohort symbols) and growing through the day. Measure a full day's close times on the first
+  captured day, then make the snapshot incremental if a close does not finish inside its minute.
+  Status: proposed (Reviewer, 2026-11-27).
 
 Model path, plan v1.5 phases (approved 2026-11-19; source: `model-migration/plan-v1.5.md` in
 project files):

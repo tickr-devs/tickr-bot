@@ -16,6 +16,9 @@ on:
       - config/**
       - strategies/**
       - ops/docker/**
+      # The unit templates and deploy-server.sh are in the image too (Dockerfile COPY ops/systemd):
+      # deploy-server.sh renders the units inside the release image (cutover 2026-11-27, #891).
+      - ops/systemd/**
       - .github/workflows/server-image.yml
   workflow_dispatch:
 concurrency:

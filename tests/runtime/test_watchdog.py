@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from baseline import mac_text
 
 from tickr import config as config_module
 from tickr.api import contract
@@ -298,14 +299,13 @@ def test_cli_watchdog_day_through_the_read_only_broker(config_path, monkeypatch,
     monkeypatch.setattr(runtime_main, "WATCHDOG_NOW", clock)
     monkeypatch.setattr(runtime_main, "WATCHDOG_SLEEP", clock.sleep)
     monkeypatch.setattr(runtime_main, "WATCHDOG_BROKER", lambda c, hook: broker)
-    monkeypatch.setitem(os.environ, cfg.alerts.imessage_recipient_variable, "")
-    # No channel on this machine (as on Linux, where CI runs), whatever the test host is.
+    # No channel (Telegram not set up), whatever the test host is.
     monkeypatch.setattr(runtime_main, "default_notifier", lambda cfg, **kwargs: None)
     assert runtime_main.main(["--config", str(config_path), "watchdog"]) == 1
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     kinds = [x["record"] for x in lines]
-    assert kinds[:2] == [watchdog.CHANNEL_REFUSED] * 2
-    assert [x["cause"] for x in lines[:2]] == ["alert-channel-missing", "alert-recipient-missing"]
+    assert kinds[:1] == [watchdog.CHANNEL_REFUSED]
+    assert [x["cause"] for x in lines[:1]] == ["alert-channel-missing"]
     assert {x["delivery"] for x in lines if x["record"] == "alert"} == {"no-notifier"}
     assert kinds.count("alert") == 2 and broker.sent == []
     journal = cfg.root / cfg.run.data_dir / cfg.runtime.watchdog_journal_file
@@ -404,8 +404,9 @@ def test_restart_decision_table(cfg, tmp_path, case, expected, started):
     assert bool(runs.calls) is started
     if started:
         ((command, timeout),) = runs.calls
-        assert command == ["/bin/launchctl", "kickstart",
-                           f"gui/{os.getuid()}/local.tickr.bot"]
+        # The shipped (server) command: the restart request inside the watchdog's container.
+        assert command == ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
+                           "request-restart", "--cause", "watchdog"]
         assert timeout == cfg.runtime.watchdog_restart_timeout_seconds
         assert watchdog.restarted_on(record) == date(2026, 11, 16)
 
@@ -430,8 +431,7 @@ def test_restart_happens_once_a_day_and_is_recorded_before_the_command(cfg, tmp_
     again.bot_check(now + timedelta(seconds=120))
     assert seen == [date(2026, 11, 16)] and kinds(recorder) == ["bot-down-with-open-trade"]
     lines = [r for r in records(tmp_path / "watchdog.jsonl") if r["record"] == watchdog.RESTART]
-    assert [(r["started"], r["command"][-1]) for r in lines] == [
-        (True, "gui/{uid}/local.tickr.bot")]
+    assert [(r["started"], r["command"][-1]) for r in lines] == [(True, "watchdog")]
 
 
 @pytest.mark.parametrize("result,cause", [(1, "restart command exited 1"),
@@ -501,7 +501,10 @@ def test_after_a_restart_a_flat_broker_and_running_bot_are_quiet(cfg, tmp_path):
 
 
 def test_restart_command_names_the_bot_job_label(config_path):
+    """On the Mac: launchd's kickstart of the bot job, with this user's id."""
+    config_path.write_text(mac_text(config_path.read_text("utf-8")), "utf-8")
     cfg = config_module.load(config_path)
+    assert watchdog.restart_command(cfg)[2] == f"gui/{os.getuid()}/local.tickr.bot"
     template = (cfg.root / "ops" / "launchd" / "local.tickr.bot.plist.template").read_text()
     label = cfg.runtime.watchdog_restart_command[-1].rsplit("/", 1)[1]
     assert f"<key>Label</key>\n  <string>{label}</string>" in template
@@ -822,3 +825,78 @@ def test_invalid_config_repeats_a_day_after_the_first_alert_not_at_midnight(monk
         runtime_main._hold_daily(lambda: calls.append(1))
     assert slept == [runtime_main.ONE_DAY.total_seconds()] * 2
     assert len(calls) == 2
+
+
+# --- the API's device-session alerts, relayed to Telegram -------------------------------------
+
+def feed(cfg) -> Path:
+    return cfg.root / cfg.run.data_dir / cfg.alerts.feed_file
+
+
+def feed_line(path: Path, kind: str, text: str, at: str = "2026-11-27T17:00:00Z") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"at": at, "title": f"Tickr sandbox {kind}", "text": text}) + "\n")
+
+
+def test_device_session_lines_of_the_api_are_relayed_once(cfg, tmp_path):
+    path = feed(cfg)
+    feed_line(path, "device-session", "device 'old' signed in")  # before the first run
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    assert recorder.shown == []  # a first run starts at the end of the feed
+    feed_line(path, "device-session", "device 'mac' signed in")
+    feed_line(path, "disk-low", "not relayed")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("not json\n")
+    guard.relay()
+    assert recorder.shown == ["Tickr: device-session | " + watchdog.RELAYED
+                              + " device 'mac' signed in (at 2026-11-27T17:00:00Z)"]
+    guard.relay()
+    assert len(recorder.shown) == 1
+    # A relaunched watchdog reads the offset back and relays nothing twice.
+    again, recorder2 = sentinel(cfg, Clock(AT), tmp_path)
+    again.relay()
+    assert recorder2.shown == []
+
+
+def test_the_relayed_copy_is_never_relayed_again(cfg, tmp_path):
+    path = feed(cfg)
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    feed_line(path, "device-session", f"{watchdog.RELAYED} device 'mac' signed in")
+    guard.relay()
+    assert recorder.shown == []
+
+
+def test_a_line_still_being_written_waits_and_a_replaced_feed_is_read_from_its_start(cfg, tmp_path):
+    path = feed(cfg)
+    feed_line(path, "disk-low", "x" * 200)
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    half = json.dumps({"at": "a", "title": "Tickr sandbox device-session", "text": "one"})
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(half[:10])
+    guard.relay()
+    assert recorder.shown == []
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(half[10:] + "\n")
+    guard.relay()
+    assert len(recorder.shown) == 1 and "one (at a)" in recorder.shown[0]
+    path.write_text("", "utf-8")  # replaced by a shorter file
+    feed_line(path, "device-session", "two")
+    guard.relay()
+    assert len(recorder.shown) == 2 and "two" in recorder.shown[1]
+
+
+def test_check_relays_and_a_missing_feed_is_not_a_finding(cfg, tmp_path):
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    assert recorder.shown == [] and not feed(cfg).exists()
+    guard.relay()  # still no feed: first run never recorded an offset, nothing to relay
+    feed_line(feed(cfg), "device-session", "three")
+    guard.check(AT)  # the first read of a feed starts at its end
+    feed_line(feed(cfg), "device-session", "four")
+    guard.check(AT)
+    assert [s for s in recorder.shown if "device-session" in s][-1].endswith(
+        "four (at 2026-11-27T17:00:00Z)")
