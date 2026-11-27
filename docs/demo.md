@@ -162,8 +162,8 @@ the app is back on the bot, on today, and any recorded day can be picked again.
 The apps carry the demo day with them, so it works on its own: any time (also while the bot
 trades), on the phone away from the Mac, with no `tickr demo` running and no network at all.
 
-- **The recording** (`apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz`, made by `tickr demo
-  --record`, `src/tickr/demo/record.py`): the real bot runs the scenario on the simulated exchange
+- **The recording** (`contract/DemoDay.jsonl.xz`, copied to TickrKit's resources in tickr-ios by
+  `.github/workflows/contract-sync.yml`; made by `tickr demo --record`, `src/tickr/demo/record.py`): the real bot runs the scenario on the simulated exchange
   exactly as `tickr demo` does (past sessions and the day up to `[demo] clock` fast, then the bot
   again from `clock` with the live loop), fast and in its own folder (`demo-record/`, deleted
   afterwards). Through `[recording] cycle` of the live loop (cycle 1: the day's last

@@ -1230,7 +1230,7 @@ def main(argv: list[str] | None = None) -> int:
                              "demo-fixture/ (`tickr demo` does this on its own; docs/demo.md)")
     demo_parser.add_argument("--record", action="store_true",
                              help="record the demo day the apps carry (their \"Demo day\" "
-                             "switch) into TickrKit's resources (docs/demo.md)")
+                             "switch) into contract/DemoDay.jsonl.xz (docs/demo.md)")
     args = parser.parse_args(argv)
     try:
         if args.command == "trade":

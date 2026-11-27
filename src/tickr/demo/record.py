@@ -20,16 +20,15 @@ service stopped. The recording is made here, with the real bot on the simulated 
    stops, start-bot, a Lab replay and an advisor decision are asked once (the folder is then
    deleted, so nothing queued is ever run).
 
-The file (`RECORDING`) is bundled in TickrKit (`DemoSource`): xz-compressed ASCII lines, line 1
-the index, every further line a piece of an answer. Each route keeps its first answer whole and
-every change as ops against the one before (runs of bytes copied from it, and new pieces), cut at
-commas, so a ticking clock or an appended candle costs a few bytes, not a document. Its `inputs`
+The file (`RECORDING`) is bundled in the apps' TickrKit (`DemoSource`): xz-compressed ASCII lines,
+line 1 the index, every further line a piece of an answer. Each route keeps its first answer whole
+and every change as ops against the one before (runs of bytes copied from it, and new pieces), cut
+at commas, so a ticking clock or an appended candle costs a few bytes, not a document. Its `inputs`
 is the fixture digest of the scenario, the demo code, the API contract and the strategies
 (`run.fixture_inputs`) it was made from, for reference only: a change of those does not call for a
 new recording. tests/demo/test_recording.py fails only when the apps could no longer read it (an
 answer that no longer matches today's committed schema, another FORMAT, a strategy that is gone);
-.github/workflows/record-demo.yml records it again every night.
-"""
+.github/workflows/record-demo.yml records it again every night. """
 
 from __future__ import annotations
 
@@ -71,8 +70,9 @@ from tickr.demo.run import (
 from tickr.demo.scenario import Scenario
 from tickr.demo.world import World, ny
 
-# Where the apps find the recording, relative to the repo (TickrKit's resources).
-RECORDING = Path("apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz")
+# Where the recording is written, relative to the repo: part of the contract bundle, copied to
+# TickrKit's resources in tickr-ios (.github/workflows/contract-sync.yml).
+RECORDING = Path("contract/DemoDay.jsonl.xz")
 FORMAT = 1  # version of the file layout; DemoSource refuses another
 RECORD_SUFFIX = "-record"  # the recording replays into `<root_dir>-record/`
 AT_CLOCK = "data-at-clock"  # inside it: the data folder at `clock`, both runs start from it

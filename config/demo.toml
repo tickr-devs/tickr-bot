@@ -234,7 +234,7 @@ commands = [
 
 # The demo day the apps carry (`tickr demo --record`, docs/demo.md): the real bot runs this
 # scenario fast and every API answer the apps read is recorded, at the API's [api] poll_seconds,
-# over one cycle of the live loop, into apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.
+# over one cycle of the live loop, into contract/DemoDay.jsonl.
 # The apps' "Demo day" switch plays that recording in a loop; it needs neither the Mac nor the bot.
 [recording]
 # Which cycle of the live loop is recorded, counted from 0 at [demo] clock (whole number below the
