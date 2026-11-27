@@ -1637,9 +1637,10 @@ class Handler(BaseHTTPRequestHandler):
         if refused is not None:
             self._refuse(PAIR_ROUTE_KIND, refused)
         elif issued is not None:
-            self._json(200, self._session_answer(issued))
+            # The alert is recorded before the answer: a client never gets ahead of it.
             self._device_session_alert(f"device {body['name']!r} signed in with tickr.bot "
                                        f"(account {account!r}, app {client!r})")
+            self._json(200, self._session_answer(issued))
 
     def _session_answer(self, issued: sessions.Issued) -> SessionV1:
         now = self.server.clock()
@@ -1699,24 +1700,18 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request", 'body must be exactly {"refresh_token": "<token>"}')
             return
         settings = self.server.settings
-        ended: sessions.RefreshRefused | None = None
         issued: sessions.Issued | None = None
         with self.server.pair_lock, _pairing_lock(settings):
             refused = self._admit(PAIR_ROUTE_KIND)
             if refused is None:
                 self._last_error = None
                 try:
-                    issued, ended = self._refresh_locked(body["refresh_token"])
+                    issued, _ = self._refresh_locked(body["refresh_token"])
                 finally:  # every 401 here is a refresh token that failed; a 503 tested none
                     self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
         if refused is not None:
             self._refuse(PAIR_ROUTE_KIND, refused)
             return
-        if ended is not None and ended.revoked is not None:
-            why = ("a refresh token that was already used came back, so a copy of it may exist "
-                   "(or the app lost the answer to its own refresh)" if ended.reused
-                   else "its sign-in expired")
-            self._device_session_alert(f"device {ended.revoked!r} signed out: {why}")
         if issued is not None:
             self._json(200, self._session_answer(issued))
 
@@ -1739,6 +1734,11 @@ class Handler(BaseHTTPRequestHandler):
                 kept = devices.without(paired, exc.revoked)
                 if kept is not None:
                     _write_private(settings.devices_path, devices.render(kept))
+                # The alert is recorded before the 401: a client never gets ahead of it.
+                why = ("a refresh token that was already used came back, so a copy of it may "
+                       "exist (or the app lost the answer to its own refresh)" if exc.reused
+                       else "its sign-in expired")
+                self._device_session_alert(f"device {exc.revoked!r} signed out: {why}")
             self._error("unauthorized", exc.cause)
             return None, exc
         # One write retires the presented token and records the new one, before the answer.
@@ -1761,8 +1761,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if kept is not None:
                 _write_private(settings.devices_path, devices.render(kept))
-        self._send(204, b"", "application/json", {})
+        # The alert is recorded before the answer: a client never gets ahead of it.
         self._device_session_alert(f"device {name!r} signed out")
+        self._send(204, b"", "application/json", {})
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated
