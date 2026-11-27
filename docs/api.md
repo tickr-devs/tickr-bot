@@ -185,7 +185,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/performance?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>` | `200` `performance-v1`: gross results in R and USD of the trades closed from `from` to `to` (New York dates, both included): counts, win rate, expectancy, averages, profit factor, max drawdown, a per-day series. |
 | GET | `/account` | `200` `account-response-v1`: positions and open orders from the bot's latest successful broker read, whether they matched its records, and the latest balances. `503 unavailable` when the file is missing, invalid or dated in the future. |
 | GET | `/quotes` | `200` `quotes-response-v1`: the newest valid L1 quote of every symbol on the bot's quote stream (`quotes-v1`, see "GET /quotes" below); `503` `unavailable` while the bot has written no quotes file or it is invalid. |
-| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. `command_max_age_seconds` is the age past which the bot refuses a command as expired: the apps keep a lost send's `Idempotency-Key` at most this long (`null` from an older API, and then they keep none). `decider` / `decider_cause`: see Decider below. |
+| GET | `/settings` | `200` `settings-v1`: risk limits, session times, active strategy and observers from `config/bot.toml`, as the API process loaded them at its start (read-only; change the file and restart). `broker_read_max_age_seconds` is the age of `status.freshness.last_broker_read_at` past which entries are blocked; `broker_read_warn_seconds` (always below it) is where clients start showing a warning. `live_quote_max_age_seconds` is how long after the stream's last delivery (`/quotes` `stream_received_at`) clients still show its quotes as live prices, and `quotes_poll_seconds` how often they read `/quotes`; both `null` from an older API, and then nothing is live. `command_max_age_seconds` is the age past which the bot refuses a command as expired: the apps keep a lost send's `Idempotency-Key` at most this long (`null` from an older API, and then they keep none). `risk.max_weekly_loss_usd` and `risk.stop_out_streak_limit` are the loss locks (0 = off; `null` from an older API). `decider` / `decider_cause`: see Decider below. |
 | GET | `/config` | `200` `config-v1`: the configuration file the API was started with, as it is on disk now, read-only. Every `[section]` in file order, each key with its value as written (TOML text) and the comment above it. `valid`/`error`: whether the file loads now, as the next start would. `changed_since_start`: the file differs from the one this API loaded (running processes keep the old values until restarted). The file holds credential variable names only, never values. `503 unavailable` when the API was started without a file path (the demo) or the file is unreadable. |
 | GET | `/settings/schema` | `200` `settings-schema-v1`: every owner setting of the settings schema with its kind, unit, bounds, step, group, words in English and Spanish, when a change applies, the direction that needs Face ID and whether it needs retraining, plus the rules across settings (read-only; see Owner settings below). `503 unavailable` when `[api] settings_schema_file` cannot be read. |
 | GET | `/settings/values` | `200` `settings-values-v1`: each schema setting's value in its owner's file as it is on disk now (TOML text), with each file's SHA-256. `503 unavailable` without a config file path (the demo) or when a file cannot be read. |
@@ -260,7 +260,8 @@ New York, days `YYYY-MM-DD`. Codes are read from the bot's own texts against the
 it writes (`api/reasons.py`); a text of any other shape is code `unrecognized` with `{}`, and
 clients show the text.
 - `entry_block.params`: `outside_regular_session` `{open, close}`; `after_last_entry` `{time}`;
-  `daily_ceiling` `{limit_usd, min_room_usd}`; `no_session_today` `{day}` (`weekend`,
+  `daily_ceiling` `{limit_usd, min_room_usd}`; `weekly_ceiling` `{limit_usd}`;
+  `stop_out_streak` `{count, limit}`; `no_session_today` `{day}` (`weekend`,
   `holiday`, `half_day`); `calendar_unknown` `{calendar}` (`not_loaded`, or the calendar or
   admission cause in lower case, e.g. `out_of_coverage`); `trading_gate_closed` `{gate, ...}`
   (the gate's `code` and its params); a fence block `{fence, ...}` (the fence's `code` and its
@@ -426,6 +427,20 @@ the planned loss of every open trade, and `daily_room_usd` = `[risk] max_daily_l
 realized - reserved (may be negative). Entries are refused while the room is below
 `settings.risk.min_daily_room_usd`. `positions` lists every open position the bot tracks;
 `position` is its first element or `null`, kept for older clients.
+
+Loss locks (backlog T11; added after version 1 shipped, absent from an older bot), counted from
+the bot's stored trades whether or not a lock is on. Only GET /status carries the two counts, from
+the run facts file (see "Run facts"); status.json has neither, and they are `null` when that file
+is missing, unreadable or of another run: `realized_loss_week_usd` is this New York
+week's net realized loss after fees (Monday to today, counted as the daily loss counts a day;
+`null` = unknown), `stop_out_streak` the trades in a row closed today by their stop at a loss (a
+winning or flat exit resets it; a losing exit that was not a stop fill leaves it as it is). With
+`settings.risk.max_weekly_loss_usd` above 0, entries are refused while realized + reserved + the
+new trade's planned loss would cross it (`entry_block` `weekly_ceiling` once nothing fits,
+`weekly_money_unknown` while the week's money is unknown); with
+`settings.risk.stop_out_streak_limit` above 0, entries are refused for the rest of the day once
+the streak reaches it (`stop_out_streak`). 0 = off (both ship off). Exits and stops are never
+blocked.
 
 `working_entries` (added after version 1 shipped, 2026-11-26; a reader takes a status without it
 as empty) lists every own trade whose entry order is working with nothing filled yet, oldest
@@ -1589,7 +1604,9 @@ decision file keeps the text):
   `NOTIONAL_OVER_CAP` `{notional, cap}`; `PLANNED_LOSS_OVER_LIMIT` `{planned_loss, limit}`;
   `DAILY_MONEY_UNKNOWN` `{missing}`; `DAILY_CEILING` `{room, ceiling, realized, reserved,
   min_room}` (room below the minimum) or `{realized, reserved, new, total, ceiling}` (the new
-  trade would cross the ceiling); `BUYING_POWER_UNKNOWN` `{}` (no balance read) or `{age,
+  trade would cross the ceiling); `WEEKLY_MONEY_UNKNOWN` `{missing}`; `WEEKLY_CEILING`
+  `{realized, reserved, new, total, ceiling}`; `STOP_OUT_STREAK` `{count, limit}`;
+  `BUYING_POWER_UNKNOWN` `{}` (no balance read) or `{age,
   limit}`; `BUYING_POWER_SHORT` `{value, buying_power, committed, free}`; `EQUITY_UNKNOWN` `{}` (no equity read), `{age, limit}` or `{value}` (a percent-of-equity limit is on and the equity is unusable); `GATE_CLOSED` `{gate, ...}` (the gate's code and params, as
   `trading_gate` above). Every other code: `{}`.
 - A cause that is not exactly one of the shapes admission and the entry path write (no `: `,
@@ -2015,13 +2032,15 @@ again).
   `contract.write_account(path, AccountV1(...))` (`runtime/account.py`), the same way. Before
   that it journals `reconcile-checked` when due (`record_reconcile`, see "Clean day").
 - Run facts: facts of the running bot that change seldom (`protection_in_force`, the active
-  strategy's `settings_version` and those of the trades the status shows) live in their
+  strategy's `settings_version` and those of the trades the status shows, the loss locks'
+  `realized_loss_week_usd` and `stop_out_streak`) live in their
   own `run-facts-v1` file (`[runtime] run_facts_file`), not in status.json, which keeps the shape a
   reader from before them accepts (it refuses unknown keys, and the watchdog takes an unreadable
   status file as a bot not running). The bot calls `contract.write_run_facts` (temp file + fsync +
   rename, like status) at its start, after each adoption of a tightening (journal row, then
-  the adoption, then the file) and when the settings versions of the trades the status shows
-  change (a trade closed today first shows), never per pass. A failed write never stops the loop nor undoes the
+  the adoption, then the file), when the settings versions of the trades the status shows
+  change (a trade closed today first shows) and when a loss lock count changes (both checked as
+  status.json is written), never per pass. A failed write never stops the loop nor undoes the
   adoption and is never retried: it is journaled once per stretch of failures
   (`run-facts-write-failed`). The file carries `run_id`; GET /status shows its facts only when it
   matches the `run_id` of status.json, so a stale (previous run), missing or unreadable file shows

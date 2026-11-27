@@ -158,7 +158,9 @@
         "value": "1",
         "adopted_at": "2026-11-16T14:55:00.123Z"
       }
-    ]
+    ],
+    "realized_loss_week_usd": "41.20",
+    "stop_out_streak": 1
   },
   "age_seconds": "2.000",
   "stale": false,

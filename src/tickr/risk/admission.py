@@ -19,6 +19,7 @@ from tickr.config import Config, GateResult, SessionConfig
 from tickr.risk.causes import AdmissionCause
 from tickr.risk.daily import check_daily
 from tickr.risk.equity import effective_limit
+from tickr.risk.locks import check_streak, check_weekly
 from tickr.risk.sizing import check_size
 from tickr.risk.timers import TradingWindow, WindowKind, trading_windows, window_at
 from tickr.strategy.base import Decision, Verdict
@@ -72,6 +73,11 @@ class AdmissionLimits:
     """Longest a resting limit entry (`Decision.rest_bars`) may work, in bars."""
     extended_hours_strategies: frozenset[str]
     """Strategies whose ENTER may be admitted outside the regular session."""
+    max_weekly_loss_usd: Decimal
+    """Weekly loss ceiling (`[risk] max_weekly_loss_usd`); 0 = off."""
+    stop_out_streak_limit: int
+    """Stop-outs in a row today that lock new entries (`[risk] stop_out_streak_limit`);
+    0 = off."""
     collar_bar_ratio: Decimal
     """Farthest the final limit may be from the last completed bar's close, as a ratio of that
     close (`[risk] entry_collar_bar_ratio`); 0 = off."""
@@ -112,6 +118,8 @@ class AdmissionLimits:
                 if risk.symbol_cooldown_after_loss_enabled else None),
             max_entry_rest_bars=risk.max_entry_rest_bars,
             extended_hours_strategies=frozenset(config.strategy.extended_hours_strategies),
+            max_weekly_loss_usd=risk.max_weekly_loss_usd,
+            stop_out_streak_limit=risk.stop_out_streak_limit,
             planned_loss_percent=risk.planned_loss_percent,
             position_notional_cap_percent=risk.position_notional_cap_percent,
             max_daily_loss_percent=risk.max_daily_loss_percent,
@@ -206,6 +214,12 @@ class AdmissionInputs:
     buying_power: BuyingPower
     entry_budget_available: bool
     stop_budget_available: bool
+    realized_loss_week_usd: Decimal | None
+    """This New York week's net realized loss (Monday to today, wins offset losses, after
+    fees) as a non-negative amount; None = unknown. Read only while the weekly ceiling is on."""
+    stop_out_streak: int | None
+    """Trades in a row closed today by their stop at a loss (`runtime.entries.stop_out_streak`);
+    None = not counted. Read only while the streak lock is on."""
     equity: Equity = Equity()
     """Read by `_check_money` only when a percent limit is on."""
     tradability_budget_available: bool = True
@@ -371,6 +385,16 @@ def _check_cooldown(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | Non
             return _refuse(C.SYMBOL_COOLDOWN,
                            f"{i.decision.symbol} closed at a loss at {loss_at.isoformat()}; "
                            f"no entry before {until.isoformat()}")
+    return None
+
+
+def _check_stop_out_streak(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Stop-out streak lock (backlog T11; after check 4): enough stop-outs in a row today
+    lock new entries for the rest of the day. Off at a limit of 0."""
+    streak = check_streak(i.stop_out_streak, lim.stop_out_streak_limit)
+    if not streak.ok:
+        assert streak.cause is not None
+        return _refuse(streak.cause, streak.detail)
     return None
 
 
@@ -575,12 +599,31 @@ def _check_money(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
         assert size.cause is not None
         return _refuse(size.cause, size.detail)
     assert size.planned_loss_usd is not None
-    reserve = _reservation(i, lim) or size.planned_loss_usd
+    reserve = _new_reservation(i, lim)
     daily = check_daily(i.realized_loss_today_usd, i.open_reservations_usd,
                         reserve, ceiling, lim.min_daily_room_usd)
     if not daily.ok:
         assert daily.cause is not None
         return _refuse(daily.cause, daily.detail)
+    return None
+
+
+def _new_reservation(i: AdmissionInputs, lim: AdmissionLimits) -> Decimal:
+    """What the entry reserves against the loss ceilings: its planned loss on the final order
+    prices, or its whole value outside the regular session (`_reservation`). Runs after the
+    decision and size checks passed."""
+    d = i.decision
+    assert d.quantity is not None and i.limit_price is not None and i.stop_price is not None
+    return _reservation(i, lim) or d.quantity * (i.limit_price - i.stop_price)
+
+
+def _check_weekly(i: AdmissionInputs, lim: AdmissionLimits) -> Admission | None:
+    """Weekly loss ceiling (backlog T11; after the daily rule of check 6). Off at 0."""
+    weekly = check_weekly(i.realized_loss_week_usd, i.open_reservations_usd,
+                          _new_reservation(i, lim), lim.max_weekly_loss_usd)
+    if not weekly.ok:
+        assert weekly.cause is not None
+        return _refuse(weekly.cause, weekly.detail)
     return None
 
 
@@ -676,15 +719,18 @@ CHECKS = (
     _check_reconciliation,
     _check_session,
     _check_own_state,
+    _check_stop_out_streak,
     _check_quote_and_setup,
     _check_money,
+    _check_weekly,
     _check_budget,
     _check_tradability,
     _check_buying_power,
 )
-"""Spec section 7 checks 1..7, in order, then the tradability check (backlog T8, off unless
-configured); the buying power part of check 6 runs last. The last two need broker reads, which
-the entry desk makes only for an entry every check before them admits."""
+"""Spec section 7 checks 1..7, in order, with the loss locks (backlog T11) after checks 4 and
+6, then the tradability check (backlog T8, off unless configured); the buying power part of
+check 6 runs last. The last two need broker reads, which the entry desk makes only for an entry
+every check before them admits."""
 
 SIMULATED_CHECKS = (
     _check_session,
@@ -699,10 +745,11 @@ prices, size and the daily loss ceiling. The same functions as `CHECKS`, in the 
 never a copy."""
 
 NOT_SIMULATED = ("gate", "reconciliation", "quote", "request_budget", "tradability",
-                 "buying_power")
+                 "buying_power", "loss_locks")
 """The checks a simulation has no counterpart for: the trading gate, broker reads and the
 entry-stop flag, the live quote (a simulation fills on bars), the request budget and the
-tradability read and the account's buying power."""
+tradability read, the account's buying power, and the weekly and stop-out streak locks (a
+simulated book holds one day and does not know which exits were stop fills)."""
 
 
 def admit_simulated(inputs: AdmissionInputs, limits: AdmissionLimits) -> Admission:

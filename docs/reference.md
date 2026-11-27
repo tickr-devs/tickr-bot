@@ -69,6 +69,10 @@ cause. Each blocks that one entry only; the bot tries again at the next signal.
 | `DAILY_MONEY_UNKNOWN` | Today's profit and loss is not known (for example the broker fees are missing). | See the `fees-unknown` alert. |
 | `DAILY_MONEY_INVALID` | A money figure for the day is not a valid amount. | Report it. |
 | `DAILY_CEILING` | The most the bot may lose today is reached (or would be). | Nothing; trading resumes the next day. |
+| `WEEKLY_CEILING` | The most the bot may lose this week (New York, Monday to today) is reached (or would be). Off unless `[risk] max_weekly_loss_usd` is set. | Nothing; trading resumes next Monday. |
+| `WEEKLY_MONEY_UNKNOWN` | A fill this week has an unknown price or fee, so the week's loss cannot be counted. | Wait for the fees to appear; if they do not, report it. |
+| `WEEKLY_MONEY_INVALID` | The week's loss or the weekly ceiling is not a valid amount. | Check `[risk] max_weekly_loss_usd`; report it if the setting is fine. |
+| `STOP_OUT_STREAK` | Too many trades in a row closed today by their stop at a loss (`[risk] stop_out_streak_limit`). No more entries today. | Nothing; trading resumes the next day. |
 | `EQUITY_UNKNOWN` | A percent-of-equity limit is on, but the account's equity (net liquidation) has no fresh, positive broker read. | Nothing; the next balance read usually fixes it. If it stays, check the broker connection. |
 | `BUYING_POWER_UNKNOWN` | The broker did not say how much buying power there is. | Nothing; it retries. |
 | `BUYING_POWER_SHORT` | There is not enough buying power for the trade. | Nothing, or add funds. |

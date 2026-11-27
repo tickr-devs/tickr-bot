@@ -95,7 +95,8 @@ PROTECTION = (ProtectionValue("risk.max_daily_loss_usd", "300", None),
 
 def run_facts(run_id: str = "run-1", written_at: datetime = T0,
               protection: tuple[ProtectionValue, ...] = PROTECTION) -> RunFactsV1:
-    return RunFactsV1(written_at=written_at, run_id=run_id, protection_in_force=protection)
+    return RunFactsV1(written_at=written_at, run_id=run_id, protection_in_force=protection,
+                      realized_loss_week_usd=Decimal("41.20"), stop_out_streak=1)
 
 
 def served(st: StatusV1) -> ServedStatusV1:

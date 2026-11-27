@@ -430,7 +430,8 @@ def documents() -> dict[str, object]:
         "settings-v1": SettingsV1(
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
             RiskSettings(Decimal("50"), Decimal("2500"), Decimal("300"), 1, Decimal("5"),
-                         Decimal("10")),
+                         Decimal("10"), max_weekly_loss_usd=Decimal("0"),
+                         stop_out_streak_limit=3),
             SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL,
             Decimal("30"), Decimal("15"), live_quote_max_age_seconds=Decimal("60"),
             quotes_poll_seconds=Decimal("1"), command_max_age_seconds=Decimal("60"),

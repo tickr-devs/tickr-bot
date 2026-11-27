@@ -254,6 +254,8 @@ class Service:
         self._progress: tuple[str, api.StopMode | None, api.StopStep, datetime] | None = None
         self._account_failing = False  # the last account file write failed (journaled once)
         self._run_facts_failing = False  # the last run facts write failed (journaled once)
+        # The loss locks' counts the last run facts write carried (None: none written yet).
+        self._loss_locks_written: tuple[Decimal | None, int] | None = None
         # The settings versions of the trades the latest status shows, and those the latest run
         # facts write held (None before the start write): a change writes the run facts again.
         self._trade_versions: tuple[api.TradeSettingsVersion, ...] = ()
@@ -845,7 +847,7 @@ class Service:
             fence = reasons.fence_reason(name, cause)
             return api.EntryBlock(name.split(":", 1)[0].replace("-", "_"), f"{name}: {cause}",
                                   params={"fence": fence.code, **fence.params})
-        money = self._daily_money_block()
+        money = self._daily_money_block() or self._loss_lock_block()
         if money is not None:
             return money
         if self.entries_off is not None:
@@ -927,6 +929,37 @@ class Service:
                                           "min_room_usd": str(risk.min_daily_room_usd)})
         return None
 
+    def _loss_lock_block(self) -> api.EntryBlock | None:
+        """Entries the loss locks (backlog T11) refuse anyway: this week's money unknown, no
+        room left under the weekly ceiling after the open reservations, or the stop-out streak
+        at its limit. A lock at 0 is off. Admission still decides each entry."""
+        from tickr.runtime.entries import (  # entries imports this module
+            realized_loss_week,
+            stop_out_streak,
+        )
+
+        risk, now = self._entry_config().risk, self.now()  # as tightened while running
+        if risk.max_weekly_loss_usd != ZERO:
+            loss = realized_loss_week(self.engine, now)
+            if loss is None:
+                return api.EntryBlock("weekly_money_unknown",
+                                      "A trade closed this week has fills without a known price.")
+            reserved = sum((t.reservation for t in self.engine.trades()), ZERO)
+            if loss + reserved >= risk.max_weekly_loss_usd:
+                return api.EntryBlock("weekly_ceiling",
+                                      f"Weekly loss ceiling {risk.max_weekly_loss_usd} USD: no "
+                                      "room left this week.",
+                                      params={"limit_usd": str(risk.max_weekly_loss_usd)})
+        if risk.stop_out_streak_limit:
+            streak = stop_out_streak(self.engine, now)
+            if streak >= risk.stop_out_streak_limit:
+                return api.EntryBlock("stop_out_streak",
+                                      f"{streak} stop-outs in a row today: no new entries "
+                                      "until tomorrow.",
+                                      params={"count": str(streak),
+                                              "limit": str(risk.stop_out_streak_limit)})
+        return None
+
     @staticmethod
     def _gate(open_: bool, cause: str) -> api.Gate:
         reason = reasons.gate_reason(cause)
@@ -999,6 +1032,15 @@ class Service:
         reserved = sum((t.reservation for t in self.engine.trades()), ZERO)
         return (entries.realized_loss_today(self.engine, now), reserved,
                 entries.daily_loss_room(self.engine, self._entry_config(), now))
+
+    def _loss_locks(self) -> tuple[Decimal | None, int]:
+        """(this week's net realized loss, stop-outs in a row today) as admission counts them
+        for the loss locks (backlog T11); the loss is None when this week's money is unknown."""
+        from tickr.runtime import entries  # entries imports this module
+
+        now = self.now()
+        return (entries.realized_loss_week(self.engine, now),
+                entries.stop_out_streak(self.engine, now))
 
     def _closed_today(self) -> list[api.DayTrade]:
         today = self.now().astimezone(NEW_YORK).date()
@@ -1143,21 +1185,30 @@ class Service:
 
     def write_status(self) -> None:
         api.write_status(self.paths.status, self.status())
-        # A trade's settings version is a run fact: written when the trades shown change.
-        if self._facts_trades is not None and self._trade_versions != self._facts_trades:
+        # Trades' settings versions and the loss locks' counts are run facts (status.json keeps
+        # its older shape): written once when either changes (a trade closed today first shows,
+        # a new day or week), never per pass.
+        trades_changed = (self._facts_trades is not None
+                          and self._trade_versions != self._facts_trades)
+        locks_changed = (self._loss_locks_written is not None
+                         and self._loss_locks() != self._loss_locks_written)
+        if trades_changed or locks_changed:
             self.write_run_facts()
         if self.quote_file is not None:
             self.quote_file.journal_failures(self.engine)
 
     def run_facts(self) -> api.RunFactsV1:
+        week_loss, streak = self._loss_locks_written = self._loss_locks()
         return api.RunFactsV1(written_at=self.now(), run_id=self.engine.run_id,
                               protection_in_force=self._protection_in_force(),
                               settings_version=self.strategy.settings_version,
-                              trade_settings_versions=self._trade_versions)
+                              trade_settings_versions=self._trade_versions,
+                              realized_loss_week_usd=week_loss, stop_out_streak=streak)
 
     def write_run_facts(self) -> None:
         """At the start and after each change of what it holds (an adoption, a change of the
-        settings versions of the trades the status shows), never per pass.
+        settings versions of the trades the status shows or of the loss locks' counts), never
+        per pass.
         Display only: a failed write never ends the loop nor undoes what changed, is never
         retried, and is journaled once per stretch of failures. The last file written stays: a
         failed write at the start leaves the previous run's file (the API shows no facts), but a

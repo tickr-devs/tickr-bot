@@ -108,6 +108,17 @@ max_entry_rest_bars = 10
 # requests a minute (20), and only while a working entry's stream quote is too old; they share the snapshot route
 # budget with discovery, whose pass stops early on a refusal and keeps its previous candidates; read by runtime.entries.
 entry_snapshot_interval_seconds = 3
+# Weekly loss ceiling in USD (backlog T11): this New York week's NET realized loss after fees (Monday to today, wins
+# offset losses, as the daily rule counts a day) + open reservations + the new trade's planned loss must stay at or
+# below it, else the entry is refused (WEEKLY_CEILING). Blocks new entries only, never exits or protection. 0 = off,
+# as shipped: the owner has not decided the number yet (the daily ceiling is max_daily_loss_usd); read by safety and
+# the status.
+max_weekly_loss_usd = 0
+# Stop-out streak lock, count (backlog T11): after this many trades in a row closed today (New York date) by their
+# protective stop at a loss, no new entry for the rest of the day (STOP_OUT_STREAK). A winning or flat exit resets the
+# streak; a losing exit that was not a stop fill leaves it as it is. Blocks new entries only, never exits or
+# protection. 0 = off, as shipped: the owner has not decided the number yet; read by safety and the status.
+stop_out_streak_limit = 0
 # Tradability check before an entry (backlog T8): true = for an entry every other check admitted, the bot reads the
 # symbol's instrument profile and its trade instrument (`GET /trade/instrument`) and refuses the entry when Webull says
 # HALTED (INSTRUMENT_HALTED), CLOSE_ONLY (INSTRUMENT_CLOSE_ONLY) or DENIED (INSTRUMENT_DENIED), when the profile status

@@ -407,7 +407,9 @@ def shown_settings(cfg: Config) -> SettingsV1:
             max_daily_loss_usd=Decimal(risk.max_daily_loss_usd),
             max_open_positions=risk.max_open_positions,
             max_quote_age_seconds=Decimal(risk.max_quote_age_seconds),
-            min_daily_room_usd=Decimal(risk.min_daily_room_usd)),
+            min_daily_room_usd=Decimal(risk.min_daily_room_usd),
+            max_weekly_loss_usd=Decimal(risk.max_weekly_loss_usd),
+            stop_out_streak_limit=risk.stop_out_streak_limit),
         session=SessionSettings(
             timezone=session.timezone,
             last_entry_minutes_before_close=session.last_entry_minutes_before_close,

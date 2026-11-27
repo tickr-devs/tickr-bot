@@ -493,6 +493,13 @@ class RunFactsV1:
     run_id: str
     # Every live protection setting with the value in force for new entries (backlog S5).
     protection_in_force: tuple[ProtectionValue, ...]
+    # Added after run-facts-v1 shipped (backlog T11): the loss locks' counts as admission reads
+    # them, whether or not the lock is on (settings `risk.max_weekly_loss_usd`,
+    # `risk.stop_out_streak_limit`; 0 = off). This New York week's net realized loss after
+    # fees (Monday to today, >= 0; null = unknown), and the stop-outs in a row today. Written
+    # when either changes, not per pass.
+    realized_loss_week_usd: Decimal | None = _added_later(None)
+    stop_out_streak: int | None = _added_later(None)
     schema_version: int = _const(RUN_FACTS_SCHEMA_VERSION)
     # Added after v1 shipped (backlog S3): the settings version this run's entry desk records;
     # null while entries are off.
@@ -534,6 +541,10 @@ class ServedStatusV1(StatusV1):
     # force for new entries; empty when the run facts file is missing, unreadable or of
     # another run, and from a bot that does not report them.
     protection_in_force: tuple[ProtectionValue, ...] = _added_later(())
+    # Added after v1 shipped (backlog T11): the loss locks' counts (RunFactsV1); null when the
+    # run facts file is missing, unreadable or of another run, and from an older bot.
+    realized_loss_week_usd: Decimal | None = _added_later(None)
+    stop_out_streak: int | None = _added_later(None)
 
 
 def _init_values(document: Any, cls: type) -> dict[str, Any]:
@@ -559,7 +570,9 @@ def served_status(status: StatusV1, facts: RunFactsV1 | None) -> ServedStatusV1:
         "strategy": StrategyId(status.strategy.name, status.strategy.version,
                                None if facts is None else facts.settings_version),
         "trades_today": tuple(_served_trade(t, versions) for t in status.trades_today),
-        "protection_in_force": () if facts is None else facts.protection_in_force})
+        "protection_in_force": () if facts is None else facts.protection_in_force,
+        "realized_loss_week_usd": None if facts is None else facts.realized_loss_week_usd,
+        "stop_out_streak": None if facts is None else facts.stop_out_streak})
 
 
 # ---------------------------------------------------------------- account written by the bot
@@ -1072,6 +1085,9 @@ class RiskSettings:
     max_open_positions: int
     max_quote_age_seconds: Decimal
     min_daily_room_usd: Decimal
+    # Added after v1 shipped (backlog T11): the loss locks; 0 = that lock is off.
+    max_weekly_loss_usd: Decimal | None = _added_later(None)
+    stop_out_streak_limit: int | None = _added_later(None)
 
 
 @dataclass(frozen=True)

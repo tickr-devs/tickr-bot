@@ -84,6 +84,9 @@ class Loosens(StrEnum):
     RAISE = "raise"
     LOWER = "lower"
     NEVER = "never"
+    RAISE_OR_OFF = "raise_or_off"
+    """A limit where 0 = off: raising it loosens, and so does setting it to 0 (turning it
+    off); setting it from 0 to a value turns it on."""
 
 
 @dataclass(frozen=True)
@@ -187,6 +190,17 @@ RECORDS: tuple[Setting, ...] = (
             "Margen mínimo de pérdida diaria en el que se dimensiona una nueva operación; por "
             "debajo se detienen las entradas.",
             _PROTECT, _DOWN, minimum=D(0)),
+    Setting(_P, "risk.max_weekly_loss_usd", Kind.DECIMAL, Unit.USD, "risk.loss_locks",
+            "Weekly loss ceiling: this week's net realized loss plus open reservations plus the "
+            "new trade's planned loss; 0 = off.",
+            "Límite de pérdida semanal: pérdida neta realizada esta semana más reservas abiertas "
+            "más la pérdida prevista de la nueva operación; 0 = desactivado.",
+            _PROTECT, Loosens.RAISE_OR_OFF, minimum=D(0)),
+    Setting(_P, "risk.stop_out_streak_limit", Kind.INT, Unit.COUNT, "risk.loss_locks",
+            "Stop-outs in a row today after which no new entry is taken until tomorrow; 0 = off.",
+            "Stops ejecutados seguidos hoy tras los que no se abre ninguna entrada hasta mañana; "
+            "0 = desactivado.",
+            _PROTECT, Loosens.RAISE_OR_OFF, minimum=D(0)),
     Setting(_P, "risk.buying_power_max_age_seconds", Kind.DECIMAL, Unit.SECONDS, "risk.account",
             "Oldest broker read of the day buying power an entry may rely on.",
             "Lectura más antigua del poder de compra del día en la que puede basarse una entrada.",
@@ -617,7 +631,9 @@ def change_effect(spec: Setting, old: Any, new: Any) -> ChangeEffect:
     raised = new > old
     lowered = new < old
     loosening = ((spec.loosens is Loosens.RAISE and raised)
-                 or (spec.loosens is Loosens.LOWER and lowered))
+                 or (spec.loosens is Loosens.LOWER and lowered)
+                 or (spec.loosens is Loosens.RAISE_OR_OFF and old != 0
+                     and (raised or new == 0)))
     if loosening:
         return ChangeEffect(Applies.NEXT_SESSION, needs_face_id=True)
     return ChangeEffect(spec.applies, needs_face_id=False)

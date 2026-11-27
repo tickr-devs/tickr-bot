@@ -66,11 +66,15 @@ def attribute(spec: Setting) -> str:
 
 def stricter(spec: Setting, old: Any, new: Any) -> bool:
     """True when `new` protects more than `old`: lower where raising loosens, higher where
-    lowering loosens (on/off: on is higher)."""
+    lowering loosens (on/off: on is higher). Where 0 = off and raising loosens (a loss lock),
+    turning it on (0 to a value) or lowering it to another value above 0 is stricter; raising
+    it or turning it off (to 0) is not."""
     if spec.loosens is Loosens.RAISE:
         return new < old
     if spec.loosens is Loosens.LOWER:
         return new > old
+    if spec.loosens is Loosens.RAISE_OR_OFF:
+        return new != 0 and (old == 0 or new < old)
     return False
 
 

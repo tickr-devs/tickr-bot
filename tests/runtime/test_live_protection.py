@@ -30,7 +30,9 @@ from tickr.runtime.liveprotection import (
     IgnoredCause,
     LiveProtection,
     protection_specs,
+    stricter,
 )
+from tickr.settings_schema import Loosens
 
 from .test_entries import CALENDAR, CFG, NOW, ROOT
 from .test_several_positions import Desk
@@ -152,6 +154,42 @@ def test_a_tightening_beside_a_loosening_is_never_half_applied(tmp_path):
     rig.pass_()
     assert rig.rows(ADOPTED) == [] and rig.rows(IGNORED)[0]["cause"] == "loosens"
     assert rig.in_force()[SLOTS] == "3" and rig.in_force()[CEILING] == "300"
+
+
+STREAK = "risk.stop_out_streak_limit"
+WEEKLY = "risk.max_weekly_loss_usd"
+
+
+@pytest.mark.parametrize(("old", "new", "tighter"), [
+    (0, 3, True),  # turned on
+    (3, 2, True),  # lowered, still on
+    (3, 4, False),  # raised
+    (3, 0, False),  # turned off
+    (0, 0, False), (3, 3, False)])  # unchanged
+def test_a_limit_where_0_is_off_is_stricter_only_turned_on_or_lowered(old, new, tighter):
+    specs = {s.key: s for s in protection_specs()}
+    for key in (STREAK, WEEKLY):
+        assert specs[key].loosens is Loosens.RAISE_OR_OFF
+        assert stricter(specs[key], D(old), D(new)) is tighter
+
+
+def test_a_loss_lock_turned_on_or_lowered_is_adopted_and_raised_or_off_is_ignored(tmp_path):
+    rig = Rig(tmp_path)
+    assert rig.in_force()[STREAK] == "0"  # shipped off
+    write(rig.path, (STREAK, "3"))
+    rig.pass_()
+    (row,) = rig.rows(ADOPTED)
+    assert row["changes"] == [{"key": STREAK, "before": "0", "after": "3"}]
+    assert rig.desk.desk.limits.stop_out_streak_limit == 3
+    for value in ("0", "4"):  # off, then raised: both loosen
+        write(rig.path, (STREAK, value))
+        rig.pass_()
+        assert rig.rows(IGNORED)[-1]["cause"] == "loosens"
+        assert rig.in_force()[STREAK] == "3"
+    write(rig.path, (STREAK, "2"))
+    rig.pass_()
+    assert [r["changes"][0]["after"] for r in rig.rows(ADOPTED)] == ["3", "2"]
+    assert rig.desk.desk.limits.stop_out_streak_limit == 2
 
 
 def test_an_invalid_file_is_ignored_with_an_alert_and_a_later_valid_one_is_adopted(tmp_path):

@@ -125,7 +125,7 @@ def test_every_gate_and_fence_shape_has_a_sentence_naming_only_values_the_bot_se
 
 # Refusal details with values but no sentence: their values are English words or text
 # (a calendar's own code, the names of missing amounts), so the app shows the bot's words.
-REFUSALS_IN_BOT_WORDS = {"CALENDAR_UNKNOWN", "DAILY_MONEY_UNKNOWN"}
+REFUSALS_IN_BOT_WORDS = {"CALENDAR_UNKNOWN", "DAILY_MONEY_UNKNOWN", "WEEKLY_MONEY_UNKNOWN"}
 # Values reasons.refusal_params adds beyond the recorded detail's shape.
 REFUSAL_EXTRA_PARAMS = {"AFTER_LAST_ENTRY": {"time"}, "SYMBOL_COOLDOWN": {"until"}}
 

@@ -62,7 +62,8 @@
             "enum": [
               "raise",
               "lower",
-              "never"
+              "never",
+              "raise_or_off"
             ]
           },
           "needs_face_id": {
