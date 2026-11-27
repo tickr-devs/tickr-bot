@@ -230,10 +230,9 @@ def test_every_exemption_names_an_existing_file_and_a_reason():
 def test_the_scan_covers_scripts_workflows_and_test_code():
     relatives = {path.relative_to(ROOT).as_posix() for path in scanned_files()}
     assert any(r.startswith(".github/workflows/") for r in relatives)
-    assert any(r.startswith("apps/") and r.endswith(".sh") for r in relatives)
-    assert any(r.startswith("apps/scripts/") and r.endswith(".py") for r in relatives)
+    assert any(r.startswith("ops/") and r.endswith(".sh") for r in relatives)
+    assert any(r.startswith("src/") and r.endswith(".py") for r in relatives)
     assert any(r.startswith("tests/") and r.endswith(".py") for r in relatives)
-    assert any("UITests" in r and r.endswith(".swift") for r in relatives)
 
 
 # --- the guard itself ---------------------------------------------------------------------------

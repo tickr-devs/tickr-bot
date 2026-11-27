@@ -1,8 +1,8 @@
 name: ci
 # Python tests. The `python-tests` job always reports, because it is a required check and a workflow
 # skipped by path filters never reports it. Its steps (and the demo-fixture and docker-image jobs) are
-# skipped when a pull request touches only docs/, the root README/CLAUDE.md or the Xcode workspace;
-# markdown under tests/ is scanned for account ids, so it always counts. App sources (apps/) and the
+# skipped when a pull request touches only docs/ or the root README/CLAUDE.md (the conflict-marker
+# check still runs); markdown under tests/ is scanned for account ids, so it always counts. The
 # workflows always count: the suite reads them (tests/test_workflows.py checks the job names).
 # Pushes to main and the merge queue always run everything.
 on:
@@ -43,12 +43,9 @@ jobs:
           fi
           # Its own command, so a failing diff stops the job instead of reading as "no changes".
           files=$(git diff --name-only --no-renames "$BASE...$HEAD")
-          # apps/ is never skipped: the Python suite reads app sources (Palette and Tokens for the
-          # brand assets, every Swift file for the Swift rules, the String Catalogs, the demo
-          # recording), so an app-only change can break it (main went red after #486).
-          # Workflows are never skipped either: tests/test_workflows.py reads them.
+          # Workflows are never skipped: tests/test_workflows.py reads them.
           others=$(printf '%s\n' "$files" | grep -Ev \
-            '^(docs/|Tickr\.xcworkspace/|README\.md$|CLAUDE\.md$)' \
+            '^(docs/|README\.md$|CLAUDE\.md$)' \
             || true)
           if [ -n "$others" ]; then echo "python=true"; else echo "python=false"; fi >> "$GITHUB_OUTPUT"
   python-tests:
@@ -63,9 +60,11 @@ jobs:
           echo "The changed-files check failed."
           exit 1
       - if: needs.python-changes.outputs.python != 'true'
-        run: echo "Only docs or Xcode workspace files changed; Python checks skipped."
-      - if: needs.python-changes.outputs.python == 'true'
-        uses: actions/checkout@v7
+        run: echo "Only docs changed; Python checks skipped."
+      - uses: actions/checkout@v7
+      # Before the skip: this required job runs on every pull request, docs-only ones too.
+      - name: No git conflict markers in tracked files
+        run: python3 .github/scripts/check_conflict_markers.py
       # uv installs exactly what uv.lock pins (ruff and pytest included), so a new release of a
       # dependency cannot fail an unrelated pull request. Action pinned by commit: it has no major tag.
       - if: needs.python-changes.outputs.python == 'true'
@@ -150,66 +149,3 @@ jobs:
             /app/ops/docker/compose.yaml | cmp - ops/docker/compose.yaml
           docker run --rm --pull never --network none --entrypoint cat tickr:ci \
             /app/ops/systemd/deploy-server.sh | cmp - ops/systemd/deploy-server.sh
-  web-tests:
-    # The tickr.bot web app (web/, docs in web/README.md): its own uv project and lock, tested
-    # against a real Postgres like the one on its server.
-    needs: python-changes
-    if: needs.python-changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: ci-only
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
-    defaults:
-      run:
-        working-directory: web
-    env:
-      TICKR_WEB_DB_NAME: tickrweb
-      TICKR_WEB_DB_USER: postgres
-      TICKR_WEB_DB_PASSWORD: ci-only
-      TICKR_WEB_DB_HOST: 127.0.0.1
-      TICKR_WEB_DB_PORT: "5432"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.11.32"
-          python-version: "3.12"
-          enable-cache: true
-      - run: uv sync --frozen
-      - run: uv run --no-sync ruff check .
-      - run: uv run --no-sync python manage.py makemigrations --check --dry-run --settings tickrweb.settings_test
-      - run: uv run --no-sync pytest -q
-  web-image:
-    # Builds the web app's image and checks its server files (web/deploy; ops/aws/web is checked
-    # in terraform.yml); never pushes or applies anything.
-    needs: python-changes
-    if: needs.python-changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - run: docker build -t tickr-web:latest web
-      - name: The app reads a mode-600 secrets file owned by the server account's uid
-        run: |
-          uid=$(sed -n 's/^USER \([0-9]*\):.*/\1/p' web/Dockerfile)
-          dir=$(mktemp -d)
-          printf "TICKR_WEB_HOST='x'\n" > "$dir/env"
-          sudo chown "$uid:$uid" "$dir/env"
-          sudo chmod 600 "$dir/env"
-          docker run --rm -v "$dir/env:/run/tickr-web/env:ro" --entrypoint sh tickr-web:latest \
-            -c 'test -r /run/tickr-web/env'
-      - run: docker compose -f web/deploy/compose.yaml config -q
-        env:
-          TICKR_WEB_HOST: tickr.bot
-          TICKR_WEB_ENV_FILE_HOST: /srv/tickr-web/etc/env
-          TICKR_WEB_DB_PASSWORD_FILE_HOST: /srv/tickr-web/etc/db_password
-          TICKR_WEB_SITE_DIR: /srv/tickr-web/site
-      - run: >-
-          docker run --rm -e TICKR_WEB_HOST=tickr.bot -v "$PWD/web/deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
-          caddy:2.10 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
