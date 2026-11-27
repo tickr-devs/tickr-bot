@@ -917,6 +917,20 @@ bundle = ""
 # passed to tickr.model.features.ticks.tick_rows.
 tick_groups = 24
 
+[confidence_sizing]
+# Size by model confidence (backlog R30): true = a position's USD size scales linearly with the model's probability from
+# min_usd (probability 0) to max_usd (probability 1), never above [risk] position_notional_cap_usd; false = every
+# position is sized as before. Shipped off and not wired into the order path yet. Config load refuses true unless the
+# model probability is available ([model] enabled), 0 < min_usd <= max_usd and max_usd <= the position cap. Read by
+# config.load and tickr.risk.confidence_sizing.
+by_confidence = false
+# Smallest position size in USD, at probability 0. The owner picks it (0 = not chosen); unused while by_confidence is
+# false. Read by config.load and tickr.research.__main__ (sizing what-if default).
+min_usd = 0
+# Largest position size in USD, at probability 1. The owner picks it (0 = not chosen); unused while by_confidence is
+# false. Read by config.load and tickr.research.__main__ (sizing what-if default).
+max_usd = 0
+
 [exit_chase]
 # Limit-exit chase before a market exit (backlog X3): a close is sent as a SELL LIMIT priced through the bid,
 # re-priced by cancel-then-place (each cancel confirmed by a Detail read before the next order), and after the last

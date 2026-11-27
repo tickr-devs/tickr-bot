@@ -179,6 +179,7 @@ engineering_tables = [
   "trailing_stop",
   "exit_chase",
   "model",
+  "confidence_sizing",
   "massive",
   "runtime",
   "alerts",
