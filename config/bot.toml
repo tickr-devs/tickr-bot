@@ -78,9 +78,12 @@ buying_power_max_age_seconds = 15
 # and the session flatten (one stop at a time, up to [orders] max_stops_per_trade each, two [orders]
 # detail_poll_seconds per stop) must fit before [session] close_order_cutoff_seconds (checked by the start-time checks,
 # runtime.launchd.check_timings: 480 s at 20 slots, 4 stops and 3 s). Entries filling together are bounded by
-# max_working_entries below, not by the slots. 6 since 2026-11-17 (owner); the owner's target of 20 waits for the daily
-# loss and position size decision and the open-orders paging probe; read by safety, the engine and the status.
-max_open_positions = 6
+# max_working_entries below, not by the slots. 20 since 2026-11-27 (owner 2026-11-25: as many as Webull's limits allow;
+# 20 is the cap our own [market_data] stream_reserved_symbols and [session] flatten_grace_seconds set): the daily loss
+# reserve is 20 x planned_loss_usd = 1000 USD of max_daily_loss_usd, and the most open orders the bot can
+# hold (20 x max_stops_per_trade stops + max_working_entries entries = 86) fit one open-orders page (probe H2d,
+# 2026-11-27: one page listed 90, docs/webull-facts.md); read by safety, the engine and the status.
+max_open_positions = 20
 # Most of our entries working at once, count (a working entry also takes a slot, so max_open_positions caps it too): only working entries can fill in the same
 # poll, and every one of them must get its verified stops within [orders] max_unprotected_seconds less a poll
 # ((entries + 1 + [orders] stop_listing_polls) x [orders] detail_poll_seconds: one Detail read per fill, then the
@@ -161,7 +164,7 @@ last_entry_minutes_before_close = 25
 flatten_minutes_before_close = 15
 # Seconds after the flatten time before broker reads must show nothing of ours left (alert not-flat-after-flatten,
 # day-end record); must cover the flatten of every slot ([risk] max_open_positions x [orders] max_stops_per_trade x 2 x
-# detail_poll_seconds, 144 s at 6 slots, 480 s at 20) plus [orders] reconcile_interval_seconds (start-time check,
+# detail_poll_seconds, 480 s at 20 slots) plus [orders] reconcile_interval_seconds (start-time check,
 # runtime.launchd.check_timings); 500 s = 15:53:20 ET on a normal day, sized for 20 slots; read by runtime.dayend.
 flatten_grace_seconds = 500
 # Seconds before the regular close (the calendar's early close on a half day) from which no closing MARKET order is sent
