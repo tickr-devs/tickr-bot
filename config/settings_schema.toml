@@ -16,6 +16,14 @@ step = 1
 # Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
 step = 1
 
+[platform."risk.max_weekly_loss_usd"]
+# Step of this setting in the app forms and the validator, USD; read by tickr.settings_schema.
+step = 1
+
+[platform."risk.stop_out_streak_limit"]
+# Step of this setting in the app forms and the validator, count; read by tickr.settings_schema.
+step = 1
+
 [platform."risk.buying_power_max_age_seconds"]
 # Step of this setting in the app forms and the validator, seconds; read by tickr.settings_schema.
 step = 0.1

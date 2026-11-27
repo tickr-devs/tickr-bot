@@ -4,6 +4,8 @@ Two files on disk decouple the bot from the API process:
 - the bot writes `StatusV1` to `<data_dir>/<status_file>` with `write_status` (temp file + rename);
 - the bot writes `AccountV1` to `<data_dir>/<account_file>` with `write_account` after each
   successful broker read of positions and open orders (reconciliation), the same way;
+- the bot writes `RunFactsV1` to `<data_dir>/<run_facts_file>` with `write_run_facts` at its
+  start and after each change of what it holds, never per pass, the same way;
 - the API writes one `CommandV1` per operator command into `<data_dir>/<commands_dir>/inbox/`
   with `write_command`; the bot reads them with `read_commands`, journals each one, then moves it
   out of the inbox with `retire_command`.
@@ -59,6 +61,7 @@ STATUS_SCHEMA_VERSION = 1
 COMMAND_SCHEMA_VERSION = 1
 ACCOUNT_SCHEMA_VERSION = 1
 QUOTES_SCHEMA_VERSION = 1
+RUN_FACTS_SCHEMA_VERSION = 1
 
 INBOX = "inbox"
 PROCESSED = "processed"
@@ -223,6 +226,25 @@ class Gate:
 class StrategyId:
     name: str
     version: str
+    # The settings version the decision or trade was made under (backlog S3,
+    # tickr.settings_version): platform settings plus the model's bundle (or, while the model
+    # is off, this strategy's values). Null when not recorded (before S3, a manual trade,
+    # research data). Added after version 1 shipped.
+    settings_version: str | None = _added_later(None)
+
+
+@dataclass(frozen=True)
+class StrategyName:
+    """A strategy's `[strategy]` name and version as status.json records it: without the
+    settings version, so the file keeps the shape a reader from before it accepts. GET /status
+    serves it as a `StrategyId` with the settings version from the run facts file."""
+
+    name: str
+    version: str
+
+
+def strategy_name(strategy: StrategyId) -> StrategyName:
+    return StrategyName(strategy.name, strategy.version)
 
 
 class DeciderKind(StrEnum):
@@ -249,7 +271,7 @@ def strategy_decider(name: str | None, version: str | None) -> DeciderV1 | None:
 
 
 def _decider_of_id(document: Any) -> DeciderV1 | None:
-    strategy: StrategyId | None = document.strategy
+    strategy: StrategyId | StrategyName | None = document.strategy
     return None if strategy is None else strategy_decider(strategy.name, strategy.version)
 
 
@@ -355,7 +377,7 @@ class Trade:
     entry_cause: str | None  # why a field of `entry` is null; null when none is
     # The strategy whose decision opened the trade; null for a manual trade or one opened
     # before the bot journaled it. Added after version 1 shipped.
-    strategy: StrategyId | None = _added_later(None)
+    strategy: StrategyName | None = _added_later(None)
     # The bot code version (git commit, `-dirty` with changed tracked files) of the run that
     # opened the trade, from `runs`; null for a run recorded before it was. Added later.
     code_version: str | None = _added_later(None)
@@ -389,6 +411,17 @@ class CommandRecord:
     cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
+class ProtectionValue:
+    """A protection setting new entries are admitted under now, as TOML text. `adopted_at` is
+    when the running bot adopted a tightening of it from config/bot.toml; null when it holds
+    the value the bot started with (backlog S5)."""
+
+    key: str  # dotted key of config/bot.toml, e.g. risk.max_open_positions
+    value: str
+    adopted_at: datetime | None
+
+
+@dataclass(frozen=True)
 class StopProgress:
     """A stop-bot the bot obeyed or is carrying out (added after version 1 shipped). The
     command's own record appears in `recent_commands` once it is done or refused; a refused
@@ -410,7 +443,7 @@ class StatusV1:
     run_id: str | None
     environment: str
     trading_gate: Gate
-    strategy: StrategyId
+    strategy: StrategyName
     entry_stop: bool
     entry_block: EntryBlock | None  # None = entries allowed
     fences: tuple[Fence, ...]
@@ -446,6 +479,100 @@ class StatusV1:
     schema_version: int = _const(STATUS_SCHEMA_VERSION)
     # Who decides this run's entries, from `strategy`. Added after version 1 shipped.
     decider: DeciderV1 | None = _derived(_decider_of_id)
+
+
+@dataclass(frozen=True)
+class RunFactsV1:
+    """Facts of one bot run that change seldom, in their own file so status.json keeps the shape
+    a reader from before them accepts (it refuses unknown keys, and the watchdog takes an
+    unreadable status file as a bot not running). Written by the bot at its start and after each
+    change of what it holds, never per pass; never by the API. The API shows them only beside a
+    status of the same `run_id`."""
+
+    written_at: datetime
+    run_id: str
+    # Every live protection setting with the value in force for new entries (backlog S5).
+    protection_in_force: tuple[ProtectionValue, ...]
+    # Added after run-facts-v1 shipped (backlog T11): the loss locks' counts as admission reads
+    # them, whether or not the lock is on (settings `risk.max_weekly_loss_usd`,
+    # `risk.stop_out_streak_limit`; 0 = off). This New York week's net realized loss after
+    # fees (Monday to today, >= 0; null = unknown), and the stop-outs in a row today. Written
+    # when either changes, not per pass.
+    realized_loss_week_usd: Decimal | None = _added_later(None)
+    stop_out_streak: int | None = _added_later(None)
+    schema_version: int = _const(RUN_FACTS_SCHEMA_VERSION)
+    # Added after v1 shipped (backlog S3): the settings version this run's entry desk records;
+    # null while entries are off.
+    settings_version: str | None = _added_later(None)
+    # Added after v1 shipped (backlog S3): the settings version of each of today's trades in
+    # status `trades_today` that has one, as its `trade-opened` row journaled.
+    trade_settings_versions: tuple[TradeSettingsVersion, ...] = _added_later(())
+
+
+@dataclass(frozen=True)
+class TradeSettingsVersion:
+    """The settings version a trade was opened under, by its entry order's client id."""
+
+    entry_client_order_id: str
+    settings_version: str
+
+
+@dataclass(frozen=True)
+class ServedTradeV1(Trade):
+    """One of status `trades_today` as GET /status serves it: its strategy with the settings
+    version from the run facts file."""
+
+    # As in `Trade`, with `settings_version`: null when the run facts file is missing,
+    # unreadable, of another run or names none for this trade.
+    strategy: StrategyId | None = _added_later(None)
+
+
+@dataclass(frozen=True)
+class ServedStatusV1(StatusV1):
+    """The bot's status as GET /status serves it: status.json with the facts of the same run
+    from the run facts file."""
+
+    # As in `StatusV1`, with the settings version this run's entry desk records (null while
+    # entries are off, and when the run facts file is missing, unreadable or of another run).
+    strategy: StrategyId
+    trades_today: tuple[ServedTradeV1, ...]
+
+    # Added after v1 shipped (backlog S5): every live protection setting with the value in
+    # force for new entries; empty when the run facts file is missing, unreadable or of
+    # another run, and from a bot that does not report them.
+    protection_in_force: tuple[ProtectionValue, ...] = _added_later(())
+    # Added after v1 shipped (backlog T11): the loss locks' counts (RunFactsV1); null when the
+    # run facts file is missing, unreadable or of another run, and from an older bot.
+    realized_loss_week_usd: Decimal | None = _added_later(None)
+    stop_out_streak: int | None = _added_later(None)
+
+
+def _init_values(document: Any, cls: type) -> dict[str, Any]:
+    return {f.name: getattr(document, f.name) for f in fields(cls) if f.init}
+
+
+def _served_trade(trade: Trade, versions: Mapping[str, str]) -> ServedTradeV1:
+    strategy = trade.strategy
+    return ServedTradeV1(**{**_init_values(trade, Trade), "strategy": None if strategy is None
+                            else StrategyId(strategy.name, strategy.version,
+                                            versions.get(trade.entry.client_order_id or ""))})
+
+
+def served_status(status: StatusV1, facts: RunFactsV1 | None) -> ServedStatusV1:
+    """`status` with the facts of its own run: none when `facts` is missing or of another run."""
+    if facts is None or status.run_id is None or facts.run_id != status.run_id:
+        facts = None
+    versions = ({} if facts is None else
+                {t.entry_client_order_id: t.settings_version
+                 for t in facts.trade_settings_versions})
+    return ServedStatusV1(**{
+        **_init_values(status, StatusV1),
+        "strategy": StrategyId(status.strategy.name, status.strategy.version,
+                               None if facts is None else facts.settings_version),
+        "trades_today": tuple(_served_trade(t, versions) for t in status.trades_today),
+        "protection_in_force": () if facts is None else facts.protection_in_force,
+        "realized_loss_week_usd": None if facts is None else facts.realized_loss_week_usd,
+        "stop_out_streak": None if facts is None else facts.stop_out_streak})
 
 
 # ---------------------------------------------------------------- account written by the bot
@@ -556,7 +683,7 @@ class StatusResponseV1:
     """GET /status. Always this shape; `status` is null when the bot's file is missing or bad."""
 
     served_at: datetime
-    status: StatusV1 | None
+    status: ServedStatusV1 | None
     age_seconds: Decimal | None
     stale: bool
     unavailable_cause: str | None
@@ -972,6 +1099,9 @@ class RiskSettings:
     max_open_positions: int
     max_quote_age_seconds: Decimal
     min_daily_room_usd: Decimal
+    # Added after v1 shipped (backlog T11): the loss locks; 0 = that lock is off.
+    max_weekly_loss_usd: Decimal | None = _added_later(None)
+    stop_out_streak_limit: int | None = _added_later(None)
 
 
 @dataclass(frozen=True)
@@ -1132,6 +1262,101 @@ class SettingsDraftV1:
     valid: bool
     refusals: tuple[SettingRefusalV1, ...]
     changes: tuple[SettingChangeV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+class SettingsDevice(StrEnum):
+    """Where a settings change came from, decided by the server from the listener and the
+    paired token the request used, never by the request's words."""
+
+    LOCAL = "local"  # the local port (the Mac app, the status page)
+    PHONE = "phone"  # the remote port with the phone's paired token
+    SIMULATOR = "simulator"  # the remote port with the iOS Simulator's token
+    BOT = "bot"  # the bot at its start, writing a pending change whose session has come
+
+
+class SettingsVersionKind(StrEnum):
+    APPLY = "apply"  # POST /settings/apply
+    ROLLBACK = "rollback"  # POST /settings/rollback
+    PROMOTE = "promote"  # the bot's start wrote pending changes from an earlier session
+
+
+class SettingsVersionState(StrEnum):
+    """Whether a version's file writes landed. A version without file writes is `done` at once."""
+
+    WRITING = "writing"  # recorded, files being written (seen only if the writer stopped)
+    DONE = "done"  # every file holds its new digest
+    NOT_WRITTEN = "not_written"  # no file changed: the version never applied
+    UNKNOWN = "unknown"  # a file holds neither digest (changed by someone else meanwhile)
+
+
+class SettingChangeState(StrEnum):
+    WRITTEN = "written"  # in its owner's file since this version
+    PENDING = "pending"  # loosens protection: the bot writes it at its first later start
+    PROMOTED = "promoted"  # a pending change the bot wrote (`settled_by` names that version)
+    SUPERSEDED = "superseded"  # a pending change a later version replaced or rolled back
+
+
+@dataclass(frozen=True)
+class SettingsVersionChangeV1:
+    """One key a version changed: `before` (the file's value then) and `after`, as TOML text.
+    `effective_after` (a New York date) is set on a change that waits for the next session: the
+    bot writes it at its first start on a later date. `settled_by` names the version that
+    promoted or superseded a pending change."""
+
+    owner: str
+    key: str
+    before: str
+    after: str
+    applies: SettingApplies
+    state: SettingChangeState
+    effective_after: date | None
+    settled_by: int | None
+
+
+@dataclass(frozen=True)
+class SettingsVersionFileV1:
+    """An owner file a version wrote: its SHA-256 before and after."""
+
+    owner: str
+    file: str
+    digest_before: str
+    digest_after: str
+
+
+@dataclass(frozen=True)
+class SettingsVersionV1:
+    """One journaled settings change: when, from which device, whether the app said the owner
+    confirmed it with Face ID (the server cannot check that itself), and what changed."""
+
+    version: int
+    kind: SettingsVersionKind
+    at: datetime
+    device: SettingsDevice
+    biometric_confirmed: bool
+    rollback_to: int | None
+    state: SettingsVersionState
+    files: tuple[SettingsVersionFileV1, ...]
+    changes: tuple[SettingsVersionChangeV1, ...]
+
+
+@dataclass(frozen=True)
+class SettingsHistoryV1:
+    """GET /settings/history, oldest first; also the settings history file on disk."""
+
+    versions: tuple[SettingsVersionV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class SettingsAppliedV1:
+    """POST /settings/apply and /settings/rollback: the version just journaled.
+    `restart_needed` is true when a change other than a tightening of protection was written to
+    a file while the bot may be running: the bot reads those settings at its start, and adopts
+    a tightening at its next loop pass."""
+
+    version: SettingsVersionV1
+    restart_needed: bool
     api_version: int = _const(API_VERSION)
 
 
@@ -1710,6 +1935,86 @@ class SystemV1:
     morning_check_cause_codes: tuple[ReasonV1, ...] = _reasons_of("morning_check_cause")
     training_cause_codes: tuple[ReasonV1, ...] = _reasons_of("training_cause")
     host_cause_codes: tuple[ReasonV1, ...] = _reasons_of("host_cause")
+
+# ---------------------------------------------------------------- readiness
+
+
+class ReadinessState(StrEnum):
+    PASS = "pass"  # proven done
+    FAIL = "fail"  # proven not done
+    UNKNOWN = "unknown"  # not proven either way: `cause` says why
+
+
+class ReadinessCode(StrEnum):
+    """A readiness check, in the fixed order GET /readiness lists them (docs/api.md)."""
+
+    CLEAN_DAYS = "clean_days"  # clean days of the loaded environment against [api]
+    PREFLIGHT = "preflight"  # today's preflight of the loaded environment
+    UNATTENDED_SAFEGUARD = "unattended_safeguard"  # the watchdog job started today
+    KEYS = "keys"  # the environment's credential variables are set (names only)
+    DATA_PROBE = "data_probe"  # chart probe C1 recorded as passed for the environment
+    TRADING_ENABLED = "trading_enabled"  # [environments.<name>] trading_enabled
+    AUTHORIZATION = "authorization"  # the owner authorization record is valid
+
+
+@dataclass(frozen=True)
+class ReadinessCheckV1:
+    """One readiness check of one environment. `value` is what was measured, as plain text
+    ("3 / 5", a New York date), null when nothing was. `cause` is English detail, null on
+    `pass`; clients translate by `code` and `state`."""
+
+    code: ReadinessCode
+    environment: str
+    state: ReadinessState
+    value: str | None
+    cause: str | None
+
+
+@dataclass(frozen=True)
+class AuthorizationRecordV1:
+    """An environment's owner authorization file, field by field. Never its `statement`.
+    `valid`/`cause`/`code`/`params` are the trading gate's own authorization check
+    (`trading_gate.code` codes); the other fields only show what the file says."""
+
+    file: str  # relative to the repo root; "" when none is configured
+    present: bool
+    environment: str | None  # as the file says; null when absent or unreadable
+    approved_on: str | None
+    digest_matches: bool | None  # its config_digest equals `config_digest`; null when absent
+    valid: bool
+    cause: str
+    code: str
+    params: Params
+
+
+@dataclass(frozen=True)
+class EnvironmentReadinessV1:
+    """One `[environments.<name>]` section, evaluated without switching to it."""
+
+    name: str
+    loaded: bool  # the environment this API process loaded
+    trading_enabled: bool
+    requires_owner_authorization: bool
+    # The app key, app secret and account variables are all set in this process: null when
+    # none is (the API job is started without other environments' credentials).
+    keys_present: bool | None
+    gate: Gate  # trading_gate() as if this environment were loaded
+    authorization: AuthorizationRecordV1 | None  # null when it requires none
+
+
+@dataclass(frozen=True)
+class ReadinessV1:
+    """GET /readiness: the readiness view, read-only. Informs only: the single barrier stays
+    `trading_gate()`; nothing here writes the config or the authorization file."""
+
+    served_at: datetime
+    environment: str  # the environment the API process loaded
+    config_digest: str  # what an authorization record must carry (a hash, not a secret)
+    gate: Gate  # trading_gate() of the loaded environment, as status.trading_gate
+    environments: tuple[EnvironmentReadinessV1, ...]  # config order
+    checklist: tuple[ReadinessCheckV1, ...]
+    api_version: int = _const(API_VERSION)
+
 
 # ---------------------------------------------------------------- alerts (notification settings)
 
@@ -2319,7 +2624,8 @@ def decisions_document(symbol: str, day: date, records: tuple[DecisionRecord, ..
         skipped = d.verdict is Verdict.ENTER and r.admission in _SKIPPED
         out.append(DecisionV1(
             at=r.bar_start, action=d.verdict,
-            strategy=StrategyId(d.strategy, d.version), observer=r.role is Role.OBSERVER,
+            strategy=StrategyId(d.strategy, d.version, r.settings_version),
+            observer=r.role is Role.OBSERVER,
             checks=checks_of(d, places), entry_price=_what_if(d.entry_high) if skipped else None,
             stop_price=_what_if(d.stop) if skipped else None, admission=r.admission,
             refusal_cause=r.refusal_cause, refusal=refusal_of(r.refusal_cause)))
@@ -2378,7 +2684,7 @@ def skipped_document(day: date, records: tuple[DecisionRecord, ...],
     return SkippedV1(day=day, signals=tuple(
         SkippedSignalV1(
             at=r.bar_start, symbol=r.symbol,
-            strategy=StrategyId(r.decision.strategy, r.decision.version),
+            strategy=StrategyId(r.decision.strategy, r.decision.version, r.settings_version),
             admission=r.admission, refusal_cause=r.refusal_cause,
             refusal=refusal_of(r.refusal_cause), entry_price=_what_if(r.decision.entry_high),
             stop_price=_what_if(r.decision.stop),
@@ -2674,7 +2980,8 @@ def watching_document(day: date, records: tuple[DecisionRecord, ...], places: in
         decisive = d.decisive
         value, cause = closeness(decisive, places, d.invalidation)
         rows.append(WatchingRowV1(
-            symbol=r.symbol, at=r.bar_start, strategy=StrategyId(d.strategy, d.version),
+            symbol=r.symbol, at=r.bar_start,
+            strategy=StrategyId(d.strategy, d.version, r.settings_version),
             verdict=d.verdict,
             decisive_check=None if decisive is None else shown_check(decisive, check_places),
             closeness=value, closeness_cause=cause, quote_age_seconds=None,
@@ -2750,7 +3057,8 @@ def latest_size(records: tuple[DecisionRecord, ...]) -> LatestSizeV1 | None:
         else:
             binding = SizeBinding.DAILY_ROOM if _room_binds(checks, quantity.measured) else None
         d = r.decision
-        return LatestSizeV1(r.symbol, r.bar_start, StrategyId(d.strategy, d.version), d.verdict,
+        return LatestSizeV1(r.symbol, r.bar_start,
+                            StrategyId(d.strategy, d.version, r.settings_version), d.verdict,
                             quantity.measured, binding,
                             None if binding else BINDING_NOT_RECORDED,
                             price=_measured(checks, SIZING_PRICE_RULE), limits=limits)
@@ -2978,6 +3286,7 @@ class PerformanceV1:
 
 SCHEMA_TYPES: dict[str, type] = {
     "status-v1": StatusV1,
+    "run-facts-v1": RunFactsV1,
     "command-v1": CommandV1,
     "status-response-v1": StatusResponseV1,
     "command-accepted-v1": CommandAcceptedV1,
@@ -2996,9 +3305,12 @@ SCHEMA_TYPES: dict[str, type] = {
     "settings-schema-v1": SettingsSchemaV1,
     "settings-values-v1": SettingsValuesV1,
     "settings-draft-v1": SettingsDraftV1,
+    "settings-history-v1": SettingsHistoryV1,
+    "settings-applied-v1": SettingsAppliedV1,
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
     "system-v1": SystemV1,
+    "readiness-v1": ReadinessV1,
     "alerts-v1": AlertsV1,
     "day-events-v1": DayEventsV1,
     "advisor-runs-v1": AdvisorRunsV1,
@@ -3320,6 +3632,16 @@ def write_status(path: Path | str, status: StatusV1) -> None:
 def read_status(path: Path | str) -> StatusV1:
     """Raises FileNotFoundError when the bot has not written a status yet, else ContractError."""
     return loads(StatusV1, Path(path).read_bytes())
+
+
+def write_run_facts(path: Path | str, facts: RunFactsV1) -> None:
+    """Called by the bot at its start and after each change of its run facts, never per pass."""
+    write_atomic(Path(path), stored(facts))
+
+
+def read_run_facts(path: Path | str) -> RunFactsV1:
+    """Raises FileNotFoundError when the bot has not written one yet, else ContractError."""
+    return loads(RunFactsV1, Path(path).read_bytes())
 
 
 def write_account(path: Path | str, account: AccountV1) -> None:

@@ -198,7 +198,7 @@ def test_a_retired_refresh_token_signs_the_device_out(settings, serve, alerts):
     assert names == ["Mac"]
     title, text = alerts.shown[-1]
     assert title.endswith("device-session") and f"'{NAME}' signed out" in text
-    assert first["refresh_token"] not in text
+    assert "already used" in text and first["refresh_token"] not in text
 
 
 def test_a_refresh_after_the_refresh_lifetime_is_refused(settings, serve, alerts):
@@ -209,7 +209,8 @@ def test_a_refresh_after_the_refresh_lifetime_is_refused(settings, serve, alerts
     resp, payload = refresh(server, first["refresh_token"])
     assert resp.status == 401 and "expired" in doc(payload)["cause"]
     assert not devices.parse(settings.devices_path.read_text("utf-8"))
-    assert "signed out" in alerts.shown[-1][1]
+    text = alerts.shown[-1][1]
+    assert "signed out: its sign-in expired" in text and "copy" not in text
 
 
 def test_no_refresh_outlives_the_sign_in(settings, serve):

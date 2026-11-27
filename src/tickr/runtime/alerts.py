@@ -58,6 +58,9 @@ class AlertKind(StrEnum):
     TOKEN_NEEDS_CONFIRMATION = "token-needs-confirmation"
     # The observer queue overflowed: observers are switched off for the run (trading goes on).
     OBSERVERS_STOPPED = "observers-stopped"
+    # The active strategy or its settings version (backlog S3) was refused at start: the bot
+    # protects and reconciles, but opens no entries this run.
+    STRATEGY_NOT_LOADED = "strategy-not-loaded"
     # Broker reads after the flatten time (plus grace) still show our position or order.
     NOT_FLAT_AFTER_FLATTEN = "not-flat-after-flatten"
     # Raised by the separate watchdog job (runtime/watchdog.py), which outlives a crashed bot:
@@ -92,6 +95,9 @@ class AlertKind(StrEnum):
     # give it (any, while [chart] webull_enabled is false; any but the active environment's app
     # key and secret while it is true): its plist is stale or hand-edited (runtime/launchd.py).
     API_CREDENTIALS_UNEXPECTED = "api-credentials-unexpected"
+    # A change of config/bot.toml the running bot did not adopt: invalid or unreadable, looser
+    # protection, or a setting outside live protection (runtime/liveprotection.py).
+    PROTECTION_CHANGE_IGNORED = "protection-change-ignored"
     # Raised by the API when a client address used up its failed-authentication budget on the
     # remote port (device token or POST /pair), or every new address is refused because the
     # address table is full of recent failures (api/authlimit.py).

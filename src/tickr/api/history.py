@@ -263,8 +263,9 @@ def _send_outcome(states: list[SendState]) -> SendState | None:
 
 
 def trade_strategy(store: Store, trade_id: str) -> api.StrategyId | None:
-    """The strategy (name, version) whose decision opened the trade, from its `trade-opened`
-    row; None for a manual trade or one opened before the bot journaled it. Raises
+    """The strategy (name, version, settings version) whose decision opened the trade, from
+    its `trade-opened` row; None for a manual trade or one opened before the bot journaled it
+    (the settings version alone is None for a trade opened before it was journaled). Raises
     MalformedJournal for a row it cannot read. Display only."""
     rows = store.query("SELECT seq, at_utc, kind, key, body FROM journal WHERE kind = ? AND "
                        "key = ? ORDER BY seq", (TRADE_OPENED, trade_id))
@@ -279,7 +280,11 @@ def trade_strategy(store: Store, trade_id: str) -> api.StrategyId | None:
     if not isinstance(name, str) or not isinstance(version, str):
         raise MalformedJournal(f"trade {trade_id}: {TRADE_OPENED} strategy {name!r} "
                                f"version {version!r}")
-    return api.StrategyId(name, version)
+    settings_version = body.get("settings_version")
+    if settings_version is not None and not isinstance(settings_version, str):
+        raise MalformedJournal(f"trade {trade_id}: {TRADE_OPENED} settings_version "
+                               f"{settings_version!r}")
+    return api.StrategyId(name, version, settings_version)
 
 
 def entry_send(store: Store, trade_id: str) -> tuple[api.EntrySend, str | None]:

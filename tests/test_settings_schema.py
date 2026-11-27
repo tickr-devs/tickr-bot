@@ -184,6 +184,21 @@ def test_a_maximum_comes_from_the_schema_file(tmp_path):
         ("risk.max_open_positions", Cause.ABOVE_MAXIMUM)]
 
 
+@pytest.mark.parametrize("key", ["risk.max_weekly_loss_usd", "risk.stop_out_streak_limit"])
+def test_a_loss_lock_turned_off_or_raised_is_a_loosening(key):
+    """0 = off (backlog T11): raising the limit or setting it to 0 loosens; turning it on from 0
+    or lowering it tightens."""
+    lock = schema.settings_of(SETTINGS, P)[key]
+    loosen = schema.ChangeEffect(Applies.NEXT_SESSION, needs_face_id=True)
+    tighten = schema.ChangeEffect(Applies.AT_ONCE, needs_face_id=False)
+    assert lock.needs_face_id
+    assert schema.change_effect(lock, 3, 4) == loosen
+    assert schema.change_effect(lock, 3, 0) == loosen
+    assert schema.change_effect(lock, 0, 3) == tighten
+    assert schema.change_effect(lock, 4, 3) == tighten
+    assert schema.change_effect(lock, 0, 0) == tighten
+
+
 CLASSES = schema.load_classes(SCHEMA_FILE)
 BOT_KEYS = _current(schema.PLATFORM)
 

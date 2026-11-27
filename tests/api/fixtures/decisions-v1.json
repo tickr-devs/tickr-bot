@@ -7,7 +7,8 @@
       "action": "WATCH",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "observer": false,
       "checks": [
@@ -37,7 +38,8 @@
       "action": "ENTER",
       "strategy": {
         "name": "price-action-v1",
-        "version": "2"
+        "version": "2",
+        "settings_version": null
       },
       "observer": true,
       "checks": [
@@ -67,7 +69,8 @@
       "action": "ENTER",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "observer": false,
       "checks": [

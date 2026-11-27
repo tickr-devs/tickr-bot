@@ -50,12 +50,14 @@ class Issued:
 class RefreshRefused(Exception):
     """A refresh token that buys nothing, with the one cause the app is told. `revoked` names
     the device whose sign-in it ended (a retired token presented again, or an expired sign-in),
-    or is None when the token belongs to no device."""
+    or is None when the token belongs to no device. `reused` tells a retired token presented
+    again (a copy may exist) from a sign-in that simply ran out."""
 
-    def __init__(self, cause: str, revoked: str | None = None):
+    def __init__(self, cause: str, revoked: str | None = None, reused: bool = False):
         super().__init__(cause)
         self.cause = cause
         self.revoked = revoked
+        self.reused = reused
 
 
 def sign_in(name: str, now: datetime, lifetimes: Lifetimes,
@@ -81,7 +83,7 @@ def refresh(devices: tuple[Device, ...], presented: str, now: datetime, lifetime
     session = device.session
     if not hmac.compare_digest(digest(presented), session.refresh_sha256):
         raise RefreshRefused("this refresh token was used already, so a copy of it may exist: "
-                             "the device is signed out; sign in again", device.name)
+                             "the device is signed out; sign in again", device.name, reused=True)
     if now >= session.refresh_expires_at or now >= session.expires_at:
         raise RefreshRefused("the sign-in has expired; sign in again", device.name)
     issued, renewed = _pair(family, now, session.expires_at, lifetimes, token_bytes)

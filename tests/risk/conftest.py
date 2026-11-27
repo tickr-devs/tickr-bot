@@ -70,6 +70,8 @@ def inputs(**changes) -> AdmissionInputs:
         buying_power=BuyingPower(D("4000000"), NOW - timedelta(seconds=2), D("0")),
         entry_budget_available=True,
         stop_budget_available=True,
+        realized_loss_week_usd=D("0"),
+        stop_out_streak=0,
     )
     return replace(base, **changes)
 

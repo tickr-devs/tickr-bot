@@ -101,6 +101,10 @@ class RiskConfig:
     symbol_cooldown_minutes_after_loss: int
     max_entry_rest_bars: int
     entry_snapshot_interval_seconds: Decimal
+    max_weekly_loss_usd: Decimal
+    """0 = the weekly loss ceiling is off (backlog T11)."""
+    stop_out_streak_limit: int
+    """0 = the stop-out streak lock is off (backlog T11)."""
     planned_loss_percent: Decimal
     position_notional_cap_percent: Decimal
     max_daily_loss_percent: Decimal
@@ -287,6 +291,7 @@ class ApiConfig:
     idempotency_key_ttl_seconds: int
     replay_settings_file: str
     settings_schema_file: str
+    settings_history_file: str
     observer_trades_max_rows: int
     journal_rows: int
     start_bot_command: tuple[str, ...]
@@ -314,6 +319,7 @@ class ApiConfig:
     settled_cache_dir: str
     settled_memory_days: int
     settled_disk_days: int
+    readiness_clean_days: int
 
 
 @dataclass(frozen=True)
@@ -532,6 +538,7 @@ class RuntimeConfig:
     discovery_stop_seconds: Decimal
     stop_marker_file: str
     preflight_result_file: str
+    run_facts_file: str
     release_step_timeout_seconds: int
     release_stop_wait_seconds: int
     release_poll_seconds: Decimal
@@ -757,7 +764,12 @@ def check_extended_sessions(session: SessionConfig) -> None:
 def load(path: Path | str, root: Path | str | None = None) -> Config:
     """Load and validate `config/bot.toml`. `root` is the repo root for relative paths."""
     path = Path(path)
-    raw_bytes = path.read_bytes()
+    return loads(path.read_bytes(), path, root)
+
+
+def loads(raw_bytes: bytes, path: Path, root: Path | str | None = None) -> Config:
+    """`load` on bytes already read from `path` (one read, so the digest and the values come
+    from the same bytes: the running bot's live protection check, runtime/liveprotection.py)."""
     try:
         data = tomllib.loads(raw_bytes.decode("utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -959,6 +971,9 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
         raise ConfigError("[risk] min_daily_room_usd must be >= 0 and below max_daily_loss_usd")
     if risk.buying_power_max_age_seconds <= 0:
         raise ConfigError("[risk] buying_power_max_age_seconds must be above 0")
+    if risk.max_weekly_loss_usd < 0 or risk.stop_out_streak_limit < 0:
+        raise ConfigError("[risk] max_weekly_loss_usd and stop_out_streak_limit must be at "
+                          "least 0 (0 = that lock is off)")
     for name in ("planned_loss_percent", "position_notional_cap_percent",
                  "max_daily_loss_percent"):
         if not 0 <= getattr(risk, name) <= 100:

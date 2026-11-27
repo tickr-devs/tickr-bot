@@ -7,7 +7,8 @@
       "at": "2026-11-16T15:00:00.000Z",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "verdict": "WATCH",
       "decisive_check": {
@@ -38,7 +39,8 @@
       "at": "2026-11-16T15:00:00.000Z",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "verdict": "IGNORE",
       "decisive_check": {
@@ -69,7 +71,8 @@
       "at": "2026-11-16T15:00:00.000Z",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "verdict": "IGNORE",
       "decisive_check": {
@@ -108,7 +111,8 @@
     "at": "2026-11-16T14:57:00.000Z",
     "strategy": {
       "name": "price-action-v1",
-      "version": "1"
+      "version": "1",
+      "settings_version": null
     },
     "verdict": "ENTER",
     "quantity": "200",

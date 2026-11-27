@@ -108,6 +108,17 @@ max_entry_rest_bars = 10
 # requests a minute (20), and only while a working entry's stream quote is too old; they share the snapshot route
 # budget with discovery, whose pass stops early on a refusal and keeps its previous candidates; read by runtime.entries.
 entry_snapshot_interval_seconds = 3
+# Weekly loss ceiling in USD (backlog T11): this New York week's NET realized loss after fees (Monday to today, wins
+# offset losses, as the daily rule counts a day) + open reservations + the new trade's planned loss must stay at or
+# below it, else the entry is refused (WEEKLY_CEILING). Blocks new entries only, never exits or protection. 0 = off,
+# as shipped: the owner has not decided the number yet (the daily ceiling is max_daily_loss_usd); read by safety and
+# the status.
+max_weekly_loss_usd = 0
+# Stop-out streak lock, count (backlog T11): after this many trades in a row closed today (New York date) by their
+# protective stop at a loss, no new entry for the rest of the day (STOP_OUT_STREAK). A winning or flat exit resets the
+# streak; a losing exit that was not a stop fill leaves it as it is. Blocks new entries only, never exits or
+# protection. 0 = off, as shipped: the owner has not decided the number yet; read by safety and the status.
+stop_out_streak_limit = 0
 # Tradability check before an entry (backlog T8): true = for an entry every other check admitted, the bot reads the
 # symbol's instrument profile and its trade instrument (`GET /trade/instrument`) and refuses the entry when Webull says
 # HALTED (INSTRUMENT_HALTED), CLOSE_ONLY (INSTRUMENT_CLOSE_ONLY) or DENIED (INSTRUMENT_DENIED), when the profile status
@@ -623,6 +634,10 @@ replay_settings_file = "config/replay.toml"
 # Settings schema file (owner settings: steps and maxima) GET /settings/schema, GET /settings/values and POST
 # /settings/validate read on every request, relative to the repo root; read by the api server (api/settingsview.py).
 settings_schema_file = "config/settings_schema.toml"
+# Settings history file, the journal of every owner settings change (time, device, values before and after, pending
+# changes), relative to data_dir; its lock is the same name plus ".lock". Written by the api server
+# (POST /settings/apply, /settings/rollback) and by the bot at its start (pending changes); api/settingsapply.py.
+settings_history_file = "settings-history.json"
 # Most simulated trades (ENTERs, oldest first) GET /observers lists per observer; more = cut, with `trades_truncated` true; read by the api server (api/observer_results.py).
 observer_trades_max_rows = 100
 # Latest journal rows GET /journal returns (oldest first; `last_seq` is the newest row's number); read by the api server.
@@ -705,6 +720,10 @@ settled_memory_days = 10
 # Past days whose built answers (and trades' bar index) the API keeps on disk under settled_cache_dir (the newest by
 # date; older day folders are deleted when a newer one is written), count; read by the api server (api/settled.py).
 settled_disk_days = 30
+# Clean days (GET /days verdict `clean`) of the loaded environment that GET /production's readiness checklist asks for
+# before another environment is enabled (spec-v1 section 1: 5 clean Sandbox days), count; informs only, never a gate;
+# read by the api server (api/readiness.py).
+readiness_clean_days = 5
 
 [market_data]
 # Seconds between discovery passes in the regular session, counted from the start of the minute the pass began, so with
@@ -1266,6 +1285,13 @@ stop_marker_file = "stopped-by-operator.json"
 # outcome and checks, replaced atomically after each run (a failed write is printed, never stops the job); read by
 # runtime (writer) and the api server (GET /system).
 preflight_result_file = "preflight.json"
+# Run facts file, relative to data_dir: facts of the running bot that change seldom (the live protection values in
+# force for new entries, the settings versions of the run and of the trades its status shows), replaced atomically at
+# the bot's start and after each change, never per pass, so status.json
+# keeps the shape an older reader accepts. A failed write is journaled (run-facts-write-failed) and never stops the
+# loop; the API shows the facts only beside a status of the same run id; read by runtime.service (writer) and the api
+# server (GET /status).
+run_facts_file = "run-facts.json"
 # Seconds one outside step of `python -m tickr.runtime release` may take (git fetch and worktree, `uv sync`, the new
 # release's preflight, which may wait [environments.*] token_check_duration_seconds for the token); must be above that
 # wait; read by runtime.release.

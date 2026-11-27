@@ -75,6 +75,8 @@ from tickr.api.contract import (
     RiskSettings,
     SessionSettings,
     SessionV1,
+    SettingsDevice,
+    SettingsHistoryV1,
     SettingsV1,
     StatusResponseV1,
 )
@@ -84,6 +86,18 @@ from tickr.api.jobs import JobsSettings, jobs_document
 from tickr.api.journal import day_events, journal_document
 from tickr.api.lab_replay import LabReplay, LabReplayRefused, LabReplaySettings
 from tickr.api.observer_results import ObserverResults, SimulationPaths
+from tickr.api.readiness import ReadinessSettings, readiness_document
+from tickr.api.settingsapply import (
+    ApplyRefused,
+    SettingsPaths,
+    applied_document,
+    bot_may_run,
+    not_flat,
+    parse_apply,
+    parse_rollback,
+    read_history,
+)
+from tickr.api.settingsapply import apply as apply_settings
 from tickr.api.settingsview import (
     BadDraft,
     SettingsUnavailable,
@@ -188,6 +202,7 @@ class ApiSettings:
     auth_max_addresses: int  # addresses each budget tracks; full of live ones = fail closed
     auth_ipv6_prefix_length: int  # an IPv6 client counts as its network of this length
     status_path: Path
+    run_facts_path: Path  # the bot's run-facts-v1 file, shown with a status of its run
     inbox: Path
     idempotency: Path  # <commands_dir>/idempotency: remembered Idempotency-Key answers
     idempotency_ttl_seconds: int
@@ -218,6 +233,7 @@ class ApiSettings:
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
     system: SystemSettings  # GET /system: link, preflight record, training, machine services
+    readiness: ReadinessSettings  # GET /readiness: the readiness view
     alerts: AlertsSettings  # GET /alerts and PUT /alerts/routing: the notification settings
     lab: LabReplaySettings  # GET and POST /lab/replay: the Lab's simulated replay
     start: StartSettings  # POST /commands/start-bot: launchd's start of the bot job
@@ -226,6 +242,7 @@ class ApiSettings:
     config_root: Path  # GET /config shows the file's path relative to this
     config_digest: str  # sha256 of the file when this API loaded it
     settings_schema_file: Path  # [api] settings_schema_file: GET /settings/schema and siblings
+    settings_history: Path  # <data_dir>/<[api] settings_history_file>: the settings journal
     settled_dir: Path  # <data_dir>/<[api] settled_cache_dir>/<environment>: past days' answers
     settled_memory_days: int  # [api] settled_memory_days
     settled_disk_days: int  # [api] settled_disk_days
@@ -354,6 +371,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         auth_max_addresses=api.remote_auth_max_addresses,
         auth_ipv6_prefix_length=api.remote_auth_ipv6_prefix_length,
         status_path=data / api.status_file,
+        run_facts_path=data / cfg.runtime.run_facts_file,
         inbox=data / api.commands_dir / contract.INBOX,
         idempotency=data / api.commands_dir / IDEMPOTENCY,
         idempotency_ttl_seconds=api.idempotency_key_ttl_seconds,
@@ -385,6 +403,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
         system=SystemSettings.from_config(cfg),
+        readiness=ReadinessSettings.from_config(cfg),
         alerts=AlertsSettings.from_config(cfg),
         lab=LabReplaySettings.from_config(cfg, config_path),
         start=StartSettings.from_config(cfg),
@@ -393,6 +412,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         config_root=cfg.root,
         config_digest=cfg.digest,
         settings_schema_file=cfg.root / api.settings_schema_file,
+        settings_history=data / api.settings_history_file,
         settled_dir=data / api.settled_cache_dir / cfg.environment_name,
         settled_memory_days=api.settled_memory_days,
         settled_disk_days=api.settled_disk_days,
@@ -418,7 +438,9 @@ def shown_settings(cfg: Config) -> SettingsV1:
             max_daily_loss_usd=Decimal(risk.max_daily_loss_usd),
             max_open_positions=risk.max_open_positions,
             max_quote_age_seconds=Decimal(risk.max_quote_age_seconds),
-            min_daily_room_usd=Decimal(risk.min_daily_room_usd)),
+            min_daily_room_usd=Decimal(risk.min_daily_room_usd),
+            max_weekly_loss_usd=Decimal(risk.max_weekly_loss_usd),
+            stop_out_streak_limit=risk.stop_out_streak_limit),
         session=SessionSettings(
             timezone=session.timezone,
             last_entry_minutes_before_close=session.last_entry_minutes_before_close,
@@ -596,7 +618,7 @@ class ApiServer(ThreadingHTTPServer):
         stale = age is not None and age > self.settings.status_stale_seconds
         return StatusResponseV1(
             served_at=now,
-            status=status,
+            status=None if status is None else contract.served_status(status, self._run_facts()),
             age_seconds=age,
             stale=stale,
             unavailable_cause=cause,
@@ -604,6 +626,23 @@ class ApiServer(ThreadingHTTPServer):
             poll_seconds=self.settings.poll_seconds,
             api_started_at=self.started_at,
         )
+
+    def readiness(self) -> contract.ReadinessV1:
+        """GET /readiness: the readiness view now (api/readiness.py)."""
+
+        def clean_days(today: date) -> int:
+            return sum(1 for day in self.history.days(today).days
+                       if day.clean.verdict is contract.CleanVerdict.CLEAN)
+
+        return readiness_document(self.settings.readiness, self.clock(), clean_days)
+
+    def _run_facts(self) -> contract.RunFactsV1 | None:
+        """The bot's run facts; None when the file is missing or unreadable (display only: the
+        status then shows none of them)."""
+        try:
+            return contract.read_run_facts(self.settings.run_facts_path)
+        except (ContractError, OSError):
+            return None
 
     def account_response(self) -> AccountResponseV1 | ErrorV1:
         """The bot's account-v1 document with its age; an `unavailable` error when the file
@@ -893,14 +932,15 @@ _ERROR_CODES = {
     "method_not_allowed": 405, "length_required": 411, "payload_too_large": 413,
     "unsupported_media_type": 415, "bad_request": 400, "too_many_pending": 429,
     "internal": 500, "unavailable": 503, "unauthorized": 401, "conflict": 409,
-    "rate_limited": 429, "auth_rate_limited": 429,
+    "rate_limited": 429, "auth_rate_limited": 429, "biometric_required": 403,
 }
 GET_ROUTES = ("/", "/status", "/commands/pending", RECEIPT_ROUTE, "/schema", "/days", "/bars",
               "/settings",
               "/explain", "/observers", "/decisions", "/skipped", "/account", "/flow",
               "/watching", "/performance", "/chart", "/jobs", "/system", "/journal", "/config",
+              "/readiness",
               "/trades/whatif", "/advisor", "/symbols", "/movers", "/quotes", "/events",
-              "/settings/schema", "/settings/values", "/alerts")
+              "/settings/schema", "/settings/values", "/settings/history", "/alerts")
 MAX_NICENESS = 19  # POSIX nice: 19 is the lowest priority (protocol constant)
 MAX_PORT = 65535  # TCP ports are 16-bit (protocol constant)
 HTML_TYPE = "text/html; charset=utf-8"
@@ -920,6 +960,9 @@ TRADE_WHATIF = "/trades/whatif"  # GET: another version on one trade's day, simu
 FOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 ADVISOR_DECISION = "/advisor/decision"  # POST only: the owner's note on a run, never a command
 SETTINGS_VALIDATE = "/settings/validate"  # POST only: checks a draft, writes nothing
+SETTINGS_APPLY = "/settings/apply"  # POST only: applies a draft (api/settingsapply.py)
+SETTINGS_ROLLBACK = "/settings/rollback"  # POST only: applies an earlier version's values
+SETTINGS_HISTORY = "/settings/history"  # GET: every journaled settings version
 ALERT_ROUTING = "/alerts/routing"  # PUT only: one cell of the owner's alert routing
 DAY_PREFIX = "/days/"
 # Headers a proxy adds to a request it forwards (Go's ReverseProxy, which `tailscale serve` is,
@@ -1227,9 +1270,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.settings.shown)
             elif path == "/config":
                 self._config()
-            elif path in ("/settings/schema", "/settings/values"):
+            elif path in ("/settings/schema", "/settings/values", SETTINGS_HISTORY):
                 self._owner_settings(path)
-            elif path == SETTINGS_VALIDATE:
+            elif path in (SETTINGS_VALIDATE, SETTINGS_APPLY, SETTINGS_ROLLBACK):
                 self._error("method_not_allowed", "use POST", {"Allow": "POST"})
             elif path == "/jobs":
                 self._json(200, jobs_document(self.server.settings.jobs,
@@ -1237,6 +1280,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/system":
                 self._json(200, system_document(self.server.settings.system,
                                                 self.server.status_response()))
+            elif path == "/readiness":
+                self._json(200, self.server.readiness())
             elif path == "/alerts":
                 self._json(200, alerts_document(self.server.settings.alerts))
             elif path == ALERT_ROUTING:
@@ -1291,6 +1336,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == SETTINGS_VALIDATE:
                 self._validate_settings()
+                return
+            if path in (SETTINGS_APPLY, SETTINGS_ROLLBACK):
+                self._apply_settings(path)
                 return
             if path == ALERT_ROUTING:
                 self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
@@ -1651,27 +1699,32 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request", 'body must be exactly {"refresh_token": "<token>"}')
             return
         settings = self.server.settings
-        revoked: str | None = None
+        ended: sessions.RefreshRefused | None = None
         issued: sessions.Issued | None = None
         with self.server.pair_lock, _pairing_lock(settings):
             refused = self._admit(PAIR_ROUTE_KIND)
             if refused is None:
                 self._last_error = None
                 try:
-                    issued, revoked = self._refresh_locked(body["refresh_token"])
+                    issued, ended = self._refresh_locked(body["refresh_token"])
                 finally:  # every 401 here is a refresh token that failed; a 503 tested none
                     self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
         if refused is not None:
             self._refuse(PAIR_ROUTE_KIND, refused)
             return
-        if revoked is not None:
-            self._device_session_alert(f"device {revoked!r} signed out: a retired refresh token "
-                                       "came back or its sign-in expired")
+        if ended is not None and ended.revoked is not None:
+            why = ("a refresh token that was already used came back, so a copy of it may exist "
+                   "(or the app lost the answer to its own refresh)" if ended.reused
+                   else "its sign-in expired")
+            self._device_session_alert(f"device {ended.revoked!r} signed out: {why}")
         if issued is not None:
             self._json(200, self._session_answer(issued))
 
-    def _refresh_locked(self, presented: str) -> tuple[sessions.Issued | None, str | None]:
-        """`_refresh` under the pairing locks: the new pair, or the device it signed out."""
+    def _refresh_locked(
+        self, presented: str,
+    ) -> tuple[sessions.Issued | None, sessions.RefreshRefused | None]:
+        """`_refresh` under the pairing locks: the new pair, or the refusal (naming the device it
+        signed out, if any). A token of no device signs nothing out and raises no alert."""
         settings = self.server.settings
         try:
             paired = load_devices(settings)
@@ -1687,7 +1740,7 @@ class Handler(BaseHTTPRequestHandler):
                 if kept is not None:
                     _write_private(settings.devices_path, devices.render(kept))
             self._error("unauthorized", exc.cause)
-            return None, exc.revoked
+            return None, exc
         # One write retires the presented token and records the new one, before the answer.
         _write_private(settings.devices_path, devices.render(renewed))
         return issued, None
@@ -1793,6 +1846,9 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request", safe_cause(exc))
             return
         try:
+            if path == SETTINGS_HISTORY:
+                self._json(200, SettingsHistoryV1(read_history(settings.settings_history)))
+                return
             specs = load_schema(settings.settings_schema_file)
             if path == "/settings/schema":
                 self._json(200, schema_document(specs))
@@ -1825,6 +1881,45 @@ class Handler(BaseHTTPRequestHandler):
                                            load_classes(settings.settings_schema_file)))
         except SettingsUnavailable as exc:
             self._error("unavailable", safe_cause(exc))
+
+    def _device(self) -> SettingsDevice:
+        """The device a settings change came from, by the listener and the token's Host."""
+        if not self.server.remote:
+            return SettingsDevice.LOCAL
+        host = self.headers.get("Host")
+        return (SettingsDevice.PHONE if host in self.server.settings.remote_hosts
+                else SettingsDevice.SIMULATOR)
+
+    def _apply_settings(self, path: str) -> None:
+        """POST /settings/apply or /settings/rollback (api/settingsapply.py): 200
+        settings-applied-v1 with the journaled version, or the error with one cause and
+        nothing changed."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        settings = self.server.settings
+        try:
+            request = (parse_apply(body) if path == SETTINGS_APPLY else parse_rollback(body))
+        except BadDraft as exc:
+            self._error("bad_request", safe_cause(exc))
+            return
+        if settings.config_file is None:
+            self._error("unavailable", "this API was started without a config file path")
+            return
+        paths = SettingsPaths(settings.settings_schema_file, settings.config_file,
+                              settings.config_root, settings.settings_history)
+        lock = settings.start.lock_file
+        try:
+            version = apply_settings(paths, request, self._device(), self.server.clock(),
+                                     lambda: not_flat(self.server.status_response(), lock))
+        except ApplyRefused as exc:
+            self._error(exc.error, exc.cause)
+            return
+        except SettingsUnavailable as exc:
+            self._error("unavailable", safe_cause(exc))
+            return
+        self._json(200, applied_document(version,
+                                         bot_may_run(self.server.status_response(), lock)))
 
     def _account(self) -> None:
         """GET /account: the bot's latest broker read of positions and open orders."""

@@ -13,7 +13,8 @@
     },
     "strategy": {
       "name": "price-action-v1",
-      "version": "1"
+      "version": "1",
+      "settings_version": null
     },
     "entry_stop": false,
     "entry_block": null,
@@ -42,7 +43,10 @@
       "kind": "strategy",
       "name": "price-action-v1",
       "version": "1"
-    }
+    },
+    "protection_in_force": [],
+    "realized_loss_week_usd": null,
+    "stop_out_streak": null
   },
   "age_seconds": "0.250",
   "stale": false,

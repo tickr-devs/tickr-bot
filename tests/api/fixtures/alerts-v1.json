@@ -139,6 +139,15 @@
       }
     },
     {
+      "kind": "strategy-not-loaded",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "telegram": true,
+        "push": true
+      }
+    },
+    {
       "kind": "not-flat-after-flatten",
       "group": "critical",
       "locked": true,
@@ -257,6 +266,15 @@
     },
     {
       "kind": "api-credentials-unexpected",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "telegram": true,
+        "push": true
+      }
+    },
+    {
+      "kind": "protection-change-ignored",
       "group": "critical",
       "locked": true,
       "channels": {

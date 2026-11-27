@@ -7,7 +7,7 @@
   with each file's SHA-256 (a later apply can refuse a draft made against an older file).
 - POST /settings/validate: a draft checked against the schema and the files now, with typed
   refusals and, per key, the change's effect. Nothing is written, journaled or applied here:
-  apply, history and rollback are later slices of S4.
+  apply, history and rollback are in api/settingsapply.py.
 
 Owner `platform` is the config file this API was started with; any other owner is a folder
 under strategies/. The schema file is read on every request, so a bad edit answers 503 with its
@@ -140,10 +140,18 @@ def _text(value: Any) -> str | None:
 def parse_draft(body: Mapping[str, Any]) -> tuple[tuple[str, str, str], ...]:
     """`{"changes": [{"owner", "key", "value"}, ...]}`, each a string, at least one, no
     (owner, key) twice; BadDraft otherwise."""
-    shape = ('body must be {"changes": [{"owner": "...", "key": "...", "value": "..."}, ...]} '
-             "with at least one change, each field a string")
-    changes = body.get("changes")
-    if set(body) != {"changes"} or not isinstance(changes, list) or not changes:
+    if set(body) != {"changes"}:
+        raise BadDraft(DRAFT_SHAPE)
+    return parse_changes(body["changes"])
+
+
+DRAFT_SHAPE = ('body must be {"changes": [{"owner": "...", "key": "...", "value": "..."}, ...]} '
+               "with at least one change, each field a string")
+
+
+def parse_changes(changes: Any, shape: str = DRAFT_SHAPE) -> tuple[tuple[str, str, str], ...]:
+    """A draft's `changes` list (see `parse_draft`); BadDraft with `shape` otherwise."""
+    if not isinstance(changes, list) or not changes:
         raise BadDraft(shape)
     parsed: list[tuple[str, str, str]] = []
     for change in changes:

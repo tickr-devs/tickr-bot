@@ -10,7 +10,9 @@
     "max_daily_loss_usd": "300",
     "max_open_positions": 1,
     "max_quote_age_seconds": "5",
-    "min_daily_room_usd": "10"
+    "min_daily_room_usd": "10",
+    "max_weekly_loss_usd": "0",
+    "stop_out_streak_limit": 3
   },
   "session": {
     "timezone": "America/New_York",
