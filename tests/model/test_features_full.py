@@ -264,7 +264,7 @@ def test_no_pinned_file_can_reach_the_bot():
 
 
 @pytest.mark.parametrize(("day", "cause"), [("2026-07-15", "sealed_day"),
-                                            ("2027-01-04", "unknown_trading_day")])
+                                            ("2029-01-02", "unknown_trading_day")])
 def test_a_sealed_or_uncovered_day_has_no_context(day, cause):
     with pytest.raises(ModelRefused) as exc:
         full.live_context(inputs.market_day(day))

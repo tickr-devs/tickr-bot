@@ -71,7 +71,8 @@ from the bot's session calendar (a `tickr.calendar.MarketDay`, never the wall cl
   (2026-07-01 .. 2026-08-14) and every lookback rule built on it are the pinned bytes: a
   Benzinga file may not span the window, a split factor or an earnings history across it stays
   missing (er_next stays missing until the reports it uses all lie after the window). D must be a
-  day of the pinned calendar (`unknown_trading_day`) and not a sealed one (`sealed_day`).
+  day of the context's calendar (`unknown_trading_day`, see THE CALENDAR) and not a sealed one
+  (`sealed_day`).
 - The seven builder modules are executed from the checked bytes into private module objects
   whose imports of each other resolve inside the context. They are never placed in
   `sys.modules`; a research import of `l1labels` (training, parity harness, research tools)
@@ -120,9 +121,16 @@ actual regular close with the pinned sessions unchanged (so `tofl` and the row r
 to the pinned 15:50 flatten: what the bundle accepts by declaring it), and a minute at or after
 the actual close refuses (`after_exchange_close`).
 
+THE CALENDAR. The pinned `trading-days.txt` (training bytes, md5-checked by the pinned
+`l1labels.calendar`) ends 2026-12-31. The context's private `l1labels.calendar()` returns it
+followed by the md5-pinned NYSE extension (`calendar_ext`, 2027-01-04 .. 2028-12-29, early closes
+as sessions), appended once; the research import of `l1labels` keeps the pinned function and
+file. A day after the extension, or a day of it that is no session, refuses
+(`unknown_trading_day`). The extension carries its early-close times: for a day it covers, the
+bot calendar's `MarketDay` must agree (a half day exactly on the extension's early closes, at
+their time), else `calendar_disagrees`, before the half day meets the session policy.
+
 `LiveContext(...)` itself refuses (`live_context_outside_bot`) unless `live_context` builds it.
-The calendar ends 2026-12-31: a later day refuses (`unknown_trading_day`) until a new pinned
-calendar arrives.
 """
 
 from __future__ import annotations
@@ -147,6 +155,7 @@ from typing import Any
 from tickr.calendar import NEW_YORK, MarketDay
 from tickr.model import features as base
 from tickr.model.errors import ModelRefused
+from tickr.model.features import calendar_ext
 
 # md5 of every pinned file of the feature builder (l1features-set7e/md5-code.txt, the same as the
 # set 6 job folder; wm2tk_l1.py is the text l1feat.modules writes from wm2tk.py e480668b).
@@ -400,6 +409,7 @@ def _builder(day: str | None) -> SimpleNamespace:
             text = dated_text(text, day)
         modules[stem] = _private_module(stem, text, modules, LIVE_SURFACE[stem])
     labels, feat = modules["l1labels"], modules["l1feat"]
+    _extend_calendar(labels)
     if texts["wm2tk_l1.py"] != _replaced(texts["wm2tk.py"], feat.TKPATCH):
         raise ModelRefused("table_code_replacement", "wm2tk_l1.py is not TKPATCH on wm2tk.py")
     if any(getattr(modules[s], "L", labels) is not labels for s in ("l1feat", "l1bz", "l1fl")):
@@ -420,6 +430,32 @@ def _builder(day: str | None) -> SimpleNamespace:
                            tk2=modules["l1tk2"], ref=modules["wm2ref16"], tk=modules["wm2tk_l1"],
                            w=w, table=SimpleNamespace(**table), settings=settings,
                            groups=ordered, names=names)
+
+
+def _extend_calendar(labels: ModuleType) -> None:
+    """The private `l1labels.calendar()` (THE CALENDAR): the pinned function, which still reads
+    and md5-checks the training file, followed by the NYSE extension once. With a file of its
+    own (`p`, the fixtures' argument) it is the pinned function unchanged."""
+    pinned = labels.calendar
+
+    def calendar(p: str | None = None, pin: str = labels.CAL_MD5) -> list[str]:
+        days = pinned(p, pin)
+        return calendar_ext.extend(days) if p is None else days
+
+    labels.calendar = calendar
+
+
+def _check_extension_day(day: str, market_day: MarketDay) -> None:
+    """For a day the extension covers, the bot calendar's half day and regular close agree with
+    the extension's early closes (THE CALENDAR)."""
+    ext = calendar_ext.load()
+    if day not in ext.days:
+        return
+    early = ext.early_close.get(day)
+    close = market_day.regular_close.strftime("%H:%M")
+    if (early is not None) != market_day.half_day or (early is not None and early != close):
+        raise ModelRefused("calendar_disagrees", f"{day}: extension early close {early}, bot "
+                           f"calendar half day {market_day.half_day} closing {close}")
 
 
 def _group_digest(groups: dict[str, list[str]]) -> str:
@@ -462,6 +498,7 @@ def live_context(market_day: MarketDay, session_policy: str = FULL_DAYS) -> Live
     if session_policy not in SESSION_POLICIES:
         raise ModelRefused("session_policy_unknown", repr(session_policy))
     day = market_day.ny_date.isoformat()
+    _check_extension_day(day, market_day)
     hours = _session_minutes(market_day)
     if market_day.half_day:
         if session_policy != HALF_DAYS_UNTIL_CLOSE:

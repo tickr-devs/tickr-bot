@@ -1,0 +1,4 @@
+# US equity early-close days (13:00 New York), 2027-01..2028-12, the extension of early-close-days.txt (which ends 2026-12). Source (fetched 2026-11-25): NYSE "Holiday & Trading Hours" page https://www.nyse.com/trade/hours-calendars, 2027 and 2028 tables (the page publishes nothing past 2028); the 2027 dates also agree with the NYSE Group release of 2025-12-23 (businesswire.com/news/home/20251223981478/en) and with config/calendar/us-equity-2027.json. 2028-01-01 falls on a Saturday: no closure is observed on 2027-12-31.
+2027-11-26
+2028-07-03
+2028-11-24
