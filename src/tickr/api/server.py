@@ -495,7 +495,8 @@ class ApiServer(ThreadingHTTPServer):
         # The alert for a command that raises risk (see _risk_used); one Alerter for both
         # listeners (set by python -m tickr.api; None = no alert, as in most tests).
         self.alerter: Alerter | None = shared.alerter if shared is not None else None
-        self.alert_lock = threading.Lock()
+        # Guards that one Alerter, so it is shared with it: both listeners alert under one lock.
+        self.alert_lock = shared.alert_lock if shared is not None else threading.Lock()
         # The remote port's failed-authentication budgets per client address (api/authlimit.py).
         self.auth_limits = {
             TOKEN_ROUTE_KIND: authlimit.AuthLimiter(

@@ -709,3 +709,9 @@ def test_the_settings_routes_need_the_paired_token(remote_api, remote_settings, 
         assert resp.status == 401 and doc(payload)["error"] == "unauthorized"
     resp, _ = remote(remote_api, method, path, body=body, token=token)
     assert resp.status != 401
+
+
+def test_both_listeners_alert_under_one_lock(local_api, remote_api):
+    """The listeners share one Alerter, so they share the lock around it too: an alert raised
+    on the phone's port never interleaves with one raised on the local port."""
+    assert remote_api.alert_lock is local_api.alert_lock
