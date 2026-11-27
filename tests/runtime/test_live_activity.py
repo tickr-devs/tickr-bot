@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -276,6 +276,24 @@ def test_a_gone_token_is_dropped_and_never_retried(cfg, store, environ):  # noqa
     assert "HTTP 410 Unregistered (token removed)" in world.journal[-1]["failures"][0]
     assert UPDATE_TOKEN not in {t.token for t in store.read().values()}
     assert world.look(positions=(POSITION,)) == (Event.UPDATE, [])
+
+
+def test_a_signed_out_devices_activity_tokens_are_never_pushed_and_are_dropped(
+        cfg, store, environ):  # noqa: F811
+    """A signed-in device that stopped refreshing: its Live Activity tokens are no recipients
+    either, from the same `ApnsClient.devices` the alert push reads."""
+    ended = datetime.fromtimestamp(Clock().now, UTC)
+    for kind, token in ((PushTokenKind.ACTIVITY_START, "c7" * 32),
+                        (PushTokenKind.ACTIVITY_UPDATE, "d8" * 32)):
+        store.register("tablet", PushToken(kind, token, "development", "bot.tickr.ios", IOS,
+                                           AT, ended))
+    world = World(cfg, store, environ)
+    _, calls = world.look(positions=(PENDING,))
+    assert [_token(c) for c in calls] == [START_TOKEN]
+    _, calls = world.look(positions=(POSITION,))
+    assert [_token(c) for c in calls] == [UPDATE_TOKEN]
+    assert "tablet" not in {device for device, _ in store.read()}
+    assert world.journal[-1]["failures"] == []
 
 
 def test_the_content_state_has_exactly_the_agreed_fields():

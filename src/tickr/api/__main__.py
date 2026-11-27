@@ -4,9 +4,10 @@
 `[api] remote_port` (a paired device's bearer token always required). `pair --name <device>`
 leaves a pairing link with a one-time code in a 0600 file under data_dir for the owner to move to
 the device; the device redeems the code once, at POST /pair on the remote port, for its own token,
-beside the devices already paired (one of the same name is replaced). `devices` lists the paired
-devices and `revoke --name <device>` revokes one and drops its push tokens. Only SHA-256
-digests are kept; nothing secret is printed.
+beside the devices already paired (one of the same name is replaced; `local` and `simulator`
+are the bot's own names and refused). `devices` lists the paired devices and
+`revoke --name <device>` revokes one and drops its push tokens. Only SHA-256 digests are kept;
+nothing secret is printed.
 
 With `[chart] webull_enabled`, and once the chart probe C1 is recorded as passed for the
 environment (`python -m tickr.probes chart-client`), `serve` builds the chart's own Webull
@@ -34,7 +35,7 @@ from pathlib import Path
 
 from tickr import config as config_module
 from tickr.api import contract
-from tickr.api.devices import DeviceFileError, valid_name
+from tickr.api.devices import DeviceFileError, ReservedName, valid_name
 from tickr.api.server import (
     ApiServer,
     list_devices,
@@ -215,6 +216,9 @@ def main(argv: list[str] | None = None) -> int:
             token_file = pair_simulator(settings)
         if args.command == "unpair-simulator":
             unpair_simulator(settings)
+    except ReservedName as exc:
+        print(f"{exc}.", file=sys.stderr)
+        return 2
     except StoreError as exc:  # revoked all the same; only the push tokens are kept
         print(f"The token is revoked, but its push tokens could not be dropped: {exc}; delete "
               "that file (each app registers again at its next launch).", file=sys.stderr)

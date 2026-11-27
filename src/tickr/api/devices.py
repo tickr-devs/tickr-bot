@@ -30,6 +30,11 @@ from tickr.api import contract
 from tickr.api.contract import ContractError
 
 LEGACY_NAME = "default"  # the device name a migrated single token gets
+LOCAL = "local"  # the device name of a request on the local port (the Mac's own app, no token)
+SIMULATOR = "simulator"  # the iOS Simulator's token on the remote port's loopback address
+# Names neither a sign-in nor `pair` may take: they name the bot's own access in the journal and
+# key its push tokens, and DELETE /session or `revoke` cannot end them.
+RESERVED = frozenset({LOCAL, SIMULATOR})
 # A device name: letters, digits, space, dot, dash, underscore; starts and ends with a letter
 # or digit, so it reads the same in a list and on the command line.
 NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9 ._-]*[A-Za-z0-9])?$")
@@ -41,6 +46,15 @@ SESSION_FIELDS = {"family", "refresh_sha256", "access_expires_at", "refresh_expi
 
 class DeviceFileError(Exception):
     """The registry (or the legacy single-token file) cannot be read as written."""
+
+
+class ReservedName(ValueError):
+    """A device name in `RESERVED`, refused for a sign-in or a pairing."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"device name {name!r} is reserved for the bot's own access; use "
+                         "another name")
+        self.name = name
 
 
 @dataclass(frozen=True)
@@ -69,6 +83,12 @@ def digest(secret: str) -> str:
 
 def valid_name(name: str) -> bool:
     return NAME.match(name) is not None
+
+
+def refuse_reserved(name: str) -> None:
+    """ReservedName when `name` is one of the bot's own (`RESERVED`)."""
+    if name in RESERVED:
+        raise ReservedName(name)
 
 
 def match(devices: tuple[Device, ...], token: str) -> Device | None:

@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
 from tickr.api.contract import PushTokenKind
 from tickr.config import AlertsConfig
@@ -453,14 +453,23 @@ def _never_critical(_kind: str) -> bool:
     return False
 
 
+class Recipients(NamedTuple):
+    """`ApnsClient.devices`: the tokens to push to, and what went wrong on the way (never a
+    token)."""
+
+    tokens: list[PushToken]
+    failures: tuple[str, ...]
+
+
 class ApnsClient:
     """One APNs POST to one registered device of the Tickr apps (`push_tokens.PushTokenStore`),
     to the APNs host of its build's environment, and only for a bundle id in `[alerts]
     apns_topics`; shared by the alert push (`ApnsNotifier`) and the Live Activity publisher
     (`runtime/live_activity.py`). One attempt, never retried. A token APNs says is gone (410, or
     BadDeviceToken) is removed and the removal named in the error, which the caller journals.
-    Errors name the device by `short_hash`, the HTTP status and Apple's reason only: never a
-    device token, the key or the provider token."""
+    A token whose device is signed out (`PushToken.expires_at`) is never a recipient and is
+    dropped (`devices`). Errors name the device by `short_hash`, the HTTP status and Apple's
+    reason only: never a device token, the key or the provider token."""
 
     def __init__(self, config: AlertsConfig, store: PushTokenStore,
                  environ: Mapping[str, str] = os.environ, transport: Transport = h2_post,
@@ -470,20 +479,34 @@ class ApnsClient:
         self._environ = environ
         self._transport = transport
         self._timeout = float(config.notification_timeout_seconds)
+        self._clock = clock
         self._provider = ProviderToken(config, environ, clock)
 
-    def devices(self, kind: PushTokenKind) -> list[PushToken]:
-        """The registered tokens of `kind`, in a stable order. NotifyError while APNs is not
-        set up or the store cannot be read."""
+    def devices(self, kind: PushTokenKind) -> Recipients:
+        """The live registered tokens of `kind`, in a stable order: the one place every APNs
+        sender (alerts, Live Activity) takes its recipients from. Tokens whose device's sign-in
+        has ended are left out and dropped from the store; a failed drop is named in
+        `failures`, the tokens are left out all the same. NotifyError while APNs is not set up
+        or the store cannot be read."""
         missing = apns_missing(self._config, self._environ)
         if missing or not apns_on(self._config, self._environ):
             raise NotifyError("apns-missing: " + ", ".join(missing or apns_names(self._config))
                               + " not set")
+        now = datetime.fromtimestamp(self._clock(), UTC)
         try:
             tokens = self._store.read()
         except StoreError as exc:
             raise NotifyError(f"apns-store-unreadable: {exc}") from None
-        return [token for _key, token in sorted(tokens.items()) if token.kind is kind]
+        failures = []
+        if any(token.expired(now) for token in tokens.values()):
+            # A signed-out device (it stopped refreshing): never pushed to, dropped or not.
+            try:
+                self._store.drop_expired(now)
+            except (OSError, StoreError) as exc:
+                failures.append(f"tokens of an ended sign-in not dropped: {type(exc).__name__}")
+        live = [token for _key, token in sorted(tokens.items())
+                if token.kind is kind and not token.expired(now)]
+        return Recipients(live, tuple(failures))
 
     def send(self, device: PushToken, payload: bytes, *, push_type: str, priority: str,
              topic_suffix: str = "") -> str | None:
@@ -555,16 +578,19 @@ class ApnsNotifier:
             raise NotifyError(f"apns failed: {type(exc).__name__}") from None
 
     def _push(self, kind: str | None, title: str, text: str) -> None:
-        devices = self._client.devices(PushTokenKind.ALERT)
+        devices, dropped = self._client.devices(PushTokenKind.ALERT)
         with self._empty_lock:
             if not devices:
+                if dropped:
+                    raise NotifyError("apns-no-device: no app has a live push token; "
+                                      + "; ".join(dropped))
                 if self._reported_empty:
                     raise NoRecipient("apns-no-device: no app has registered a push token")
                 self._reported_empty = True
                 raise NotifyError("apns-no-device: no app has registered a push token")
             self._reported_empty = False
         payload = apns_payload(kind, title, text, kind is not None and self._critical(kind))
-        failures = []
+        failures = list(dropped)
         for device in devices:
             error = self._client.send(device, payload, push_type=APNS_PUSH_TYPE,
                                       priority=APNS_PRIORITY)

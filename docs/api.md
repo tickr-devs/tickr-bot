@@ -58,8 +58,10 @@ rewrite the file on every request); never a token.
 
 - `pair --name <device>` adds a device once its code is redeemed; the devices already paired keep
   working. Pairing a name again replaces that device's token when the new code is redeemed (the
-  old one works until then). A name is letters, digits, space, dot, dash and underscore, starting
-  and ending with a letter or digit. A new `pair` replaces a code still waiting.
+  old one works until then) and drops the push tokens stored under the name (the app registers
+  again). A name is letters, digits, space, dot, dash and underscore, starting and ending with a
+  letter or digit; the bot's own names `local` and `simulator` are refused (`api/devices.py`
+  `RESERVED`, the same set a sign-in refuses). A new `pair` replaces a code still waiting.
 - `devices` lists the paired devices: name, paired time, last-used time.
 - `revoke --name <device>` revokes one device: its next request gets `401`; the others keep working.
 
@@ -94,10 +96,11 @@ page) needs no token, as before: any process on this Mac can use it.
 `POST /pair` (remote port only; the local port answers `404`): the same `Host` and `Origin` rules,
 no token, body exactly `{"code": "<code from the link>"}`. `200` with `paired-v1`
 (`{"token": "...", "api_version": 1}`) once: the code is burnt, the new token's SHA-256 is stored
-for the device named at `pair` (added, or replacing that device's earlier token), and the link file
-is deleted. `401 unauthorized` when no pairing is waiting, the code
-is wrong (nothing changes) or it has expired (the code and the link file are deleted); `400` for
-any other body; `503` when the code file is unreadable. Neither the code nor the token appears in
+for the device named at `pair` (added, or replacing that device's earlier token), the push tokens
+stored under that name are dropped, and the link file is deleted. `401 unauthorized` when no
+pairing is waiting, the code is wrong (nothing changes) or it has expired (the code and the link
+file are deleted); `400` for any other body, or for a waiting code whose name is reserved (written
+before `pair` refused one: the code and the link file are deleted); `503` when the code file is unreadable. Neither the code nor the token appears in
 an error or the log. A missing or empty `remote_hosts_file` (the default) turns remote access off; an unreadable
 one, or a name in it that is not a lowercase DNS name, stops the API at start.
 
@@ -117,6 +120,8 @@ and iPad send their model and the start of the app's vendor id ("iPhone 3F2A1B7C
 computer name with only the characters a device name may hold. Signing in under a name that is
 already listed replaces that device's tokens on purpose (signing the same device in again), so two
 Macs with the same computer name share one entry and the later sign-in wins; rename one of them.
+The push tokens stored under the name are dropped before the alert is recorded (the app registers
+again once signed in), so a name that changes hands never keeps the earlier holder's tokens.
 The bot's own names `local` and `simulator` are refused (`400`). `iat` may be at most
 `remote_signin_clock_skew_seconds` ahead of the bot's clock. `401 unauthorized` with the one failed
 check as the cause, or when sign-in is off (`remote_signin_accounts` empty, the default), counted
@@ -1246,8 +1251,17 @@ sender).
   dropped.
 - Signing a device out drops all its push tokens: `DELETE /session`, a refresh refused for a
   reused refresh token or an expired sign-in, `python -m tickr.api revoke --name <device>` and
-  `unpair-simulator`. If the store cannot be read then, the device is signed out all the same
-  and the `device-session` alert (or the command) says the tokens were kept.
+  `unpair-simulator`. So does a new sign-in or pairing under the name. If the store cannot be
+  read then, the device is signed out (or signed in) all the same and the `device-session` alert
+  (or the command) says the tokens were kept.
+- A signed-in device's registration carries `expires_at`: when the device is signed out unless
+  it refreshes, its live refresh token's end (`POST /session/refresh` refuses from then on; it
+  never passes the sign-in's own end). Each successful refresh moves it to the new refresh
+  token's end; if the store cannot be read then, the refresh still succeeds and the token merely
+  expires early (the app registers again). A paired device's, the Simulator's and the Mac app's
+  registrations carry none. From that time on no sender (alerts or Live Activity, both through
+  `ApnsClient.devices`) pushes to it, and it is dropped, so a device that stopped refreshing
+  stops receiving pushes without calling the API.
 - `kind` (Apple's token types): `alert`, the device token alerts are pushed to (the default);
   `activity_start`, a Live Activity push-to-start token; `activity_update`, one Live Activity's
   update token. The activity kinds are pushed to by the Live Activity publisher (below).
@@ -1259,9 +1273,10 @@ sender).
   after DELETE `registered` is false and all but `kind` null. The device token is never echoed or logged;
   the bot's journal names a device by the first 8 hex digits of the token's SHA-256.
 - The store is `<data_dir>/<[alerts] push_tokens_file>`, mode 0600, written atomically,
-  `schema_version` 2 (keyed by device name). A schema-1 file (keyed by bearer-token digest,
-  which changes at every refresh) is refused with `503`, never mapped to names: delete it and
-  each app registers again at its next launch.
+  `schema_version` 3 (keyed by device name, each token with its `expires_at` or null). A
+  schema-1 file (keyed by bearer-token digest, which changes at every refresh) or schema-2 file
+  (no sign-in end) is refused with `503`, never completed by guessing: delete it and each app
+  registers again at its next launch.
 - Sending: once `[alerts] apns_*_variable` are set (preflight `alert-push`), every alert routed
   to `push` goes once to each device's `alert` token, never retried, to the host of its environment,
   with `aps.alert {title, body}`, sound `default`, `thread-id` and a top-level `kind` set to the

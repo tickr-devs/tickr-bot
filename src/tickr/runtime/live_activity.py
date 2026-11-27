@@ -272,8 +272,9 @@ class Publisher:
         body: dict[str, Any] = {"event": event.value, "state": content.state.value,
                                 "priority": priority, "sent": 0, "failures": []}
         try:
-            devices = [d for d in self._client.devices(kind)
-                       if d.bundle_id == self._live.app_bundle_id]
+            recipients = self._client.devices(kind)
+            body["failures"].extend(recipients.failures)
+            devices = [d for d in recipients.tokens if d.bundle_id == self._live.app_bundle_id]
         except NotifyError as exc:
             body["failures"].append(str(exc))
             devices = []

@@ -6,17 +6,27 @@ sender pushes to), `activity_start` (a Live Activity push-to-start token) or `ac
 publisher (`runtime/live_activity.py`) to the activity kinds.
 
 The store is one JSON file under data_dir (`[alerts] push_tokens_file`, 0600, written atomically):
-`{"schema_version": 2, "devices": {"<device name>": {"<kind>": {"token", "environment",
-"bundle_id", "platform", "registered_at"}}}}`. The API is its writer; the push sender reads it on
-each alert and removes a token APNs says is gone (410 or BadDeviceToken).
+`{"schema_version": 3, "devices": {"<device name>": {"<kind>": {"token", "environment",
+"bundle_id", "platform", "registered_at", "expires_at"}}}}`. The API is its writer; the push
+sender reads it on each alert and removes a token APNs says is gone (410 or BadDeviceToken).
+
+`expires_at` is when the registering device is signed out unless it refreshes: its live refresh
+token's end (`Session.refresh_expires_at` in api/devices.py, which never passes the sign-in's own
+`expires_at`; `sessions.refresh` refuses at the earlier of the two, so this one), moved forward at
+each refresh (`renew`). It is null for a device whose access does not expire (a paired device,
+`LOCAL`, the Simulator). A token past it is never pushed to: the senders skip it and drop it
+(`drop_expired`), so a signed-in device that stopped refreshing stops receiving pushes when it
+could no longer refresh, whether or not it ever calls the API again.
 
 A device key is the name of the device that registered the token, as the API authorized it: the
 paired or signed-in device's name in `api/devices.py`, `LOCAL` for the Mac's own app on the local
 port (no token there), or the Simulator's reserved name. The name stays the same while a signed-in
-device's access tokens rotate at each refresh, so its registration survives a refresh; signing the
-device out or revoking it drops its tokens (`remove_device`). Schema 1 keyed devices by the SHA-256
-of their bearer token, which changes at every refresh; such a file is refused (`OldSchema`), never
-mapped to names by guessing: delete it and each app registers again at its next launch. A device
+device's access tokens rotate at each refresh, so its registration survives a refresh (the
+expiry moves forward with it); signing the device out or revoking it, or its
+name being taken by a new sign-in or pairing, drops its tokens (`remove_device`). Schema 1 keyed
+devices by the SHA-256 of their bearer token, which changes at every refresh; schema 2 carried no
+sign-in expiry. Such a file is refused (`OldSchema`), never completed by guessing: delete it and
+each app registers again at its next launch. A device
 token is personal data: it is never logged or put in an error; `short_hash` names one in a journal
 line instead.
 """
@@ -31,7 +41,7 @@ import os
 import re
 import threading
 from collections.abc import Collection, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,9 +50,12 @@ from tickr.api import contract
 from tickr.api.contract import PushPlatform as Platform
 from tickr.api.contract import PushTokenKind as Kind
 
-SCHEMA_VERSION = 2
-# The schema that keyed devices by their bearer token's SHA-256; refused, never migrated.
-DIGEST_KEYED_SCHEMA = 1
+SCHEMA_VERSION = 3
+# Refused, never migrated: what each older schema lacks cannot be filled in without a guess.
+OLD_SCHEMAS = {
+    1: "keyed by bearer-token digests that change at every refresh",
+    2: "its tokens carry no sign-in expiry",
+}
 LOCAL = "local"  # the device key of the Mac's own app: the API's LOCAL_DEVICE name
 PRIVATE_MODE = 0o600  # owner read and write only (POSIX mode bits)
 # An APNs device token: hex, an even number of digits. Apple documents no fixed length (32 bytes
@@ -50,7 +63,8 @@ PRIVATE_MODE = 0o600  # owner read and write only (POSIX mode bits)
 DEVICE_TOKEN = re.compile(r"^(?:[0-9a-fA-F]{2}){1,100}$")
 SHORT_HASH_DIGITS = 8  # hex digits of a token's SHA-256 shown in a journal line
 _FIELDS = frozenset({"token", "environment", "bundle_id", "platform"})
-_ENTRY = frozenset({"token", "environment", "bundle_id", "platform", "registered_at"})
+_ENTRY = frozenset({"token", "environment", "bundle_id", "platform", "registered_at",
+                    "expires_at"})
 Key = tuple[str, Kind]  # (device key, token kind): one token each
 
 
@@ -59,7 +73,7 @@ class StoreError(Exception):
 
 
 class OldSchema(StoreError):
-    """A schema-1 file, keyed by bearer-token digests that no longer name a device."""
+    """A file of an older schema (`OLD_SCHEMAS`), which cannot be read without a guess."""
 
 
 class BadRegistration(ValueError):
@@ -74,6 +88,13 @@ class PushToken:
     bundle_id: str  # the APNs topic, one of [alerts] apns_topics
     platform: Platform
     registered_at: datetime
+    # When the registering device is signed out unless it refreshes (its refresh token's end);
+    # None for a device whose access does not expire (paired, LOCAL, the Simulator). Never
+    # pushed to from this time on.
+    expires_at: datetime | None = None
+
+    def expired(self, now: datetime) -> bool:
+        return self.expires_at is not None and now >= self.expires_at
 
 
 def short_hash(token: str) -> str:
@@ -82,9 +103,12 @@ def short_hash(token: str) -> str:
 
 
 def parse_registration(body: dict[str, Any], topics: tuple[str, ...],
-                       environments: Collection[str], now: datetime) -> PushToken:
+                       environments: Collection[str], now: datetime, *,
+                       expires_at: datetime | None) -> PushToken:
     """The token a POST /push-token body registers, or BadRegistration naming the field.
-    `kind` is optional and `alert` when left out."""
+    `kind` is optional and `alert` when left out. `expires_at` is when the registering device
+    is signed out unless it refreshes (None when its access does not expire), never taken from
+    the body."""
     if not _FIELDS <= set(body) <= _FIELDS | {"kind"}:
         raise BadRegistration('body must be exactly {"token", "environment", "bundle_id", '
                               '"platform"} and optionally "kind"')
@@ -101,7 +125,8 @@ def parse_registration(body: dict[str, Any], topics: tuple[str, ...],
                               "apns_topics)")
     if not isinstance(platform, str) or platform not in set(Platform):
         raise BadRegistration('platform must be "ios" or "macos"')
-    return PushToken(kind, token.lower(), environment, bundle_id, Platform(platform), now)
+    return PushToken(kind, token.lower(), environment, bundle_id, Platform(platform), now,
+                     expires_at)
 
 
 def parse_kind(value: Any) -> Kind:
@@ -115,8 +140,8 @@ def _parse(text: str) -> dict[Key, PushToken]:
     body = json.loads(text)
     if not isinstance(body, dict) or set(body) != {"schema_version", "devices"}:
         raise ValueError("keys must be exactly schema_version and devices")
-    if body["schema_version"] == DIGEST_KEYED_SCHEMA:
-        raise OldSchema("schema 1")
+    if body["schema_version"] in OLD_SCHEMAS:
+        raise OldSchema(body["schema_version"])
     if body["schema_version"] != SCHEMA_VERSION:
         raise ValueError(f"schema_version {body['schema_version']!r}")
     if not isinstance(body["devices"], dict):
@@ -134,9 +159,12 @@ def _parse(text: str) -> dict[Key, PushToken]:
             if not (isinstance(entry["bundle_id"], str)
                     and isinstance(entry["environment"], str)):
                 raise ValueError("a bundle_id or environment is not text")
+            expires = entry["expires_at"]
             out[(device, kind)] = PushToken(kind, entry["token"], entry["environment"],
                                             entry["bundle_id"], Platform(entry["platform"]),
-                                            contract.parse_time(entry["registered_at"]))
+                                            contract.parse_time(entry["registered_at"]),
+                                            None if expires is None
+                                            else contract.parse_time(expires))
     return out
 
 
@@ -145,7 +173,8 @@ def _text(tokens: dict[Key, PushToken]) -> str:
     for (device, kind), t in sorted(tokens.items()):
         devices.setdefault(device, {})[kind.value] = {
             "token": t.token, "environment": t.environment, "bundle_id": t.bundle_id,
-            "platform": t.platform.value, "registered_at": contract.format_time(t.registered_at)}
+            "platform": t.platform.value, "registered_at": contract.format_time(t.registered_at),
+            "expires_at": None if t.expires_at is None else contract.format_time(t.expires_at)}
     return json.dumps({"schema_version": SCHEMA_VERSION, "devices": devices},
                       indent=2, sort_keys=True) + "\n"
 
@@ -201,10 +230,10 @@ class PushTokenStore:
             raise StoreError(f"{self.path.name} unreadable: {type(exc).__name__}") from None
         try:
             return _parse(text)
-        except OldSchema:
-            raise OldSchema(f"{self.path.name} is schema 1, keyed by bearer-token digests that "
-                            "change at every refresh; delete it, each app registers again at "
-                            "its next launch") from None
+        except OldSchema as exc:
+            version = exc.args[0]
+            raise OldSchema(f"{self.path.name} is schema {version}, {OLD_SCHEMAS[version]}; "
+                            "delete it, each app registers again at its next launch") from None
         except (ValueError, TypeError, KeyError, contract.ContractError) as exc:
             # The message never holds file content: a ValueError above names a field only.
             raise StoreError(f"{self.path.name} out of shape: {type(exc).__name__}") from None
@@ -233,6 +262,27 @@ class PushTokenStore:
         with self._locked():
             tokens = self.read()
             kept = {k: t for k, t in tokens.items() if k[0] != device}
+            if len(kept) < len(tokens):
+                _write_private(self.path, _text(kept))
+            return len(tokens) - len(kept)
+
+    def renew(self, device: str, expires_at: datetime) -> int:
+        """Move the expiry of `device`'s expiring tokens to `expires_at` (it refreshed); how
+        many there were. A token without an expiry is left without one."""
+        with self._locked():
+            tokens = self.read()
+            renewed = {k: replace(t, expires_at=expires_at) for k, t in tokens.items()
+                       if k[0] == device and t.expires_at is not None}
+            if renewed:
+                _write_private(self.path, _text(tokens | renewed))
+            return len(renewed)
+
+    def drop_expired(self, now: datetime) -> int:
+        """Drop every token whose device is signed out by `now`; how many there were. An entry
+        registered again or renewed meanwhile carries its later expiry and is kept."""
+        with self._locked():
+            tokens = self.read()
+            kept = {k: t for k, t in tokens.items() if not t.expired(now)}
             if len(kept) < len(tokens):
                 _write_private(self.path, _text(kept))
             return len(tokens) - len(kept)
