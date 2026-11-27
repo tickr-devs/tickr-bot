@@ -25,6 +25,7 @@ from typing import Any
 from tickr.broker.base import Broker, BrokerError, OrderNotFound, RateLimited, Refused
 from tickr.config import Config, GateResult
 from tickr.engine import chase
+from tickr.risk import watched_stop
 from tickr.risk.ticks import CENT, tick
 from tickr.risk.timers import WindowKind
 from tickr.store import IN_LIST_LIMIT, Store, marks
@@ -44,6 +45,9 @@ ZERO = Decimal(0)
 # stop (F7). The pre-market and post-market join when the bot-watched stop and the LIMIT exits
 # exist (design v2.1, PRs 3 and 4).
 PROTECTED_WINDOWS = frozenset({WindowKind.REGULAR})
+# A bot-watched stop's BREACH or BLIND verdict (`Engine._watch_stop`), journaled with the exit
+# request it causes, in one transaction: once per trade.
+WATCH_VERDICT = "watched-stop-verdict"
 
 
 class Leg(StrEnum):
@@ -414,6 +418,8 @@ class Engine:
                  clock: Callable[[], float] = time.time,
                  close_refusal: Callable[[], str | None] = lambda: None,
                  exit_quote: Callable[[str], chase.ExitQuote | None] = lambda _symbol: None,
+                 watch_quote: Callable[[str], watched_stop.WatchQuote | None] = (
+                     lambda _symbol: None),
                  ) -> None:
         self.store = store
         self.broker = broker
@@ -427,6 +433,12 @@ class Engine:
         # The bid and ATR a limit-exit chase prices from (`[exit_chase]`, engine.chase), or
         # None; the default has none, so an enabled chase refuses and closes by MARKET.
         self.exit_quote = exit_quote
+        # The book a bot-watched stop is checked against (an extended-hours trade, Webull takes
+        # no stop there, F7), or None; the default has none, so such a watch goes blind.
+        self.watch_quote = watch_quote
+        # Per extended trade: what its watch remembers between checks (risk.watched_stop).
+        # Memory only: after a restart the watch starts again, so the blind clock restarts too.
+        self._watches: dict[str, watched_stop.WatchState] = {}
         self._positions: list[Position] | None = None  # this pass's positions read
         # The latest reconcile's reads; None after a failed read (or when a caller drops it).
         self.broker_view: BrokerView | None = None
@@ -884,6 +896,8 @@ class Engine:
             return f"trade is {trade.state}" + (", exit asked" if trade.exit_requested else "")
         if trade.reduce_state is not None:
             return "a partial sale was already asked for this trade"
+        if trade.trading_window is not WindowKind.REGULAR:
+            return f"no partial sale in the {trade.trading_window}: it would be a MARKET order"
         if self._has_fence(Fence.EXIT_REFUSED, trade_id):
             return "an earlier close was refused"
         if any(o.live for o in orders if o.leg is Leg.ENTRY):
@@ -958,10 +972,14 @@ class Engine:
 
     def _send(self, cid: str) -> None:
         row = self.order(cid)
+        # The regular session's orders stay CORE; an extended trade's orders work in every
+        # session (Webull `ALL`), as admission's window decided (risk.timers.TradingWindow).
+        regular = self.trade(row.trade_id).trading_window is WindowKind.REGULAR
         request = OrderRequest(
             client_order_id=cid, symbol=row.symbol, side=row.side, order_type=row.order_type,
             quantity=row.quantity, time_in_force=TimeInForce.DAY,
-            session=TradingSession.CORE, limit_price=row.limit_price,
+            session=TradingSession.CORE if regular else TradingSession.ALL,
+            limit_price=row.limit_price,
             stop_price=row.stop_price)
         with self.store.transaction():
             self._set_send_state(cid, SendState.ATTEMPTED, {})
@@ -1808,6 +1826,9 @@ class Engine:
             with self.store.transaction():
                 self._set_reduce(trade, ReduceState.DONE, {"why": "exit requested"})
             trade = self.trade(trade.trade_id)
+        if trade.trading_window is not WindowKind.REGULAR:
+            self._advance_watched(trade, entry, exits, expected)
+            return
         if trade.state is TradeState.EXITING and not (
                 self._has_fence(Fence.SHUTTING_DOWN) and not any(e.live for e in exits)):
             self._exit_step(trade, entry, stops, exits, held, expected)
@@ -1822,6 +1843,59 @@ class Engine:
             self._cap_stops(trade, entry)
         trade = self.trade(trade.trade_id)
         self._watch_protection(trade, exits, expected - self._reduce_pending(trade, exits))
+
+    # --- bot-watched stop (extended hours, design v2.1 section 3) ----------------------------
+
+    def _advance_watched(self, trade: TradeRow, entry: OrderRow, exits: list[OrderRow],
+                         expected: Decimal) -> None:
+        """An extended-hours trade: Webull takes no stop there (F7), so no broker stop is ever
+        placed for it and the unprotected clock does not apply; the bot checks its stop price
+        itself on every pass (`_watch_stop`). Its exit is LIMIT orders priced from the market
+        (design v2.1 section 5), not built yet: until then a requested exit cancels the entry
+        and holds the rest under an operator fence, never a MARKET order or a broker stop.
+        `open_trade` refuses such a trade (`PROTECTED_WINDOWS`) until that path exists."""
+        if trade.state is not TradeState.EXITING:
+            self._watch_stop(trade, expected)
+            return
+        self._watches.pop(trade.trade_id, None)
+        if entry.live and not self._has_fence(Fence.CANCEL_FAILED, entry.client_order_id):
+            self._cancel(entry)
+            return
+        selling = sum((e.open_quantity for e in exits if e.live), ZERO)
+        if expected - selling > 0 and not self._has_fence(Fence.EXIT_REFUSED, trade.trade_id):
+            self._set_fence(Fence.EXIT_REFUSED, trade.trade_id, (
+                f"{trade.exit_requested} of {expected - selling} {trade.symbol} in the "
+                f"{trade.trading_window}: no LIMIT exit path outside the regular session yet; "
+                "close the position in the Webull app"))
+
+    def _watch_stop(self, trade: TradeRow, expected: Decimal) -> None:
+        """One check of an extended trade's stop (risk.watched_stop.watch) once it holds
+        shares. A BREACH or BLIND verdict is journaled with the exit request it causes, in one
+        transaction, so it is acted on once: the trade is exiting from then on and is not
+        watched again."""
+        tid = trade.trade_id
+        if expected <= 0:
+            self._watches.pop(tid, None)  # nothing held yet: nothing to protect
+            return
+        if not self.store.journal("stop-from-fill", tid):
+            trade = self._stop_from_fill(trade, [])  # no broker stop ever: derive it once
+        mono = self.clock()
+        state = self._watches.get(tid) or watched_stop.WatchState(started=mono)
+        seen = self.watch_quote(trade.symbol)
+        result = watched_stop.watch(
+            trade.stop_price, None if seen is None else seen.quote,
+            datetime.fromtimestamp(mono, UTC), mono, state,
+            watched_stop.watch_limits(trade.trading_window, self.config),
+            feed_alive=seen is not None and seen.feed_alive)
+        self._watches[tid] = result.state
+        if result.verdict is watched_stop.Watch.HOLD:
+            return
+        with self.store.transaction():
+            self.store.append(WATCH_VERDICT, {
+                "verdict": result.verdict, "cause": result.cause, "stop": trade.stop_price,
+                "last_usable_bid": result.state.last_usable_bid,
+                "last_usable_time": result.state.last_usable_time}, key=tid, run_id=self.run_id)
+            self.exit_request_row(tid, f"watched-stop-{result.verdict}")
 
     def _cap_stops(self, trade: TradeRow, entry: OrderRow) -> None:
         """An entry filling in pieces adds stops with each observation; the session flatten
