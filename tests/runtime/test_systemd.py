@@ -100,7 +100,39 @@ def test_every_job_requires_the_secrets_unit_and_holds_no_value(config_path, rep
         assert "After=docker.service tickr-secrets.service\n" in text
         assert "Environment=TICKR_ENV_FILE_HOST=/run/tickr/env\n" in text
     api = (out / "tickr-api.service").read_text("utf-8")
-    assert "tickr-secrets.service" not in api and "TICKR_ENV_FILE_HOST=" not in api
+    # The API needs no credential: it does not wait for the secrets unit, and compose mounts no
+    # env file into it (test below). It still names the env file's path: compose interpolates the
+    # whole file, and x-with-env requires it.
+    assert "tickr-secrets.service" not in api
+    assert "Environment=TICKR_ENV_FILE_HOST=/run/tickr/env\n" in api
+
+
+def test_compose_mounts_no_env_file_into_the_api(repo):
+    text = (repo / "ops" / "docker" / "compose.yaml").read_text("utf-8")
+    api = re.search(r"(?ms)^  api:\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)", text)
+    assert api is not None
+    assert "with-env" not in api.group(1) and "/run/tickr/env" not in api.group(1)
+
+
+def test_every_compose_unit_sets_every_variable_compose_requires(config_path, repo, tmp_path):
+    # 2026-11-27 cutover: tickr-api.service lacked TICKR_ENV_FILE_HOST and `up -d api` refused
+    # on the server ("required variable ... is missing a value"), because compose interpolates
+    # every service, not only the one it starts. CI's compose check sets all of them globally.
+    out = tmp_path / "out"
+    _render(config_path, out)
+    required = set(re.findall(r"\$\{(\w+):\?", (repo / "ops" / "docker" / "compose.yaml")
+                              .read_text("utf-8")))
+    assert {"TICKR_IMAGE", "TICKR_ENV_FILE_HOST", "TICKR_CONFIG_HOST"} <= required
+    limits = set(re.findall(r"(?m)^(\w+)=", (out / "limits.env").read_text("utf-8")))
+    units = [u for u in out.glob("tickr-*.service") if "docker compose" in u.read_text("utf-8")]
+    assert {u.name for u in units} >= {"tickr-api.service", "tickr-bot.service",
+                                       "tickr-preflight.service", "tickr-watchdog.service"}
+    for unit in units:
+        text = unit.read_text("utf-8")
+        names = set(re.findall(r"(?m)^Environment=(\w+)=", text))
+        if re.search(r"(?m)^EnvironmentFile=.*limits\.env$", text):
+            names |= limits
+        assert required <= names, (unit.name, sorted(required - names))
 
 
 @pytest.mark.parametrize("field,value", [
