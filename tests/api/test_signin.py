@@ -17,6 +17,8 @@ from tickr.api.signin import KeyFileError, Rules, SignInRefused
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "signin"
 GRANTS = json.loads((FIXTURES / "grants.json").read_text("utf-8"))
 ISSUED = datetime.fromtimestamp(GRANTS["issued_at"], UTC)
+# The audience the fixture grants were signed for: the bot's first address. Production reads
+# remote_signin_audience from bot.toml; the check is the same for any audience.
 RULES = Rules(issuer="https://tickr.bot", audience="https://bot.tickr.bot", scope="bot",
               clients=frozenset({"tickr-ios", "tickr-mac"}), accounts=frozenset({"1"}),
               max_lifetime_seconds=60)

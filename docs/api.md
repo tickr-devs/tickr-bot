@@ -103,7 +103,7 @@ one, or a name in it that is not a lowercase DNS name, stops the API at start.
 
 `POST /session` (remote port only): signing a device in with the owner's tickr.bot account instead
 of a pairing link. The app signs in at tickr.bot (OAuth 2.0 authorization code with PKCE, client
-`tickr-ios` or `tickr-mac`, `resource=https://bot.tickr.bot`) and gets a 60-second RS256 access
+`tickr-ios` or `tickr-mac`, `resource=https://api.tickr.bot`) and gets a 60-second RS256 access
 token, the grant. Body exactly `{"grant": "<grant>", "name": "<device name>"}`, no bearer token.
 The bot checks the grant itself (`api/signin.py`) against the provider key pinned in
 `[api] remote_signin_key_file` and never calls tickr.bot. It checks the signature, `iss`, `aud`,

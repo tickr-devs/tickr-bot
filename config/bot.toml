@@ -537,7 +537,7 @@ remote_signin_key_file = "config/signin/tickr-bot-provider.pem"
 remote_signin_issuer = "https://tickr.bot"
 # The grant's audience (`aud`), exactly: this bot's public address, which the apps ask tickr.bot for (RFC 8707
 # `resource`); a grant for any other audience is refused; read by the api server (POST /session).
-remote_signin_audience = "https://bot.tickr.bot"
+remote_signin_audience = "https://api.tickr.bot"
 # Scope the grant must hold (one word of its space-separated `scope`); read by the api server (POST /session).
 remote_signin_scope = "bot"
 # The apps tickr.bot gives grants to (the grant's `client_id`): the iPhone/iPad app and the Mac app; read by the api
