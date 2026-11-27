@@ -1,4 +1,5 @@
-"""The server's bot restart request (docs/deploy-server.md, "Bot restart on the server").
+"""The server's bot restart and start requests (docs/deploy-server.md, "Bot restart on the
+server" and "Bot start on the server").
 
 On the server the watchdog runs in its own container and cannot run a host `systemctl`. Its
 restart command (`[runtime] watchdog_restart_command`) is `python -m tickr.runtime
@@ -6,6 +7,12 @@ request-restart --cause <cause>`, which only writes the request file `[runtime]
 server_restart_request_file` under the data folder (mounted in every container). The host unit
 `tickr-bot-restart.path` sees the file and starts `tickr-bot-restart.service`, which takes the
 request, restarts the bot container once and logs the request to the journal.
+
+The API's Start (`[api] start_bot_command`) is `python -m tickr.runtime request-start --cause
+start-bot`, which writes `[runtime] server_start_request_file` the same way. The host unit
+`tickr-bot-start.path` starts `tickr-bot-start.service`, which takes the request and runs
+`docker compose up -d --no-recreate` for the bot: a running bot container is never touched, a
+stopped one is started, a missing one is created. A start request never restarts a running bot.
 
 The write is atomic (a temp file in the same folder, fsynced, then renamed), so the path unit
 never sees a partial file. The control folder is never created here: deploy-server.sh creates it
@@ -24,8 +31,8 @@ from pathlib import Path, PurePosixPath
 
 from tickr.config import Config, ConfigError
 
-# The suffix the restart unit renames a request to before it restarts the bot, so a request
-# written during the restart is a new event.
+# The suffix the restart and start units rename a request to before they act on the bot, so a
+# request written meanwhile is a new event.
 TAKEN_SUFFIX = ".taken"
 # A cause is one word the journal can hold as is: no whitespace, quotes or line breaks.
 _CAUSE = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -46,19 +53,39 @@ class RestartRequestRefused(Exception):
         self.detail = detail
 
 
+def _relative(key: str, raw: str) -> PurePosixPath:
+    rel = PurePosixPath(raw)
+    if rel.is_absolute() or ".." in rel.parts or len(rel.parts) < 2:
+        raise ConfigError(f"[runtime] {key} must be a relative path "
+                          f"inside data_dir with a folder part, got {raw!r}")
+    return rel
+
+
 def relative_request_file(config: Config) -> PurePosixPath:
     """`[runtime] server_restart_request_file`, checked: relative, inside data_dir, in a
     folder of its own (the folder deploy-server.sh creates)."""
-    raw = config.runtime.server_restart_request_file
-    rel = PurePosixPath(raw)
-    if rel.is_absolute() or ".." in rel.parts or len(rel.parts) < 2:
-        raise ConfigError("[runtime] server_restart_request_file must be a relative path "
-                          f"inside data_dir with a folder part, got {raw!r}")
+    return _relative("server_restart_request_file", config.runtime.server_restart_request_file)
+
+
+def relative_start_request_file(config: Config) -> PurePosixPath:
+    """`[runtime] server_start_request_file`, checked like the restart request, and in the
+    restart request's folder (deploy-server.sh creates that one folder only) under another
+    name (each host path unit watches one file)."""
+    rel = _relative("server_start_request_file", config.runtime.server_start_request_file)
+    restart = relative_request_file(config)
+    if rel.parent != restart.parent or rel == restart:
+        raise ConfigError("[runtime] server_start_request_file must be another file in the "
+                          f"folder of server_restart_request_file ({restart.parent}), "
+                          f"got {str(rel)!r}")
     return rel
 
 
 def request_path(config: Config) -> Path:
     return config.root / config.run.data_dir / relative_request_file(config)
+
+
+def start_request_path(config: Config) -> Path:
+    return config.root / config.run.data_dir / relative_start_request_file(config)
 
 
 def request_text(at: datetime, cause: str) -> str:

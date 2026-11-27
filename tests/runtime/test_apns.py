@@ -443,24 +443,22 @@ def test_on_and_missing_check_presence_only(environ):
 
 
 def test_default_notifier_adds_push_once_set_up_and_given_the_data_folder(tmp_path, environ):
-    assert default_notifier(APNS, "linux", {}, data_dir=tmp_path) is None
+    assert default_notifier(APNS, {}, data_dir=tmp_path) is None
     both = replace(APNS, bot_token_variable="TICKR_TEST_TG_TOKEN",
                    chat_id_variable="TICKR_TEST_TG_CHAT")
     telegram = {**environ, both.bot_token_variable: "set", both.chat_id_variable: "set"}
-    channels = default_notifier(both, "linux", telegram, data_dir=tmp_path)
+    channels = default_notifier(both, telegram, data_dir=tmp_path)
     assert isinstance(channels, Channels) and channels.background == (TELEGRAM, PUSH)
-    mac = default_notifier(APNS, "darwin", environ, data_dir=tmp_path)
-    assert PUSH in mac.background
-    no_folder = default_notifier(APNS, "darwin", environ)
-    assert PUSH not in no_folder.background
+    no_folder = default_notifier(both, telegram)
+    assert isinstance(no_folder, Channels) and PUSH not in no_folder.background
 
 
 def test_push_is_never_the_only_channel(tmp_path, environ):
     """Push reaches nobody until a phone registered: with no other owner channel there is no
     notifier at all, so the watchdog and preflight refuse instead of starting deaf."""
-    assert default_notifier(APNS, "linux", environ, data_dir=tmp_path) is None
+    assert default_notifier(APNS, environ, data_dir=tmp_path) is None
     feed = tmp_path / "alerts.jsonl"
-    assert default_notifier(APNS, "linux", environ, feed=feed, data_dir=tmp_path) is None
+    assert default_notifier(APNS, environ, feed=feed, data_dir=tmp_path) is None
 
 
 def test_store_file_is_private_and_replaces_per_device(store):

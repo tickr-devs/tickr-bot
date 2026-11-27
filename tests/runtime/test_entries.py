@@ -11,6 +11,7 @@ from baseline import load_baseline
 from funded import FUNDS
 
 from tickr import config
+from tickr.api.history import trade_strategy
 from tickr.broker.fake import FakeBroker
 from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.config import GateResult
@@ -85,6 +86,33 @@ def test_admitted_enter_opens_a_trade_at_the_top_of_the_window(tmp_path):
     (opened,) = desk.engine.store.journal("trade-opened", trade.trade_id)
     d = decision()
     assert (opened.body["strategy"], opened.body["strategy_version"]) == (d.strategy, d.version)
+
+
+def test_the_settings_version_goes_on_every_decision_and_the_trade(tmp_path):
+    desk = Desk(tmp_path)
+    desk.desk.settings_version = "f" * 64
+    desk.decide(decision(Verdict.WATCH))
+    desk.decide(decision())
+    desk.desk.log.close()
+    records = load_records([desk.dir / "2026-11-16" / "decisions.jsonl"])
+    assert [r.settings_version for r in records] == ["f" * 64] * 2
+    (trade,) = desk.engine.trades()
+    (row,) = desk.store.query("SELECT settings_version FROM trades")
+    assert row[0] == "f" * 64
+    d = decision()
+    strategy = trade_strategy(desk.store, trade.trade_id)
+    assert (strategy.name, strategy.version, strategy.settings_version) == (
+        d.strategy, d.version, "f" * 64)
+
+
+def test_a_desk_without_a_settings_version_records_none(tmp_path):
+    desk = Desk(tmp_path)
+    desk.decide(decision())
+    desk.desk.log.close()
+    line = (desk.dir / "2026-11-16" / "decisions.jsonl").read_text().splitlines()[0]
+    assert "settings_version" not in json.loads(line)
+    (trade,) = desk.engine.trades()
+    assert trade_strategy(desk.store, trade.trade_id).settings_version is None
 
 
 def test_every_decision_is_recorded_in_the_research_format(tmp_path):
@@ -469,6 +497,26 @@ def test_open_trades_entry_value_is_taken_off_the_buying_power(tmp_path):
     assert desk.decide(decision()).admission == "taken"
     later = desk.desk._inputs(decision(symbol="XYZ"), quote(), NOW).buying_power
     assert later.committed_usd == D("101.00")  # 10 x 10.10
+
+
+def test_a_percent_limit_reads_the_equity_and_refuses_when_it_is_unknown(tmp_path):
+    """X2: with a percent limit on the desk reads the balance for its equity (once per
+    `buying_power_max_age_seconds`); a failing read refuses EQUITY_UNKNOWN, a read admits."""
+    cfg = replace(CFG, risk=replace(CFG.risk, max_daily_loss_percent=D(50)))
+    broker = FakeBroker()  # no funds: the balance read fails
+    store = Store.open(tmp_path / "db.sqlite3", busy_timeout_seconds=0)
+    engine = Engine(store, broker, cfg, "desk0002", lambda: GateResult(True, "t"))
+    engine.recover()
+    desk = EntryDesk(engine, cfg, calendar=CALENDAR, last_broker_read_at=lambda: NOW,
+                     log=DecisionLog(tmp_path / "decisions"))
+    refused = desk.on_decision(decision(), bar_start=BAR, quote=quote(), now=NOW)
+    assert refused.refusal_cause == "EQUITY_UNKNOWN: no equity read"
+    assert broker.balance_reads == 1 and not broker.sent
+    broker.funds = FUNDS
+    at = NOW + timedelta(seconds=float(CFG.risk.buying_power_max_age_seconds))
+    q = replace(quote(), provider_time=at, receipt_time=at)
+    desk2 = desk.on_decision(decision(), bar_start=BAR, quote=q, now=at)
+    assert desk2.admission == "taken", desk2.refusal_cause
 
 
 def test_the_collar_blocks_entries_only(tmp_path):

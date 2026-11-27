@@ -1,8 +1,6 @@
-"""Owner alerts (spec section 11): a macOS notification, an iMessage to the owner's phone and a
-line in the alerts feed file (`[alerts] feed_file`), which a Claude session on the Mac waits on.
-
-The Mac notification is shown by the Tickr app (`[alerts] mac_app`), so it carries the app's
-icon; when the app is missing, not allowed to notify or fails, osascript shows it instead.
+"""Owner alerts (spec section 11): a Telegram message to the owner's chat and a line in the
+alerts feed file (`[alerts] feed_file`), which a Claude session waits on. Telegram is the one
+channel that works on a server; the apps' APNs push (`ApnsNotifier`) is only ever an extra one.
 
 `Alerter.alert(kind, text)` never raises and never retries. It returns an `AlertOutcome` that the
 caller always writes to its journal, whether the notification was shown, suppressed as a repeat,
@@ -12,10 +10,7 @@ suppressed so that a condition that persists does not flood the owner. The owner
 and what was skipped is named in the outcome.
 
 Alert text must never contain a secret value: callers pass variable NAMES, never contents.
-The iMessage recipient is personal data: Tickr code only knows the NAME of the environment
-variable that holds it (`[alerts] imessage_recipient_variable`) and checks its presence; the
-AppleScript reads the value itself (`system attribute`), so it is never in Python, argv or logs.
-The Telegram bot token and chat id are the same: only the variable NAMES are configuration
+The Telegram bot token and chat id are personal data: only the variable NAMES are configuration
 (`[alerts] bot_token_variable`, `chat_id_variable`); the values are read from the
 environment at the moment of one send and never stored, logged or put in an error text. The
 channel is off while neither variable is set.
@@ -30,13 +25,10 @@ from __future__ import annotations
 import base64
 import json
 import os
-import plistlib
 import queue
 import re
 import socket
 import ssl
-import subprocess
-import sys
 import threading
 import time
 import urllib.error
@@ -44,7 +36,6 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -65,37 +56,6 @@ if TYPE_CHECKING:
 # check), so the bot, the watchdog and the API import this module on a machine without them
 # and only a configured push needs them.
 
-# Protocol constants of macOS: the AppleScript runner and a script that takes its title and
-# text as arguments, so alert text is never parsed as AppleScript.
-OSASCRIPT = "/usr/bin/osascript"
-_APPLESCRIPT = (
-    "on run argv",
-    "display notification (item 2 of argv) with title (item 1 of argv)",
-    "end run",
-)
-# Sends argv item 2 by iMessage to the address held by the environment variable NAMED in argv
-# item 1. A missing recipient is an AppleScript error (non-zero exit), never a silent skip.
-# AppleScript names are case-insensitive: a variable must not share a name with a Messages
-# term (`imessage` is the `iMessage` service type and fails with -10003 before sending).
-_IMESSAGE_SCRIPT = (
-    "on run argv",
-    "set recipient to system attribute (item 1 of argv)",
-    'if recipient is "" then error "recipient variable not set"',
-    'tell application "Messages"',
-    "set acct to 1st account whose service type = iMessage",
-    "send (item 2 of argv) to participant recipient of acct",
-    "end tell",
-    "end run",
-)
-# The Tickr app's command line (apps/macos AlertCommand): `<executable> --notify-alert TITLE TEXT`
-# exits 0 once the notification is handed to Notification Center.
-APP_ALERT_FLAG = "--notify-alert"
-APP_INFO_PLIST = ("Contents", "Info.plist")
-APP_EXECUTABLES = ("Contents", "MacOS")
-APP_EXECUTABLE_KEY = "CFBundleExecutable"
-DARWIN = "darwin"
-MACOS = "macos"
-IMESSAGE = "imessage"
 FEED = "feed"
 TELEGRAM = "telegram"
 PUSH = "push"
@@ -122,6 +82,9 @@ class AlertKind(StrEnum):
     TOKEN_NEEDS_CONFIRMATION = "token-needs-confirmation"
     # The observer queue overflowed: observers are switched off for the run (trading goes on).
     OBSERVERS_STOPPED = "observers-stopped"
+    # The active strategy or its settings version (backlog S3) was refused at start: the bot
+    # protects and reconciles, but opens no entries this run.
+    STRATEGY_NOT_LOADED = "strategy-not-loaded"
     # Broker reads after the flatten time (plus grace) still show our position or order.
     NOT_FLAT_AFTER_FLATTEN = "not-flat-after-flatten"
     # Raised by the separate watchdog job (runtime/watchdog.py), which outlives a crashed bot:
@@ -156,6 +119,9 @@ class AlertKind(StrEnum):
     # give it (any, while [chart] webull_enabled is false; any but the active environment's app
     # key and secret while it is true): its plist is stale or hand-edited (runtime/launchd.py).
     API_CREDENTIALS_UNEXPECTED = "api-credentials-unexpected"
+    # A change of config/bot.toml the running bot did not adopt: invalid or unreadable, looser
+    # protection, or a setting outside live protection (runtime/liveprotection.py).
+    PROTECTION_CHANGE_IGNORED = "protection-change-ignored"
     # Raised by the API when a client address used up its failed-authentication budget on the
     # remote port (device token or POST /pair), or every new address is refused because the
     # address table is full of recent failures (api/authlimit.py).
@@ -163,6 +129,10 @@ class AlertKind(StrEnum):
     # Raised by the API for each accepted entry-stop "off" or start-bot: the device (by name),
     # the port and the time, so a stolen device token shows up at once.
     RISK_COMMAND_USED = "risk-command-used"
+    # Raised by the API when a device signs in with tickr.bot, signs out, or is signed out
+    # because a retired refresh token came back: whoever controls tickr.bot's signing key could
+    # sign a device in, so every new device shows up at once.
+    DEVICE_SESSION = "device-session"
 
 
 class Delivery(StrEnum):
@@ -186,134 +156,11 @@ class NoRecipient(NotifyError):
 
 
 class Notifier(Protocol):
-    """One alert delivery channel (`MacNotifier`, `IMessageNotifier`), or several at once
+    """One alert delivery channel (`TelegramNotifier`, `FeedNotifier`), or several at once
     (`Channels`). `default_notifier` chooses them for the bot and the watchdog alike."""
 
     def notify(self, title: str, text: str) -> None:
         """Show one notification or raise NotifyError."""
-
-
-Runner = Callable[..., subprocess.CompletedProcess[bytes]]
-# osascript ends an error line with its number in brackets, e.g. "... Access not allowed. (-10003)".
-_APPLESCRIPT_ERROR = re.compile(rb"\((-\d+)\)\s*$")
-
-
-def _osascript(runner: Runner, timeout: float, script: tuple[str, ...],
-               args: list[str]) -> None:
-    """Run one AppleScript with `args` as its argv (an argument list, never a shell string).
-    The error names the exit code and the AppleScript error number only: the rest of stderr
-    could echo the arguments."""
-    argv = [OSASCRIPT]
-    for line in script:
-        argv += ["-e", line]
-    argv += args
-    try:
-        result = runner(argv, capture_output=True, timeout=timeout, check=False)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise NotifyError(f"osascript did not run: {type(exc).__name__}") from exc
-    if result.returncode != 0:
-        number = _APPLESCRIPT_ERROR.search(result.stderr or b"")
-        detail = f" (AppleScript error {number.group(1).decode()})" if number else ""
-        raise NotifyError(f"osascript exited with code {result.returncode}{detail}")
-
-
-class MacNotifier:
-    """macOS notification through osascript. Title and text go in argv, never into the script."""
-
-    def __init__(self, timeout_seconds: Decimal, runner: Runner = subprocess.run) -> None:
-        self._timeout = float(timeout_seconds)
-        self._runner = runner
-
-    def notify(self, title: str, text: str) -> None:
-        _osascript(self._runner, self._timeout, _APPLESCRIPT, [title, text])
-
-
-class AppNotifier:
-    """macOS notification shown by the Tickr app, with its icon. The app runs once per alert in
-    its notify mode; title and text go in argv. Raises NotifyError when the app is missing, not
-    allowed to notify (System Settings > Notifications), times out or fails."""
-
-    def __init__(self, app: str, timeout_seconds: Decimal,
-                 runner: Runner = subprocess.run) -> None:
-        self._app = app
-        self._timeout = float(timeout_seconds)
-        self._runner = runner
-
-    def _executable(self) -> str:
-        info = os.path.join(self._app, *APP_INFO_PLIST)
-        try:
-            with open(info, "rb") as handle:
-                name = plistlib.load(handle).get(APP_EXECUTABLE_KEY)
-        except (OSError, plistlib.InvalidFileException, ValueError) as exc:
-            raise NotifyError(f"app-missing: {type(exc).__name__}") from exc
-        if not isinstance(name, str) or not name:
-            raise NotifyError("app-missing: no executable in Info.plist")
-        return os.path.join(self._app, *APP_EXECUTABLES, name)
-
-    def notify(self, title: str, text: str) -> None:
-        argv = [self._executable(), APP_ALERT_FLAG, title, text]
-        try:
-            result = self._runner(argv, capture_output=True, timeout=self._timeout, check=False)
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise NotifyError(f"app did not run: {type(exc).__name__}") from exc
-        if result.returncode != 0:
-            raise NotifyError(f"app exited with code {result.returncode}")
-
-
-class FirstOf:
-    """One notification through the first channel that delivers it: the next is tried only
-    when the one before raised. Raises NotifyError naming every failure when none delivered.
-    A channel that timed out may still have shown it, so a repeat is possible; a loss is not."""
-
-    def __init__(self, channels: tuple[Notifier, ...]) -> None:
-        self._channels = channels
-
-    def notify(self, title: str, text: str) -> None:
-        errors = []
-        for channel in self._channels:
-            try:
-                channel.notify(title, text)
-            except NotifyError as exc:
-                errors.append(str(exc))
-            else:
-                return
-        raise NotifyError("; ".join(errors))
-
-
-def mac_notifier(config: AlertsConfig, runner: Runner = subprocess.run) -> Notifier:
-    """The Tickr app when configured, osascript after it (or alone)."""
-    script = MacNotifier(config.notification_timeout_seconds, runner)
-    if not config.mac_app:
-        return script
-    app = AppNotifier(config.mac_app, config.mac_app_timeout_seconds, runner)
-    return FirstOf((app, script))
-
-
-def recipient_missing(config: AlertsConfig, environ: Mapping[str, str]) -> str | None:
-    """The recipient variable's NAME when it is not set, else None. Presence only: the value is
-    compared with "" and never stored, printed or returned."""
-    name = config.imessage_recipient_variable
-    return None if environ.get(name) else name
-
-
-class IMessageNotifier:
-    """iMessage through Messages.app, driven by osascript. Messages must be signed in to
-    iMessage on this Mac. The recipient never passes through Python: the script reads the
-    variable named `variable`. One attempt per alert, never retried."""
-
-    def __init__(self, config: AlertsConfig, environ: Mapping[str, str] = os.environ,
-                 runner: Runner = subprocess.run) -> None:
-        self._config = config
-        self._environ = environ
-        self._timeout = float(config.notification_timeout_seconds)
-        self._runner = runner
-
-    def notify(self, title: str, text: str) -> None:
-        missing = recipient_missing(self._config, self._environ)
-        if missing is not None:
-            raise NotifyError(f"alert-recipient-missing: {missing} not set")
-        _osascript(self._runner, self._timeout, _IMESSAGE_SCRIPT,
-                   [self._config.imessage_recipient_variable, f"{title}\n{text}"])
 
 
 # Telegram Bot API protocol constants: the method, its JSON fields and the HTTPS scheme.
@@ -355,7 +202,7 @@ def telegram_missing(config: AlertsConfig, environ: Mapping[str, str]) -> list[s
 
 class TelegramNotifier:
     """One Telegram message to the owner's chat (HTTPS POST to the Bot API), so the owner is
-    told away from the Mac. One attempt per alert, never retried. Errors name the failure kind
+    told away from the desk. One attempt per alert, never retried. Errors name the failure kind
     or the HTTP status only: the request address holds the bot token."""
 
     def __init__(self, config: AlertsConfig, environ: Mapping[str, str] = os.environ,
@@ -710,7 +557,7 @@ class ApnsNotifier:
 
 class FeedNotifier:
     """Appends one JSON line per alert ({at, title, text}) to the alerts feed file, so whatever
-    waits on that file (a Claude session on the Mac) learns of the alert at once. Every process
+    waits on that file (a Claude session) learns of the alert at once. Every process
     that alerts appends to the same file; one short `write` in append mode per line. Raises
     NotifyError when the file cannot be written (a full disk, a missing folder)."""
 
@@ -750,7 +597,7 @@ class Channels:
     """Every alert through every channel; a failing channel never stops the others.
 
     `channels` run in the caller's thread. `background` channels each run once on a daemon
-    thread, so the bot's loop never waits on the Tickr app, osascript or Messages.app; each
+    thread, so the bot's loop never waits on the network; each
     reports its result through `done` exactly once. Never retried."""
 
     def __init__(self, channels: tuple[tuple[str, Notifier], ...],
@@ -807,7 +654,7 @@ class Channels:
 
     def wait(self) -> None:
         """Until the background sends started so far have finished (each is bounded by its own
-        osascript timeout). For short-lived commands, which would otherwise exit first."""
+        timeout). For short-lived commands, which would otherwise exit first."""
         for thread in self._threads:
             thread.join()
         self._threads = []
@@ -840,35 +687,29 @@ def _once(channel: Notifier, name: str, kind: str | None, title: str, text: str,
     return run
 
 
-def default_notifier(config: AlertsConfig, platform: str = sys.platform,
-                     environ: Mapping[str, str] = os.environ,
+def default_notifier(config: AlertsConfig, environ: Mapping[str, str] = os.environ,
                      feed: Path | None = None,
                      data_dir: Path | None = None) -> Notifier | None:
-    """The channels for this machine (on a Mac the notification and iMessage; Telegram on any
-    machine once one of its variables is set; the apps' push once an APNs variable is set,
-    given the data folder that holds their device tokens; and, given its path, the alerts feed
-    file), all in the background: the Tickr app, osascript and the network can each take
-    seconds, and the bot's loop must not wait for them. None where there are none (CI, Linux
-    without Telegram).
+    """The channels for this machine: Telegram once one of its variables is set, the apps' push
+    once an APNs variable is set (given the data folder that holds their device tokens) and,
+    given its path, the alerts feed file, all in the background because the network can take
+    seconds and the bot's loop must not wait for it. None when Telegram is not set up: the feed
+    file alone is not a way to reach the owner (preflight refuses, `alert-channel-missing`). The
+    same on every operating system.
 
     The push is only ever an extra channel: it reaches nobody until a phone registered, the
     token is still valid and notifications are allowed, none of which can be proved here. So
-    without another owner channel there is no notifier (None), push or not."""
-    background: list[tuple[str, Notifier]] = []
-    if platform == DARWIN:
-        background += [(MACOS, mac_notifier(config)),
-                       (IMESSAGE, IMessageNotifier(config, environ))]
-    if telegram_on(config, environ):
-        background.append((TELEGRAM, TelegramNotifier(config, environ)))
-    if background and apns_on(config, environ) and data_dir is not None:
+    without Telegram there is no notifier (None), push or not."""
+    if not telegram_on(config, environ):
+        return None
+    background: list[tuple[str, Notifier]] = [(TELEGRAM, TelegramNotifier(config, environ))]
+    if apns_on(config, environ) and data_dir is not None:
         # Imported here: alert_routing imports this module (its delivery names).
         from tickr.runtime.alert_routing import LOCKED
         locked = frozenset(kind.value for kind in LOCKED)
         store = PushTokenStore(data_dir / config.push_tokens_file)
         background.append((PUSH, ApnsNotifier(config, store, environ,
                                               critical=locked.__contains__)))
-    if not background:
-        return None
     if feed is not None:
         background.append((FEED, FeedNotifier(feed)))
     return Channels((), tuple(background))

@@ -7,7 +7,7 @@ name: ci-alert
 # the pull request.
 on:
   workflow_run:
-    workflows: [ci, swift-rules, macos-app, ios-app, ui-tests, layout-sweep, record-demo, cancel-conflicted]
+    workflows: [ci, record-demo, contract-sync, cancel-conflicted, release]
     types: [completed]
 # One report at a time per workflow, so two runs finishing together cannot open two issues.
 concurrency:

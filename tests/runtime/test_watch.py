@@ -303,12 +303,12 @@ def test_daily_ceiling_uses_the_real_net_result(tmp_path):
     assert AlertKind.DAILY_CEILING_REACHED in rig.kinds()
 
 
-def test_loop_pass_never_waits_on_imessage_and_journals_its_outcome_when_known(tmp_path):
-    """The bot's loop calls watch.check(): an alert returns while the iMessage channel is
-    still blocked; a later pass journals the iMessage outcome; exit flushes nothing twice."""
+def test_loop_pass_never_waits_on_a_slow_channel_and_journals_its_outcome_when_known(tmp_path):
+    """The bot's loop calls watch.check(): an alert returns while the Telegram channel is
+    still blocked; a later pass journals its outcome; exit flushes nothing twice."""
     import threading
 
-    from tickr.runtime.alerts import IMESSAGE, Channels, NotifyError
+    from tickr.runtime.alerts import TELEGRAM, Channels, NotifyError
 
     entered, release = threading.Event(), threading.Event()
 
@@ -316,23 +316,23 @@ def test_loop_pass_never_waits_on_imessage_and_journals_its_outcome_when_known(t
         def notify(self, title: str, text: str) -> None:
             entered.set()
             release.wait()
-            raise NotifyError("osascript exited with code 1")
+            raise NotifyError("telegram answered HTTP 500")
 
     rig = Rig(tmp_path)
     rig.watch.alerter = Alerter(rig.cfg.alerts, "Tickr test",
-                                Channels((("macos", rig.notifier),), ((IMESSAGE, SlowPhone()),)),
+                                Channels((("macos", rig.notifier),), ((TELEGRAM, SlowPhone()),)),
                                 lambda: rig.now)
     rig.fence(Fence.STOP_REJECTED, "t1")
-    rig.watch.check()  # returns although the iMessage send is blocked
+    rig.watch.check()  # returns although the Telegram send is blocked
     assert entered.wait(5) and not release.is_set()
     bodies = [r.body for r in rig.store.journal(ALERT)]
-    assert [(b["delivery"], b.get("pending")) for b in bodies] == [("shown", ["imessage"])]
+    assert [(b["delivery"], b.get("pending")) for b in bodies] == [("shown", ["telegram"])]
     release.set()
     rig.watch.flush_alerts()
     rig.watch.check()
     bodies = [r.body for r in rig.store.journal(ALERT)]
     assert [(b["delivery"], b.get("channel")) for b in bodies] == [
-        ("shown", None), ("failed", "imessage")]
+        ("shown", None), ("failed", "telegram")]
     assert len(rig.notifier.shown) == 1
 
 

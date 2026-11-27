@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
+from baseline import write_mac
 
 from tickr import config
 from tickr.api import contract
@@ -24,7 +25,8 @@ from .test_server import ROOT, Clock, doc, request, schema
 
 @pytest.fixture
 def settings(tmp_path):
-    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    """The API on the Mac (launchd's kickstart): the shipped config is the server's."""
+    cfg = config.load(write_mac(tmp_path / "bot.toml"), root=tmp_path)
     return replace(settings_from_config(cfg), port=0)
 
 
@@ -60,7 +62,19 @@ def _start(server, runner: Runner, body=None):
     return resp, doc(payload)
 
 
-def test_shipped_command_is_launchd_kickstart_of_the_bot_job_with_this_uid(settings):
+def test_shipped_server_command_is_the_start_request(tmp_path):
+    """The server's Start writes the start request (docs/deploy-server.md, "Bot start on the
+    server"): the host's tickr-bot-start.service never touches a running bot container, so
+    Start is safe although the API container cannot see the bot's pid. Never request-restart,
+    whose unit recreates a running bot."""
+    cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
+    command = settings_from_config(cfg).start.command
+    assert command == ("python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
+                       "request-start", "--cause", "start-bot")
+    assert "request-restart" not in command
+
+
+def test_mac_command_is_launchd_kickstart_of_the_bot_job_with_this_uid(settings):
     command = settings.start.command
     assert command[:2] == ("/bin/launchctl", "kickstart")
     assert "-k" not in command  # never restarts a running job

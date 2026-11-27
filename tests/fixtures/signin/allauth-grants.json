@@ -1,0 +1,34 @@
+{
+  "ios": {
+    "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IkdJa256UFZodEE0YUVTeWJsT2Z3N3FHX01xUm4zWHJ2V1c0ZnZIM20zR2ciLCJ0eXAiOiJKV1QifQ.eyJjbGllbnRfaWQiOiJ0aWNrci1pb3MiLCJpc3MiOiJodHRwczovL3Rlc3RzZXJ2ZXIiLCJpYXQiOjE3OTU3OTU2NDMsImV4cCI6MTc5NTc5NTcwMywianRpIjoiNjUzOGQwNGZiMDczNDljMTkzMDk2MWI4MDE2ZmUyYTAiLCJ0b2tlbl91c2UiOiJhY2Nlc3MiLCJhdWQiOlsiaHR0cHM6Ly9hcGkudGlja3IuYm90Il0sInN1YiI6IjEiLCJzY29wZSI6ImJvdCJ9.S2w0x4jnpxXiPtJVJYgNbetZ4R8nOiF24kZHB48Q8-BY1XKKTBeG_zTFad4hzrkr3f3mr59VInburopf_TcwO1ERe0OAJlkG5XBSJtp9DX83XCsISDbE_O8tsVyRm5L-Y-QzxeMy5hiqdNy6HVgXOtkp58vxdYUPSmsTm_hvx9JzbQSVJGhX_ICai7dYzUBZ1LKmdLEAMipnc8op-UHMGDGq3HUWMyJZr8bhun15ot7vTfruF4nIu8e97-gnq_4ar9OCwTmBaDLDRwhqvfNoobrYzIU4zgacVlXlJjajnra6bmPdToZOgerH4vwfr-myre-0Nn5jrzFr4arPqjou73y7tDoVkqQP2i9yPotcAc3ydxmSei4irhCsGgt0XeYbQHGgQ7OoOuMNFT-vqW5pfUznzxryV2at9RcPIZR9kbRYf6fM-gdxjyBfXiVonY9qqnMnKn76EUvVjeSdPAMMtbwq3wNHIpjGWiQqqs5xFiyGfb9keQsrnLWGUUpRG1ju",
+    "claims": {
+      "client_id": "tickr-ios",
+      "iss": "https://testserver",
+      "iat": 1795795643,
+      "exp": 1795795703,
+      "jti": "6538d04fb07349c1930961b8016fe2a0",
+      "token_use": "access",
+      "aud": [
+        "https://api.tickr.bot"
+      ],
+      "sub": "1",
+      "scope": "bot"
+    }
+  },
+  "mac": {
+    "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IkdJa256UFZodEE0YUVTeWJsT2Z3N3FHX01xUm4zWHJ2V1c0ZnZIM20zR2ciLCJ0eXAiOiJKV1QifQ.eyJjbGllbnRfaWQiOiJ0aWNrci1tYWMiLCJpc3MiOiJodHRwczovL3Rlc3RzZXJ2ZXIiLCJpYXQiOjE3OTU3OTU2NDMsImV4cCI6MTc5NTc5NTcwMywianRpIjoiZmQxNDI0ZDQ3OTM5NGU3ZDhhYTE0NmExZjg3NGRlY2EiLCJ0b2tlbl91c2UiOiJhY2Nlc3MiLCJhdWQiOlsiaHR0cHM6Ly9hcGkudGlja3IuYm90Il0sInN1YiI6IjEiLCJzY29wZSI6ImJvdCJ9.OIIn7nLM8kCY_SkeytxK8xs9Lf0hrdRxnUsZKlxaW4Kly4YDfhi2jaXkV8Jm-br_N-WmGh792geKGfQ3qchA_5FO6b_5kT0rDwyLKLpftx2MtftNo391NlwhUNFORQKOHwd-vNnRYDBvE-EvZ9WVhhArgNYGK_2EyYVWPFdGxtMHK6wGLEIv8DMrYyXVmR08ttubsWJ-dhIKo2ujZ5KyUx48P4vVe0HE4kMGGaQHfpHzRUshR-eN61-rdkUawS-25JPN_Xnq1Ppu5p0SEK85Q6YflzYu9wNqH8GJbu5c7UEKXteAMlXi_ABPl-J3rIExBNAgKcinMQl5X5t0fRMWNdk-TqEFiilZ1E-6IXIsMLSByoJj8qmB8h29QIiPOqKDHyJ63JWCwqULG29EXDs4nFIbOZ4LycJ0rJV6kSd6ON2MyAdwmDdwliptL_wfncC9-hSVWTHJhK6MRvcfIYei9zZFrqQhH0e-CP9crWn2sJG1kwMgCEcxZEKsMTKTRTx4",
+    "claims": {
+      "client_id": "tickr-mac",
+      "iss": "https://testserver",
+      "iat": 1795795643,
+      "exp": 1795795703,
+      "jti": "fd1424d479394e7d8aa146a1f874deca",
+      "token_use": "access",
+      "aud": [
+        "https://api.tickr.bot"
+      ],
+      "sub": "1",
+      "scope": "bot"
+    }
+  }
+}

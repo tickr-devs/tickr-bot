@@ -33,11 +33,38 @@ PINNED: dict[tuple[str, str], str] = {
     ("risk", "max_open_positions"): "1",
 }
 
+# (section, key) -> TOML value of the Mac host, the launchd jobs' machine before the server
+# cutover (2026-11-26): the shipped config/bot.toml holds the server's values, and the tests of
+# the Mac's launchd paths (kickstart, power assertions, the Tickr app) set these on top of it.
+MAC_HOST: dict[tuple[str, str], str] = {
+    ("api", "start_bot_command"): '["/bin/launchctl", "kickstart", "gui/{uid}/local.tickr.bot"]',
+    ("api", "system_services"): '"mac"',
+    ("api", "sleep_check_command"): '["/usr/bin/pmset", "-g", "assertions"]',
+    ("runtime", "watchdog_restart_command"):
+        '["/bin/launchctl", "kickstart", "gui/{uid}/local.tickr.bot"]',
+}
+
 _SECTION = re.compile(r"^\[([A-Za-z0-9_.]+)\]\s*$")
 
 
 def pinned_text(text: str) -> str:
     """`text` (a bot.toml) with every PINNED key set to its pinned value; each must be there."""
+    return set_keys(text, PINNED)
+
+
+def mac_text(text: str) -> str:
+    """`text` (a bot.toml) with the Mac host's values (MAC_HOST); each key must be there."""
+    return set_keys(text, MAC_HOST)
+
+
+def write_mac(path: Path) -> Path:
+    """Write the shipped config with the Mac host's values to `path`."""
+    path.write_text(mac_text(SHIPPED.read_text("utf-8")), "utf-8")
+    return path
+
+
+def set_keys(text: str, values: dict[tuple[str, str], str]) -> str:
+    """`text` (a bot.toml) with every (section, key) of `values` set; each must be there."""
     section, out, seen = "", [], set()
     for line in text.splitlines(keepends=True):
         header = _SECTION.match(line)
@@ -45,14 +72,14 @@ def pinned_text(text: str) -> str:
             section = header.group(1)
         key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith(
             "#") else None
-        value = PINNED.get((section, key)) if key is not None else None
+        value = values.get((section, key)) if key is not None else None
         if value is not None:
             line = f"{key} = {value}\n"
             seen.add((section, key))
         out.append(line)
-    missing = set(PINNED) - seen
+    missing = set(values) - seen
     if missing:
-        raise AssertionError(f"pinned keys not in the config: {sorted(missing)}")
+        raise AssertionError(f"keys not in the config: {sorted(missing)}")
     return "".join(out)
 
 

@@ -55,10 +55,13 @@ def test_cooldown_turned_off(lim):
 
 
 def test_there_are_seven_checks():
-    # Spec 7's seven, the tradability check (backlog T8, off unless configured), then check
-    # 6's buying power part, run last so the desk reads the balance only for an entry the
-    # others admit.
-    assert len(CHECKS) == 9 and CHECKS[-1].__name__ == "_check_buying_power"
+    # Spec 7's seven, the loss locks (backlog T11) after checks 4 and 6, the tradability check
+    # (backlog T8, off unless configured), then check 6's buying power part, run last so the
+    # desk reads the balance only for an entry the others admit.
+    assert [c.__name__ for c in CHECKS] == [
+        "_check_gate", "_check_reconciliation", "_check_session", "_check_own_state",
+        "_check_stop_out_streak", "_check_quote_and_setup", "_check_money", "_check_weekly",
+        "_check_budget", "_check_tradability", "_check_buying_power"]
 
 
 def test_the_buying_power_refusal_comes_after_every_other_check(lim):
@@ -187,13 +190,15 @@ def test_each_refusal_has_its_cause(lim, cause, make):
 # Causes that need other limits: SESSION_TIMES_INVALID (test_invalid_session_offsets_refuse) and
 # the extended windows' own (test_extended_window_*), WORKING_ENTRY_LIMIT_REACHED (several slots:
 # test_an_entry_beyond_the_working_entries_limit_is_refused), the tradability causes (the
-# check on: tests/risk/test_tradability.py) and the price collar's (shipped off:
-# tests/risk/test_price_collar.py).
+# check on: tests/risk/test_tradability.py), the price collar's (shipped off:
+# tests/risk/test_price_collar.py), the loss locks, which ship off (tests/risk/test_locks.py),
+# and EQUITY_UNKNOWN (a percent limit on: tests/risk/test_equity_limits.py).
 OTHER_LIMITS = {C.SESSION_TIMES_INVALID, C.BEFORE_FIRST_ENTRY, C.STRATEGY_NOT_EXTENDED,
                 C.SPREAD_TOO_WIDE, C.WORKING_ENTRY_LIMIT_REACHED, C.TRADABILITY_UNKNOWN,
                 C.INSTRUMENT_HALTED, C.INSTRUMENT_CLOSE_ONLY, C.INSTRUMENT_DENIED,
                 C.INSTRUMENT_NOT_TRADABLE, C.TRADABILITY_BUDGET_UNAVAILABLE,
-                C.PRICE_COLLAR_UNKNOWN, C.PRICE_COLLAR_BREACH}
+                C.PRICE_COLLAR_UNKNOWN, C.PRICE_COLLAR_BREACH, C.WEEKLY_MONEY_UNKNOWN,
+                C.WEEKLY_MONEY_INVALID, C.WEEKLY_CEILING, C.STOP_OUT_STREAK, C.EQUITY_UNKNOWN}
 
 
 def test_every_cause_is_exercised():

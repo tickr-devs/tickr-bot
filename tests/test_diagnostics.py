@@ -31,7 +31,7 @@ def folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cfg = config.load(tmp_path / "config" / "bot.toml")
     env = cfg.environment
     for name in (env.app_key_variable, env.app_secret_variable, env.account_variable,
-                 cfg.alerts.imessage_recipient_variable):
+                 cfg.alerts.bot_token_variable, cfg.alerts.chat_id_variable):
         monkeypatch.setenv(name, DUMMY)
     # Files that must never be read: env files next to the config, a token, the account file.
     (tmp_path / "config" / ".env").write_text(f"WEBULL_APP_KEY={DUMMY}\n")

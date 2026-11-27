@@ -12,8 +12,6 @@
           "channel": {
             "type": "string",
             "enum": [
-              "mac",
-              "imessage",
               "telegram",
               "push"
             ]
@@ -70,12 +68,6 @@
           "channels": {
             "type": "object",
             "properties": {
-              "mac": {
-                "type": "boolean"
-              },
-              "imessage": {
-                "type": "boolean"
-              },
               "telegram": {
                 "type": "boolean"
               },
@@ -84,8 +76,6 @@
               }
             },
             "required": [
-              "mac",
-              "imessage",
               "telegram",
               "push"
             ],

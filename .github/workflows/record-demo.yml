@@ -50,9 +50,10 @@ jobs:
         with:
           branch: demo-recording
           delete-branch: true
-          add-paths: apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz
+          add-paths: contract/DemoDay.jsonl.xz
           commit-message: "Demo day recorded again on the latest main (nightly)"
           title: "Demo day recorded again on the latest main (nightly)"
           body: |
             `tickr demo --record` on the latest `main` by `.github/workflows/record-demo.yml`
-            (docs/demo.md "The recording"). Only the recording the apps carry changes.
+            (docs/demo.md "The recording"). Only the recording the apps carry changes; after the merge
+            contract-sync.yml carries it to tickr-ios.

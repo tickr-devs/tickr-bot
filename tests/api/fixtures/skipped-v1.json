@@ -6,7 +6,8 @@
       "symbol": "ABCD",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "admission": "refused",
       "refusal_cause": "POSITION_LIMIT_REACHED: 1 open position(s), limit 1",
@@ -91,6 +92,11 @@
         "cause": null,
         "cause_codes": []
       },
+      "decider": {
+        "kind": "strategy",
+        "name": "price-action-v1",
+        "version": "1"
+      },
       "prices_after_cause_codes": []
     },
     {
@@ -98,7 +104,8 @@
       "symbol": "ZNTH",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "admission": "refused",
       "refusal_cause": "SYMBOL_COOLDOWN: ZNTH closed at a loss at 2026-11-16T10:14:07.250000-05:00; no entry before 2026-11-16T10:44:07.250000-05:00",
@@ -174,6 +181,11 @@
         "cause": null,
         "cause_codes": []
       },
+      "decider": {
+        "kind": "strategy",
+        "name": "price-action-v1",
+        "version": "1"
+      },
       "prices_after_cause_codes": []
     },
     {
@@ -181,7 +193,8 @@
       "symbol": "WXYZ",
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "admission": "not_evaluated",
       "refusal_cause": null,
@@ -214,6 +227,11 @@
             }
           }
         ]
+      },
+      "decider": {
+        "kind": "strategy",
+        "name": "price-action-v1",
+        "version": "1"
       },
       "prices_after_cause_codes": [
         {

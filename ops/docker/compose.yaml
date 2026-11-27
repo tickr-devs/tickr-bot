@@ -1,8 +1,8 @@
 # Tickr on a Linux server (example). See docs/deploy-server.md before using it.
 #
-# BLOCKER: today the only alert channels are the macOS notification and iMessage (osascript).
-# On Linux preflight refuses with `alert-channel-missing`, so the bot job never starts the bot.
-# A Linux alert channel is an open owner decision.
+# ALERTS: the alert channel is Telegram. Put TICKR_TELEGRAM_BOT_TOKEN and TICKR_TELEGRAM_CHAT_ID
+# in the env file; without them preflight refuses with `alert-channel-missing` and the bot job
+# never starts the bot.
 #
 # On the server this file is the host copy /srv/tickr/etc/compose.yaml (deploy-server.sh refuses
 # one that differs from the release image's /app/ops/docker/compose.yaml). Run with these host

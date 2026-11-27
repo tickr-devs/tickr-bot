@@ -15,17 +15,14 @@ Broker facts live in `docs/webull-facts.md`. Owner decisions live in `docs/decis
 7. **Refuse, never guess.** Unknown status, missing field, limit breach, unknown trading day: a typed refusal with one recorded cause. No silent defaults or clipping.
 8. **Strategies are swappable modules.** A strategy never sends orders and never loosens platform risk. It receives data and returns a decision with its reasons, tagged with its name and version.
 9. **Only `src/tickr/broker/webull.py` may import the Webull SDK.**
-10. **Never print the process environment; screenshot/test tools pass only named variables.** Its output holds credential values. Never run `env`, `printenv`, `export -p`, a bare `set`, `xctest --help` or `xcodebuild -showBuildSettings`, never trace a shell that sees a secret (`set -x`), never print, log, stringify or iterate `os.environ` whole, and in Swift read `ProcessInfo.processInfo.environment` one named variable at a time (never bind, print or forward the dictionary). Messages name a missing variable, never its value. `tests/test_no_env_dumps.py` enforces this for scripts, workflows and Python/Swift code; a real exception goes into its `ALLOWED` list with a reason.
+10. **Never print the process environment; screenshot/test tools pass only named variables.** Its output holds credential values. Never run `env`, `printenv`, `export -p`, a bare `set`, `xctest --help` or `xcodebuild -showBuildSettings`, never trace a shell that sees a secret (`set -x`), never print, log, stringify or iterate `os.environ` whole. Messages name a missing variable, never its value. `tests/test_no_env_dumps.py` enforces this for scripts, workflows and Python code; a real exception goes into its `ALLOWED` list with a reason.
 
-## Swift code rules (apps/)
+## Other repositories
 
-Enforced by `apps/scripts/check_swift_rules.py` in the `swift-rules` CI job on every pull request, and by SwiftLint. Details: `docs/design-system.md`.
-
-- **No words in code.** Every text a person reads is defined once in the target's `L10n.swift` as `LocalizedStringResource("key", defaultValue: "English")`, with a Spanish translation in its String Catalog. Views use `L10n` entries: never `Text("…")`, `Button("…")`, `Text(verbatim: "…")` or a returned English string. Only SF Symbol names, documented `static let` identifiers and enum raw values may be other string literals.
-- **No magic numbers.** Sizes, durations, opacities and colours come from `Tokens` and `Palette`; anything else is a documented `static let`.
-- **2-space indentation.**
-- **Current Apple stack only, no deprecated or legacy APIs.** The apps target the latest macOS and iOS (26 and later) in Swift 6 language mode with strict concurrency (no `nonisolated(unsafe)`, `@unchecked Sendable`, `@preconcurrency` or weakened concurrency settings), and use: Swift Testing (`import Testing`, `@Test`, `#expect`) for tests, XCTest only for UI tests; Observation (`@Observable`, `@State`, `@Environment`, `@Bindable`), never `ObservableObject`/`@Published`; async/await, `Task` and actors, never Combine, callbacks or `DispatchQueue`; `NavigationStack`/`NavigationSplitView`; Swift Charts for charts; String Catalogs; `#Preview`; the current form of every SwiftUI, UIKit and AppKit call (`foregroundStyle`, `clipShape`, `navigationTitle`, `onChange(of:) { old, new in }`, `NSApp.activate()`). Rule `legacy` of the checker rejects the listed old APIs, in tests too, and package or project settings below Swift 6 or OS 26.
-- **Dependencies through Factory** (hmlongco/Factory, `FactoryKit`, re-exported by `TickrKit`). Services are registered once on `Container` (shared ones in `apps/shared/Sources/TickrKit/Dependencies.swift`, app ones in the app's `Dependencies.swift`) and resolved with `@Injected(\.key)` (`@ObservationIgnored` in an `@Observable` model) or `Container.shared.key()`. Never build a service inside a model or view, and never add a singleton of your own. Views read their model from the SwiftUI environment. Tests replace registrations under `@Suite(.container)` from `FactoryTesting`.
+The apps live in `tickr-devs/tickr-ios`, the site in `tickr-web`, Terraform in `tickr-infra`.
+The apps read only the API contract: `src/tickr/api/schema/`, `tests/api/fixtures/` and
+`contract/` (`codes.json`, `DemoDay.jsonl.xz`). Change it on purpose, regenerate it with its tests,
+and expect the `contract-sync` pull request in tickr-ios to need a matching app change.
 
 ## How we work
 

@@ -28,6 +28,16 @@
               },
               "version": {
                 "type": "string"
+              },
+              "settings_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -84,6 +94,7 @@
                       "POSITION_LIMIT_REACHED",
                       "WORKING_ENTRY_LIMIT_REACHED",
                       "SYMBOL_COOLDOWN",
+                      "STOP_OUT_STREAK",
                       "DECISION_NOT_ENTER",
                       "DECISION_NOT_ACTIVE",
                       "STRATEGY_NOT_EXTENDED",
@@ -105,9 +116,13 @@
                       "QUANTITY_NOT_WHOLE",
                       "NOTIONAL_OVER_CAP",
                       "PLANNED_LOSS_OVER_LIMIT",
+                      "EQUITY_UNKNOWN",
                       "DAILY_MONEY_UNKNOWN",
                       "DAILY_MONEY_INVALID",
                       "DAILY_CEILING",
+                      "WEEKLY_MONEY_UNKNOWN",
+                      "WEEKLY_MONEY_INVALID",
+                      "WEEKLY_CEILING",
                       "BUYING_POWER_UNKNOWN",
                       "BUYING_POWER_SHORT",
                       "ENTRY_BUDGET_UNAVAILABLE",
@@ -412,6 +427,37 @@
               "cause"
             ],
             "additionalProperties": false
+          },
+          "decider": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "strategy",
+                      "model"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "version"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "prices_after_cause_codes": {
             "type": "array",

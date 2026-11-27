@@ -426,7 +426,10 @@ class LabReplay:
               later: list[Callable[[], Any]]) -> None:
         """Wait for each version in turn, the next one started before this one's exit.json.
         Until the last exit.json is written the run counts as running (`_waiting`), so no
-        reader sees a gap between the versions and no start can replace the run in it."""
+        reader sees a gap between the versions and no start can replace the run in it. The
+        last exit.json and the end of `_waiting` happen under one hold of the lock, so no
+        reader or start sees the run finished and still running either; the `finally` ends
+        `_waiting` only when the waiter fails before that."""
         try:
             self._wait_legs(run, current, child, later)
         finally:
@@ -439,18 +442,22 @@ class LabReplay:
         legs = current["legs"]
         for index, leg in enumerate(legs):
             code = child.wait()
-            stop = False
-            if index + 1 < len(legs):
+            last = index + 1 == len(legs)
+            if not last:
                 try:
                     child = later[index]()
                 except OSError as exc:
                     following = run / legs[index + 1]["dir"]
                     _refused(following, f"cannot start ({type(exc).__name__})")
                     self._exit(following, -1)
-                    stop = True
-            self._exit(run / leg["dir"], code)
-            if stop:
+                    last = True
+            if last:
+                with self._lock:
+                    self._exit(run / leg["dir"], code)
+                    if self._waiting == current["run_id"]:
+                        self._waiting = None
                 return
+            self._exit(run / leg["dir"], code)
 
     def _exit(self, folder: Path, code: int) -> None:
         _write(folder / EXIT, {"finished_at": api.format_time(self.clock()), "code": code})

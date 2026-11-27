@@ -12,12 +12,15 @@
   `release` and `rollback` require just before they switch.
 - `require-flat`: `broker-flat` plus the database's open trades; exit 0 only when flat (the
   server deploy's gate, ops/systemd/deploy-server.sh).
-- `alert <kind> <text>`: show one alert (used to test notifications on the Mac).
+- `alert <kind> <text>`: show one alert (used to test notifications).
 - `render-launchd`: write filled-in plists from ops/launchd into a folder; installs nothing.
 - `render-systemd`: write the systemd units and timers from ops/systemd (Linux server); installs
   nothing.
 - `request-restart --cause <word>`: the server's watchdog restart command: write the restart
   request file the host's tickr-bot-restart.path watches (runtime/restartrequest.py).
+- `request-start --cause <word>`: the server's Start (`[api] start_bot_command`): write the start
+  request file the host's tickr-bot-start.path watches; the host starts a stopped or missing bot
+  container and never touches a running one (runtime/restartrequest.py).
 - `release [--commit REF]` / `rollback`: switch what the launchd jobs run to a pinned release
   (runtime/release.py); refused unless the bot is flat.
 
@@ -52,7 +55,6 @@ from tickr.runtime.alerts import (
     Routing,
     default_notifier,
     feed_path,
-    recipient_missing,
     route_all,
     token_pending_text,
 )
@@ -113,7 +115,7 @@ def _data_dir(config_path: Path) -> Path | None:
 
 def _feed(config_path: Path, alerts: config_module.AlertsConfig) -> Path | None:
     """The alerts feed file even when the rest of the config is invalid; None when [run]
-    itself is not readable (the Mac notification and iMessage still go out)."""
+    itself is not readable (Telegram still goes out)."""
     data = _data_dir(config_path)
     return None if data is None else data / alerts.feed_file
 
@@ -135,7 +137,7 @@ def _alert(config_path: Path, environment: str | None, kind: AlertKind, text: st
                                 data_dir=_data_dir(config_path))
     alerter = Alerter(alerts, title, notifier, routing=_routing(config_path, alerts))
     _emit("alert", alerter.alert(kind, text).journal_body())
-    for outcome in alerter.flush():  # background channels (iMessage) before this process exits
+    for outcome in alerter.flush():  # background channels before this process exits
         _emit("alert", outcome.journal_body())
 
 
@@ -280,17 +282,11 @@ def _watchdog(config_path: Path) -> int:
     alerter = Alerter(cfg.alerts, f"{TITLE} {cfg.environment_name}", notifier,
                       clock=WATCHDOG_NOW, routing=skipped_by(routing_path(cfg)))
     if notifier is None:
-        # No channel on this machine (not macOS): every alert is journaled "no-notifier" only.
+        # No channel (Telegram is not set up): every alert is journaled "no-notifier" only.
         # Recorded once at the start so the journal says why nobody was told; the exit code is
         # then never 0, so the host scheduler shows a failed job.
         journal.write(watchdog.CHANNEL_REFUSED, {"cause": PreflightCause.ALERT_CHANNEL_MISSING,
                                                  "platform": sys.platform})
-    missing = recipient_missing(cfg.alerts, os.environ)
-    if missing is not None:
-        # Recorded, and every iMessage attempt fails with the same cause; the watchdog still
-        # runs, because the Mac notification is the remaining channel.
-        journal.write(watchdog.CHANNEL_REFUSED, {"cause": PreflightCause.ALERT_RECIPIENT_MISSING,
-                                                 "variable": missing})
 
     def token_pending() -> None:
         sentinel.alert(AlertKind.TOKEN_NEEDS_CONFIRMATION,
@@ -391,6 +387,25 @@ def _request_restart(config_path: Path, cause: str) -> int:
                                 "detail": exc.detail})
         return int(ExitCode.FAILED)
     _emit(REQUEST_RESTART, {"requested": True, "requested_at": at.isoformat(), "why": cause})
+    return 0
+
+
+REQUEST_START = "request-start"
+
+
+def _request_start(config_path: Path, cause: str) -> int:
+    """The server's Start command ([api] start_bot_command): write the start request file for
+    the host's tickr-bot-start.path (runtime/restartrequest.py). Exit 0 when written, 1 with the
+    one cause when refused (nothing written)."""
+    cfg = config_module.load(config_path)
+    at = datetime.now(UTC)
+    try:
+        restartrequest.write_request(restartrequest.start_request_path(cfg), at, cause)
+    except restartrequest.RestartRequestRefused as exc:
+        _emit(REQUEST_START, {"requested": False, "cause": exc.cause.value,
+                              "detail": exc.detail})
+        return int(ExitCode.FAILED)
+    _emit(REQUEST_START, {"requested": True, "requested_at": at.isoformat(), "why": cause})
     return 0
 
 
@@ -512,6 +527,10 @@ def main(argv: list[str] | None = None) -> int:
     request = sub.add_parser(REQUEST_RESTART,
                              help="server: ask the host to restart the bot container once")
     request.add_argument("--cause", required=True, help="one word, logged by the host unit")
+    start = sub.add_parser(REQUEST_START,
+                           help="server: ask the host to start a stopped bot container "
+                                "(a running one is never touched)")
+    start.add_argument("--cause", required=True, help="one word, logged by the host unit")
     for name, text in (("release", "run a commit of origin/main from now on (flat only)"),
                        ("rollback", "run the previous release again (flat only)")):
         cmd = sub.add_parser(name, help=text)
@@ -544,6 +563,8 @@ def main(argv: list[str] | None = None) -> int:
             return _render_systemd(args)
         if args.command == REQUEST_RESTART:
             return _request_restart(args.config, args.cause)
+        if args.command == REQUEST_START:
+            return _request_start(args.config, args.cause)
         if args.command in ("release", "rollback"):
             return _release(args)
     except config_module.ConfigError as exc:

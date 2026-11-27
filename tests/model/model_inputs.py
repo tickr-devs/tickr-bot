@@ -277,3 +277,20 @@ def capture(given: full.FullInputs, day: str, root: Path, late=None,
     body = [f"{x},{_text(late('fl', r) or early(day))}" for x, r in facts if not omit("fl", r)]
     (root / "fl.csv").write_text("\n".join([f"{lines[0]},{full.RECEIPT_FIELD}", *body]) + "\n")
     return full.FullInputs(root / "tk.parquet", root / "ref", root / "bz", root / "fl.csv")
+
+
+def published_receipts(day: str):
+    """`late` for `capture`: a news record (Benzinga article, reference news item) published
+    after the capture's early receipt is received one second after it was published."""
+
+    def late(source: str, record: dict) -> datetime.datetime | None:
+        stamp = record.get("published") or record.get("published_utc")
+        if source not in ("bz", "ref") or not isinstance(stamp, str):
+            return None
+        when = datetime.datetime.fromisoformat(stamp)
+        return when + datetime.timedelta(seconds=1) if when > early(day) else None
+
+    return late
+
+
+CAPTURED = {"reference": "ref", "benzinga": "bz", "fl_facts": "fl.csv"}  # `capture`'s names

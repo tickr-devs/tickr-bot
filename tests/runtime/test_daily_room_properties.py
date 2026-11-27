@@ -471,4 +471,4 @@ def _admissible(now: datetime, decision, q: Quote) -> AdmissionInputs:
         limit_price=None, stop_price=None, setup_valid=True, quote=q, last_bar=None,
         previous_quote=None, realized_loss_today_usd=ZERO, open_reservations_usd=ZERO,
         buying_power=BuyingPower(D(4_000_000), now, ZERO), entry_budget_available=True,
-        stop_budget_available=True)
+        stop_budget_available=True, realized_loss_week_usd=ZERO, stop_out_streak=0)
