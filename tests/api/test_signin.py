@@ -99,7 +99,7 @@ def test_a_grant_tickr_bot_issued_passes(app):
     2026-11-27; issuer "https://testserver" there, "https://tickr.bot" in production)."""
     recorded = json.loads((FIXTURES / "allauth-grants.json").read_text("utf-8"))[app]
     claims = recorded["claims"]
-    rules = replace(RULES, issuer="https://testserver")
+    rules = replace(RULES, issuer="https://testserver", audience="https://api.tickr.bot")
     now = datetime.fromtimestamp(claims["iat"], UTC)
     grant = signin.check(recorded["access_token"], _key("allauth.pem"), rules, now)
     assert (grant.account, grant.client, grant.jti) == (claims["sub"], claims["client_id"],
