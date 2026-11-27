@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from tickr.api import reasons
-from tickr.api.contract import OWN_TRADE_OPEN, BotState, NotReachedCause
+from tickr.api.contract import OWN_TRADE_OPEN, UNKNOWN_CAUSE, BotState, NotReachedCause, RefusalCode
 from tickr.data.discovery import Cause
 from tickr.engine.core import Fence
 from tickr.risk.causes import AdmissionCause
@@ -22,6 +22,7 @@ SCRIPT = ROOT / "apps" / "scripts" / "kit_api_strings.py"
 REASONS_SCRIPT = ROOT / "apps" / "scripts" / "kit_reason_strings.py"
 KIT_CATALOG = ROOT / "apps/shared/Sources/TickrKit/Resources/Localizable.xcstrings"
 SERVICE = ROOT / "src" / "tickr" / "runtime" / "service.py"
+SKIPPED_GROUPS = ROOT / "apps/shared/Sources/TickrKit/SkippedGroups.swift"
 
 
 def load():
@@ -170,3 +171,18 @@ def test_every_translation_names_the_same_values_as_the_english():
             continue
         units = {lang: entry["localizations"][lang]["stringUnit"]["value"] for lang in ("en", "es")}
         assert set(token.findall(units["en"])) == set(token.findall(units["es"])), key
+
+
+def swift_refusal_codes() -> set[str]:
+    """Raw values of the Swift `RefusalCode` enum, which the apps put in words."""
+    source = SKIPPED_GROUPS.read_text(encoding="utf-8")
+    body = re.search(r"public enum RefusalCode\b.*?\n}\n", source, re.S)
+    assert body, "no RefusalCode enum in SkippedGroups.swift: update this test"
+    return set(re.findall(r'^  case \w+ = "(\w+)"$', body.group(0), re.M))
+
+
+def test_every_refusal_code_the_api_sends_has_words_in_the_apps():
+    # UNKNOWN (a cause the API cannot read exactly) has no case on purpose: the apps show
+    # "Other reason" for it, as for a code from a newer bot.
+    sent = {code.value for code in RefusalCode} - {UNKNOWN_CAUSE}
+    assert swift_refusal_codes() == sent
