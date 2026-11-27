@@ -44,7 +44,17 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import authlimit, contract, devices, flow, settled, symbols, trade_whatif
+from tickr.api import (
+    authlimit,
+    contract,
+    devices,
+    flow,
+    sessions,
+    settled,
+    signin,
+    symbols,
+    trade_whatif,
+)
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.alerts import AlertsSettings, alerts_document
@@ -64,6 +74,7 @@ from tickr.api.contract import (
     QuotesResponseV1,
     RiskSettings,
     SessionSettings,
+    SessionV1,
     SettingsDevice,
     SettingsHistoryV1,
     SettingsV1,
@@ -120,6 +131,9 @@ COMMAND_SOURCE = "api"
 JSON_TYPE = "application/json"
 LOCAL_DEVICE = "local"  # the device name of a request on the local port (no token there)
 SIMULATOR_DEVICE = "simulator"  # the iOS Simulator's token on the remote port's loopback address
+# Device names a sign-in may not take: they name the bot's own access in the journal, and
+# DELETE /session cannot revoke them.
+RESERVED_DEVICES = frozenset({LOCAL_DEVICE, SIMULATOR_DEVICE})
 LOCAL_PORT, REMOTE_PORT = "local", "remote"  # the port named in a risk-command-used alert
 ENTRY_STOP_STATES = {"on": CommandKind.ENTRY_STOP_ON, "off": CommandKind.ENTRY_STOP_OFF}
 STOP_MODES = {m.value: m for m in contract.StopMode}  # POST /commands/stop-bot {"mode": ...}
@@ -145,6 +159,13 @@ BEARER = "Bearer "
 PRIVATE_FILE_MODE = 0o600  # owner read and write only (POSIX mode bits)
 LOCK_SUFFIX = ".lock"  # the pairing lock file: next to the code file, never holds data
 PAIR_ROUTE = "/pair"  # POST on the remote port only: redeem the one-time pairing code
+# On the remote port only: POST with a tickr.bot sign-in grant buys a device token; DELETE with
+# a device's token ends that device's session (its token is revoked).
+SESSION_ROUTE = "/session"
+# On the remote port only: POST with a signed-in device's refresh token buys a new token pair.
+REFRESH_ROUTE = "/session/refresh"
+# The remote routes that take no bearer token: the code, grant or refresh token is in the body.
+BODY_CREDENTIAL_ROUTES = (PAIR_ROUTE, SESSION_ROUTE, REFRESH_ROUTE)
 # Fewest random bytes in a token or pairing code: 128 bits, the usual floor for a bearer secret.
 MIN_SECRET_BYTES = 16
 IPV6_BITS = 128  # length of an IPv6 address (protocol constant)
@@ -173,6 +194,11 @@ class ApiSettings:
     auth_failures: int
     pair_window_seconds: int  # POST /pair budget, stricter
     pair_failures: int
+    # tickr.bot sign-in (POST /session): None while [api] remote_signin_accounts is empty (off).
+    signin_rules: signin.Rules | None
+    signin_key: signin.PublicKey | None
+    signin_used_path: Path  # SHA-256 of each redeemed grant id until the grant expires
+    session_lifetimes: sessions.Lifetimes  # a signed-in device's access, refresh, sign-in limits
     auth_max_addresses: int  # addresses each budget tracks; full of live ones = fail closed
     auth_ipv6_prefix_length: int  # an IPv6 client counts as its network of this length
     status_path: Path
@@ -317,6 +343,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
     if PurePosixPath(api.lab_replay_data_dir) == PurePosixPath(api.lab_replay_results_dir):
         raise ConfigError("[api] lab_replay_data_dir and lab_replay_results_dir must be "
                           "two different folders")
+    signin_rules, signin_key = _signin(cfg)
     return ApiSettings(
         host=api.host,
         port=api.port,
@@ -337,6 +364,10 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         auth_failures=api.remote_auth_failures,
         pair_window_seconds=api.remote_pair_window_seconds,
         pair_failures=api.remote_pair_failures,
+        signin_rules=signin_rules,
+        signin_key=signin_key,
+        signin_used_path=data / api.remote_signin_used_file,
+        session_lifetimes=_session_lifetimes(cfg),
         auth_max_addresses=api.remote_auth_max_addresses,
         auth_ipv6_prefix_length=api.remote_auth_ipv6_prefix_length,
         status_path=data / api.status_file,
@@ -464,7 +495,8 @@ class ApiServer(ThreadingHTTPServer):
         # The alert for a command that raises risk (see _risk_used); one Alerter for both
         # listeners (set by python -m tickr.api; None = no alert, as in most tests).
         self.alerter: Alerter | None = shared.alerter if shared is not None else None
-        self.alert_lock = threading.Lock()
+        # Guards that one Alerter, so it is shared with it: both listeners alert under one lock.
+        self.alert_lock = shared.alert_lock if shared is not None else threading.Lock()
         # The remote port's failed-authentication budgets per client address (api/authlimit.py).
         self.auth_limits = {
             TOKEN_ROUTE_KIND: authlimit.AuthLimiter(
@@ -1044,8 +1076,8 @@ class Handler(BaseHTTPRequestHandler):
             if origin is not None and origin != f"https://{host}":
                 self._error("forbidden_origin", f"Origin {origin!r} is not allowed")
                 return False
-            if self.command == "POST" and self._path() == PAIR_ROUTE:
-                return True  # the pairing code in the body is the credential: see _redeem
+            if self.command == "POST" and self._path() in BODY_CREDENTIAL_ROUTES:
+                return True  # the code, grant or refresh token in the body is the credential
             return self._authorized(host)
         if host in self.server.allowed_host_headers:
             if origin is not None and origin not in self.server.allowed_origins:
@@ -1119,6 +1151,10 @@ class Handler(BaseHTTPRequestHandler):
             return False
         if device is None:
             self._error("unauthorized", "the bearer token is not the paired one", challenge)
+            return False
+        if sessions.access_expired(device, self.server.clock()):
+            self._error("unauthorized", "the access token has expired; renew it at POST "
+                        "/session/refresh", challenge)
             return False
         self.device_name = device.name
         return True
@@ -1311,6 +1347,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == PAIR_ROUTE and self.server.remote:
                 self._redeem()
                 return
+            if path == SESSION_ROUTE and self.server.remote:
+                self._sign_in()
+                return
+            if path == REFRESH_ROUTE and self.server.remote:
+                self._refresh()
+                return
             if path not in COMMAND_ROUTES:
                 if path in GET_ROUTES or path.startswith(DAY_PREFIX):
                     self._error("method_not_allowed", "use GET", {"Allow": "GET"})
@@ -1397,17 +1439,31 @@ class Handler(BaseHTTPRequestHandler):
         text = (f"{command} by device {self.device_name!r} on the {port} port at "
                 f"{contract.format_time(self.server.clock())}; if this was not you, revoke the "
                 "device (docs/operations.md, risk-command-used)")
+        self._send_alert(AlertKind.RISK_COMMAND_USED, text)
+
+    def _device_session_alert(self, what: str) -> None:
+        """One `device-session` alert: a device signed in or out (never a token or grant)."""
+        if self.server.alerter is None:
+            return
+        self._send_alert(AlertKind.DEVICE_SESSION, (
+            f"{what} on the remote port at {contract.format_time(self.server.clock())}; if this "
+            "was not you, revoke the device (docs/operations.md, device-session)"))
+
+    def _send_alert(self, kind: AlertKind, text: str) -> None:
+        """Raise `kind`, journal-only failures to the log; never raises."""
+        alerter = self.server.alerter
+        if alerter is None:
+            return
         try:
             with self.server.alert_lock:
-                outcomes = [alerter.alert(AlertKind.RISK_COMMAND_USED, text), *alerter.completed()]
+                outcomes = [alerter.alert(kind, text), *alerter.completed()]
             for outcome in outcomes:
                 body = outcome.journal_body()
                 if body["error"]:
                     sys.stderr.write(f"api: alert {body['kind']} {body['delivery']} "
                                      f"({body['error']})\n")
         except Exception as exc:  # noqa: BLE001 - a failing alert never undoes the command
-            sys.stderr.write(f"api: alert {AlertKind.RISK_COMMAND_USED.value} failed "
-                             f"({type(exc).__name__})\n")
+            sys.stderr.write(f"api: alert {kind.value} failed ({type(exc).__name__})\n")
 
     def _advisor_decision(self) -> None:
         """POST /advisor/decision with {"run": "<id>", "verdict": "accepted"|"rejected"}:
@@ -1430,6 +1486,18 @@ class Handler(BaseHTTPRequestHandler):
             self._error("not_found" if exc.missing else "conflict", safe_cause(exc))
             return
         self._json(200, advisor_document(settings.advisor_dir, settings.advisor_runs))
+
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib naming
+        if not self._guard():
+            return
+        try:
+            if self._path() != SESSION_ROUTE or not self.server.remote:
+                self._error("method_not_allowed", "only GET and POST are supported",
+                            {"Allow": "GET, POST"})
+                return
+            self._sign_out()
+        except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
+            self._error("internal", type(exc).__name__)
 
     def do_PUT(self) -> None:  # noqa: N802 - stdlib naming
         if not self._guard():
@@ -1534,6 +1602,169 @@ class Handler(BaseHTTPRequestHandler):
         settings.pairing_code_path.unlink(missing_ok=True)
         settings.pairing_path.unlink(missing_ok=True)
         return token
+
+    def _sign_in(self) -> None:
+        """POST /session with {"grant": "<tickr.bot grant>", "name": "<device name>"} on the
+        remote port: a grant tickr.bot signed for one of `[api] remote_signin_accounts` buys one
+        token pair for the device `name` (added, or its earlier tokens replaced), 200 session-v1,
+        and a `device-session` alert. Each grant is redeemed once; a refused grant changes
+        nothing and counts against the POST /pair budget. Neither the grant nor a token is ever
+        logged or echoed."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        if (set(body) != {"grant", "name"} or not isinstance(body["grant"], str)
+                or not body["grant"] or not isinstance(body["name"], str)
+                or not devices.valid_name(body["name"])):
+            self._error("bad_request", 'body must be exactly {"grant": "<grant>", "name": '
+                        '"<device name: letters, digits, space, dot, dash, underscore>"}')
+            return
+        if body["name"] in RESERVED_DEVICES:
+            self._error("bad_request", f"device name {body['name']!r} is reserved for the bot's "
+                        "own access; sign in under another name")
+            return
+        settings = self.server.settings
+        with self.server.pair_lock, _pairing_lock(settings):
+            refused = self._admit(PAIR_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                issued = account = client = None
+                try:
+                    result = self._sign_in_locked(body["grant"], body["name"])
+                    if result is not None:
+                        issued, account, client = result
+                finally:  # every 401 here is a grant that failed; a 503 tested none
+                    self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
+        if refused is not None:
+            self._refuse(PAIR_ROUTE_KIND, refused)
+        elif issued is not None:
+            # The alert is recorded before the answer: a client never gets ahead of it.
+            self._device_session_alert(f"device {body['name']!r} signed in with tickr.bot "
+                                       f"(account {account!r}, app {client!r})")
+            self._json(200, self._session_answer(issued))
+
+    def _session_answer(self, issued: sessions.Issued) -> SessionV1:
+        now = self.server.clock()
+        return SessionV1(
+            access_token=issued.access_token,
+            access_expires_in=int((issued.access_expires_at - now).total_seconds()),
+            refresh_token=issued.refresh_token,
+            refresh_expires_in=int((issued.refresh_expires_at - now).total_seconds()))
+
+    def _sign_in_locked(self, grant: str, name: str) -> tuple[sessions.Issued, str, str] | None:
+        """`_sign_in` under the pairing locks: the new token, or None once refused."""
+        settings = self.server.settings
+        if settings.signin_rules is None or settings.signin_key is None:
+            self._error("unauthorized", "sign-in is off: [api] remote_signin_accounts is empty")
+            return None
+        now = self.server.clock()
+        try:
+            checked = signin.check(grant, settings.signin_key, settings.signin_rules, now)
+        except signin.SignInRefused as exc:
+            self._error("unauthorized", exc.cause)
+            return None
+        try:
+            used = _used_grants(settings.signin_used_path, now)
+            paired = load_devices(settings)
+        except (OSError, ValueError, TypeError, ContractError) as exc:
+            self._error("unavailable", f"the used-grant file is unreadable ({type(exc).__name__})")
+            return None
+        except devices.DeviceFileError as exc:
+            self._device_list_unreadable(exc)
+            return None
+        digest = signin.jti_digest(checked.jti)
+        if digest in used:
+            self._error("unauthorized", "this grant was used already; sign in again")
+            return None
+        used[digest] = checked.expires_at
+        # The grant is spent before the token exists: a crash between the two loses a grant
+        # (the app signs in again), never lets one buy two tokens.
+        _write_private(settings.signin_used_path, json.dumps(
+            {d: contract.format_time(t) for d, t in sorted(used.items())}) + "\n")
+        device, issued = sessions.sign_in(name, now, settings.session_lifetimes,
+                                          settings.token_bytes)
+        _write_private(settings.devices_path,
+                       devices.render(devices.with_device(paired, device)))
+        return issued, checked.account, checked.client
+
+    def _refresh(self) -> None:
+        """POST /session/refresh with {"refresh_token": "<token>"} on the remote port, no bearer
+        token: a signed-in device's live refresh token buys a new pair, 200 session-v1; the
+        presented token is retired in the same write. A retired token presented again signs the
+        device out (a copy may exist) and raises `device-session`. Every refusal is a 401 counted
+        against the POST /pair budget; neither token is ever logged or echoed."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        if set(body) != {"refresh_token"} or not isinstance(body["refresh_token"], str) \
+                or not body["refresh_token"]:
+            self._error("bad_request", 'body must be exactly {"refresh_token": "<token>"}')
+            return
+        settings = self.server.settings
+        issued: sessions.Issued | None = None
+        with self.server.pair_lock, _pairing_lock(settings):
+            refused = self._admit(PAIR_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                try:
+                    issued, _ = self._refresh_locked(body["refresh_token"])
+                finally:  # every 401 here is a refresh token that failed; a 503 tested none
+                    self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
+        if refused is not None:
+            self._refuse(PAIR_ROUTE_KIND, refused)
+            return
+        if issued is not None:
+            self._json(200, self._session_answer(issued))
+
+    def _refresh_locked(
+        self, presented: str,
+    ) -> tuple[sessions.Issued | None, sessions.RefreshRefused | None]:
+        """`_refresh` under the pairing locks: the new pair, or the refusal (naming the device it
+        signed out, if any). A token of no device signs nothing out and raises no alert."""
+        settings = self.server.settings
+        try:
+            paired = load_devices(settings)
+        except (OSError, devices.DeviceFileError) as exc:
+            self._device_list_unreadable(exc)
+            return None, None
+        try:
+            renewed, issued = sessions.refresh(paired, presented, self.server.clock(),
+                                               settings.session_lifetimes, settings.token_bytes)
+        except sessions.RefreshRefused as exc:
+            if exc.revoked is not None:
+                kept = devices.without(paired, exc.revoked)
+                if kept is not None:
+                    _write_private(settings.devices_path, devices.render(kept))
+                # The alert is recorded before the 401: a client never gets ahead of it.
+                why = ("a refresh token that was already used came back, so a copy of it may "
+                       "exist (or the app lost the answer to its own refresh)" if exc.reused
+                       else "its sign-in expired")
+                self._device_session_alert(f"device {exc.revoked!r} signed out: {why}")
+            self._error("unauthorized", exc.cause)
+            return None, exc
+        # One write retires the presented token and records the new one, before the answer.
+        _write_private(settings.devices_path, devices.render(renewed))
+        return issued, None
+
+    def _sign_out(self) -> None:
+        """DELETE /session with a device's bearer token: that device's token is revoked, 204.
+        The Simulator's token is not a signed-in device and is refused."""
+        name = self.device_name
+        if name in (LOCAL_DEVICE, SIMULATOR_DEVICE, ""):
+            self._error("conflict", "this token is not a signed-in device's")
+            return
+        settings = self.server.settings
+        with self.server.pair_lock, _pairing_lock(settings):
+            try:
+                kept = devices.without(load_devices(settings), name)
+            except (OSError, devices.DeviceFileError) as exc:
+                self._device_list_unreadable(exc)
+                return
+            if kept is not None:
+                _write_private(settings.devices_path, devices.render(kept))
+        # The alert is recorded before the answer: a client never gets ahead of it.
+        self._device_session_alert(f"device {name!r} signed out")
+        self._send(204, b"", "application/json", {})
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated
@@ -1873,7 +2104,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error("method_not_allowed", "only GET and POST are supported",
                         {"Allow": "GET, POST"})
 
-    do_HEAD = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
+    do_HEAD = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
 
 
 def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
@@ -1889,6 +2120,61 @@ def make_remote_server(local: ApiServer) -> ApiServer:
     """The phone-facing listener next to `local`, sharing its settings, clock and inbox lock."""
     return ApiServer(local.settings, local.clock, remote=True, inbox_lock=local.inbox_lock,
                      start_lock=local.start_lock, lab=local.lab, shared=local)
+
+
+def _signin(cfg: Config) -> tuple[signin.Rules | None, signin.PublicKey | None]:
+    """The sign-in rules and the pinned provider key, or (None, None) while sign-in is off."""
+    api = cfg.api
+    if not api.remote_signin_accounts:
+        return None, None
+    if api.remote_signin_max_lifetime_seconds <= 0:
+        raise ConfigError("[api] remote_signin_max_lifetime_seconds must be positive")
+    if api.remote_signin_clock_skew_seconds < 0:
+        raise ConfigError("[api] remote_signin_clock_skew_seconds may not be negative")
+    if not api.remote_signin_clients or not all(api.remote_signin_accounts):
+        raise ConfigError("[api] remote_signin_clients and remote_signin_accounts must name "
+                          "at least one client and no empty account")
+    try:
+        key = signin.load_key((cfg.root / api.remote_signin_key_file).read_text("ascii"))
+    except (OSError, UnicodeDecodeError, signin.KeyFileError) as exc:
+        raise ConfigError(f"[api] remote_signin_key_file is unusable ({safe_cause(exc)})") from exc
+    rules = signin.Rules(
+        issuer=api.remote_signin_issuer, audience=api.remote_signin_audience,
+        scope=api.remote_signin_scope, clients=frozenset(api.remote_signin_clients),
+        accounts=frozenset(api.remote_signin_accounts),
+        max_lifetime_seconds=api.remote_signin_max_lifetime_seconds,
+        clock_skew_seconds=api.remote_signin_clock_skew_seconds)
+    return rules, key
+
+
+def _session_lifetimes(cfg: Config) -> sessions.Lifetimes:
+    """A signed-in device's token lifetimes; each positive, none longer than the next."""
+    api = cfg.api
+    lifetimes = sessions.Lifetimes(api.remote_access_token_seconds,
+                                   api.remote_refresh_token_seconds, api.remote_session_max_seconds)
+    if not 0 < lifetimes.access_seconds <= lifetimes.refresh_seconds <= lifetimes.session_seconds:
+        raise ConfigError("[api] remote_access_token_seconds, remote_refresh_token_seconds and "
+                          "remote_session_max_seconds must be positive and in that order")
+    return lifetimes
+
+
+def _used_grants(path: Path, now: datetime) -> dict[str, datetime]:
+    """The redeemed grant ids still unexpired at `now` (digest -> expiry); an absent file is
+    none. Any other shape raises, so a damaged file refuses sign-in instead of forgetting."""
+    try:
+        document = json.loads(path.read_text("ascii"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(document, dict):
+        raise ValueError("not an object")
+    used = {}
+    for digest, expires in document.items():
+        if not devices.HEX_DIGEST.match(digest) or not isinstance(expires, str):
+            raise ValueError("not a used-grant entry")
+        at = contract.parse_time(expires)
+        if at > now:
+            used[digest] = at
+    return used
 
 
 def _write_private(path: Path, text: str) -> None:

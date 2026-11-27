@@ -825,3 +825,78 @@ def test_invalid_config_repeats_a_day_after_the_first_alert_not_at_midnight(monk
         runtime_main._hold_daily(lambda: calls.append(1))
     assert slept == [runtime_main.ONE_DAY.total_seconds()] * 2
     assert len(calls) == 2
+
+
+# --- the API's device-session alerts, relayed to Telegram -------------------------------------
+
+def feed(cfg) -> Path:
+    return cfg.root / cfg.run.data_dir / cfg.alerts.feed_file
+
+
+def feed_line(path: Path, kind: str, text: str, at: str = "2026-11-27T17:00:00Z") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"at": at, "title": f"Tickr sandbox {kind}", "text": text}) + "\n")
+
+
+def test_device_session_lines_of_the_api_are_relayed_once(cfg, tmp_path):
+    path = feed(cfg)
+    feed_line(path, "device-session", "device 'old' signed in")  # before the first run
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    assert recorder.shown == []  # a first run starts at the end of the feed
+    feed_line(path, "device-session", "device 'mac' signed in")
+    feed_line(path, "disk-low", "not relayed")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("not json\n")
+    guard.relay()
+    assert recorder.shown == ["Tickr: device-session | " + watchdog.RELAYED
+                              + " device 'mac' signed in (at 2026-11-27T17:00:00Z)"]
+    guard.relay()
+    assert len(recorder.shown) == 1
+    # A relaunched watchdog reads the offset back and relays nothing twice.
+    again, recorder2 = sentinel(cfg, Clock(AT), tmp_path)
+    again.relay()
+    assert recorder2.shown == []
+
+
+def test_the_relayed_copy_is_never_relayed_again(cfg, tmp_path):
+    path = feed(cfg)
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    feed_line(path, "device-session", f"{watchdog.RELAYED} device 'mac' signed in")
+    guard.relay()
+    assert recorder.shown == []
+
+
+def test_a_line_still_being_written_waits_and_a_replaced_feed_is_read_from_its_start(cfg, tmp_path):
+    path = feed(cfg)
+    feed_line(path, "disk-low", "x" * 200)
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    half = json.dumps({"at": "a", "title": "Tickr sandbox device-session", "text": "one"})
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(half[:10])
+    guard.relay()
+    assert recorder.shown == []
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(half[10:] + "\n")
+    guard.relay()
+    assert len(recorder.shown) == 1 and "one (at a)" in recorder.shown[0]
+    path.write_text("", "utf-8")  # replaced by a shorter file
+    feed_line(path, "device-session", "two")
+    guard.relay()
+    assert len(recorder.shown) == 2 and "two" in recorder.shown[1]
+
+
+def test_check_relays_and_a_missing_feed_is_not_a_finding(cfg, tmp_path):
+    guard, recorder = sentinel(cfg, Clock(AT), tmp_path)
+    guard.relay()
+    assert recorder.shown == [] and not feed(cfg).exists()
+    guard.relay()  # still no feed: first run never recorded an offset, nothing to relay
+    feed_line(feed(cfg), "device-session", "three")
+    guard.check(AT)  # the first read of a feed starts at its end
+    feed_line(feed(cfg), "device-session", "four")
+    guard.check(AT)
+    assert [s for s in recorder.shown if "device-session" in s][-1].endswith(
+        "four (at 2026-11-27T17:00:00Z)")
