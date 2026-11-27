@@ -18,6 +18,9 @@
   nothing.
 - `request-restart --cause <word>`: the server's watchdog restart command: write the restart
   request file the host's tickr-bot-restart.path watches (runtime/restartrequest.py).
+- `request-start --cause <word>`: the server's Start (`[api] start_bot_command`): write the start
+  request file the host's tickr-bot-start.path watches; the host starts a stopped or missing bot
+  container and never touches a running one (runtime/restartrequest.py).
 - `release [--commit REF]` / `rollback`: switch what the launchd jobs run to a pinned release
   (runtime/release.py); refused unless the bot is flat.
 
@@ -392,6 +395,25 @@ def _request_restart(config_path: Path, cause: str) -> int:
     return 0
 
 
+REQUEST_START = "request-start"
+
+
+def _request_start(config_path: Path, cause: str) -> int:
+    """The server's Start command ([api] start_bot_command): write the start request file for
+    the host's tickr-bot-start.path (runtime/restartrequest.py). Exit 0 when written, 1 with the
+    one cause when refused (nothing written)."""
+    cfg = config_module.load(config_path)
+    at = datetime.now(UTC)
+    try:
+        restartrequest.write_request(restartrequest.start_request_path(cfg), at, cause)
+    except restartrequest.RestartRequestRefused as exc:
+        _emit(REQUEST_START, {"requested": False, "cause": exc.cause.value,
+                              "detail": exc.detail})
+        return int(ExitCode.FAILED)
+    _emit(REQUEST_START, {"requested": True, "requested_at": at.isoformat(), "why": cause})
+    return 0
+
+
 # Replaced in tests: the broker factory of `broker-flat`; it is only ever held through
 # watchdog.ReadOnlyBroker (positions and open orders, nothing that sends).
 FLAT_BROKER: Callable[[config_module.Config, Callable[[], None]], Broker] = _webull_broker
@@ -510,6 +532,10 @@ def main(argv: list[str] | None = None) -> int:
     request = sub.add_parser(REQUEST_RESTART,
                              help="server: ask the host to restart the bot container once")
     request.add_argument("--cause", required=True, help="one word, logged by the host unit")
+    start = sub.add_parser(REQUEST_START,
+                           help="server: ask the host to start a stopped bot container "
+                                "(a running one is never touched)")
+    start.add_argument("--cause", required=True, help="one word, logged by the host unit")
     for name, text in (("release", "run a commit of origin/main from now on (flat only)"),
                        ("rollback", "run the previous release again (flat only)")):
         cmd = sub.add_parser(name, help=text)
@@ -542,6 +568,8 @@ def main(argv: list[str] | None = None) -> int:
             return _render_systemd(args)
         if args.command == REQUEST_RESTART:
             return _request_restart(args.config, args.cause)
+        if args.command == REQUEST_START:
+            return _request_start(args.config, args.cause)
         if args.command in ("release", "rollback"):
             return _release(args)
     except config_module.ConfigError as exc:

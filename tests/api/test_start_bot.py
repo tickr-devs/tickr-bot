@@ -62,11 +62,16 @@ def _start(server, runner: Runner, body=None):
     return resp, doc(payload)
 
 
-def test_shipped_server_config_has_no_start_command(tmp_path):
-    """The server's API cannot start the bot safely (docs/deploy-server.md, cutover): Start
-    answers 503 there."""
+def test_shipped_server_command_is_the_start_request(tmp_path):
+    """The server's Start writes the start request (docs/deploy-server.md, "Bot start on the
+    server"): the host's tickr-bot-start.service never touches a running bot container, so
+    Start is safe although the API container cannot see the bot's pid. Never request-restart,
+    whose unit recreates a running bot."""
     cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
-    assert settings_from_config(cfg).start.command == ()
+    command = settings_from_config(cfg).start.command
+    assert command == ("python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
+                       "request-start", "--cause", "start-bot")
+    assert "request-restart" not in command
 
 
 def test_mac_command_is_launchd_kickstart_of_the_bot_job_with_this_uid(settings):

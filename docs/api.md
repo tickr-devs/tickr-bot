@@ -213,7 +213,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | POST | `/commands/flatten` | Body `{}` (everything) or `{"symbol": "<TICKER>"}` (only that position). `202` `command-accepted-v1`. |
 | POST | `/commands/stop-bot` | Body `{}`, `{"mode": "close_and_stop"}` or `{"mode": "leave_open"}` (what to do with open positions, see stop-bot below). Graceful stop that sticks. `202` `command-accepted-v1`. |
 | POST | `/commands/emergency` | Body `{}`. Entry-stop on, cancel own orders, flatten all. The apps' "Close all" button. `202` `command-accepted-v1`. |
-| POST | `/commands/start-bot` | Body `{}`. Starts the bot job through launchd (not a bot command, see "Start-bot"). `202` `bot-start-v1`; `409 conflict` while a fresh status says the bot is starting, running or stopping, or a live process holds the bot's lock; `503 unavailable` when no start command is configured, the stop marker cannot be removed, or the command fails. |
+| POST | `/commands/start-bot` | Body `{}`. Starts the bot job through launchd on a Mac, through the start request on the server (not a bot command, see "Start-bot"). `202` `bot-start-v1`; `409 conflict` while a fresh status says the bot is starting, running or stopping, or a live process holds the bot's lock; `503 unavailable` when no start command is configured, the stop marker cannot be removed, or the command fails. |
 
 Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1, "cause_codes": [...]}`
 (`cause_codes`, added after version 1 shipped, as under "Reason codes" below):
@@ -1753,13 +1753,22 @@ preconditions to every command.
 #### Start-bot
 
 `POST /commands/start-bot` is the one command the bot does not read: a stopped bot cannot.
-The API runs `[api] start_bot_command` (on a Mac: `launchctl kickstart gui/<uid>/local.tickr.bot`,
-without `-k`, so a job that already runs is never restarted; shipped empty since the server
-cutover, docs/deploy-server.md) and answers `202 bot-start-v1`
-(`requested_at`, `stop_marker_cleared`) when it exits 0. The bot job then runs exactly as a
-scheduled start: preflight first, which may still refuse (no session today, token, disk);
-follow `GET /status` and the job log. Nothing runs inside the API process, and nothing talks
-to the broker.
+The API runs `[api] start_bot_command` and answers `202 bot-start-v1`
+(`requested_at`, `stop_marker_cleared`) when it exits 0:
+
+- on a Mac: `launchctl kickstart gui/<uid>/local.tickr.bot`, without `-k`, so a job that
+  already runs is never restarted;
+- shipped (the server, since the cutover): `python -m tickr.runtime --config
+  /app/config/bot.toml request-start --cause start-bot`, which only writes the start request
+  file `[runtime] server_start_request_file` under the data folder. The host's
+  `tickr-bot-start.service` then runs `docker compose up -d --no-recreate` for the bot: a running
+  bot container is never touched, a stopped one is started, a missing one is created
+  (docs/deploy-server.md, "Bot start on the server"). On the server `202` means "request
+  written", not "bot started": the host unit's status says whether the container started.
+
+The bot job then runs exactly as a scheduled start: preflight first, which may still refuse
+(no session today, token, disk); follow `GET /status` and the job log. Nothing runs inside the
+API process, and nothing talks to the broker.
 
 - Refused `409 conflict` (nothing changed) while a fresh status says the bot is `starting`,
   `running` or `stopping`. A stale or missing status proves nothing, so the start goes ahead;
@@ -1767,7 +1776,10 @@ to the broker.
 - Refused `409 conflict` (nothing changed) while a live process is recorded in the bot's lock
   file (`tickr.lock` under `data_dir`): a fresh `stopped` is written before the process has
   ended, and `tickr trade` holds the same lock. The kickstart would do nothing, or the job
-  would end on `AlreadyRunning`, with the owner's stop already gone.
+  would end on `AlreadyRunning`, with the owner's stop already gone. On the server the API's
+  container does not share the bot's pid namespace, so this check cannot see the bot's pid
+  there; the start request is still safe because its host unit never touches a running bot
+  container.
   A crashed bot leaves its pid in the file; should macOS reuse that pid for another process,
   Start answers `409` until that process ends. A lock file that cannot be read is `503`.
 - The operator stop marker left by stop-bot is removed first (pressing Start is the decision
@@ -1778,8 +1790,9 @@ to the broker.
   runs. Removing it is written to the API log (`api.log` under launchd) with the time.
 - Starts run one at a time across both listeners, under their own lock, so a slow start
   command never holds back a queued command such as emergency or flatten.
-- `503 unavailable` without running anything when `start_bot_command` is empty (the server's
-  Docker, the demo, which sets it empty so it can never start the real bot job).
+- `503 unavailable` without running anything when `start_bot_command` is empty (the demo,
+  which sets it empty so it can never start the real bot job). On the server a missing control
+  folder makes `request-start` exit 1 (`control-folder-missing`): `503` with the exit code.
 - An `Idempotency-Key` is checked for its form only: a repeat is harmless.
 
 Stopping stays `POST /commands/stop-bot`: the bot drains itself and is refused while any trade

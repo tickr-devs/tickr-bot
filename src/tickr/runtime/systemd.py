@@ -20,6 +20,14 @@ data folder, and `tickr-bot-restart.service` restarts the compose service `bot` 
 bot's own `stop_grace_period` read from that compose.yaml here (`bot_stop_grace`), never a number of
 its own.
 
+Bot start on request: `tickr-bot-start.path` watches the start request the API's Start writes
+inside its container, and `tickr-bot-start.service` runs `up -d --no-recreate` for the compose
+service `bot` once: a running bot container is never touched, a stopped or missing one is
+started. The start request lives in the restart request's folder (the one control folder
+deploy-server.sh creates). These two units and the scheduled bot unit hold the lock file
+`COMPOSE_LOCK` in that folder around their compose command, so no two of them run compose on the
+bot at once.
+
 Times are wall-clock times in a zone the caller names (an IANA name): the server's own zone is
 never assumed, so a host on UTC still starts the bot at 04:00 New York time.
 """
@@ -41,6 +49,11 @@ PATH_SUFFIX = ".path.template"
 BOT_SERVICE = "bot"
 PORTS_ENV = "ports.env"
 COMPOSE_ENV = "limits.env"
+# The lock file, in the request files' control folder, that the bot, restart and start units
+# hold with `flock` around their compose command (and deploy-server.sh from its running-bot check
+# to its removal of a stopped bot container), so two compose commands never act on the bot at
+# once.
+COMPOSE_LOCK = "compose.lock"
 # systemd weekday names, indexed by the launchd number (0 and 7 are both Sunday).
 _WEEKDAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _WEEK_ORDER = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -158,6 +171,8 @@ def values(config: Config, paths: Paths, zone: str, compose_text: str) -> dict[s
     image = check_image(paths.image)
     request = _safe("server_restart_request_file",
                     str(paths.data / restartrequest.relative_request_file(config)))
+    start = _safe("server_start_request_file",
+                  str(paths.data / restartrequest.relative_start_request_file(config)))
     grace = bot_stop_grace(compose_text, compose_values(config, data, image))
     return {
         "COMPOSE": _safe("compose", str(paths.compose)),
@@ -169,6 +184,9 @@ def values(config: Config, paths: Paths, zone: str, compose_text: str) -> dict[s
         "IMAGE": image,
         "RESTART_REQUEST": request,
         "RESTART_TAKEN": request + restartrequest.TAKEN_SUFFIX,
+        "START_REQUEST": start,
+        "START_TAKEN": start + restartrequest.TAKEN_SUFFIX,
+        "COMPOSE_LOCK": str(Path(request).parent / COMPOSE_LOCK),
         "BOT_STOP_GRACE": str(grace),
         "PREFLIGHT_CALENDAR": _calendar(sched.preflight, sched.weekdays, zone),
         "BOT_CALENDAR": _calendar(sched.bot, sched.weekdays, zone),

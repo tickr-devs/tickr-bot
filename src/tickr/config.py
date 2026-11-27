@@ -502,6 +502,7 @@ class RuntimeConfig:
     watchdog_restart_file: str
     watchdog_entry_restart_file: str
     server_restart_request_file: str
+    server_start_request_file: str
     evaluation_budget_seconds: Decimal
     discovery_stop_seconds: Decimal
     stop_marker_file: str

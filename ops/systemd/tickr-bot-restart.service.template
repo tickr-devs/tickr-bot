@@ -5,8 +5,11 @@
 # running container is stopped within its own stop_grace_period from compose.yaml, [runtime]
 # bot_exit_timeout_seconds, read when this unit was rendered; a crashed or removed one is
 # created again; the image is never pulled or built here, a missing image fails the step);
-# (3) log the request to the journal. Never retried: no Restart=, no loop. A failed step stops
-# the rest and stays visible in `systemctl status tickr-bot-restart.service`.
+# (3) log the request to the journal. Step (2) holds the compose lock (`flock`, waiting for it;
+# shared with tickr-bot-start.service, tickr-bot.service and deploy-server.sh), so no other
+# compose command acts on the bot at the same time: {{COMPOSE_LOCK}}
+# Never retried: no Restart=, no loop. A failed step stops the rest and stays visible in
+# `systemctl status tickr-bot-restart.service`.
 # The env file is the path {{ENV_FILE}} on the host, written by tickr-secrets.service; only its
 # path is named here, never a value.
 # Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
@@ -23,5 +26,5 @@ EnvironmentFile={{COMPOSE_ENV}}
 Environment=TICKR_CONFIG_HOST={{CONFIG_HOST}}
 Environment=TICKR_ENV_FILE_HOST={{ENV_FILE}}
 ExecStart=/bin/mv -fT {{RESTART_REQUEST}} {{RESTART_TAKEN}}
-ExecStart=/usr/bin/docker compose -f {{COMPOSE}} -p tickr --profile jobs up -d --force-recreate --no-deps --pull never --no-build -t {{BOT_STOP_GRACE}} bot
+ExecStart=/usr/bin/flock {{COMPOSE_LOCK}} /usr/bin/docker compose -f {{COMPOSE}} -p tickr --profile jobs up -d --force-recreate --no-deps --pull never --no-build -t {{BOT_STOP_GRACE}} bot
 ExecStart=/bin/cat {{RESTART_TAKEN}}

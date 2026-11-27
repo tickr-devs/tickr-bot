@@ -207,6 +207,8 @@ It writes:
   mounts it read-only and the entrypoint sources it.
 - `tickr-bot-restart.path` and `tickr-bot-restart.service`: the watchdog's bot restart on the
   server (below, "Bot restart on the server").
+- `tickr-bot-start.path` and `tickr-bot-start.service`: the app's Start on the server (below,
+  "Bot start on the server").
 - `limits.env`: `TICKR_BOT_EXIT_TIMEOUT`, `TICKR_NIGHTLY_OUT`, `TICKR_NIGHTLY_SEED`,
   `TICKR_DATA_HOST` and `TICKR_IMAGE` (below).
 - `ports.env`: `TICKR_API_PORT` and `TICKR_API_REMOTE_PORT` from `[api] port` and `remote_port`.
@@ -254,7 +256,7 @@ refuses (exit 1, nothing changed), in this order:
 - `data-not-mounted`: `DATA` is not a mount point (`mountpoint -q`). The data disk is in fstab
   with `nofail`, so a disk that failed to mount leaves an empty folder on the root disk, and a
   bot started there would have no state. For the same reason every rendered unit that uses the
-  data folder (the API, the four jobs, the restart path and service) carries
+  data folder (the API, the four jobs, the restart and start paths and services) carries
   `RequiresMountsFor=DATA`: systemd refuses to start them without the mount.
 - `image-user-unknown`, `data-owner-unknown` / `data-owner-mismatch`: the owner uid:gid of `DATA` is not the
   release image's runtime user, read with `id -u` and `id -g` in a throwaway container of the
@@ -274,13 +276,38 @@ refuses (exit 1, nothing changed), in this order:
   position and no open order, and the database has no open trade (opened read-only). The data
   folder is not mounted read-only because the broker's token folder is in it (the SDK may
   refresh the token) and SQLite needs the WAL's shared-memory file.
-- while a bot restart request is waiting in `DATA/control` (the path unit would restart the
-  bot the moment it starts: read the request, remove it, deploy again).
+- while a bot restart or start request is waiting in `DATA/control` (its path unit would
+  restart or start the bot the moment it starts: read the request, remove it, deploy again).
+- when the rendered start request is not in the restart request's folder (render-systemd
+  already refuses that; the script checks the files it installs).
 
 It then creates only `DATA/control` (under the verified mount, owned by the image's uid:gid,
-mode 700), installs the units and enables the timers, `tickr-bot-restart.path` and the API
-(`TICKR_SERVICE_USER`, default `tickr`, is the units' `User=`). It never starts or stops the
-bot. Not yet run on a real server.
+mode 700) and, when missing, its compose lock `DATA/control/compose.lock` (same owner, mode
+600; never replaced, a unit may hold it), and takes that lock (`flock`, held until the
+removal below: the bot, restart and start units wait for it). Still before anything is
+installed it refuses:
+
+- `bot-running`: the bot container runs (`docker compose ... -p tickr --profile jobs ps
+  --status running -q bot`, with the rendered `limits.env`). Flat is not enough: a running bot
+  keeps the image it started from, and after it ends a Start would start that stopped
+  container as it is, the previous release. Deploy after the bot has ended.
+- `bot-state-unknown`: that `ps` failed; `compose-lock-failed`: the lock could not be taken.
+
+Then it installs the files (all or nothing, below). With the new `limits.env` in place and
+still under the compose lock, it removes a stopped bot container: `docker compose --env-file ETC/limits.env -f ETC/compose.yaml -p tickr --profile
+jobs rm -f bot`, without `-s`. Compose's `rm` removes only service containers that are not
+running: `Remove` in `pkg/compose/remove.go` (2.24.6 and 2.40.3, the versions Ubuntu
+24.04 ships, differ there only in names) inspects each container and keeps for removal only those whose
+`State.Running` is false; only `-s` (`--stop`) stops containers first. A running bot is never
+removed (and was refused above under the same lock); no container at all is "No stopped
+containers", exit 0. So the next Start or
+scheduled start creates the bot from the new release image, never the stopped container of
+the previous one. When the removal fails it refuses with `bot-container-not-removed` (exit 1):
+the new files are in place, but systemd is not reloaded and nothing is enabled or restarted;
+read the docker line, then deploy again. Last it reloads systemd and enables the timers,
+`tickr-bot-restart.path`, `tickr-bot-start.path` and the API (`TICKR_SERVICE_USER`, default
+`tickr`, is the units' `User=`). It never starts or stops the bot. Not yet run on a real
+server.
 
 The data folder was a named Docker volume (`tickr-data`) before the restart unit; it is now the
 host folder `DATA`. No server ever ran on that volume (this deploy was never run on a real
@@ -296,7 +323,8 @@ against the image's copy; `bot.toml` must come from the same commit ("Server fil
 
 The install is all or nothing: every file is first copied to a hidden temp file in its target
 folder (a failed copy removes them and installs nothing), then renamed into place, and
-`systemctl daemon-reload` runs only after every file is there.
+`systemctl daemon-reload` runs only after every file is there and a stopped bot container
+is removed.
 
 ### Bot restart on the server
 
@@ -315,8 +343,9 @@ systemd, so the restart goes through a request file on the data folder:
 2. `tickr-bot-restart.path` (`PathExists=` on that file) starts `tickr-bot-restart.service`
    (`Type=oneshot`, user `tickr`), which runs each step once and stops at the first failure:
    (a) renames the request to `restart-request.taken`, so a request written during the restart
-   is a new event; (b) `docker compose -f /srv/tickr/etc/compose.yaml -p tickr
-   --profile jobs up -d --force-recreate --no-deps --pull never --no-build -t <grace> bot`: the
+   is a new event; (b) under the compose lock (`flock /srv/tickr/data/control/compose.lock`,
+   shared with the start and the scheduled bot unit, "Bot start on the server") `docker compose -f
+   /srv/tickr/etc/compose.yaml -p tickr --profile jobs up -d --force-recreate --no-deps --pull never --no-build -t <grace> bot`: the
    same compose definition the scheduled `tickr-bot.service` starts. A running (hung) container
    is stopped within `<grace>` and recreated; a crashed or removed one is created again. The
    image is never pulled or built here: a missing `TICKR_IMAGE` (from `limits.env`) fails the step. `<grace>`
@@ -336,23 +365,71 @@ systemd, so the restart goes through a request file on the data folder:
 The watchdog's `restarted` journal line on the server means "request written", not "bot
 started": check the unit's status for the restart itself.
 
+### Bot start on the server
+
+The app's Start (`POST /commands/start-bot`, docs/api.md "Start-bot") runs `[api]
+start_bot_command` in the API's container. The restart request cannot serve it: its unit
+force-recreates a running bot, and the API's container (no host pid namespace) cannot see the
+bot's live pid in its lock file, so Start's lock check is blind there. Start has its own request
+and unit, which never touch a running bot:
+
+1. The API keeps its checks (a fresh status that says starting, running or stopping is `409`;
+   the lock file; the operator stop marker is cleared), then runs `python -m tickr.runtime
+   --config /app/config/bot.toml request-start --cause start-bot`. It writes `[runtime]
+   server_start_request_file` (`control/start-request`, in the restart request's folder: the
+   one folder `deploy-server.sh` creates; config refuses any other folder) the same way as the
+   restart request: atomically, one JSON line with `requested_at` (UTC) and `cause`, refused
+   with `control-folder-missing` or `cause-invalid` (exit 1, nothing written; the API answers
+   `503`).
+2. `tickr-bot-start.path` (`PathExists=` on that file) starts `tickr-bot-start.service`
+   (`Type=oneshot`, user `tickr`, `After=tickr-bot-restart.service`: a start queued with or
+   during a restart waits for it), which runs each step once and stops at the first failure:
+   (a) renames the request to `start-request.taken`; (b) under the compose lock (below) `docker
+   compose -f /srv/tickr/etc/compose.yaml -p tickr --profile jobs up -d --no-recreate --no-deps --pull
+   never --no-build bot` (the same compose file, project and profile as the restart unit, no
+   `WorkingDirectory=`); (c) prints the taken request to the journal.
+3. `--no-recreate` ("If containers already exist, don't recreate them", `docker compose up
+   --help`). Checked in the compose source of the versions Ubuntu 24.04 ships
+   (`docker-compose-v2` 2.24.6 in noble, 2.40.3 in noble-updates; `pkg/compose/convergence.go`):
+   with this policy `mustRecreate` is always false, so an existing bot container is kept; a
+   running one is left as it is (no stop, no restart, no new container), and the start phase
+   (`startService`) starts only the bot's containers that are not running. A missing container
+   is created and started. A stopped container is started as it was created, with the image it
+   was created from (bot.toml and the data folder are bind mounts, so it reads today's files),
+   so a stopped container must never outlive its release: `deploy-server.sh` removes a stopped
+   bot container once it has installed the new `limits.env` (above, the server deploy), and the
+   next Start or scheduled start creates the container from the new release image. The deploy
+   refuses while the bot container runs (`bot-running`), so no container of the previous
+   release survives a deploy.
+4. The compose step of the restart, the start and the scheduled bot unit (`tickr-bot.service`)
+   holds one lock, `DATA/control/compose.lock` (`flock`, which waits for it; the file is created
+   by `deploy-server.sh`, which holds it from its running-bot check to its removal of a stopped
+   container), so a restart that arrives while a start runs, a scheduled start during a deploy,
+   and so on, waits instead of running a second compose command on the bot at once.
+5. Never retried, and the same failure modes as the restart unit: a failed step stays in
+   `systemctl status tickr-bot-start.service`; a failed rename leaves the request, the path unit
+   hits its trigger limit and later Starts are ignored until `systemctl reset-failed
+   tickr-bot-start.path`. After the API's `202` (request written), a failed unit step, such as a
+   missing image, shows only in `systemctl status tickr-bot-start.service` and its journal (the
+   app sees a bot that never appears in `/status`; nothing alerts).
+
 **Cutover (the server move release).** `config/bot.toml` itself holds the server's values, so
 the server's `/srv/tickr/etc/bot.toml` is the commit's file with no hand edit, and merging that
 change ends hosting on the Mac (its launchd jobs no longer work with it):
 
 - `[runtime] watchdog_restart_command = ["python", "-m", "tickr.runtime", "--config",
   "/app/config/bot.toml", "request-restart", "--cause", "watchdog"]`;
-- `[api] start_bot_command = []`: Start answers `503` on the server. The request file would
-  start a stopped bot, but its unit force-recreates a running one, and the API container (no host
-  pid namespace) cannot see the bot's live pid in its lock file, so the guard Start relies on is
-  blind there;
+- `[api] start_bot_command = ["python", "-m", "tickr.runtime", "--config",
+  "/app/config/bot.toml", "request-start", "--cause", "start-bot"]` (above, "Bot start on the
+  server");
 - `[api] system_services = "none"` with `sleep_check_command = []` (no launchd, no caffeinate);
 - `[api] training_progress_file = "training-progress.json"` under the data folder (no training
   job runs on the server: "no training job is reporting");
 - `[alerts] mac_app = ""`.
 
 Then run `deploy-server.sh` (creates `/srv/tickr/data/control`, installs and starts the path
-unit) and check `systemctl status tickr-bot-restart.path` shows it active (waiting).
+units) and check `systemctl status tickr-bot-restart.path tickr-bot-start.path` shows both
+active (waiting).
 
 ### Hand-written timers (example, superseded by `render-systemd`)
 

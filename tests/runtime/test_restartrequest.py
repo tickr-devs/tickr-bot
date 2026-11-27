@@ -1,4 +1,4 @@
-"""The server's bot restart request: `python -m tickr.runtime request-restart`."""
+"""The server's bot restart and start requests: `request-restart` and `request-start`."""
 
 from __future__ import annotations
 
@@ -134,3 +134,65 @@ def test_the_shipped_watchdog_restart_command_is_this_request(config_path, capsy
     assert main(["--config", str(config_path), *command[5:]]) == 0
     assert json.loads(capsys.readouterr().out.strip())["requested"] is True
     assert json.loads(path.read_text("utf-8"))["cause"] == "watchdog"
+
+
+# The start request (`request-start`, the server's [api] start_bot_command).
+
+
+def _set_start_file(config_path: Path, value: str) -> None:
+    text = config_path.read_text("utf-8")
+    old = 'server_start_request_file = "control/start-request"'
+    assert old in text
+    config_path.write_text(text.replace(old, f"server_start_request_file = {value!r}".replace(
+        "'", '"')), "utf-8")
+
+
+@pytest.mark.parametrize("value", ["/abs/start-request", "../start-request", "start-request",
+                                   "other/start-request", "control/restart-request"])
+def test_the_start_file_must_be_another_file_in_the_restart_folder(config_path, value):
+    _set_start_file(config_path, value)
+    cfg = config_module.load(config_path)
+    with pytest.raises(config_module.ConfigError, match="server_start_request_file"):
+        restartrequest.start_request_path(cfg)
+
+
+def test_request_start_command_writes_its_own_file(config_path, capsys):
+    cfg = config_module.load(config_path)
+    control = cfg.root / cfg.run.data_dir / "control"
+    control.mkdir(parents=True)
+    assert main(["--config", str(config_path), "request-start", "--cause", "start-bot"]) == 0
+    row = json.loads(capsys.readouterr().out.strip())
+    assert row["record"] == "request-start" and row["requested"] is True
+    assert json.loads((control / "start-request").read_text("utf-8"))["cause"] == "start-bot"
+    assert sorted(p.name for p in control.iterdir()) == ["start-request"]  # never a restart
+
+
+@pytest.mark.parametrize("cause", ["", "two words"])
+def test_request_start_command_refuses_an_unsafe_cause(config_path, capsys, cause):
+    cfg = config_module.load(config_path)
+    control = cfg.root / cfg.run.data_dir / "control"
+    control.mkdir(parents=True)
+    assert main(["--config", str(config_path), "request-start", "--cause", cause]) == 1
+    row = json.loads(capsys.readouterr().out.strip())
+    assert row["requested"] is False and row["cause"] == "cause-invalid"
+    assert list(control.iterdir()) == []
+
+
+def test_request_start_command_refuses_without_the_control_folder(config_path, capsys):
+    assert main(["--config", str(config_path), "request-start", "--cause", "start-bot"]) == 1
+    row = json.loads(capsys.readouterr().out.strip())
+    assert row["requested"] is False and row["cause"] == "control-folder-missing"
+
+
+def test_the_shipped_start_bot_command_is_this_request(config_path, capsys):
+    """config/bot.toml holds the server's Start (the cutover): `python -m tickr.runtime` with
+    the bot.toml compose mounts in every container, then request-start with cause start-bot."""
+    cfg = config_module.load(config_path)
+    command = list(cfg.api.start_bot_command)
+    assert command == ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
+                       "request-start", "--cause", "start-bot"]
+    path = cfg.root / cfg.run.data_dir / "control" / "start-request"
+    path.parent.mkdir(parents=True)
+    assert main(["--config", str(config_path), *command[5:]]) == 0
+    assert json.loads(capsys.readouterr().out.strip())["requested"] is True
+    assert json.loads(path.read_text("utf-8"))["cause"] == "start-bot"

@@ -1,0 +1,16 @@
+# Tickr bot start request watch: starts tickr-bot-start.service when the request file exists.
+# The API's Start ([api] start_bot_command) writes it from inside its container (`python -m
+# tickr.runtime request-start`, [runtime] server_start_request_file under the data folder,
+# mounted from {{DATA_HOST}}). The service renames the file first, so one request starts the
+# bot at most once.
+# Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
+[Unit]
+Description=Tickr bot start request watch
+RequiresMountsFor={{DATA_HOST}}
+
+[Path]
+PathExists={{START_REQUEST}}
+Unit=tickr-bot-start.service
+
+[Install]
+WantedBy=multi-user.target

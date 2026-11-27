@@ -589,12 +589,12 @@ observer_trades_max_rows = 100
 journal_rows = 40
 # Command POST /commands/start-bot runs to start the bot job ("{uid}" = this user's id); on a Mac launchd's
 # `launchctl kickstart gui/{uid}/local.tickr.bot` (without -k it never restarts a job that is already running).
-# Empty = start-bot answers 503 (no launchd: the server's Docker, the demo); read by the api server.
-# Server (2026-11-26 cutover): empty. The server's only start path, the restart request file
-# (`request-restart`, docs/deploy-server.md), force-recreates the bot container, so it would restart a running bot,
-# and the API container (no host pid namespace) cannot see the bot's live pid in its lock file: Start is off on the
-# server until that is solved; the timers start the bot.
-start_bot_command = []
+# Empty = start-bot answers 503 (no start path: the demo); read by the api server.
+# Server (2026-11-26 cutover): `request-start` inside the API's container writes [runtime] server_start_request_file and
+# the host unit tickr-bot-start runs `docker compose up -d --no-recreate` for the bot (docs/deploy-server.md, "Bot start
+# on the server"): a running bot container is never touched, so Start is safe although the API container (no host pid
+# namespace) cannot see the bot's live pid in its lock file; the cause word "start-bot" is logged by that unit.
+start_bot_command = ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml", "request-start", "--cause", "start-bot"]
 # Seconds POST /commands/start-bot waits for start_bot_command to return before answering 503; read by the api server.
 start_bot_timeout_seconds = 10
 # Newest AI advisor runs GET /advisor returns (folders under [advisor] proposals_dir, newest first; its
@@ -1188,6 +1188,13 @@ watchdog_entry_restart_file = "watchdog-entry-restart.json"
 # tickr-bot-restart.service restarts the bot container once. Its folder must already exist (deploy-server.sh creates
 # it); read by runtime.restartrequest and runtime.systemd.
 server_restart_request_file = "control/restart-request"
+# Server only (docs/deploy-server.md, "Bot start on the server"): the start request file, relative to data_dir, in the
+# same folder as server_restart_request_file under another name. The API's Start ([api] start_bot_command, `python -m
+# tickr.runtime request-start`, inside the API's container) writes it atomically with the request time (UTC) and cause;
+# the host unit tickr-bot-start.path watches it and tickr-bot-start.service runs `docker compose up -d --no-recreate`
+# for the bot once (a running bot container is never touched; a stopped or missing one is started); read by
+# runtime.restartrequest and runtime.systemd.
+server_start_request_file = "control/start-request"
 # Seconds one loop pass may spend on market upkeep and the strategy before an evaluation-slow journal row (the next
 # Detail read waits for it; keep it near [orders] detail_poll_seconds). Discovery runs on its own thread and is not part
 # of it: its duration is the `seconds` of each discovery journal row; read by runtime.service.
