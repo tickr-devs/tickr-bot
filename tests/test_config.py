@@ -11,6 +11,7 @@ from baseline import pinned_text
 
 from tickr import config
 from tickr.api.reasons import gate_reason
+from tickr.broker.webull import Route
 from tickr.cli import main
 from tickr.risk.admission import AdmissionLimits
 
@@ -26,11 +27,33 @@ def _copy(tmp_path: Path, text: str | None = None) -> Path:
     return target
 
 
-def test_the_shipped_config_keeps_six_slots_and_six_working_entries():
-    """6 slots since 2026-11-17 (owner, probe T L2 recorded; docs/decisions.md), and as many
-    entries working at once as the fills-together bound allows."""
+def test_the_shipped_config_keeps_twenty_slots_and_six_working_entries():
+    """20 slots since 2026-11-27 (owner 2026-11-25: as many as Webull's limits allow, probe H2d
+    recorded; docs/decisions.md), and as many entries working at once as the fills-together
+    bound allows."""
     risk = config.load(BOT).risk
-    assert (risk.max_open_positions, risk.max_working_entries) == (6, 6)
+    assert (risk.max_open_positions, risk.max_working_entries) == (20, 6)
+
+
+def test_the_shipped_slots_fit_one_open_orders_page_and_the_read_budget():
+    """At the shipped slot count every open order the bot can hold (each slot's stops plus the
+    working entries) fits the one open-orders page probe H2d saw listing all of its
+    `[probe] open_orders_paging_orders` (docs/webull-facts.md), so each open-orders read stays
+    one request. The loop makes at most one pass per `[orders] detail_poll_seconds`, and a pass
+    reads positions once and Detail at most `detail_reads_per_step` times whatever the slot
+    count: those reads fit every environment's route limit."""
+    cfg = config.load(BOT)
+    held = (cfg.risk.max_open_positions * cfg.orders.max_stops_per_trade
+            + cfg.risk.max_working_entries)
+    assert held <= cfg.probe.open_orders_paging_orders
+    assert cfg.environment.open_orders_max_pages >= 1
+    passes = Decimal(config.SECONDS_PER_MINUTE) / cfg.orders.detail_poll_seconds
+    for env in cfg.environments.values():
+        for route, per_pass in ((Route.POSITIONS, 1),
+                                (Route.ORDER_DETAIL, cfg.orders.detail_reads_per_step)):
+            count, window = env.route_limits.get(
+                route.path, (env.requests_per_route_per_minute, config.SECONDS_PER_MINUTE))
+            assert passes * per_pass <= Decimal(count) * config.SECONDS_PER_MINUTE / window
 
 
 def test_bot_toml_loads():
