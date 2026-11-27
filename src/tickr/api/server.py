@@ -1052,7 +1052,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _guard(self) -> bool:
         self.device_name = ""  # who the token belongs to; set once the request is authorized
-        # When that device's sign-in ends (None: its access does not expire); set with the name.
+        # When that device is signed out unless it refreshes (None: its access does not expire);
+        # set with the name.
         self.device_expires_at: datetime | None = None
         host = self.headers.get("Host")
         origin = self.headers.get("Origin")
@@ -1164,7 +1165,10 @@ class Handler(BaseHTTPRequestHandler):
                         "/session/refresh", challenge)
             return False
         self.device_name = device.name
-        self.device_expires_at = None if device.session is None else device.session.expires_at
+        # `sessions.refresh` refuses from the earlier of the refresh token's end and the sign-in's
+        # end; the refresh token's never passes the sign-in's, so it is the one.
+        self.device_expires_at = (None if device.session is None
+                                  else device.session.refresh_expires_at)
         return True
 
     def _match_device(self, header: str) -> tuple[tuple[devices.Device, ...] | Exception,
@@ -1836,6 +1840,15 @@ class Handler(BaseHTTPRequestHandler):
             return None, exc
         # One write retires the presented token and records the new one, before the answer.
         _write_private(settings.devices_path, devices.render(renewed))
+        name = next(d.name for d in renewed if d.sha256 == devices.digest(issued.access_token))
+        try:
+            # Under the pairing locks (the store lock is only ever taken inside them).
+            settings.alerts.push_tokens.renew(name, issued.refresh_expires_at)
+        except (OSError, StoreError) as exc:
+            # The refresh stands: at worst the push tokens expire at the old refresh token's
+            # end, are dropped, and the app registers again at its next launch.
+            sys.stderr.write(f"api: push tokens of device {name!r} not renewed "
+                             f"({type(exc).__name__})\n")
         return issued, None
 
     def _sign_out(self) -> None:

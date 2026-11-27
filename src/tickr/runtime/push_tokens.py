@@ -2,25 +2,27 @@
 
 The kind (`PushTokenKind`) says what the token is for: `alert` (the device token the alert
 sender pushes to), `activity_start` (a Live Activity push-to-start token) or `activity_update`
-(one Live Activity's update token). Only `alert` tokens are pushed to today; the activity kinds
-are stored for the planned Live Activity sender.
+(one Live Activity's update token). The alert sender pushes to `alert` tokens, the Live Activity
+publisher (`runtime/live_activity.py`) to the activity kinds.
 
 The store is one JSON file under data_dir (`[alerts] push_tokens_file`, 0600, written atomically):
 `{"schema_version": 3, "devices": {"<device name>": {"<kind>": {"token", "environment",
 "bundle_id", "platform", "registered_at", "expires_at"}}}}`. The API is its writer; the push
 sender reads it on each alert and removes a token APNs says is gone (410 or BadDeviceToken).
 
-`expires_at` is the end of the registering device's sign-in (`Session.expires_at` in
-api/devices.py), or null for a device whose access does not expire (a paired device, `LOCAL`, the
-Simulator). A token past it is never pushed to: the sender skips it and drops it
-(`drop_expired`), so a signed-in device that never refreshed again stops receiving alerts when its
-sign-in ends, whether or not it ever calls the API again.
+`expires_at` is when the registering device is signed out unless it refreshes: its live refresh
+token's end (`Session.refresh_expires_at` in api/devices.py, which never passes the sign-in's own
+`expires_at`; `sessions.refresh` refuses at the earlier of the two, so this one), moved forward at
+each refresh (`renew`). It is null for a device whose access does not expire (a paired device,
+`LOCAL`, the Simulator). A token past it is never pushed to: the senders skip it and drop it
+(`drop_expired`), so a signed-in device that stopped refreshing stops receiving pushes when it
+could no longer refresh, whether or not it ever calls the API again.
 
 A device key is the name of the device that registered the token, as the API authorized it: the
 paired or signed-in device's name in `api/devices.py`, `LOCAL` for the Mac's own app on the local
 port (no token there), or the Simulator's reserved name. The name stays the same while a signed-in
 device's access tokens rotate at each refresh, so its registration survives a refresh (the
-sign-in's `expires_at` never moves at a refresh); signing the device out or revoking it, or its
+expiry moves forward with it); signing the device out or revoking it, or its
 name being taken by a new sign-in or pairing, drops its tokens (`remove_device`). Schema 1 keyed
 devices by the SHA-256 of their bearer token, which changes at every refresh; schema 2 carried no
 sign-in expiry. Such a file is refused (`OldSchema`), never completed by guessing: delete it and
@@ -39,7 +41,7 @@ import os
 import re
 import threading
 from collections.abc import Collection, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -86,8 +88,9 @@ class PushToken:
     bundle_id: str  # the APNs topic, one of [alerts] apns_topics
     platform: Platform
     registered_at: datetime
-    # The end of the registering device's sign-in; None for a device whose access does not
-    # expire (paired, LOCAL, the Simulator). Never pushed to from this time on.
+    # When the registering device is signed out unless it refreshes (its refresh token's end);
+    # None for a device whose access does not expire (paired, LOCAL, the Simulator). Never
+    # pushed to from this time on.
     expires_at: datetime | None = None
 
     def expired(self, now: datetime) -> bool:
@@ -103,8 +106,9 @@ def parse_registration(body: dict[str, Any], topics: tuple[str, ...],
                        environments: Collection[str], now: datetime, *,
                        expires_at: datetime | None) -> PushToken:
     """The token a POST /push-token body registers, or BadRegistration naming the field.
-    `kind` is optional and `alert` when left out. `expires_at` is the end of the registering
-    device's sign-in (None when its access does not expire), never taken from the body."""
+    `kind` is optional and `alert` when left out. `expires_at` is when the registering device
+    is signed out unless it refreshes (None when its access does not expire), never taken from
+    the body."""
     if not _FIELDS <= set(body) <= _FIELDS | {"kind"}:
         raise BadRegistration('body must be exactly {"token", "environment", "bundle_id", '
                               '"platform"} and optionally "kind"')
@@ -262,9 +266,20 @@ class PushTokenStore:
                 _write_private(self.path, _text(kept))
             return len(tokens) - len(kept)
 
+    def renew(self, device: str, expires_at: datetime) -> int:
+        """Move the expiry of `device`'s expiring tokens to `expires_at` (it refreshed); how
+        many there were. A token without an expiry is left without one."""
+        with self._locked():
+            tokens = self.read()
+            renewed = {k: replace(t, expires_at=expires_at) for k, t in tokens.items()
+                       if k[0] == device and t.expires_at is not None}
+            if renewed:
+                _write_private(self.path, _text(tokens | renewed))
+            return len(renewed)
+
     def drop_expired(self, now: datetime) -> int:
-        """Drop every token whose device's sign-in has ended by `now`; how many there were. An
-        entry registered again meanwhile carries its new sign-in's expiry and is kept."""
+        """Drop every token whose device is signed out by `now`; how many there were. An entry
+        registered again or renewed meanwhile carries its later expiry and is kept."""
         with self._locked():
             tokens = self.read()
             kept = {k: t for k, t in tokens.items() if not t.expired(now)}

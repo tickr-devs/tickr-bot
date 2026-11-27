@@ -191,6 +191,7 @@ engineering_tables = [
   "massive",
   "runtime",
   "alerts",
+  "live_activity",
   "chart",
   "parity",
 ]

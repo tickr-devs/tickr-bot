@@ -1362,6 +1362,31 @@ apns_topics = ["bot.tickr.ios", "bot.tickr.mac"]
 # so this stays between the two (50 minutes); read by runtime.alerts.
 apns_token_lifetime_seconds = 3000
 
+[live_activity]
+# The iPhone Live Activity of an open trading day, pushed over APNs (docs/api.md "Live Activity"). The watchdog
+# process reads the bot's status file every [api] poll_seconds in a thread of its own and pushes start, update and end
+# to the Live Activity tokens the iOS app registers (POST /push-token); the bot's trading loop never takes part.
+# false = no thread, nothing sent. true needs the APNs variables named in [alerts] (config load refuses it otherwise);
+# read by runtime.live_activity and the watchdog.
+enabled = false
+# Bundle id of the app whose Live Activity this is, one of [alerts] apns_topics; pushes go to the topic
+# "<this>.push-type.liveactivity" and only to tokens registered with this bundle id; read by runtime.live_activity.
+app_bundle_id = "bot.tickr.ios"
+# Name of the iOS app's ActivityAttributes type, sent as aps.attributes-type on start so the system knows which
+# activity to start; must match the app's widget extension; read by runtime.live_activity.
+attributes_type = "TickrActivityAttributes"
+# Seconds between pushes that only refresh prices and unrealized P&L while a position is open; 0 = no periodic
+# refresh, events only (start, fill, stop confirmed, pause, alarm, close, end). Apple budgets how often an activity
+# may be updated, so the owner picks this; read by runtime.live_activity.
+pnl_refresh_seconds = 0
+# Seconds the ended activity stays on the Lock Screen after the day goes flat (aps.dismissal-date = end time plus
+# this); 0 = no dismissal-date, the system default applies; read by runtime.live_activity.
+end_linger_seconds = 0
+# File that keeps the last state pushed (and whether an activity is live), relative to [run] data_dir, so a restarted
+# watchdog neither starts a second activity nor repeats an event; written before each push; read by
+# runtime.live_activity.
+state_file = "live-activity.json"
+
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API
 # process build its own Webull client in the background (it then needs the app key and secret, never the account id,

@@ -33,6 +33,7 @@ from tickr.runtime.alerts import (
     TELEGRAM,
     Alerter,
     AlertKind,
+    ApnsClient,
     ApnsNotifier,
     Channels,
     Delivery,
@@ -627,4 +628,20 @@ def test_a_sign_in_expiry_is_stored_and_a_registration_again_keeps_its_own(store
                                        AT, end + timedelta(days=1)))
     assert store.drop_expired(end) == 0 and ("tablet", ALERT) in store.read()
     assert store.drop_expired(end + timedelta(days=1)) == 1
+    assert sorted(store.read()) == [("local", ALERT), ("phone", ALERT)]
+
+
+def test_every_sender_takes_live_recipients_from_one_place(store, environ):
+    """`ApnsClient.devices` is the alert push's and the Live Activity's only source: a
+    signed-out device's token of any kind is left out and dropped there."""
+    clock = Clock()
+    ended = _ended_at(clock)
+    for kind in PushTokenKind:
+        store.register("tablet", PushToken(kind, f"{list(PushTokenKind).index(kind) + 1}f" * 32,
+                                           "development", "bot.tickr.ios", IOS, AT, ended))
+    client = ApnsClient(APNS, store, environ, Wire(), clock)
+    for kind in PushTokenKind:
+        recipients = client.devices(kind)
+        assert recipients.failures == ()
+        assert all(t.expires_at is None for t in recipients.tokens)
     assert sorted(store.read()) == [("local", ALERT), ("phone", ALERT)]

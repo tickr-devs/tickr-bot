@@ -17,7 +17,7 @@ from tickr.api import contract, devices
 from tickr.api.server import make_remote_server, make_server, settings_from_config
 from tickr.config import ConfigError
 from tickr.runtime.alerts import Alerter
-from tickr.runtime.push_tokens import parse_registration
+from tickr.runtime.push_tokens import StoreError, parse_registration
 
 from .test_remote import REMOTE, _serve, remote, with_remote_hosts
 from .test_risk_alert import Recorder
@@ -369,24 +369,71 @@ def test_signing_out_with_an_unreadable_push_store_still_signs_out(settings, ser
     assert f"'{NAME}' signed out" in text and "push tokens could not be dropped" in text
 
 
-def test_a_push_registration_carries_the_sign_ins_end_across_refreshes(settings, serve):
-    """The sender never pushes past the sign-in's own end (runtime/push_tokens.py); a refresh
-    never moves that end, so the registration's expiry stays the device's."""
+def _push_expiry(settings):
+    return settings.alerts.push_tokens.read()[(NAME, contract.PushTokenKind.ALERT)].expires_at
+
+
+def _session(settings):
+    (device,) = devices.parse(settings.devices_path.read_text("utf-8"))
+    return device.session
+
+
+def test_a_push_registration_expires_when_the_device_could_no_longer_refresh(settings, serve):
+    """The push token's expiry is the moment `sessions.refresh` would refuse: the live refresh
+    token's end (never past the sign-in's own end). A refresh moves it forward."""
     clock = Clock(ISSUED + timedelta(seconds=1))
     server = serve(settings, clock=clock)
     first = doc(sign_in(server)[1])
     remote(server, "POST", PUSH, token=first["access_token"], body=push_body())
-    (device,) = devices.parse(settings.devices_path.read_text("utf-8"))
-    end = device.session.expires_at
-    store = settings.alerts.push_tokens
-    assert store.read()[(NAME, contract.PushTokenKind.ALERT)].expires_at == end
+    session = _session(settings)
+    assert _push_expiry(settings) == session.refresh_expires_at < session.expires_at
     clock.now += timedelta(seconds=settings.session_lifetimes.access_seconds)
     second = doc(refresh(server, first["refresh_token"])[1])
-    remote(server, "POST", PUSH, token=second["access_token"], body=push_body("b2" * 32))
-    assert store.read()[(NAME, contract.PushTokenKind.ALERT)].expires_at == end
-    # Never refreshed again: at the sign-in's end the token is dropped, with no API call.
-    assert store.drop_expired(end - timedelta(microseconds=1)) == 0
-    assert store.drop_expired(end) == 1 and push_tokens(settings) == {}
+    renewed = _session(settings).refresh_expires_at
+    assert renewed > session.refresh_expires_at and _push_expiry(settings) == renewed
+    # Never refreshed again: one instant before the refresh would be refused, both are alive;
+    # at that instant the refresh is refused and the push token is dropped, with no API call.
+    store = settings.alerts.push_tokens
+    assert store.drop_expired(renewed - timedelta(microseconds=1)) == 0
+    assert store.drop_expired(renewed) == 1 and push_tokens(settings) == {}
+    clock.now = renewed
+    resp, payload = refresh(server, second["refresh_token"])
+    assert resp.status == 401 and "expired" in doc(payload)["cause"]
+
+
+def test_the_push_expiry_never_passes_the_sign_ins_end(settings, serve):
+    """Refreshing on time until the sign-in's end: the push token follows each refresh and the
+    last one is capped at the end, as the refresh token is."""
+    lifetimes = settings.session_lifetimes
+    clock = Clock(ISSUED + timedelta(seconds=1))
+    server = serve(settings, clock=clock)
+    answer = doc(sign_in(server)[1])
+    remote(server, "POST", PUSH, token=answer["access_token"], body=push_body())
+    end = _session(settings).expires_at
+    step = timedelta(seconds=lifetimes.refresh_seconds - 1)
+    while clock.now + step < end:
+        clock.now += step
+        answer = doc(refresh(server, answer["refresh_token"])[1])
+        assert _push_expiry(settings) == _session(settings).refresh_expires_at
+    assert _push_expiry(settings) == end
+
+
+def test_a_refresh_stands_when_the_push_expiry_cannot_be_moved(settings, serve, monkeypatch):
+    clock = Clock(ISSUED + timedelta(seconds=1))
+    server = serve(settings, clock=clock)
+    first = doc(sign_in(server)[1])
+    remote(server, "POST", PUSH, token=first["access_token"], body=push_body())
+    before = _push_expiry(settings)
+
+    def unreadable(_name, _at):
+        raise StoreError("push-tokens.json out of shape: ValueError")
+
+    monkeypatch.setattr(settings.alerts.push_tokens, "renew", unreadable)
+    resp, payload = refresh(server, first["refresh_token"])
+    assert resp.status == 200, payload
+    assert remote(server, "GET", "/status",
+                  token=doc(payload)["access_token"])[0].status != 401
+    assert _push_expiry(settings) == before  # expires early at worst; the app registers again
 
 
 def test_signing_in_under_a_taken_name_drops_that_names_push_tokens(settings, serve, alerts):
