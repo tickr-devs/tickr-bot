@@ -5,6 +5,7 @@ refusal."""
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -128,3 +129,20 @@ def test_a_grant_tickr_bot_issued_passes(app):
     grant = signin.check(recorded["access_token"], _key("allauth.pem"), rules, now)
     assert (grant.account, grant.client, grant.jti) == (claims["sub"], claims["client_id"],
                                                         claims["jti"])
+
+
+def test_the_shipped_provider_key_is_tickr_bots_grant_key():
+    """config/signin/tickr-bot-provider.pem is the key tickr.bot serves at /api/app/grant-key.pem:
+    RSA 3072, and its RFC 7638 thumbprint is the `kid` of tickr.bot's grants."""
+    root = Path(__file__).resolve().parents[2]
+    key = signin.load_key((root / "config/signin/tickr-bot-provider.pem").read_text("utf-8"))
+
+    def b64(value: int) -> str:
+        raw = value.to_bytes((value.bit_length() + 7) // 8, "big")
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    jwk = json.dumps({"e": b64(key.exponent), "kty": "RSA", "n": b64(key.modulus)},
+                     separators=(",", ":"), sort_keys=True)
+    thumbprint = base64.urlsafe_b64encode(hashlib.sha256(jwk.encode()).digest()).rstrip(b"=")
+    assert key.modulus.bit_length() == 3072
+    assert thumbprint.decode() == "vX45fH22Yuqamw3FA7sRPhhDDuEQlFoVaghMGr_QaEc"
