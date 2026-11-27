@@ -1,7 +1,8 @@
 """Calibration check "70 means 70" (R29): a reliability table per probability column.
 
 Input is one CSV of stored model answers (format in docs/research.md): a header row, a 0/1
-`outcome` column and one or more `p_<name>` probability columns. An answer is bucketed by
+`outcome` column, a `day` column (the answer's trading day, YYYY-MM-DD, checked against the
+sealed exam window) and one or more `p_<name>` probability columns. An answer is bucketed by
 floor(p x buckets), with p = 1 in the last bucket. Per bucket: the count, the mean predicted
 probability, the observed rate of outcome 1 and the gap (observed - predicted). Overall: the
 Brier score, the expected calibration error (count-weighted mean absolute gap) and the base
@@ -17,6 +18,7 @@ from __future__ import annotations
 import csv
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from tickr.archive import open_text
 from tickr.research.errors import ResearchError
 
 OUTCOME_COLUMN = "outcome"
+DAY_COLUMN = "day"
 PROBABILITY_PREFIX = "p_"
 
 
@@ -64,8 +67,9 @@ def load_answers(path: Path) -> tuple[list[str], list[tuple[int, dict[str, str]]
     with open_text(path) as handle:
         reader = csv.DictReader(handle)
         header = reader.fieldnames or []
-        if OUTCOME_COLUMN not in header:
-            raise ResearchError(f"{path}: no {OUTCOME_COLUMN!r} column")
+        for required in (OUTCOME_COLUMN, DAY_COLUMN):
+            if required not in header:
+                raise ResearchError(f"{path}: no {required!r} column")
         columns = [c for c in header if c.startswith(PROBABILITY_PREFIX)]
         if not columns:
             raise ResearchError(
@@ -78,6 +82,20 @@ def load_answers(path: Path) -> tuple[list[str], list[tuple[int, dict[str, str]]
     if not rows:
         raise ResearchError(f"{path}: no answers")
     return columns, rows
+
+
+def answer_days(path: Path) -> list[date]:
+    """The trading day of every stored answer, for the sealed-window check; a bad one refused."""
+    _, rows = load_answers(path)
+    days = []
+    for number, row in rows:
+        try:
+            days.append(date.fromisoformat(row[DAY_COLUMN].strip()))
+        except ValueError as exc:
+            raise ResearchError(
+                f"{path}:{number}: {DAY_COLUMN} is not a YYYY-MM-DD date: "
+                f"{row[DAY_COLUMN]!r}") from exc
+    return days
 
 
 def reliability(path: Path, rows: Sequence[tuple[int, dict[str, str]]], column: str,

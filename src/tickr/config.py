@@ -124,6 +124,7 @@ class SessionConfig:
     flatten_grace_seconds: Decimal
     close_order_cutoff_seconds: Decimal
     half_days_enabled: bool
+    carry_across_sessions: bool
     premarket_enabled: bool
     premarket_first_entry_minutes_after_open: int
     premarket_last_entry_minutes_before_close: int

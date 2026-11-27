@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import csv
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from tickr.replay.measured import FORMAT as MEASURED_FORMAT
+from tickr.replay.measured import OPERATIONS_FORMAT
 from tickr.research import calibration as cal
 from tickr.research import collar as col
 from tickr.research import fill_quality as fq
@@ -250,7 +252,9 @@ def write_collar(result: col.CollarReport, out_dir: Path, places: int) -> dict[s
 REFUSAL_COLUMNS = ("day", "strategy", "version", "role", "setup", "kind", "name", "count")
 
 
-def write_refusals(rows: Sequence[rf.RefusalRow], out_dir: Path, places: int) -> dict[str, Any]:
+def write_refusals(rows: Sequence[rf.RefusalRow], out_dir: Path, places: int,
+                   platform_only_days: Sequence[date]) -> dict[str, Any]:
+    """`platform_only_days`: sealed days whose rows hold platform refusal causes only."""
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(out_dir / "refusals.csv", REFUSAL_COLUMNS,
                ([getattr(r, c) for c in REFUSAL_COLUMNS] for r in rows), places)
@@ -258,7 +262,8 @@ def write_refusals(rows: Sequence[rf.RefusalRow], out_dir: Path, places: int) ->
     for r in rows:
         by_kind[r.kind] = by_kind.get(r.kind, 0) + r.count
     body = {"days": sorted({r.day.isoformat() for r in rows}), "rows": len(rows),
-            "by_kind": by_kind}
+            "by_kind": by_kind,
+            "platform_only_days": sorted(d.isoformat() for d in platform_only_days)}
     return _json(out_dir / "refusals_summary.json", body, places)
 
 
@@ -271,24 +276,62 @@ SLIPPAGE_DAY_COLUMNS = (
     "stop_slippage_usd", "stop_slippage_percent")
 
 
+# Withheld (left empty) on a day of the sealed exam window (owner ruling 2026-11-26): the P&L and
+# every absolute price of a trade, from which its return could be read. Each fill's slippage
+# against its intended or trigger price, the counts and the aggregates stay.
+SLIPPAGE_SEALED_COLUMNS = frozenset({"stop_price", "stop_fill_price", "entry_price",
+                                     "realized_loss_usd"})
+# The operations summary of every day, sealed days included: NOT a replay input (the replay
+# refuses its format, `tickr.replay.measured`).
+OPERATIONS_NOTE = ("operations evidence over every live day, sealed days included; never a "
+                   "replay input: the replay reads slippage_summary.json")
+
+
+def _withheld(columns: frozenset[str], withhold: Callable[[date], bool]):
+    def value(row: Any, column: str) -> Any:
+        return None if column in columns and withhold(row.day) else getattr(row, column)
+    return value
+
+
 def write_slippage(trades: Sequence[sl.StoppedTrade], environment: str | None, out_dir: Path,
-                   places: int) -> dict[str, Any]:
-    """`slippage_trades.csv`, `slippage_days.csv` and `slippage_summary.json`, the file the
-    replay's `measured_slippage_file` selects (`tickr.replay.measured`)."""
+                   places: int, withhold: Callable[[date], bool]) -> dict[str, Any]:
+    """`slippage_trades.csv`, `slippage_days.csv`, `slippage_summary.json` (the file the
+    replay's `measured_slippage_file` selects, `tickr.replay.measured`) and
+    `slippage_operations.json`.
+
+    `withhold(day)` is true for a day of the sealed exam window (research/sealed.py). Its trade
+    rows keep the stop slippage and leave `SLIPPAGE_SEALED_COLUMNS` empty; its day row leaves
+    the realized P&L empty. `slippage_summary.json` counts only the days outside the window and
+    lists the excluded ones. `slippage_operations.json` counts every day, its realized P&L is
+    null when a sealed day is among them, and its own format keeps it out of the replay."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    trade_value = _withheld(SLIPPAGE_SEALED_COLUMNS, withhold)
+    day_value = _withheld(frozenset({"realized_loss_usd"}), withhold)
     _write_csv(out_dir / "slippage_trades.csv", SLIPPAGE_TRADE_COLUMNS,
-               ([getattr(t, c) for c in SLIPPAGE_TRADE_COLUMNS] for t in trades), places)
+               ([trade_value(t, c) for c in SLIPPAGE_TRADE_COLUMNS] for t in trades), places)
     days = sl.by_day(trades)
     _write_csv(out_dir / "slippage_days.csv", SLIPPAGE_DAY_COLUMNS,
-               ([getattr(d, c) for c in SLIPPAGE_DAY_COLUMNS] for d in days), places)
-    total = sl.group(trades, None)
+               ([day_value(d, c) for c in SLIPPAGE_DAY_COLUMNS] for d in days), places)
+    sealed_days = [d.day.isoformat() for d in days if d.day is not None and withhold(d.day)]
+
+    def totals(group: sl.SlippageGroup, realized: bool) -> dict[str, Any]:
+        return {"stopped_trades": group.stopped_trades, "measured_trades": group.measured_trades,
+                "planned_loss_usd": group.planned_loss_usd,
+                "realized_loss_usd": group.realized_loss_usd if realized else None,
+                "stop_slippage_usd": group.stop_slippage_usd,
+                "stop_slippage_percent": group.stop_slippage_percent}
+
+    every = sl.group(trades, None)
+    _json(out_dir / "slippage_operations.json",
+          {"format": OPERATIONS_FORMAT, "note": OPERATIONS_NOTE, "environment": environment,
+           "days": [d.day.isoformat() for d in days if d.day is not None],
+           "sealed_days": sealed_days, **totals(every, not sealed_days)}, places)
+    open_trades = [t for t in trades if not withhold(t.day)]
     body = {"format": MEASURED_FORMAT, "label": "measured", "environment": environment,
-            "days": [d.day.isoformat() for d in days if d.day is not None],
-            "stopped_trades": total.stopped_trades, "measured_trades": total.measured_trades,
-            "planned_loss_usd": total.planned_loss_usd,
-            "realized_loss_usd": total.realized_loss_usd,
-            "stop_slippage_usd": total.stop_slippage_usd,
-            "stop_slippage_percent": total.stop_slippage_percent}
+            "days": [d.day.isoformat() for d in days
+                     if d.day is not None and not withhold(d.day)],
+            "sealed_days_excluded": sealed_days,
+            **totals(sl.group(open_trades, None), True)}
     return _json(out_dir / "slippage_summary.json", body, places)
 
 
@@ -319,23 +362,30 @@ FILL_ASSUMED = {
     "stop_slippage_percent": "slippage_percent",
     "exit_slippage_vs_quote_percent": "slippage_percent",
 }
+# Withheld (left empty) on a day of the sealed exam window: every absolute price of a trade.
+# The slippage of each fill against its limit or quote, delays, shares and fees stay.
+FILL_SEALED_COLUMNS = frozenset({"entry_limit", "entry_fill", "entry_ask", "exit_fill",
+                                 "exit_bid"})
 FEES_ASSUMPTION = "none: the replay and the backtest are gross of fees (no fee model in config)"
 
 
 def write_fill_quality(sets: Sequence[tuple[str, Sequence[fq.TradeFill],
                                             Sequence[sl.StoppedTrade]]],
-                       assumed: dict[str, Decimal], out_dir: Path, places: int) -> dict[str, Any]:
+                       assumed: dict[str, Decimal], out_dir: Path, places: int,
+                       withhold: Callable[[date], bool]) -> dict[str, Any]:
     """Per set (label, trades, stopped trades): `<label>/fill_quality_trades.csv` and
     `<label>/fill_quality_days.csv` (one row per day, then `all`); `fill_quality_compare.csv`
     (metric, assumed, one column per set, and the second minus the first when there are two);
-    `fill_quality_summary.json`."""
+    `fill_quality_summary.json`. On a day where `withhold(day)` is true (the sealed exam window)
+    the trade rows leave `FILL_SEALED_COLUMNS` empty."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    value = _withheld(FILL_SEALED_COLUMNS, withhold)
     overall = {}
     for label, trades, stopped in sets:
         folder = out_dir / label
         folder.mkdir(exist_ok=True)
         _write_csv(folder / "fill_quality_trades.csv", FILL_TRADE_COLUMNS,
-                   ([getattr(t, c) for c in FILL_TRADE_COLUMNS] for t in trades), places)
+                   ([value(t, c) for c in FILL_TRADE_COLUMNS] for t in trades), places)
         days = sorted({t.day for t in trades})
         rows = [(d, fq.metrics(trades, stopped, d)) for d in [*days, None]]
         columns = ("day", *rows[-1][1])

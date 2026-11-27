@@ -20,3 +20,13 @@ gate_window_months = 3
 gate_drop_best_percent = 1
 # R23 gate report: tail concentration, the top percents of trades by after-cost result whose share of the net is reported (the model targets rare large gainers; Codex review of #851), percent each, increasing; read by research/gate.py.
 gate_tail_percents = [1, 5, 10]
+
+[sealed]
+# The sealed exam data (backlog R20, docs/promotion.md rung 0): closed [first, last] ranges of exchange-time-zone dates ([research] session_timezone), both ends sealed; read by research/sealed.py, which refuses every research command whose dates or inputs touch them. No flag overrides it: the exam unseals only when the owner edits this table.
+ranges = [[2026-07-01, 2026-08-14]]
+# The sealed exam data (backlog R20): this date and every later one is sealed (R20 "every day from 2026-11-20"), exchange-time-zone date; read by research/sealed.py.
+every_day_from = 2026-11-20
+# Commands that read sealed data (owner ruling 2026-11-26: market data, feature tables, labels, model scores, decision records with their outcomes, any P&L or return of a decision): every input of a sealed day is refused; command names; read by research/sealed.py for research/__main__.py, which refuses a command in neither list.
+sealed_commands = ["calibration", "collar", "decide", "diff", "gate", "observers", "outcomes", "sizing", "whatif"]
+# Platform execution reports (owner ruling 2026-11-26): they may read the bot's OWN order, fill and timing records of sealed days, but never a market-data file of one (a sealed captured quote or bar is still refused); they print no per-decision or per-symbol return (P&L of a sealed day is withheld), no model score, nothing grouped by model output; their numbers are operational evidence only, never used to choose a model, label, threshold or feature; command names; read by research/sealed.py.
+execution_commands = ["fill-quality", "latency", "refusals", "slippage"]

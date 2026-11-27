@@ -14,6 +14,9 @@ from pathlib import Path
 from tickr.replay.errors import MeasuredSlippageError
 
 FORMAT = "tickr-measured-slippage-v1"
+# `slippage_operations.json` of the same command: every live day, the sealed exam window
+# included (owner ruling 2026-11-26). Operations evidence only, never a replay input.
+OPERATIONS_FORMAT = "tickr-slippage-operations-v1"
 
 
 def load_measured_slippage(path: Path, min_trades: int) -> Decimal:
@@ -26,6 +29,10 @@ def load_measured_slippage(path: Path, min_trades: int) -> Decimal:
         body = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MeasuredSlippageError(f"{path}: not a readable JSON file: {exc}") from exc
+    if isinstance(body, dict) and body.get("format") == OPERATIONS_FORMAT:
+        raise MeasuredSlippageError(
+            f"{path}: an operations summary of live days (sealed days included) is never a "
+            "replay input; select slippage_summary.json")
     if not isinstance(body, dict) or body.get("format") != FORMAT:
         raise MeasuredSlippageError(f"{path}: format is not {FORMAT!r}")
     count = body.get("measured_trades")
