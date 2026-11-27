@@ -10,7 +10,9 @@ sets, lags). Each is checked against its md5 (FULL_PINS) on the bytes that are r
 re-implemented: `LiveContext.minute_rows` cuts the inputs with `l1feat.cut_inputs` and runs
 `l1feat.assemble` on the rows of one minute, in the live date context described below. The 65
 table columns come from the context's own feature-only copy of the table code (see THE TABLE
-CODE IN A CONTEXT).
+CODE IN A CONTEXT). `minute_rows` is `table_rows` (the minute's cohort and table columns) then
+`assemble_rows` (the cut and `assemble`), each with the minute's bounds and receipt cutoff, for
+a live caller that needs the cohort before the ticks are converted.
 
 Computable here, not live: no feed fills these inputs yet and nothing at runtime calls this
 module. `tickr.model.bundle` still serves only `LIVE_GROUPS`; COMPUTABLE_GROUPS is the list of
@@ -524,7 +526,7 @@ def live_context(market_day: MarketDay, session_policy: str = FULL_DAYS) -> Live
             calendar = code.labels.calendar()
         if day not in calendar:
             raise ModelRefused("unknown_trading_day", day)
-        ctx = LiveContext(_KEY, day, code, end)
+        ctx = LiveContext(_KEY, day, code, end, market_day, session_policy)
         for old in [k for k in _LIVE if k != "groups"]:
             del _LIVE[old]
         _LIVE[key] = ctx
@@ -534,14 +536,19 @@ def live_context(market_day: MarketDay, session_policy: str = FULL_DAYS) -> Live
 class LiveContext:
     """The pinned feature builder bounded by one live trading day (see the module docstring).
     Built only by `live_context`. `end_minute`: the first table minute it does not serve (the
-    actual extended close of a full day, the actual regular close of a half day)."""
+    actual extended close of a full day, the actual regular close of a half day).
+    `market_day` / `session_policy`: what `live_context` was given (a worker process builds the
+    same context again from them)."""
 
-    def __init__(self, key: object, day: str, code: SimpleNamespace, end_minute: int) -> None:
+    def __init__(self, key: object, day: str, code: SimpleNamespace, end_minute: int,
+                 market_day: MarketDay | None = None, session_policy: str = FULL_DAYS) -> None:
         if key is not _KEY:
             raise ModelRefused("live_context_outside_bot", "build it with live_context()")
         self.day = day
         self.code = code
         self.end_minute = end_minute
+        self.market_day = market_day
+        self.session_policy = session_policy
 
     @property
     def names(self) -> list[str]:
@@ -566,30 +573,50 @@ class LiveContext:
                 w.load = _refusal("wm2_l1f", "load")
                 w._CAP.clear()
 
-    def minute_rows(self, rows: Any, minute: int, state: base.DayState,
-                    types: set[str] | None, inputs: FullInputs,
-                    cutoff: datetime.datetime) -> Any:
-        """The rows of `minute` of the context's day with all 191 features, from what was
-        received by `cutoff` (aware; at or after the minute's mark): the table rows of the
-        minute from the day's bars so far, the training's `cut_inputs` at the minute (anything
-        it would cut refuses, see `_refuse_cut`) and its `assemble` on those rows. Returns `sym`
-        and the 191 features in the training's order and stored types (m int16, sess int8, the
-        others float32); an empty frame when no row."""
-        import numpy as np
-        import pandas as pd
-
-        code, day = self.code, self.day
+    def _bounds(self, minute: int, cutoff: datetime.datetime) -> int:
+        """The checks every minute of the context passes first: before the day's close, a
+        cutoff that is aware and at or after the minute's mark. Returns the cutoff in UTC ns."""
         if minute >= self.end_minute:
             raise ModelRefused("after_exchange_close", f"minute {minute}, close {self.end_minute}")
         if cutoff.tzinfo is None:
             raise ModelRefused("cutoff_not_aware", cutoff.isoformat())
         if cutoff < self.mark(minute):
             raise ModelRefused("cutoff_before_mark", f"{cutoff.isoformat()}, minute {minute}")
-        limit = _ns(cutoff)
-        frame = base.bars_frame(_received_bars(rows, limit), day, code.w.NM)
+        return _ns(cutoff)
+
+    def received_bars(self, rows: Any, minute: int, cutoff: datetime.datetime) -> Any:
+        """The day's bar rows received by `cutoff`, without their receipt column, after the
+        minute's bounds (`_bounds`)."""
+        return _received_bars(rows, self._bounds(minute, cutoff))
+
+    def table_rows(self, rows: Any, minute: int, state: base.DayState, types: set[str] | None,
+                   cutoff: datetime.datetime) -> Any:
+        """The table rows of `minute` (every column of the feature-only `day2` table, one row
+        per symbol the training's row rule keeps: the minute's cohort) from the day's bars
+        received by `cutoff` (a bar after `minute` refuses); None when the table has no row at
+        all."""
+        frame = base.bars_frame(self.received_bars(rows, minute, cutoff), self.day,
+                                self.code.w.NM)
         if (frame.m > minute).any():
             raise ModelRefused("bar_after_minute", f"minute {minute}")
         table = self.table(frame, state, types)
+        if table is None:
+            return None
+        return table.loc[table.m == minute].reset_index(drop=True)
+
+    def assemble_rows(self, t: Any, minute: int, state: base.DayState, inputs: FullInputs,
+                      cutoff: datetime.datetime) -> Any:
+        """`minute_rows` from the table rows `t` of `minute` (`table_rows`, or rows equal to
+        them): the training's `cut_inputs` at the minute on the inputs received by `cutoff`
+        (anything it would cut refuses, see `_refuse_cut`, also when `t` has no row) and its
+        `assemble` on `t`."""
+        import numpy as np
+        import pandas as pd
+
+        code, day = self.code, self.day
+        limit = self._bounds(minute, cutoff)
+        if t is not None and len(t) and (t.m != minute).any():
+            raise ModelRefused("table_rows_of_another_minute", f"minute {minute}")
         cols = ["sym", *code.names]
         with base._LOCK:
             work = tempfile.mkdtemp(prefix="tickr-l1feat-")
@@ -599,9 +626,9 @@ class LiveContext:
                     cut = code.feat.cut_inputs(day, minute, str(held.tick_file),
                                                str(held.benzinga), work, str(held.reference))
                 _refuse_cut(code, held, cut, day)
-                if table is None or not (table.m == minute).any():
+                if t is None or not len(t):
                     return pd.DataFrame(columns=cols)
-                t = table.loc[table.m == minute].reset_index(drop=True)
+                t = t.reset_index(drop=True)
                 prev = np.array([state.prev.get(s, np.nan) for s in t["sym"].values],
                                 np.float64)
                 with _training_refusals(), contextlib.redirect_stdout(io.StringIO()):
@@ -611,6 +638,18 @@ class LiveContext:
             finally:
                 shutil.rmtree(work, ignore_errors=True)
         return out[cols].reset_index(drop=True)
+
+    def minute_rows(self, rows: Any, minute: int, state: base.DayState,
+                    types: set[str] | None, inputs: FullInputs,
+                    cutoff: datetime.datetime) -> Any:
+        """The rows of `minute` of the context's day with all 191 features, from what was
+        received by `cutoff` (aware; at or after the minute's mark): the table rows of the
+        minute from the day's bars so far (`table_rows`), the training's `cut_inputs` at the
+        minute (anything it would cut refuses, see `_refuse_cut`) and its `assemble` on those
+        rows (`assemble_rows`). Returns `sym` and the 191 features in the training's order and
+        stored types (m int16, sess int8, the others float32); an empty frame when no row."""
+        t = self.table_rows(rows, minute, state, types, cutoff)
+        return self.assemble_rows(t, minute, state, inputs, cutoff)
 
 
 _EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)

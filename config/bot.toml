@@ -916,6 +916,22 @@ bundle = ""
 # differed in the last bit at 1,000, tests/model/tick_memory.py); any other value is refused; read by config.load,
 # passed to tickr.model.features.ticks.tick_rows.
 tick_groups = 24
+# Live features (tickr.model.live, not wired into the bot loop): true = before a closed minute's ticks go through the
+# frozen converter, one synthetic marker quote per stock at the first nanosecond of the next minute lets the minute's
+# last quote weigh to the minute end, as in the training's whole-day tick file whenever the stock quotes again that
+# day; false = the plain prefix (that quote weighs 0). Codex (codex-108 point 1) uses it in the parity experiment and
+# keeps it out of the raw capture, carried state, counts and next minute; the open-day report measures the final-quote
+# approximation before any activation, so it stays off here with the model; read by tickr.model.live.
+live_marker_quote = false
+# Seconds after a minute's end before tickr.model.live may close that minute (late bars, trades, quotes and REST pages
+# still arriving), written as text, e.g. "2.5". Not measured yet: it awaits the arrival measurement of PR #796, so it
+# is empty and a clock-driven close refuses (feature_wait_unmeasured) instead of guessing; read by config.load and
+# tickr.model.live.
+live_wait_after_minute_seconds = ""
+# Processes that compute the cohort's table rows side by side at each close of tickr.model.live (the pinned table code
+# on chunks of at most 500 tickers, tickr.model.features.incremental); 1 = in the bot's own process, no worker. A count
+# of processes, at least 1; read by config.load and tickr.model.live.
+live_table_workers = 1
 
 [confidence_sizing]
 # Size by model confidence (backlog R30): true = a position's USD size scales linearly with the model's probability from
@@ -1290,6 +1306,49 @@ cache_max_age_days = 30
 # Most calendar days walked back to find the sessions of a 1d or 5d chart range (weekends and holidays are skipped);
 # read by the api server.
 session_lookback_days = 14
+
+[parity]
+# The replay parity harness (python -m tickr.model.parity) runs on the owner's Mac beside the live bot; these keys keep
+# it from taking the bot's disk and memory (tickr.model.headroom). Measured 2026-11-17: one minute's uncompressed
+# quotes prefix passed 5.9 GB at 18:58 New York and filled a disk that had about 25 GB free at the start (other
+# processes writing too; duckdb errno 28); the run peaked at 12.7 GB resident and a 32.3 GB memory footprint on the
+# 32 GB Mac (39 GB swap in use).
+# Free disk space, decimal GB (10^9 bytes), the harness must leave on the disk of its --work-dir: it protects the live
+# bot's disk (database, logs, captures). Before each tick conversion the harness refuses disk_space_insufficient,
+# before writing, when free space minus the conversion's estimated bytes (its input rows times the bytes per row
+# measured on the run) would fall below it; also the cap of every harness duckdb spill. Basis, single-day samples on
+# the Mac: macOS swap lives on the same boot volume and grows under the harness's memory pressure; its largest
+# measured size is 40,960 MB (2026-11-25, after the 2026-11-17 run), 41 GB counted as growth from an empty swap
+# after a reboot; plus the live bot's worst measured day of disk growth (2026-11-23: 975 MB of data plus 7 MB of
+# api.log, about 1 GB); read by tickr.model.parity (--disk-reserve-gb overrides it).
+disk_reserve_gb = 42
+# Available memory, decimal GB, below which the harness refuses memory_insufficient before a conversion: it protects
+# the live bot's memory (the 2026-11-17 run pushed the Mac into 39 GB of swap). Basis: the measured footprint of the
+# processes that share the Mac on 2026-11-25 (bot, API and apps about 3.3 GB; Claude processes about 3.2 GB; a single-day sample),
+# 6.5 GB rounded up; read by tickr.model.parity (--memory-reserve-gb overrides it).
+memory_reserve_gb = 7
+# Memory limit, decimal GB, of every duckdb engine of the harness, the frozen tick converter's included (as its
+# TICK_MEM, which must then be unset; its own default is 10 GB): beyond it duckdb spills into the work folder, within
+# disk_reserve_gb. Basis, a single-day sample: memory available on the Mac on 2026-11-25 (10.3 GB, swap 37.4 of
+# 38.9 GB in use) minus memory_reserve_gb, rounded down. Not yet subtracted: the harness's own Python, the
+# converter's non-duckdb memory and the comparison frames; their peak resident size is in each minute's journal line
+# of the first run after the Mac's reboot, and this value is re-derived from it; read by tickr.model.parity
+# (--duckdb-memory-gb overrides it).
+duckdb_memory_gb = 3
+# Events per input file of the probe conversion that measures a conversion kind's bytes per input row when the kind's
+# first conversion is larger (a measurement's size, not a limit), count; read by tickr.model.headroom.
+probe_rows = 1000000
+# Seconds between two samples of a conversion folder's size while it converts (pacing of the peak measurement; file
+# removals inside it are sampled too); read by tickr.model.headroom.
+disk_poll_seconds = 0.5
+# Provisional diagnostics of the replay parity engine check (codex-110 point 2), each the text "name day symbol
+# HH:MM column ulp64": one tick-table cell (symbol, row minute New York, v11 column) of one open day that differs
+# between the incremental and full-prefix engines by exactly ulp64 float64 units in the last place. Such a cell is
+# listed apart in the report as class diagnostic, never counted as exact and never a bound for another cell: any
+# other difference stays an engine difference, and the delivered features must still be exact. Measured: the
+# 2026-11-17 Mac run (#839 09d56392, claude-115 R4) found WDC tburst of 19:16 at 1046.190217 / 1046.1902169999998,
+# 1 float64 ULP, 0 float32 ULP, both variants, identical serial settings; read by tickr.model.parity.
+engine_diagnostics = ["wdc-tburst 2026-11-17 WDC 19:16 tburst 1"]
 
 [environments.sandbox]
 # May this process send trading requests in this environment; read by the trading gate.

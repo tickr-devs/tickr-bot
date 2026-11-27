@@ -79,8 +79,10 @@ jobs:
       - if: needs.python-changes.outputs.python == 'true'
         run: uv run --no-sync ruff check .
       # One pytest process per core (pytest-xdist): the suite's tests share no state.
+      # --dist worksteal: an idle worker takes tests queued on a busy one, so the slow model
+      # modules no longer end the run on one worker alone (2026-11-27, 4 cores: 435 s -> 330 s).
       - if: needs.python-changes.outputs.python == 'true'
-        run: uv run --no-sync pytest -q -n auto
+        run: uv run --no-sync pytest -q -n auto --dist worksteal
   demo-fixture:
     # Builds the real demo fixture from the committed inputs (docs/demo.md): the fixture is never
     # committed, every Mac builds its own, so a change that breaks the build (the demo day not flat

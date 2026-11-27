@@ -410,6 +410,9 @@ class ModelConfig:
     bundles_dir: str
     bundle: str
     tick_groups: int
+    live_marker_quote: bool
+    live_wait_after_minute_seconds: str
+    live_table_workers: int
 
 
 @dataclass(frozen=True)
@@ -428,6 +431,16 @@ class ExitChaseConfig:
     reprice_seconds: Decimal
     max_reprices: int
     max_worse_atr: Decimal
+
+
+@dataclass(frozen=True)
+class ParityConfig:
+    disk_reserve_gb: int
+    memory_reserve_gb: int
+    duckdb_memory_gb: int
+    probe_rows: int
+    disk_poll_seconds: Decimal
+    engine_diagnostics: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -577,6 +590,7 @@ class Config:
     massive: MassiveConfig
     exit_chase: ExitChaseConfig
     trailing_stop: TrailingStopConfig
+    parity: ParityConfig
     environments: dict[str, EnvironmentConfig]
     root: Path
     digest: str
@@ -611,6 +625,7 @@ _SECTIONS: dict[str, type] = {
     "massive": MassiveConfig,
     "exit_chase": ExitChaseConfig,
     "trailing_stop": TrailingStopConfig,
+    "parity": ParityConfig,
 }
 
 
@@ -665,6 +680,16 @@ def _coerce(where: str, value: Any, target: Any) -> Any:
             limits[route] = (pair[0], Decimal(str(pair[1])))
         return limits
     raise ConfigError(f"{where}: unsupported type {target!r}")  # pragma: no cover
+
+
+def live_wait_seconds(model: ModelConfig) -> Decimal | None:
+    """The measured wait after a minute's end before the live features close it, or None when
+    the key is empty (not measured) or not a number of at least 0."""
+    try:
+        value = Decimal(model.live_wait_after_minute_seconds)
+    except ArithmeticError:
+        return None
+    return value if value.is_finite() and value >= 0 else None
 
 
 def build_section(name: str, table: Any, cls: type) -> Any:
@@ -812,6 +837,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
                           "are; the live data feed and the decision path follow)")
     if model.tick_groups < 1:
         raise ConfigError("[model] tick_groups must be at least 1")
+    if model.live_wait_after_minute_seconds != "" and live_wait_seconds(model) is None:
+        raise ConfigError("[model] live_wait_after_minute_seconds must be empty (not measured "
+                          "yet) or a number of seconds of at least 0 written as text")
+    if model.live_table_workers < 1:
+        raise ConfigError("[model] live_table_workers must be at least 1")
     check_sizing(built["confidence_sizing"], built["risk"], model)
     trailing: TrailingStopConfig = built["trailing_stop"]
     if trailing.enabled:
@@ -823,6 +853,11 @@ def load(path: Path | str, root: Path | str | None = None) -> Config:
     if trailing.min_move_usd < 0:
         raise ConfigError("[trailing_stop] min_move_usd must be at least 0 (0 = no minimum "
                           "step)")
+    parity: ParityConfig = built["parity"]
+    if (min(parity.disk_reserve_gb, parity.memory_reserve_gb, parity.duckdb_memory_gb,
+            parity.probe_rows) < 1 or parity.disk_poll_seconds <= 0):
+        raise ConfigError("[parity] reserves, duckdb_memory_gb and probe_rows must be at least "
+                          "1, disk_poll_seconds above 0")
     massive: MassiveConfig = built["massive"]
     if (massive.http_timeout_seconds < 1 or massive.page_limit < 1 or massive.max_pages < 1
             or massive.stream_max_message_bytes < 1 or massive.stream_reconnect_seconds <= 0

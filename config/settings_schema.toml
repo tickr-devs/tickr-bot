@@ -184,6 +184,7 @@ engineering_tables = [
   "runtime",
   "alerts",
   "chart",
+  "parity",
 ]
 # Tables of config/bot.toml whose keys are all closed (the per-environment tables: hosts, secret
 # variable names, authorization); read by tickr.settings_schema.classify.
