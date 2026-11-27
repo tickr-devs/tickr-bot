@@ -91,7 +91,7 @@ class Watch:
                                          run_id=self.engine.run_id)
 
     def flush_alerts(self) -> None:
-        """At exit: wait for background alert sends (iMessage) and journal their outcomes."""
+        """At exit: wait for background alert sends (Telegram) and journal their outcomes."""
         self._journal(self.alerter.flush())
 
     def check(self) -> None:

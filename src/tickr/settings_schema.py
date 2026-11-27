@@ -18,6 +18,7 @@ its [sizing] table.
 from __future__ import annotations
 
 import math
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -83,6 +84,9 @@ class Loosens(StrEnum):
     RAISE = "raise"
     LOWER = "lower"
     NEVER = "never"
+    RAISE_OR_OFF = "raise_or_off"
+    """A limit where 0 = off: raising it loosens, and so does setting it to 0 (turning it
+    off); setting it from 0 to a value turns it on."""
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,16 @@ class Cause(StrEnum):
     OFF_STEP = "OFF_STEP"
     RULE_BROKEN = "RULE_BROKEN"
     VALUE_MISSING = "VALUE_MISSING"
+    ENGINEERING_KEY = "ENGINEERING_KEY"
+    CLOSED_KEY = "CLOSED_KEY"
+
+
+class SettingClass(StrEnum):
+    """Who may change a key of config/bot.toml (backlog S2)."""
+
+    OWNER = "owner"  # from the apps; has a record in RECORDS
+    ENGINEERING = "engineering"  # file only
+    CLOSED = "closed"  # the run environment, trading authorization, secrets: never from an app
 
 
 @dataclass(frozen=True)
@@ -176,6 +190,17 @@ RECORDS: tuple[Setting, ...] = (
             "Margen mínimo de pérdida diaria en el que se dimensiona una nueva operación; por "
             "debajo se detienen las entradas.",
             _PROTECT, _DOWN, minimum=D(0)),
+    Setting(_P, "risk.max_weekly_loss_usd", Kind.DECIMAL, Unit.USD, "risk.loss_locks",
+            "Weekly loss ceiling: this week's net realized loss plus open reservations plus the "
+            "new trade's planned loss; 0 = off.",
+            "Límite de pérdida semanal: pérdida neta realizada esta semana más reservas abiertas "
+            "más la pérdida prevista de la nueva operación; 0 = desactivado.",
+            _PROTECT, Loosens.RAISE_OR_OFF, minimum=D(0)),
+    Setting(_P, "risk.stop_out_streak_limit", Kind.INT, Unit.COUNT, "risk.loss_locks",
+            "Stop-outs in a row today after which no new entry is taken until tomorrow; 0 = off.",
+            "Stops ejecutados seguidos hoy tras los que no se abre ninguna entrada hasta mañana; "
+            "0 = desactivado.",
+            _PROTECT, Loosens.RAISE_OR_OFF, minimum=D(0)),
     Setting(_P, "risk.buying_power_max_age_seconds", Kind.DECIMAL, Unit.SECONDS, "risk.account",
             "Oldest broker read of the day buying power an entry may rely on.",
             "Lectura más antigua del poder de compra del día en la que puede basarse una entrada.",
@@ -356,6 +381,16 @@ RULES: tuple[Rule, ...] = (
 
 
 _NUMBERS = frozenset({"step", "maximum"})
+CLASSES = "classes"
+"""Top-level table of config/settings_schema.toml that holds the class lists, not an owner."""
+
+
+@dataclass(frozen=True)
+class Classes:
+    tables: Mapping[str, SettingClass]
+    """Class of each table of config/bot.toml (a dotted table name is one table)."""
+    keys: Mapping[str, SettingClass]
+    """Explicit class of single keys; wins over the table's class."""
 
 
 def _decimal(where: str, value: Any) -> Decimal:
@@ -374,7 +409,8 @@ def load(path: Path | str) -> tuple[Setting, ...]:
     or for no record, and an unknown field."""
     tables = tomllib.loads(Path(path).read_text("utf-8"))
     entries: dict[tuple[str, str], Any] = {
-        (owner, key): entry for owner, table in tables.items() for key, entry in table.items()}
+        (owner, key): entry for owner, table in tables.items() if owner != CLASSES
+        for key, entry in table.items()}
     settings: list[Setting] = []
     for record in RECORDS:
         where = f'[{record.owner}."{record.key}"]'
@@ -395,6 +431,111 @@ def load(path: Path | str) -> tuple[Setting, ...]:
     if entries:
         raise SchemaError(f"entries for no record: {sorted(entries)}")
     return tuple(settings)
+
+
+def _names(table: Mapping[str, Any], field: str) -> tuple[str, ...]:
+    names = table.get(field)
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise SchemaError(f"[classes] {field}: expected a list of names")
+    return tuple(names)
+
+
+def load_classes(path: Path | str) -> Classes:
+    """The class lists of config/settings_schema.toml. Refuses a missing or unknown list, a name
+    that is not a dotted key, a table in both lists, and a platform record whose key path lies in
+    a closed table or under a closed key (at any depth, see `classify`)."""
+    table = tomllib.loads(Path(path).read_text("utf-8")).get(CLASSES)
+    fields = {"engineering_tables", "closed_tables", "closed_keys"}
+    if not isinstance(table, Mapping) or set(table) != fields:
+        raise SchemaError(f"[classes] must hold exactly {sorted(fields)}")
+    engineering = _names(table, "engineering_tables")
+    closed = _names(table, "closed_tables")
+    closed_keys = _names(table, "closed_keys")
+    if bad := sorted(n for n in (*engineering, *closed, *closed_keys) if key_path(n) is None):
+        raise SchemaError(f"[classes] names that are not dotted keys: {bad}")
+    if both := sorted(set(engineering) & set(closed)):
+        raise SchemaError(f"[classes] tables in both lists: {both}")
+    classes = Classes(
+        tables={**dict.fromkeys(engineering, SettingClass.ENGINEERING),
+                **dict.fromkeys(closed, SettingClass.CLOSED)},
+        keys=dict.fromkeys(closed_keys, SettingClass.CLOSED))
+    for record in RECORDS:
+        if record.owner != PLATFORM:
+            continue
+        if key_path(record.key) is None or _is_closed(classes, _paths(record.key)):
+            raise SchemaError(f"record {record.key} sits in a closed table or key")
+    return classes
+
+
+_PART = re.compile(r"[ \t]*(?:([A-Za-z0-9_-]+)"  # bare part
+                   r"""|"([^"\\\x00-\x1f\x7f]*)"|'([^'\x00-\x1f\x7f]*)')[ \t]*""")
+"""One part of a TOML dotted key: bare, or quoted without escapes (an escape gives None)."""
+
+
+def key_path(key: str) -> tuple[str, ...] | None:
+    """The parts of a TOML dotted key (`a.b`, `a . "b"`, `'a'.b` all give ("a", "b")); None for
+    anything else, including escapes, empty parts and line breaks, so a caller refuses it."""
+    parts: list[str] = []
+    at = 0
+    while True:
+        match = _PART.match(key, at)
+        if match is None:
+            return None
+        parts.append(next(g for g in match.groups() if g is not None))
+        at = match.end()
+        if at == len(key):
+            return tuple(parts)
+        if key[at] != ".":
+            return None
+        at += 1
+
+
+def _paths(key: str) -> tuple[tuple[str, ...], ...]:
+    """Every reading of `key` as a path: as a TOML dotted key, and as `flatten` joins a file's
+    keys (split on dots, which keeps a key like `route_limits./trading/x`). Empty parts give no
+    reading."""
+    raw = tuple(key.split("."))
+    return tuple(p for p in (key_path(key), raw if all(raw) else None) if p)
+
+
+def _within(path: tuple[str, ...], name: str, deeper: bool = False) -> bool:
+    """Whether `path` is the key or table `name` or lies under it (only under it when `deeper`),
+    compared without case."""
+    prefix = key_path(name) or ()
+    return (bool(prefix) and len(path) >= len(prefix) + deeper
+            and tuple(p.casefold() for p in path[:len(prefix)]) == tuple(
+                p.casefold() for p in prefix))
+
+
+def _is_closed(classes: Classes, paths: tuple[tuple[str, ...], ...]) -> bool:
+    closed = [n for n, c in (*classes.tables.items(), *classes.keys.items())
+              if c is SettingClass.CLOSED]
+    return any(_within(p, n) for p in paths for n in closed)
+
+
+def classify(classes: Classes, owner: str, key: str) -> SettingClass | None:
+    """The class of a dotted key of `owner`'s file, decided on its whole key path.
+
+    A platform key that is, or lies at any depth under, a closed table or closed key in any
+    reading of its path (TOML quotes and spaces, or `flatten`'s plain dots; any case) is CLOSED,
+    even when a record names it: closed wins. Then a record (same spelling) is OWNER, and any
+    other key takes the class of its longest listed table. None, which every caller refuses
+    (UNKNOWN_KEY), for a key with no reading or a platform key in a table that no list names (a
+    test requires every table of bot.toml to be listed, so only a key outside the file gets
+    None): an unclassified key is never OWNER. A strategy file's keys without a record are
+    ENGINEERING."""
+    paths = _paths(key)
+    if not paths:
+        return None
+    if owner != PLATFORM:
+        has_record = any(r.owner == owner and r.key == key for r in RECORDS)
+        return SettingClass.OWNER if has_record else SettingClass.ENGINEERING
+    if _is_closed(classes, paths):
+        return SettingClass.CLOSED
+    if any(r.owner == PLATFORM and r.key == key for r in RECORDS):
+        return SettingClass.OWNER
+    owning = [t for t in classes.tables if any(_within(p, t, deeper=True) for p in paths)]
+    return classes.tables[max(owning, key=len)] if owning else None
 
 
 def settings_of(settings: tuple[Setting, ...], owner: str) -> dict[str, Setting]:
@@ -490,7 +631,9 @@ def change_effect(spec: Setting, old: Any, new: Any) -> ChangeEffect:
     raised = new > old
     lowered = new < old
     loosening = ((spec.loosens is Loosens.RAISE and raised)
-                 or (spec.loosens is Loosens.LOWER and lowered))
+                 or (spec.loosens is Loosens.LOWER and lowered)
+                 or (spec.loosens is Loosens.RAISE_OR_OFF and old != 0
+                     and (raised or new == 0)))
     if loosening:
         return ChangeEffect(Applies.NEXT_SESSION, needs_face_id=True)
     return ChangeEffect(spec.applies, needs_face_id=False)

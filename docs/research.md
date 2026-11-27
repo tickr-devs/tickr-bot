@@ -518,3 +518,23 @@ report also rounds to its `output_decimal_places` (`--replay-settings` with `--c
 `config/replay.toml`): that number has one home.
 
 Exit code 2 and `research refused: <cause>` on any bad input; nothing is guessed.
+
+## sizing: flat against sized by model confidence (R30)
+
+```
+python -m tickr.research sizing --answers answers.csv --all-sessions-usd 4000 \
+  --out out/sizing
+```
+
+SIMULATED. Input: the stored-answers CSV of `calibration` (a 0/1 `outcome` column, `p_<name>`
+probability columns, a blank cell = no answer) plus three columns of its own: `day`
+(YYYY-MM-DD), `session` (`regular` or `extended`) and `result_pct` (net result after fees, percent
+of the position's notional). `--probability-column` names the `p_<name>` to size on (optional when
+there is one). A blank probability on a trade is refused: it cannot be sized.
+
+Two money lines, each flat against sized: main session (`regular` rows, position at
+`[risk] position_notional_cap_usd`) and all sessions (every row, position at
+`--all-sessions-usd`). Sized bounds are `[confidence_sizing] min_usd/max_usd` (or `--min-usd`,
+`--max-usd`), scaled by line size over the cap. Output per line: earned on winners, lost on
+losers, net, days in plus (`sizing.csv`, `sizing_summary.json`). The bounds are the owner's to
+choose; shipped as 0 the command refuses (`bounds_outside_cap`) unless they are passed.

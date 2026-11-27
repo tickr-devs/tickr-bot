@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from tickr import config
-from tickr.api import contract
+from tickr.api import contract, lab_replay
 from tickr.api.lab_replay import LabReplay, LabReplayRefused
 from tickr.api.server import make_remote_server, make_server, settings_from_config
 from tickr.backtest.universe import PoolEntry, write_pool
@@ -200,6 +200,32 @@ def test_a_refused_backtest_fails_with_its_cause_without_the_home_folder(cfg, sp
     keep.mkdir()
     lab.start()
     assert not results.parent.exists() and keep.exists()
+
+
+def test_a_finished_run_never_reads_finished_while_a_start_is_still_refused(cfg, spawner,
+                                                                           monkeypatch):
+    """The last exit.json and the end of the waiter land under one hold of the lock: at the
+    moment the run first reads finished, the lock is held, so no state() or start() runs
+    between the two; once state() says FAILED, the next start is not refused."""
+    _pool(cfg)
+    spawn = spawner()
+    lab = _lab(cfg, SATURDAY, spawn)
+    held: list[bool] = []
+    write = lab_replay._write
+
+    def watched(path, body):
+        write(path, body)
+        if path.name == lab_replay.EXIT:
+            held.append(lab._lock.locked())
+
+    monkeypatch.setattr(lab_replay, "_write", watched)
+    lab.start()
+    spawn.child.code = 2
+    spawn.child.done.set()
+    _wait_for_exit(lab)
+    assert held == [True]
+    assert lab.state().state is contract.LabReplayState.FAILED
+    assert lab.start().state is contract.LabReplayState.RUNNING
 
 
 def _results(command):

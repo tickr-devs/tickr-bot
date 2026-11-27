@@ -45,16 +45,22 @@ import queue
 import signal
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from tickr.observers.loader import LoadedStrategy, load_strategy, parse_modules
+from tickr.observers.loader import (
+    LoadedStrategy,
+    load_strategy,
+    parse_modules,
+    with_settings_version,
+)
 from tickr.observers.log import DecisionLog
 from tickr.research.records import M1, Admission, DecisionRecord
+from tickr.settings_version import for_observer
 from tickr.strategy.base import Decision, Role, SymbolContext, Verdict, usable_quote
 
 ALL_OBSERVERS = "all observers"
@@ -105,11 +111,13 @@ def freeze(context: SymbolContext, at: datetime, max_quote_age: timedelta,
 @dataclass(frozen=True)
 class ProcessSpec:
     """How the child process builds the observers again: the same folders under `root`, the
-    same `[observers] strategy_modules`, the decision log folder, and the NAMES of the
+    same `[observers] strategy_modules`, the decision log folder, the platform part of their
+    settings version (`tickr.settings_version.platform_part`), and the NAMES of the
     credential variables it must not have (`config.credential_variables`)."""
     root: Path
     modules: tuple[str, ...]
     decisions: Path
+    platform: Mapping[str, Any]
     scrub: frozenset[str] = frozenset()
 
 
@@ -279,6 +287,7 @@ class _Worker:
                 role=Role.OBSERVER,
                 decision=decision,
                 admission=Admission.NOT_EVALUATED if enter else Admission.NOT_APPLICABLE,
+                settings_version=observer.settings_version,
             )
             try:
                 self.log.append(record)
@@ -320,7 +329,9 @@ def _child_main(spec: ProcessSpec, folders: tuple[str, ...], max_seconds: float,
     loaded = []
     for folder in folders:
         try:
-            loaded.append(load_strategy(spec.root, folder, modules))
+            built = load_strategy(spec.root, folder, modules)
+            loaded.append(with_settings_version(
+                built, lambda b=built: for_observer(spec.platform, b.values)))
         except Exception as exc:  # noqa: BLE001 - reported to the parent, never raised there
             results.send(("events", [("off", folder, folder, datetime.now(UTC),
                                       f"not loaded in the observer process: "

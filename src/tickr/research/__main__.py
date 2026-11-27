@@ -24,6 +24,7 @@ from tickr.replay.settings import load_settings
 from tickr.research import (
     calibration,
     compare,
+    confidence,
     fill_quality,
     observer_report,
     refusals,
@@ -44,6 +45,7 @@ from tickr.research.sealed import (
 )
 from tickr.research.settings import load_research_settings
 from tickr.research.whatif import what_if
+from tickr.risk.confidence_sizing import SizingRefused
 from tickr.types import Bar
 
 
@@ -82,6 +84,18 @@ def _parser() -> argparse.ArgumentParser:
     clock(p)
     p.add_argument("--decisions", type=Path, nargs="+", required=True, help="decision JSONL")
     p.add_argument("--quantity", help="shares for USD results (default: recorded quantity)")
+
+    p = sub.add_parser("sizing", help="flat against sized by model confidence, both money lines")
+    p.add_argument("--answers", type=Path, required=True,
+                   help="CSV: outcome, p_<name>, day, session, result_pct (research/confidence.py)")
+    p.add_argument("--probability-column", help="the p_<name> column to size on "
+                   "(optional when the file has just one)")
+    p.add_argument("--all-sessions-usd", required=True,
+                   help="position size of the all-sessions money line, USD")
+    p.add_argument("--min-usd", help="smallest size (default: [confidence_sizing] min_usd)")
+    p.add_argument("--max-usd", help="largest size (default: [confidence_sizing] max_usd)")
+    places_source(p)
+    p.add_argument("--out", type=Path, required=True, help="output directory")
 
     p = sub.add_parser("decide", help="record a strategy version's decisions over the bars")
     bars_and_out(p)
@@ -181,10 +195,10 @@ def _parser() -> argparse.ArgumentParser:
 
 # Every command of the parser; each is named in one [sealed] list of config/research.toml.
 COMMANDS = frozenset({"outcomes", "whatif", "decide", "observers", "diff", "latency", "collar",
-                      "refusals", "slippage", "calibration", "fill-quality", "gate"})
+                      "refusals", "slippage", "calibration", "fill-quality", "gate", "sizing"})
 # Commands whose reports round to the replay settings' output_decimal_places (its only home).
 REPORT_COMMANDS = frozenset({"outcomes", "diff", "latency", "collar", "refusals", "slippage",
-                             "calibration"})
+                             "calibration", "sizing"})
 
 
 def _records(what: str, paths: Sequence[Path]) -> tuple[DecisionRecord, ...]:
@@ -279,6 +293,29 @@ def _filter(records, spec: str | None):
     return compare.select(records, name, version or None)
 
 
+def _decimal(flag: str, text: str) -> Decimal:
+    try:
+        return Decimal(text)
+    except InvalidOperation as exc:
+        raise ResearchError(f"{flag} is not a number: {text!r}") from exc
+
+
+def _sizing(args: argparse.Namespace, places: int) -> dict:
+    cfg = bot_config.load(args.config)
+    own = cfg.confidence_sizing
+    low = own.min_usd if args.min_usd is None else _decimal("--min-usd", args.min_usd)
+    high = own.max_usd if args.max_usd is None else _decimal("--max-usd", args.max_usd)
+    try:
+        answers = confidence.load(args.answers, args.probability_column)
+        refuse_sealed("--answers", days=[date.fromisoformat(a.day) for a in answers])
+        result = confidence.compare(
+            answers, cfg.risk.position_notional_cap_usd,
+            _decimal("--all-sessions-usd", args.all_sessions_usd), low, high)
+    except SizingRefused as exc:
+        raise ResearchError(f"sizing refused: {exc}") from exc
+    return report.write_confidence(result, args.out, places)
+
+
 def _history_sessions(args: argparse.Namespace) -> int:
     """The bot's `[market_data] history_sessions`: the replay settings do not repeat it."""
     return bot_config.load(args.config).market_data.history_sessions
@@ -345,6 +382,8 @@ def _run(args: argparse.Namespace) -> dict:
                                   days=[t.day for t in trades])
         return report.write_slippage(trades, args.environment, args.out,
                                      places, sealed_day)
+    if args.command == "sizing":
+        return _sizing(args, places)
     replay_settings = load_settings(args.replay_settings, _history_sessions(args))
     clock_for = session_clock(args.config)
     places = replay_settings.output_decimal_places

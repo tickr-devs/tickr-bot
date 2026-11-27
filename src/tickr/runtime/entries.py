@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from tickr.api.history import close_window, closed_trades, orders_of, total_net
@@ -23,7 +23,7 @@ from tickr.calendar import (
     MarketDay,
     SessionCalendar,
 )
-from tickr.config import Config, trading_gate
+from tickr.config import Config, RiskConfig, trading_gate
 from tickr.data.base import MarketDataError
 from tickr.engine.core import (
     STOP_PLACES_PER_FILL,
@@ -41,6 +41,7 @@ from tickr.risk.admission import (
     AdmissionInputs,
     AdmissionLimits,
     BuyingPower,
+    Equity,
     Reconciliation,
     admit,
     refusal_before_broker_reads,
@@ -48,6 +49,7 @@ from tickr.risk.admission import (
 )
 from tickr.risk.causes import ENGINE_REFUSED
 from tickr.risk.ticks import round_to_tick
+from tickr.settings_version import SettingsVersion
 from tickr.strategy.base import Decision, Role, Verdict
 from tickr.types import Bar, Quote, Tradability
 
@@ -198,6 +200,25 @@ def entry_block_cause(engine: Engine, config: Config, trade: TradeRow,
         return "today's realized result unknown"
     if room < 0:
         return f"daily loss ceiling: {-room} over it with the open reservations"
+    return loss_lock_cause(engine, config, now)
+
+
+def loss_lock_cause(engine: Engine, config: Config, now: datetime) -> str | None:
+    """Why the loss locks (backlog T11) refuse every new entry now, or None: this week's
+    money unknown or over the weekly ceiling with the open reservations, or the stop-out
+    streak at its limit. A lock at 0 is off."""
+    risk = config.risk
+    if risk.max_weekly_loss_usd != ZERO:
+        loss = realized_loss_week(engine, now)
+        if loss is None:
+            return "this week's realized result unknown"
+        over = loss + sum((t.reservation for t in engine.trades()), ZERO) - risk.max_weekly_loss_usd
+        if over > 0:
+            return f"weekly loss ceiling: {over} over it with the open reservations"
+    if risk.stop_out_streak_limit:
+        streak = stop_out_streak(engine, now)
+        if streak >= risk.stop_out_streak_limit:
+            return f"stop-out streak: {streak} in a row today, limit {risk.stop_out_streak_limit}"
     return None
 
 
@@ -232,12 +253,21 @@ def _closed_today_orders(engine: Engine, now: datetime,
     """Trades closed today (New York date), optionally of one symbol: trade id -> (close
     time, its orders)."""
     today = now.astimezone(NEW_YORK).date()
+    return _closed_orders(engine, today, today, symbol)
+
+
+def _closed_orders(engine: Engine, first: date, last: date, symbol: str | None = None,
+                   ) -> dict[str, tuple[datetime, list[OrderRow]]]:
+    """Trades closed on New York dates `first` to `last`, optionally of one symbol, in close
+    order: trade id -> (close time, its orders)."""
+    low, high = close_window(first)[0], close_window(last)[1]
     rows = engine.store.query("SELECT trade_id, symbol, closed_at FROM trades "
                               "WHERE closed_at >= ? AND closed_at < ? ORDER BY rowid",
-                              close_window(today))
+                              (low, high))
     kept = [row for row in rows
-            if datetime.fromisoformat(row["closed_at"]).astimezone(NEW_YORK).date() == today
+            if first <= datetime.fromisoformat(row["closed_at"]).astimezone(NEW_YORK).date() <= last
             and (symbol is None or row["symbol"] == symbol)]
+    kept.sort(key=lambda row: datetime.fromisoformat(row["closed_at"]))
     orders = orders_of(engine.store, [row["trade_id"] for row in kept])
     return {row["trade_id"]: (datetime.fromisoformat(row["closed_at"]),
                               orders.get(row["trade_id"], [])) for row in kept}
@@ -262,6 +292,52 @@ def realized_loss_today(engine: Engine, now: datetime) -> Decimal | None:
         return None
     net = total_net(closed_trades(engine.store, closed_on=now.astimezone(NEW_YORK).date()))
     return None if net is None else max(-net, ZERO)
+
+
+def week_start(day: date) -> date:
+    """Monday of the New York week of `day`: the weekly loss ceiling counts trades closed from
+    that Monday on (backlog T11). A holiday closes no trade, so a week that starts with one
+    still starts on its Monday, and a week never reaches into the one before."""
+    return day - timedelta(days=day.weekday())
+
+
+def realized_loss_week(engine: Engine, now: datetime) -> Decimal | None:
+    """This New York week's net realized loss (Monday to today) as a non-negative amount, from
+    stored trades, counted per day as `realized_loss_today` counts one: wins offset losses,
+    after the broker's fees. None if a trade closed this week has fills whose prices or fees
+    are unknown."""
+    today = now.astimezone(NEW_YORK).date()
+    closed = _closed_orders(engine, week_start(today), today)
+    if not all(_prices_known(orders) for _, orders in closed.values()):
+        return None
+    net = ZERO
+    for day in sorted({at.astimezone(NEW_YORK).date() for at, _ in closed.values()}):
+        day_net = total_net(closed_trades(engine.store, closed_on=day))
+        if day_net is None:
+            return None
+        net += day_net
+    return max(-net, ZERO)
+
+
+def stop_out_streak(engine: Engine, now: datetime) -> int:
+    """Stop-outs in a row among the trades closed today (New York date), oldest close first,
+    from stored trades (backlog T11). A stop-out is a trade whose protective stop filled and
+    whose result after fees is a loss or unknown (the stricter answer). A winning or flat exit
+    (result after fees >= 0, whatever closed it) resets the streak to 0; a losing or unknown
+    exit that was not a stop fill leaves it as it is; a trade that never filled is no exit."""
+    closed = _closed_today_orders(engine, now)
+    net = {t.trade_id: t.result_net_usd for t in closed_trades(
+        engine.store, closed_on=now.astimezone(NEW_YORK).date())}
+    streak = 0
+    for trade_id, (_, orders) in closed.items():
+        if not any(o.filled_quantity > 0 for o in orders):
+            continue
+        result = net.get(trade_id) if _prices_known(orders) else None
+        if result is not None and result >= 0:
+            streak = 0
+        elif any(o.leg is Leg.STOP and o.filled_quantity > 0 for o in orders):
+            streak += 1
+    return streak
 
 
 def daily_loss_room(engine: Engine, config: Config, now: datetime) -> Decimal | None:
@@ -342,17 +418,34 @@ def session_at(calendar: SessionCalendar | None, now: datetime) -> MarketDay | C
 class EntryDesk:
     def __init__(self, engine: Engine, config: Config, *, calendar: SessionCalendar | None,
                  last_broker_read_at: Callable[[], datetime | None],
-                 log: DecisionLog) -> None:
+                 log: DecisionLog, settings_version: str | None = None,
+                 versions: Callable[[Config], SettingsVersion] | None = None) -> None:
         self.engine = engine
+        # The settings version entries are decided under (tickr.settings_version), recorded
+        # with each of the active strategy's decisions and on each trade it opens; None only
+        # in tests, or after an adoption whose version was refused (Service.check_protection).
+        self.settings_version = settings_version
+        # The settings version of a config with the active strategy's values
+        # (settings_version.for_active), computed again when protection is adopted; None only
+        # in tests.
+        self.versions = versions
         self.config = config
         self.calendar = calendar
         self.last_broker_read_at = last_broker_read_at
         self.log = log
         self.limits = AdmissionLimits.from_config(config)
-        # The latest successful balance read: (day buying power, when).
-        self._balance: tuple[Decimal, datetime] | None = None
+        # The latest successful balance read: (day buying power, net liquidation, when).
+        self._balance: tuple[Decimal, Decimal, datetime] | None = None
         # When the desk last tried to read the balance, whatever the outcome.
         self._balance_tried_at: datetime | None = None
+
+    def adopt(self, risk: RiskConfig, settings_version: str | None) -> None:
+        """Admit new entries under these [risk] values and record them with this settings
+        version from now on, both together: protection a running bot tightened
+        (runtime/liveprotection.py). Nothing already placed is touched: a trade opened before
+        keeps the version it was opened under."""
+        self.limits = AdmissionLimits.from_config(replace(self.config, risk=risk))
+        self.settings_version = settings_version
 
     # --- money -----------------------------------------------------------------------------
 
@@ -364,13 +457,14 @@ class EntryDesk:
         `[risk] buying_power_max_age_seconds` ago, whatever its outcome: a failing read costs
         one request per that age, never one per decision (no retry on the loop thread). A
         failed read keeps the old figure, which admission then finds too old."""
-        max_age = timedelta(seconds=float(self.config.risk.buying_power_max_age_seconds))
+        max_age = timedelta(seconds=float(self.limits.buying_power_max_age_seconds))
         tried = self._balance_tried_at
         if tried is not None and timedelta(0) <= now - tried < max_age:
             return
         self._balance_tried_at = now
         try:
-            self._balance = (self.engine.broker.balance().day_buying_power, now)
+            balance = self.engine.broker.balance()
+            self._balance = (balance.day_buying_power, balance.net_liquidation, now)
         except BrokerError:
             pass
 
@@ -381,7 +475,13 @@ class EntryDesk:
                         ZERO)
         if self._balance is None:
             return BuyingPower(None, None, committed)
-        return BuyingPower(self._balance[0], self._balance[1], committed)
+        return BuyingPower(self._balance[0], self._balance[2], committed)
+
+    def _equity(self) -> Equity:
+        """The latest balance read's net liquidation (no read here)."""
+        if self._balance is None:
+            return Equity()
+        return Equity(self._balance[1], self._balance[2])
 
     # --- tradability ------------------------------------------------------------------------
 
@@ -446,8 +546,13 @@ class EntryDesk:
             realized_loss_today_usd=realized_loss_today(engine, now),
             open_reservations_usd=self._reservations(),
             buying_power=self._buying_power(),
+            equity=self._equity(),
             entry_budget_available=engine.broker.can_place(1),
             stop_budget_available=engine.broker.can_place(1 + stop_requests_owed(engine)),
+            realized_loss_week_usd=(realized_loss_week(engine, now)
+                                    if self.limits.max_weekly_loss_usd else None),
+            stop_out_streak=(stop_out_streak(engine, now)
+                             if self.limits.stop_out_streak_limit else None),
             tradability_budget_available=self._tradability_budget(),
         )
 
@@ -462,6 +567,8 @@ class EntryDesk:
         admission = RecordAdmission.NOT_APPLICABLE
         cause: str | None = None
         if decision.verdict is Verdict.ENTER:
+            if self.limits.percent_limits_on:
+                self._read_balance(now)  # the percent limits need a fresh equity (X2)
             inputs = self._inputs(decision, quote, now, last_bar=last_bar,
                                   previous_quote=previous_quote)
             # Tradability (when on) and then the balance are read only for an entry every
@@ -486,6 +593,7 @@ class EntryDesk:
                                            result.planned_loss_usd,
                                            entry_low_price=decision.entry_low,
                                            strategy=(decision.strategy, decision.version),
+                                           settings_version=self.settings_version,
                                            rest_until=rest_until(decision, bar_start),
                                            scale_out_quantity=decision.scale_out,
                                            window=result.window,
@@ -511,7 +619,7 @@ class EntryDesk:
                                                                 decision.quantity)},
                             key=trade.trade_id, run_id=self.engine.run_id)
         return self._write(DecisionRecord(now, bar_start, Role.ACTIVE, decision, admission,
-                                          cause))
+                                          cause, self.settings_version))
 
     def record_late(self, decision: Decision, *, bar_start: datetime,
                     now: datetime) -> DecisionRecord:
@@ -519,7 +627,8 @@ class EntryDesk:
         evaluation): never admitted or acted on, so an ENTER is `not_evaluated`."""
         admission = (RecordAdmission.NOT_EVALUATED if decision.verdict is Verdict.ENTER
                      else RecordAdmission.NOT_APPLICABLE)
-        return self._write(DecisionRecord(now, bar_start, Role.ACTIVE, decision, admission))
+        return self._write(DecisionRecord(now, bar_start, Role.ACTIVE, decision, admission,
+                                          settings_version=self.settings_version))
 
     def _write(self, record: DecisionRecord) -> DecisionRecord:
         decision, admission = record.decision, record.admission

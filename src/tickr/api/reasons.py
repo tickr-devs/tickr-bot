@@ -206,6 +206,8 @@ _REFUSAL = {
         ("", r"(?P<open>[0-9]+) open position\(s\), limit (?P<limit>[0-9]+)")),
     "WORKING_ENTRY_LIMIT_REACHED": _shapes(
         ("", r"(?P<working>[0-9]+) entries working, limit (?P<limit>[0-9]+)")),
+    "STOP_OUT_STREAK": _shapes(
+        ("", r"(?P<count>[0-9]+) stop-outs in a row today, limit (?P<limit>[0-9]+)")),
     "SYMBOL_COOLDOWN": _shapes(("", r"(?P<symbol>\S+) closed at a loss at \S+; no entry before "
                                     r"\S+")),
     "DECISION_NOT_ENTER": _shapes(("", r"verdict is (?P<verdict>\S+)")),
@@ -247,6 +249,10 @@ _REFUSAL = {
         ("", r"notional (?P<notional>" + _NUM + r") > cap (?P<cap>" + _NUM + r")")),
     "PLANNED_LOSS_OVER_LIMIT": _shapes(
         ("", r"planned loss (?P<planned_loss>" + _NUM + r") > limit (?P<limit>" + _NUM + r")")),
+    "EQUITY_UNKNOWN": _shapes(
+        ("", r"no equity read"),
+        ("", r"equity read (?P<age>" + _NUM + r") s ago > (?P<limit>" + _NUM + r") s"),
+        ("", r"equity figure invalid: (?P<value>.+)")),
     "DAILY_MONEY_UNKNOWN": _shapes(("", r"unknown: (?P<missing>.+)")),
     "DAILY_CEILING": _shapes(
         ("", r"room (?P<room>" + _NUM + r") = ceiling (?P<ceiling>" + _NUM + r") - realized "
@@ -254,6 +260,11 @@ _REFUSAL = {
          r"min_daily_room_usd (?P<min_room>" + _NUM + r")"),
         ("", r"realized (?P<realized>" + _NUM + r") \+ reserved (?P<reserved>" + _NUM
          + r") \+ new (?P<new>" + _NUM + r") = (?P<total>" + _NUM + r") vs ceiling "
+         r"(?P<ceiling>" + _NUM + r")")),
+    "WEEKLY_MONEY_UNKNOWN": _shapes(("", r"unknown: (?P<missing>.+)")),
+    "WEEKLY_CEILING": _shapes(
+        ("", r"week realized (?P<realized>" + _NUM + r") \+ reserved (?P<reserved>" + _NUM
+         + r") \+ new (?P<new>" + _NUM + r") = (?P<total>" + _NUM + r") vs weekly ceiling "
          r"(?P<ceiling>" + _NUM + r")")),
     "BUYING_POWER_UNKNOWN": _shapes(
         ("", r"no balance read"),

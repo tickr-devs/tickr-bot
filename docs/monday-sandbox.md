@@ -38,11 +38,11 @@ the bot is started by hand (steps 11 and 12) and runs to the close.
    accounts; `chmod 700 data/webull-token-sandbox` once and run preflight again.
 5. If `ops/launchd/` changed in the pull, render and load the jobs again (operations.md,
    "Install the jobs"). Then send yourself a test alert:
-   `launchctl kickstart gui/$(id -u)/local.tickr.test-alert`. The Mac notification and the
-   iMessage must both arrive. In `~/Library/Logs/Tickr/test-alert.log` the first JSON line
-   only says the alert is on its way (`"delivery": "sending"`, both channels pending); one
-   line per channel follows, and both must say `"delivery": "shown"`.
-6. The Mac stays on power, awake and logged in all day. Messages is signed in.
+   `launchctl kickstart gui/$(id -u)/local.tickr.test-alert`. The Telegram message must
+   arrive. In `~/Library/Logs/Tickr/test-alert.log` the first JSON line
+   only says the alert is on its way (`"delivery": "sending"`, Telegram pending); the
+   `telegram` channel line follows and must say `"delivery": "shown"`.
+6. The Mac stays on power, awake and logged in all day. Telegram variables are set in the env file.
    **Demo day is off in both apps** («Демо-день выключен в обоих приложениях»): Mac Settings ›
    General and iPhone Settings, "Demo day" switch off; no DEMO DAY pill in the Mac title bar and
    no demo banner on the iPhone's Home or the menu-bar panel. While it is on, that app shows the

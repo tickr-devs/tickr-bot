@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -97,8 +98,12 @@ from tickr.api.contract import (
     SessionKind,
     SessionSettings,
     SessionTimesV1,
+    SettingChangeState,
     SettingDifferenceV1,
+    SettingsDevice,
     SettingsV1,
+    SettingsVersionKind,
+    SettingsVersionState,
     SizeBinding,
     SizeLimitV1,
     SkippedSignalV1,
@@ -129,7 +134,7 @@ from tickr.runtime.alerts import AlertKind
 from tickr.settings_schema import Applies, Cause, Compare, Kind, Loosens, Unit
 from tickr.strategy.base import Verdict
 
-from .samples import T0, account, entry, status
+from .samples import T0, account, entry, run_facts, served, status
 from .schema_check import errors
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -153,10 +158,57 @@ LAB_DAYS = tuple(DAY - timedelta(days=d) for d in (3, 4, 5, 6, 7, 10, 11))
 
 
 def _response(st, age, stale, cause=None) -> StatusResponseV1:
-    return StatusResponseV1(served_at=T0 + timedelta(seconds=2), status=st, age_seconds=age,
+    return StatusResponseV1(served_at=T0 + timedelta(seconds=2),
+                            status=None if st is None else served(st), age_seconds=age,
                             stale=stale, unavailable_cause=cause,
                             summary=contract.summarize(st, age, stale, cause), poll_seconds=POLL,
                             api_started_at=T0 - timedelta(hours=1))
+
+
+def _readiness() -> contract.ReadinessV1:
+    state, code = contract.ReadinessState, contract.ReadinessCode
+    on = contract.Gate(True, "trading enabled by configuration", "trading_enabled", {})
+    off = contract.Gate(False, "trading is disabled for environment 'production'",
+                        "trading_disabled", {"environment": "production"})
+    mismatch = "owner authorization does not match the current config digest"
+    return contract.ReadinessV1(
+        served_at=T0, environment="sandbox", config_digest="9a28" + "0" * 60, gate=on,
+        environments=(
+            contract.EnvironmentReadinessV1("sandbox", True, True, False, None, on, None),
+            contract.EnvironmentReadinessV1(
+                "production", False, False, True, None, off,
+                contract.AuthorizationRecordV1(
+                    "authorization/production.toml", True, "production", "2026-11-20", False,
+                    False, mismatch, "authorization_digest_mismatch", {}))),
+        checklist=(
+            contract.ReadinessCheckV1(code.CLEAN_DAYS, "sandbox", state.FAIL, "3 / 5",
+                                      "3 clean days of 5"),
+            contract.ReadinessCheckV1(code.PREFLIGHT, "sandbox", state.PASS, "2026-11-16", None),
+            contract.ReadinessCheckV1(code.UNATTENDED_SAFEGUARD, "sandbox", state.UNKNOWN,
+                                      "2026-11-13", "the watchdog last started on 2026-11-13, "
+                                      "not today"),
+            contract.ReadinessCheckV1(code.KEYS, "production", state.UNKNOWN, None,
+                                      "this process holds none of them"),
+            contract.ReadinessCheckV1(code.DATA_PROBE, "production", state.FAIL, None,
+                                      "chart probe C1 is not recorded for production"),
+            contract.ReadinessCheckV1(code.TRADING_ENABLED, "production", state.FAIL, None,
+                                      "[environments.production] trading_enabled is false"),
+            contract.ReadinessCheckV1(code.AUTHORIZATION, "production", state.FAIL, None,
+                                      mismatch)))
+
+
+def _settings_file(before: str, after: str) -> contract.SettingsVersionFileV1:
+    return contract.SettingsVersionFileV1("platform", "config/bot.toml", before, after)
+
+
+_settings_version_1 = contract.SettingsVersionV1(
+    1, SettingsVersionKind.APPLY, T0, SettingsDevice.PHONE, True, None, SettingsVersionState.DONE,
+    (_settings_file("a" * 64, "b" * 64),), (
+        contract.SettingsVersionChangeV1("platform", "risk.max_open_positions", "2", "1",
+                                         Applies.AT_ONCE, SettingChangeState.WRITTEN, None, None),
+        contract.SettingsVersionChangeV1("platform", "risk.max_daily_loss_usd", "50", "60",
+                                         Applies.NEXT_SESSION, SettingChangeState.PROMOTED,
+                                         T0.date(), 2)))
 
 
 def documents() -> dict[str, object]:
@@ -183,6 +235,7 @@ def documents() -> dict[str, object]:
                         T0, "api")
     return {
         "status-v1.example": status(),
+        "run-facts-v1": run_facts(),
         "status-response-v1": _response(status(), Decimal("2.000"), False),
         "status-response-v1.minimal": _response(minimal, Decimal("0.250"), False),
         "status-response-v1.stale": _response(status(), Decimal("42.500"), True),
@@ -349,13 +402,40 @@ def documents() -> dict[str, object]:
                                       "expected int as TOML text, got '1.5'")), (
             contract.SettingChangeV1("platform", "risk.min_daily_room_usd", "10", "60", True,
                                      Applies.AT_ONCE, False, False),)),
+        # A tightening written at once with a loosening left pending (phone, Face ID), the bot's
+        # start writing it the next day, and a rollback to before both.
+        "settings-history-v1": contract.SettingsHistoryV1((
+            _settings_version_1,
+            contract.SettingsVersionV1(
+                2, SettingsVersionKind.PROMOTE, T0 + timedelta(days=1), SettingsDevice.BOT, False,
+                None, SettingsVersionState.DONE, (_settings_file("b" * 64, "c" * 64),), (
+                    contract.SettingsVersionChangeV1(
+                        "platform", "risk.max_daily_loss_usd", "50", "60", Applies.NEXT_SESSION,
+                        SettingChangeState.WRITTEN, None, None),)),
+            contract.SettingsVersionV1(
+                3, SettingsVersionKind.ROLLBACK, T0 + timedelta(days=1, hours=1),
+                SettingsDevice.LOCAL, False, 0, SettingsVersionState.DONE,
+                (_settings_file("c" * 64, "d" * 64),), (
+                    contract.SettingsVersionChangeV1(
+                        "platform", "risk.max_open_positions", "1", "2", Applies.AT_ONCE,
+                        SettingChangeState.WRITTEN, None, None),
+                    contract.SettingsVersionChangeV1(
+                        "platform", "risk.max_daily_loss_usd", "60", "50", Applies.AT_ONCE,
+                        SettingChangeState.WRITTEN, None, None))))),
+        "settings-applied-v1": contract.SettingsAppliedV1(
+            replace(_settings_version_1, changes=(_settings_version_1.changes[0],
+                                                  replace(_settings_version_1.changes[1],
+                                                          state=SettingChangeState.PENDING,
+                                                          settled_by=None))), True),
         "settings-v1": SettingsV1(
             "sandbox", "price-action-v1", ("price-action-v1-lookback8",),
             RiskSettings(Decimal("50"), Decimal("2500"), Decimal("300"), 1, Decimal("5"),
-                         Decimal("10")),
+                         Decimal("10"), max_weekly_loss_usd=Decimal("0"),
+                         stop_out_streak_limit=3),
             SessionSettings("America/New_York", 15, 5, False), Decimal("15"), POLL,
             Decimal("30"), Decimal("15"), live_quote_max_age_seconds=Decimal("60"),
-            quotes_poll_seconds=Decimal("1"), command_max_age_seconds=Decimal("60")),
+            quotes_poll_seconds=Decimal("1"), command_max_age_seconds=Decimal("60"),
+            decider=contract.strategy_decider("price-action", "1")),
         # 10:00 New York on a Monday: the bot runs, its last broker read was 4 s ago.
         "jobs-v1": JobsV1(
             T0, BotState.RUNNING, False, T0.replace(hour=13, minute=12, second=4),
@@ -432,7 +512,8 @@ def documents() -> dict[str, object]:
                                                "stop marker stopped-by-operator.json exists; "
                                                "the watchdog never starts a bot the operator "
                                                "stopped")), 2, None),
-                contract.SleepV1(contract.SleepState.HELD, 2, None)), None),
+                contract.SleepV1(contract.SleepState.HELD, 2, None)), None,
+            model=contract.ModelV1(False, None, contract.ModelState.OFF, None)),
         # Before the open with problems: no broker read in 2 minutes, the token needed
         # confirmation, no training job, the watchdog's restart command failed once.
         "system-v1.attention": contract.SystemV1(
@@ -451,27 +532,29 @@ def documents() -> dict[str, object]:
                     contract.WatchdogRestartV1(T0 - timedelta(days=3, minutes=15),
                                                contract.RestartOutcome.FAILED, True, 1,
                                                "restart command exited 113"),), 1, None),
-                contract.SleepV1(contract.SleepState.NOT_HELD, 0, None)), None),
+                contract.SleepV1(contract.SleepState.NOT_HELD, 0, None)), None,
+            model=contract.ModelV1(False, "l1-2026-12-01a", contract.ModelState.OFF, None)),
         # A server without the Mac's services, before any preflight record or status file.
         "system-v1.server": contract.SystemV1(
             T0, None, False,
             contract.BrokerLinkV1(None, Decimal("30"), Decimal("90"), contract.LinkState.UNKNOWN,
                                   None, "the bot has not written a status file"),
             None, "no preflight recorded yet", None, "no training job is reporting",
-            None, "no machine services on this host ([api] system_services = none)"),
-        # The notification settings: disk-low kept off iMessage; push not built yet.
+            None, "no machine services on this host ([api] system_services = none)",
+            # [model] enabled is refused by config load today; were it on, the API would not
+            # know the bot's load: null with its cause.
+            model=contract.ModelV1(True, None, None, contract.MODEL_LOAD_NOT_RECORDED)),
+        # Settings > Environment: Sandbox loaded; Production off with a record for an old digest.
+        "readiness-v1": _readiness(),
+        # The notification settings: disk-low kept off Telegram; push not built yet.
         "alerts-v1": contract.AlertsV1((
-            contract.AlertChannelV1(contract.AlertChannel.MAC, True, None),
-            contract.AlertChannelV1(contract.AlertChannel.IMESSAGE, False,
-                                    contract.AlertChannelCause.CHECK_FAILED),
+            contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, True, None),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
                                     contract.AlertChannelCause.NOT_BUILT)),
             alerts_api._kinds(Routing(frozenset({(AlertKind.DISK_LOW,
-                                                  contract.AlertChannel.IMESSAGE)}))), None),
+                                                  contract.AlertChannel.TELEGRAM)}))), None),
         "alerts-v1.unreadable": contract.AlertsV1((
-            contract.AlertChannelV1(contract.AlertChannel.MAC, False,
-                                    contract.AlertChannelCause.NO_PREFLIGHT),
-            contract.AlertChannelV1(contract.AlertChannel.IMESSAGE, False,
+            contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
                                     contract.AlertChannelCause.NO_PREFLIGHT),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
                                     contract.AlertChannelCause.NOT_BUILT)),
@@ -924,19 +1007,28 @@ _LAUNCHD = (LaunchdJobV1("preflight", "08:30", (1, 2, 3, 4, 5)),
             LaunchdJobV1("nightly-fetch", "19:00", (1, 2, 3, 4, 5)))
 
 
-def _text(document: object) -> str:
-    return json.dumps(contract.to_jsonable(document), indent=2, ensure_ascii=False) + "\n"
+# Fixtures of files the bot writes (not API responses): encoded as stored, without derived keys.
+STORED = ("status-v1",)
+
+
+def _derived(name: str) -> bool:
+    return name.split(".", 1)[0] not in STORED
+
+
+def _text(name: str, document: object) -> str:
+    return json.dumps(contract.to_jsonable(document, derived=_derived(name)), indent=2,
+                      ensure_ascii=False) + "\n"
 
 
 def test_fixtures_are_current():
     docs = documents()
     if os.environ.get("TICKR_WRITE_FIXTURES") == "1":
         for name, document in docs.items():
-            (FIXTURES / f"{name}.json").write_text(_text(document), "utf-8")
+            (FIXTURES / f"{name}.json").write_text(_text(name, document), "utf-8")
     on_disk = {p.stem for p in FIXTURES.glob("*.json")}
     assert on_disk == set(docs), "fixtures on disk differ from documents()"
     for name, document in docs.items():
-        assert (FIXTURES / f"{name}.json").read_text("utf-8") == _text(document), (
+        assert (FIXTURES / f"{name}.json").read_text("utf-8") == _text(name, document), (
             f"{name}: regenerate with TICKR_WRITE_FIXTURES=1 and review the diff")
 
 
@@ -946,4 +1038,5 @@ def test_fixture_matches_schema_and_parses(path):
     cls = contract.SCHEMA_TYPES[schema_name]
     raw = json.loads(path.read_text("utf-8"))
     assert errors(contract.json_schema(cls), raw) == []
-    assert contract.to_jsonable(contract.from_jsonable(cls, raw)) == raw
+    assert contract.to_jsonable(contract.from_jsonable(cls, raw),
+                                derived=_derived(path.stem)) == raw

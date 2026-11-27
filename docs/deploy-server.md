@@ -4,16 +4,16 @@ Today Tickr runs on the owner's Mac under launchd (`docs/operations.md`). This p
 changes on an always-on Linux server, gives a Docker setup for it, and lists what the owner must
 decide first.
 
-**Status: not ready to trade.** The only alert channels are the macOS notification and iMessage,
-both driven by `osascript`. A Linux host has neither, so preflight refuses the start with
-`alert-channel-missing` and the bot job never starts the bot. Everything else below works; the
-alert channel is an owner decision (see "Open owner decisions").
+**Alerts.** The alert channel is Telegram, which works on any host (the iMessage and Mac
+notification channels were removed, owner 2026-11-25). Set `TICKR_TELEGRAM_BOT_TOKEN` and
+`TICKR_TELEGRAM_CHAT_ID` in the env file; without them preflight refuses the start with
+`alert-channel-missing` and the bot job never starts the bot. App push (APNs) comes later.
 
 ## Audit: what is Mac-only
 
 | Area | On the Mac | On Linux / in Docker | Done here |
 |---|---|---|---|
-| Alert channels | `runtime/alerts.py`: Mac notification and iMessage through `/usr/bin/osascript` and Messages.app. | `default_notifier` returns no channel off macOS. Before this change every alert was journaled `"delivery": "no-notifier"` and preflight still passed: the bot would have run with nobody told. Nothing crashed (no import of `osascript`, it is only a path). | Preflight check `alert-channel` (before `alert-recipient`, so it is the reported cause) refuses with `alert-channel-missing` (blocks the start, exit 1). The watchdog journals `watchdog-alert-channel-refused` with that cause, still runs and journals, and never exits 0 (1 instead of 0; 3 on a closed day), so its unit shows failed. **Blocker.** |
+| Alert channels | `runtime/alerts.py`: Telegram (`TelegramNotifier`, one HTTPS POST) and the alerts feed file; the same on every OS. | No change: nothing depends on the platform. | Preflight check `alert-channel` refuses with `alert-channel-missing` (blocks the start, exit 1) when Telegram is not set up; `alert-telegram` checks that both variables are set. The watchdog journals `watchdog-alert-channel-refused` with that cause, still runs and journals, and never exits 0 (1 instead of 0; 3 on a closed day), so its unit shows failed. Solved by Telegram. On the AWS server both names go into the `tickr-bot/env` secret with the Webull variables; `tickr-secrets.service` writes every name in it to the env file `/run/tickr/env`, which the bot, preflight and watchdog containers source (`ops/aws/bot/README.md`, "Fill the secret"). |
 | caffeinate | `/usr/bin/caffeinate` in the bot and watchdog plists' shell line. | Not needed: a server does not sleep. Not called anywhere in Python. | Nothing. |
 | launchd | Five plists rendered by `render-launchd` from `[runtime]` times. | No launchd. `render-launchd` still works but its output is useless. | `ops/docker/compose.yaml` plus host systemd timers (below). `render-systemd` writes the units and timers from `[runtime]` (below). |
 | Paths | Logs in `~/Library/Logs/Tickr`; env file `~/.config/tickr/env`; repo root = parent of `config/`. | Logs are the container logs (`docker compose logs`), rotated by the json-file driver. Env file: any host path, mounted read-only at `/run/tickr/env`. Repo root is `/app` in the image. Preflight's hint still names `~/.config/tickr/env` (text only). | Compose file. |
@@ -24,7 +24,7 @@ alert channel is an owner decision (see "Open owner decisions").
 | API binding | `[api] host` = 127.0.0.1, enforced by the API (refuses a non-loopback host). | With Docker's bridge network a 127.0.0.1 bind inside the container is unreachable from the host, and publishing a port would need a 0.0.0.0 bind, which the API refuses. | `network_mode: host`: the API is on the server's own loopback only; Docker publishes no ports. Phone access works as on the Mac (`tailscale serve` on the host to `[api] remote_port`). |
 | Env file | Sourced by `/bin/sh` (`set -a; . file`) in the plist; Tickr never reads it. | Compose `env_file:` would put the values into `docker inspect`. | Bind-mounted read-only; the entrypoint sources it the same way. Only its path is in the container environment. A set-but-unreadable file refuses the start (exit 2). |
 | Stopping | `launchctl kill TERM`; launchd `ExitTimeOut` = `bot_exit_timeout_seconds`. | `docker compose stop bot` sends SIGTERM; `stop_grace_period` is the SIGKILL delay. `init: true` (tini) forwards the signal to the supervisor. | `stop_grace_period: ${TICKR_BOT_EXIT_TIMEOUT}s`, from `[runtime] bot_exit_timeout_seconds` through the rendered `limits.env`. |
-| Token approval | `token-needs-confirmation` alert, approve in the Webull app. | Same, but without an alert channel nobody is asked. | Covered by the blocker. |
+| Token approval | `token-needs-confirmation` alert, approve in the Webull app. | Same; the alert reaches you on Telegram. | Nothing. |
 
 ## Files
 
@@ -99,6 +99,12 @@ mounts only `bot.toml` over the image's copy. Production only, later: the owner 
 file (`[environments.production] authorization_file`) and its mount in `compose.yaml` (step 7
 below); not needed in Sandbox.
 
+Never copy the Mac's alert routing file (`<data_dir>/alert-routing.json`, `[alerts]
+routing_file`) to the server. A file with `mac` or `imessage` cells is unusable there: every kind
+goes to every channel and PUT /alerts/routing is refused until the file is deleted
+(docs/api.md, "routing_cause"). On the server the routing starts with no file and the owner sets
+it from the apps.
+
 The exact SSM copy for a release `<commit>`, as root on the server (the files' contents come from
 the commit in the owner's checkout; never send the env file or any secret this way):
 
@@ -163,12 +169,26 @@ every release.
    ```sh
    C="docker compose -f /srv/tickr/etc/compose.yaml --profile jobs"
    $C run --rm preflight mkdir -m 700 /app/data/webull-token-sandbox
-   $C run --rm preflight; echo $?      # today: 1, alert-channel-missing
+   $C run --rm preflight; echo $?      # 1, alert-channel-missing, until Telegram is set
    ```
-6. API: `docker compose -f /srv/tickr/etc/compose.yaml up -d api`;
+6. **Cutover step: send one test alert before the first bot start; the owner confirms it
+   arrived.** With `TICKR_TELEGRAM_BOT_TOKEN` and `TICKR_TELEGRAM_CHAT_ID` in the env file
+   (on AWS: in the `tickr-bot/env` secret, then `sudo systemctl restart tickr-secrets`):
+   ```sh
+   $C run --rm preflight python -m tickr.runtime --config /app/config/bot.toml \
+       alert preflight-failed "test alert from the server"
+   ```
+   It sends one alert through every configured channel, exactly like the bot's jobs (same
+   image, env file and config), and prints a JSON `alert` line `"delivery": "sending"`, then
+   one per channel once it has answered: `"delivery":
+   "shown"` with `"channel": "telegram"` when Telegram accepted it, or `"failed"` with an
+   `error` naming only the HTTP status or the failure type (never the token or chat id).
+   `preflight-failed` is a locked kind, so the owner's routing cannot turn it off. Do not start
+   the bot until the message is on the owner's phone.
+7. API: `docker compose -f /srv/tickr/etc/compose.yaml up -d api`;
    `curl -s http://127.0.0.1:8766/` on the server.
-7. Production only: uncomment the authorization bind mount in `compose.yaml`.
-8. Schedule the jobs with systemd timers (below). Stop the bot with
+8. Production only: uncomment the authorization bind mount in `compose.yaml`.
+9. Schedule the jobs with systemd timers (below). Stop the bot with
    `docker compose -f /srv/tickr/etc/compose.yaml stop bot`; logs with `... logs -f bot`.
    Before rebooting the server, the same rule as the Mac: wait for the `bot-exit` line.
 
@@ -201,6 +221,8 @@ It writes:
   mounts it read-only and the entrypoint sources it.
 - `tickr-bot-restart.path` and `tickr-bot-restart.service`: the watchdog's bot restart on the
   server (below, "Bot restart on the server").
+- `tickr-bot-start.path` and `tickr-bot-start.service`: the app's Start on the server (below,
+  "Bot start on the server").
 - `limits.env`: `TICKR_BOT_EXIT_TIMEOUT`, `TICKR_NIGHTLY_OUT`, `TICKR_NIGHTLY_SEED`,
   `TICKR_DATA_HOST` and `TICKR_IMAGE` (below).
 - `ports.env`: `TICKR_API_PORT` and `TICKR_API_REMOTE_PORT` from `[api] port` and `remote_port`.
@@ -217,8 +239,8 @@ data disk, written to `limits.env` as `TICKR_DATA_HOST`), `tickr`. `limits.env` 
 `TICKR_BOT_EXIT_TIMEOUT` = `[runtime] bot_exit_timeout_seconds` and the nightly fetch's
 folders (`nightly_fetch_out`, `nightly_fetch_seed`); every unit loads it and
 compose.yaml reads it as the bot's `stop_grace_period`, so the number lives only in `bot.toml`
-(for a hand-run compose command: `set -a; . /srv/tickr/etc/limits.env; set +a`). `[runtime] watchdog_restart_command` (a launchctl call
-today) must be set for the server before the watchdog's restart can work (cutover, below).
+(for a hand-run compose command: `set -a; . /srv/tickr/etc/limits.env; set +a`). `config/bot.toml` holds the server's values
+(cutover, below), so the server runs the commit's file as it is.
 
 `deploy-server.sh COMMIT [ETC [DATA]]` (on the server `/srv/tickr/bin/deploy-server.sh`,
 "Server files") installs the rendered files. It needs no clone and no host Python. It
@@ -248,7 +270,7 @@ refuses (exit 1, nothing changed), in this order:
 - `data-not-mounted`: `DATA` is not a mount point (`mountpoint -q`). The data disk is in fstab
   with `nofail`, so a disk that failed to mount leaves an empty folder on the root disk, and a
   bot started there would have no state. For the same reason every rendered unit that uses the
-  data folder (the API, the four jobs, the restart path and service) carries
+  data folder (the API, the four jobs, the restart and start paths and services) carries
   `RequiresMountsFor=DATA`: systemd refuses to start them without the mount.
 - `image-user-unknown`, `data-owner-unknown` / `data-owner-mismatch`: the owner uid:gid of `DATA` is not the
   release image's runtime user, read with `id -u` and `id -g` in a throwaway container of the
@@ -268,13 +290,38 @@ refuses (exit 1, nothing changed), in this order:
   position and no open order, and the database has no open trade (opened read-only). The data
   folder is not mounted read-only because the broker's token folder is in it (the SDK may
   refresh the token) and SQLite needs the WAL's shared-memory file.
-- while a bot restart request is waiting in `DATA/control` (the path unit would restart the
-  bot the moment it starts: read the request, remove it, deploy again).
+- while a bot restart or start request is waiting in `DATA/control` (its path unit would
+  restart or start the bot the moment it starts: read the request, remove it, deploy again).
+- when the rendered start request is not in the restart request's folder (render-systemd
+  already refuses that; the script checks the files it installs).
 
 It then creates only `DATA/control` (under the verified mount, owned by the image's uid:gid,
-mode 700), installs the units and enables the timers, `tickr-bot-restart.path` and the API
-(`TICKR_SERVICE_USER`, default `tickr`, is the units' `User=`). It never starts or stops the
-bot. Not yet run on a real server.
+mode 700) and, when missing, its compose lock `DATA/control/compose.lock` (same owner, mode
+600; never replaced, a unit may hold it), and takes that lock (`flock`, held until the
+removal below: the bot, restart and start units wait for it). Still before anything is
+installed it refuses:
+
+- `bot-running`: the bot container runs (`docker compose ... -p tickr --profile jobs ps
+  --status running -q bot`, with the rendered `limits.env`). Flat is not enough: a running bot
+  keeps the image it started from, and after it ends a Start would start that stopped
+  container as it is, the previous release. Deploy after the bot has ended.
+- `bot-state-unknown`: that `ps` failed; `compose-lock-failed`: the lock could not be taken.
+
+Then it installs the files (all or nothing, below). With the new `limits.env` in place and
+still under the compose lock, it removes a stopped bot container: `docker compose --env-file ETC/limits.env -f ETC/compose.yaml -p tickr --profile
+jobs rm -f bot`, without `-s`. Compose's `rm` removes only service containers that are not
+running: `Remove` in `pkg/compose/remove.go` (2.24.6 and 2.40.3, the versions Ubuntu
+24.04 ships, differ there only in names) inspects each container and keeps for removal only those whose
+`State.Running` is false; only `-s` (`--stop`) stops containers first. A running bot is never
+removed (and was refused above under the same lock); no container at all is "No stopped
+containers", exit 0. So the next Start or
+scheduled start creates the bot from the new release image, never the stopped container of
+the previous one. When the removal fails it refuses with `bot-container-not-removed` (exit 1):
+the new files are in place, but systemd is not reloaded and nothing is enabled or restarted;
+read the docker line, then deploy again. Last it reloads systemd and enables the timers,
+`tickr-bot-restart.path`, `tickr-bot-start.path` and the API (`TICKR_SERVICE_USER`, default
+`tickr`, is the units' `User=`). It never starts or stops the bot. Not yet run on a real
+server.
 
 The data folder was a named Docker volume (`tickr-data`) before the restart unit; it is now the
 host folder `DATA`. No server ever ran on that volume (this deploy was never run on a real
@@ -290,7 +337,8 @@ against the image's copy; `bot.toml` must come from the same commit ("Server fil
 
 The install is all or nothing: every file is first copied to a hidden temp file in its target
 folder (a failed copy removes them and installs nothing), then renamed into place, and
-`systemctl daemon-reload` runs only after every file is there.
+`systemctl daemon-reload` runs only after every file is there and a stopped bot container
+is removed.
 
 ### Bot restart on the server
 
@@ -309,8 +357,9 @@ systemd, so the restart goes through a request file on the data folder:
 2. `tickr-bot-restart.path` (`PathExists=` on that file) starts `tickr-bot-restart.service`
    (`Type=oneshot`, user `tickr`), which runs each step once and stops at the first failure:
    (a) renames the request to `restart-request.taken`, so a request written during the restart
-   is a new event; (b) `docker compose -f /srv/tickr/etc/compose.yaml -p tickr
-   --profile jobs up -d --force-recreate --no-deps --pull never --no-build -t <grace> bot`: the
+   is a new event; (b) under the compose lock (`flock /srv/tickr/data/control/compose.lock`,
+   shared with the start and the scheduled bot unit, "Bot start on the server") `docker compose -f
+   /srv/tickr/etc/compose.yaml -p tickr --profile jobs up -d --force-recreate --no-deps --pull never --no-build -t <grace> bot`: the
    same compose definition the scheduled `tickr-bot.service` starts. A running (hung) container
    is stopped within `<grace>` and recreated; a crashed or removed one is created again. The
    image is never pulled or built here: a missing `TICKR_IMAGE` (from `limits.env`) fails the step. `<grace>`
@@ -330,16 +379,70 @@ systemd, so the restart goes through a request file on the data folder:
 The watchdog's `restarted` journal line on the server means "request written", not "bot
 started": check the unit's status for the restart itself.
 
-**Cutover steps (the server move release).** In the server's `bot.toml` (and in
-`config/bot.toml` in that release), set:
+### Bot start on the server
 
-```toml
-watchdog_restart_command = ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml", "request-restart", "--cause", "watchdog"]
-```
+The app's Start (`POST /commands/start-bot`, docs/api.md "Start-bot") runs `[api]
+start_bot_command` in the API's container. The restart request cannot serve it: its unit
+force-recreates a running bot, and the API's container (no host pid namespace) cannot see the
+bot's live pid in its lock file, so Start's lock check is blind there. Start has its own request
+and unit, which never touch a running bot:
+
+1. The API keeps its checks (a fresh status that says starting, running or stopping is `409`;
+   the lock file; the operator stop marker is cleared), then runs `python -m tickr.runtime
+   --config /app/config/bot.toml request-start --cause start-bot`. It writes `[runtime]
+   server_start_request_file` (`control/start-request`, in the restart request's folder: the
+   one folder `deploy-server.sh` creates; config refuses any other folder) the same way as the
+   restart request: atomically, one JSON line with `requested_at` (UTC) and `cause`, refused
+   with `control-folder-missing` or `cause-invalid` (exit 1, nothing written; the API answers
+   `503`).
+2. `tickr-bot-start.path` (`PathExists=` on that file) starts `tickr-bot-start.service`
+   (`Type=oneshot`, user `tickr`, `After=tickr-bot-restart.service`: a start queued with or
+   during a restart waits for it), which runs each step once and stops at the first failure:
+   (a) renames the request to `start-request.taken`; (b) under the compose lock (below) `docker
+   compose -f /srv/tickr/etc/compose.yaml -p tickr --profile jobs up -d --no-recreate --no-deps --pull
+   never --no-build bot` (the same compose file, project and profile as the restart unit, no
+   `WorkingDirectory=`); (c) prints the taken request to the journal.
+3. `--no-recreate` ("If containers already exist, don't recreate them", `docker compose up
+   --help`). Checked in the compose source of the versions Ubuntu 24.04 ships
+   (`docker-compose-v2` 2.24.6 in noble, 2.40.3 in noble-updates; `pkg/compose/convergence.go`):
+   with this policy `mustRecreate` is always false, so an existing bot container is kept; a
+   running one is left as it is (no stop, no restart, no new container), and the start phase
+   (`startService`) starts only the bot's containers that are not running. A missing container
+   is created and started. A stopped container is started as it was created, with the image it
+   was created from (bot.toml and the data folder are bind mounts, so it reads today's files),
+   so a stopped container must never outlive its release: `deploy-server.sh` removes a stopped
+   bot container once it has installed the new `limits.env` (above, the server deploy), and the
+   next Start or scheduled start creates the container from the new release image. The deploy
+   refuses while the bot container runs (`bot-running`), so no container of the previous
+   release survives a deploy.
+4. The compose step of the restart, the start and the scheduled bot unit (`tickr-bot.service`)
+   holds one lock, `DATA/control/compose.lock` (`flock`, which waits for it; the file is created
+   by `deploy-server.sh`, which holds it from its running-bot check to its removal of a stopped
+   container), so a restart that arrives while a start runs, a scheduled start during a deploy,
+   and so on, waits instead of running a second compose command on the bot at once.
+5. Never retried, and the same failure modes as the restart unit: a failed step stays in
+   `systemctl status tickr-bot-start.service`; a failed rename leaves the request, the path unit
+   hits its trigger limit and later Starts are ignored until `systemctl reset-failed
+   tickr-bot-start.path`. After the API's `202` (request written), a failed unit step, such as a
+   missing image, shows only in `systemctl status tickr-bot-start.service` and its journal (the
+   app sees a bot that never appears in `/status`; nothing alerts).
+
+**Cutover (the server move release).** `config/bot.toml` itself holds the server's values, so
+the server's `/srv/tickr/etc/bot.toml` is the commit's file with no hand edit, and merging that
+change ends hosting on the Mac (its launchd jobs no longer work with it):
+
+- `[runtime] watchdog_restart_command = ["python", "-m", "tickr.runtime", "--config",
+  "/app/config/bot.toml", "request-restart", "--cause", "watchdog"]`;
+- `[api] start_bot_command = ["python", "-m", "tickr.runtime", "--config",
+  "/app/config/bot.toml", "request-start", "--cause", "start-bot"]` (above, "Bot start on the
+  server");
+- `[api] system_services = "none"` with `sleep_check_command = []` (no launchd, no caffeinate);
+- `[api] training_progress_file = "training-progress.json"` under the data folder (no training
+  job runs on the server: "no training job is reporting").
 
 Then run `deploy-server.sh` (creates `/srv/tickr/data/control`, installs and starts the path
-unit) and check `systemctl status tickr-bot-restart.path` shows it active (waiting). Until that
-release, `config/bot.toml` keeps the Mac's `launchctl` command.
+units) and check `systemctl status tickr-bot-restart.path tickr-bot-start.path` shows both
+active (waiting).
 
 ### Hand-written timers (example, superseded by `render-systemd`)
 
@@ -411,15 +514,16 @@ Delete the zip from the data folder after copying it.
   cannot pull a different Python or Debian without a reviewed change.
 - **Render the times from `[runtime]`.** Use `render-systemd` (above) for the timers; the compose
   `stop_grace_period` (`bot_exit_timeout_seconds`) comes from `bot.toml` through `limits.env`.
-- **Until an alert channel exists, a failed systemd unit is the only signal.** Preflight and the
-  bot job exit 1 and the watchdog never exits 0 without a channel; nothing reaches the phone.
-  Watch `systemctl list-units --failed` and the container logs yourself.
+- **Without Telegram a failed systemd unit is the only signal.** Preflight and the bot job exit
+  1 and the watchdog never exits 0 without a channel. Set the Telegram variables before the
+  first run; watch `systemctl list-units --failed` and the container logs as well.
 
 ## Open owner decisions
 
-1. **Linux alert channel (blocker).** iMessage needs Messages.app on a signed-in Mac. Choices
-   include keeping a Mac as the iMessage sender, or a channel that works from Linux. A new
-   channel is an owner decision; nothing is implemented. Until then preflight refuses on Linux.
+1. **Linux alert channel: decided** (owner 2026-11-25): Telegram now, app push later. The
+   removal of iMessage and the Mac notification ships in the same release as the server move, so
+   critical alerts are never without a channel. Steps, step 6 proves the send before the first
+   start.
 2. **Where the server runs** (home box, VPS and its region; latency to Webull; who else has root
    on it, since root can read the env file and the token folder).
 3. **How its clock is synced** (chrony or systemd-timesyncd, which servers), and whether

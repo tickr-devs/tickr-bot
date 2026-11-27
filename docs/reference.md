@@ -69,6 +69,11 @@ cause. Each blocks that one entry only; the bot tries again at the next signal.
 | `DAILY_MONEY_UNKNOWN` | Today's profit and loss is not known (for example the broker fees are missing). | See the `fees-unknown` alert. |
 | `DAILY_MONEY_INVALID` | A money figure for the day is not a valid amount. | Report it. |
 | `DAILY_CEILING` | The most the bot may lose today is reached (or would be). | Nothing; trading resumes the next day. |
+| `WEEKLY_CEILING` | The most the bot may lose this week (New York, Monday to today) is reached (or would be). Off unless `[risk] max_weekly_loss_usd` is set. | Nothing; trading resumes next Monday. |
+| `WEEKLY_MONEY_UNKNOWN` | A fill this week has an unknown price or fee, so the week's loss cannot be counted. | Wait for the fees to appear; if they do not, report it. |
+| `WEEKLY_MONEY_INVALID` | The week's loss or the weekly ceiling is not a valid amount. | Check `[risk] max_weekly_loss_usd`; report it if the setting is fine. |
+| `STOP_OUT_STREAK` | Too many trades in a row closed today by their stop at a loss (`[risk] stop_out_streak_limit`). No more entries today. | Nothing; trading resumes the next day. |
+| `EQUITY_UNKNOWN` | A percent-of-equity limit is on, but the account's equity (net liquidation) has no fresh, positive broker read. | Nothing; the next balance read usually fixes it. If it stays, check the broker connection. |
 | `BUYING_POWER_UNKNOWN` | The broker did not say how much buying power there is. | Nothing; it retries. |
 | `BUYING_POWER_SHORT` | There is not enough buying power for the trade. | Nothing, or add funds. |
 | `ENTRY_BUDGET_UNAVAILABLE` | The broker request budget has no room for the entry order. | Nothing. |
@@ -143,8 +148,8 @@ alert. See "Preflight checks" in [operations.md](operations.md#preflight-checks)
 | `disk-low` | Too little free disk space. | Free space. |
 | `calendar-unknown` | Cannot tell if today is a trading day. | See the calendar causes. |
 | `credentials-missing` | A broker key variable is not set. | Set the named variable (the message names it, never its value). |
-| `alert-recipient-missing` | The variable holding the iMessage recipient is not set. | Set the named variable. |
-| `alert-channel-missing` | No alert channel is working. | Fix the notification setup. |
+| `alert-channel-missing` | No alert channel is set up: neither Telegram variable is set. | Set both Telegram variables (operations.md, setup step 2). |
+| `alert-telegram-missing` | Only one of the two Telegram variables is set (bot token or chat id). | Set both named variables, or neither to turn Telegram off. |
 | `token-dir-missing` | The folder for the broker token does not exist. | Create it. |
 | `token-dir-open` | The token folder can be read by other users. | Restrict its permissions. |
 | `token-unusable` | The broker token is missing, expired or rejected. | Renew it and confirm it in the Webull app (see the `token-needs-confirmation` alert). |
@@ -221,11 +226,13 @@ Why a settings change from the app or the site was declined. Nothing was changed
 | `OFF_STEP` | The value is not one of the allowed steps. | Use a multiple of the step. |
 | `RULE_BROKEN` | The value breaks a rule that links it to another setting. | Change the related setting too. |
 | `VALUE_MISSING` | A required value was not given. | Enter a value. |
+| `ENGINEERING_KEY` | The setting is changed only in the configuration file, not from the app. | Ask the engineer to change the file. |
+| `CLOSED_KEY` | The setting is never changed from an app: the environment, the Production authorization or a secret's name. | Leave it; it is set on the Mac by its owner. |
 
 ## Alerts
 
-Every alert goes to a Mac notification, to iMessage and to the alerts feed `data/alerts.jsonl`
-(the kind is the title). The same kind and text inside the repeat window is shown once. See
+Every alert goes to Telegram and to the alerts feed `data/alerts.jsonl` (the kind is the
+title), unless the owner's routing turned a non-critical kind off on Telegram. The same kind and text inside the repeat window is shown once. See
 [Alerts in operations.md](operations.md#alerts).
 
 Urgency: **Now** means act as soon as you see it (money or an unprotected position may be at
@@ -248,6 +255,7 @@ risk). **Today** means look before the next session. **Info** means no action is
 | `bot-did-not-stop` | Today | The bot was told to stop and is still running. Check the job log and stop it safely (see "Stopping the bot safely" in [operations.md](operations.md#stopping-the-bot-safely)). |
 | `preflight-failed` | Today | A start-up check failed, so the bot did not start. See the start-up causes above and [operations.md](operations.md#preflight-checks). |
 | `token-needs-confirmation` | Today | The broker token needs your confirmation in the Webull app before the bot can trade. Confirm it there. |
+| `strategy-not-loaded` | Today | The strategy or its settings version could not be loaded, so the bot opens no entries for this run (it still reconciles and protects). The alert names the cause; fix it and restart the bot. Always sent on every channel: it cannot be switched off. |
 | `observers-stopped` | Info | The side recorders were switched off for this run. Trading goes on. |
 | `not-flat-after-flatten` | Now | After the end-of-day close the bot still sees a position or order. See [operations.md](operations.md#not-flat-after-flatten). |
 | `watchdog-not-flat` | Now | The watchdog sees a position or open order after the close. See [operations.md](operations.md#watchdog-not-flat). |
@@ -264,4 +272,5 @@ risk). **Today** means look before the next session. **Info** means no action is
 | `fees-corrected` | Info | The account's cash activity showed the recorded fees were wrong, and they were replaced. |
 | `remote-auth-blocked` | Today | The API's remote port refuses an address (or, with a full table, every new address) after too many failed token or pairing-code checks. If it is not one of your devices, nothing to do: the limit holds. If it is yours, wait the time in the alert, then re-pair the device (or revoke a stale one sharing its address). Always sent on every channel: it cannot be switched off. See [api.md](api.md#failed-authentication-limit). |
 | `api-credentials-unexpected` | Today | The local API holds a credential variable it must not have. See [operations.md](operations.md#the-api-job-and-the-webull-keys). |
+| `protection-change-ignored` | Today | The bot saw a settings file change while running and did not adopt it (a looser value, an invalid file, or a change of a non-protection setting). The protection in force stays as it is; the file is read again at the next start, so check it now if you did not expect the change. |
 | `risk-command-used` | Today | A paired device (or the local port) turned entries back on or started the bot. If you did not do this, revoke that device. Always sent on every channel: it cannot be switched off. See [operations.md](operations.md#risk-command-used). |

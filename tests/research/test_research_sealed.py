@@ -248,6 +248,14 @@ def _gate(tmp_path, days, start=None, end=None):
             *SETTINGS, *PLACES]
 
 
+def _sizing(tmp_path, days):
+    answers = tmp_path / "answers.csv"
+    answers.write_text("outcome,p_a,day,session,result_pct\n" + "".join(
+        f"1,0.8,{d.isoformat()},regular,1.0\n" for d in days))
+    return ["sizing", "--answers", str(answers), "--all-sessions-usd", "4000", "--min-usd", "500",
+            "--max-usd", "1000", *PLACES]
+
+
 def _gate_covered(tmp_path, days):
     # The range is open; one covered day outside it lies in the window.
     return _gate(tmp_path, days, start=date(2026, 6, 1), end=OPEN)
@@ -256,7 +264,7 @@ def _gate_covered(tmp_path, days):
 # Runs that touch a sealed input every command refuses: market data, decision records of the
 # strategies, model trades. The execution reports are here only with a market-data file.
 REFUSED = {"decide": _decide, "outcomes": _outcomes, "whatif": _whatif,
-           "observers": _observers, "diff": _diff, "gate": _gate,
+           "observers": _observers, "diff": _diff, "gate": _gate, "sizing": _sizing,
            "collar": _collar, "collar --bars": _collar_bars,
            "latency": _latency, "fill-quality --quotes": _fill_quality_quotes}
 # Execution reports reading only the bot's own order, fill and timing records of sealed days.

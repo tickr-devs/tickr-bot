@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from baseline import mac_text
 
 from tickr import config as config_module
 from tickr.api import contract
@@ -298,14 +299,13 @@ def test_cli_watchdog_day_through_the_read_only_broker(config_path, monkeypatch,
     monkeypatch.setattr(runtime_main, "WATCHDOG_NOW", clock)
     monkeypatch.setattr(runtime_main, "WATCHDOG_SLEEP", clock.sleep)
     monkeypatch.setattr(runtime_main, "WATCHDOG_BROKER", lambda c, hook: broker)
-    monkeypatch.setitem(os.environ, cfg.alerts.imessage_recipient_variable, "")
-    # No channel on this machine (as on Linux, where CI runs), whatever the test host is.
+    # No channel (Telegram not set up), whatever the test host is.
     monkeypatch.setattr(runtime_main, "default_notifier", lambda cfg, **kwargs: None)
     assert runtime_main.main(["--config", str(config_path), "watchdog"]) == 1
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     kinds = [x["record"] for x in lines]
-    assert kinds[:2] == [watchdog.CHANNEL_REFUSED] * 2
-    assert [x["cause"] for x in lines[:2]] == ["alert-channel-missing", "alert-recipient-missing"]
+    assert kinds[:1] == [watchdog.CHANNEL_REFUSED]
+    assert [x["cause"] for x in lines[:1]] == ["alert-channel-missing"]
     assert {x["delivery"] for x in lines if x["record"] == "alert"} == {"no-notifier"}
     assert kinds.count("alert") == 2 and broker.sent == []
     journal = cfg.root / cfg.run.data_dir / cfg.runtime.watchdog_journal_file
@@ -404,8 +404,9 @@ def test_restart_decision_table(cfg, tmp_path, case, expected, started):
     assert bool(runs.calls) is started
     if started:
         ((command, timeout),) = runs.calls
-        assert command == ["/bin/launchctl", "kickstart",
-                           f"gui/{os.getuid()}/local.tickr.bot"]
+        # The shipped (server) command: the restart request inside the watchdog's container.
+        assert command == ["python", "-m", "tickr.runtime", "--config", "/app/config/bot.toml",
+                           "request-restart", "--cause", "watchdog"]
         assert timeout == cfg.runtime.watchdog_restart_timeout_seconds
         assert watchdog.restarted_on(record) == date(2026, 11, 16)
 
@@ -430,8 +431,7 @@ def test_restart_happens_once_a_day_and_is_recorded_before_the_command(cfg, tmp_
     again.bot_check(now + timedelta(seconds=120))
     assert seen == [date(2026, 11, 16)] and kinds(recorder) == ["bot-down-with-open-trade"]
     lines = [r for r in records(tmp_path / "watchdog.jsonl") if r["record"] == watchdog.RESTART]
-    assert [(r["started"], r["command"][-1]) for r in lines] == [
-        (True, "gui/{uid}/local.tickr.bot")]
+    assert [(r["started"], r["command"][-1]) for r in lines] == [(True, "watchdog")]
 
 
 @pytest.mark.parametrize("result,cause", [(1, "restart command exited 1"),
@@ -501,7 +501,10 @@ def test_after_a_restart_a_flat_broker_and_running_bot_are_quiet(cfg, tmp_path):
 
 
 def test_restart_command_names_the_bot_job_label(config_path):
+    """On the Mac: launchd's kickstart of the bot job, with this user's id."""
+    config_path.write_text(mac_text(config_path.read_text("utf-8")), "utf-8")
     cfg = config_module.load(config_path)
+    assert watchdog.restart_command(cfg)[2] == f"gui/{os.getuid()}/local.tickr.bot"
     template = (cfg.root / "ops" / "launchd" / "local.tickr.bot.plist.template").read_text()
     label = cfg.runtime.watchdog_restart_command[-1].rsplit("/", 1)[1]
     assert f"<key>Label</key>\n  <string>{label}</string>" in template

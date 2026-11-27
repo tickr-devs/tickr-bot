@@ -1,12 +1,7 @@
 {
   "channels": [
     {
-      "channel": "mac",
-      "configured": false,
-      "cause": "no-preflight"
-    },
-    {
-      "channel": "imessage",
+      "channel": "telegram",
       "configured": false,
       "cause": "no-preflight"
     },
@@ -22,8 +17,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -32,8 +26,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -42,8 +35,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -52,8 +44,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -62,8 +53,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -72,8 +62,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -82,8 +71,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -92,8 +80,7 @@
       "group": "trading",
       "locked": false,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -102,8 +89,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -112,8 +98,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -122,8 +107,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -132,8 +116,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -142,8 +125,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -152,8 +134,16 @@
       "group": "day",
       "locked": false,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
+        "push": true
+      }
+    },
+    {
+      "kind": "strategy-not-loaded",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "telegram": true,
         "push": true
       }
     },
@@ -162,8 +152,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -172,8 +161,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -182,8 +170,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -192,8 +179,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -202,8 +188,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -212,8 +197,7 @@
       "group": "day",
       "locked": false,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -222,8 +206,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -232,8 +215,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -242,8 +224,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -252,8 +233,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -262,8 +242,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -272,8 +251,7 @@
       "group": "trading",
       "locked": false,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -282,8 +260,7 @@
       "group": "trading",
       "locked": false,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -292,8 +269,16 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
+        "push": true
+      }
+    },
+    {
+      "kind": "protection-change-ignored",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "telegram": true,
         "push": true
       }
     },
@@ -302,8 +287,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     },
@@ -312,8 +296,7 @@
       "group": "critical",
       "locked": true,
       "channels": {
-        "mac": true,
-        "imessage": true,
+        "telegram": true,
         "push": true
       }
     }

@@ -11,7 +11,7 @@ every alerting process on each alert. It only ever turns a (kind, channel) cell 
   one off is refused (`RoutingRefused`, cause `locked-kind`).
 
 Routable channels are the owner-facing ones (`RouteChannel`); the alerts feed file (a Claude
-session on the Mac) is not routable and always gets every alert. A channel without a delivery
+session) is not routable and always gets every alert. A channel without a delivery
 in this code yet (`push`) can be switched and stored, and has no effect until it exists.
 """
 
@@ -27,15 +27,14 @@ from pathlib import Path
 from tickr.api.contract import AlertChannel as RouteChannel
 from tickr.api.contract import AlertGroup, write_atomic
 from tickr.config import AlertsConfig, Config
-from tickr.runtime.alerts import IMESSAGE, MACOS, AlertKind
+from tickr.runtime.alerts import TELEGRAM, AlertKind
 from tickr.runtime.watch import ALERT_AT_ONCE, FENCE_ALERTS
 
 ROUTING_SCHEMA_VERSION = 1
 
 
 # The delivery (its name in `alerts.Channels`) behind each routable channel; push has none yet.
-DELIVERY: Mapping[RouteChannel, str] = {RouteChannel.MAC: MACOS,
-                                        RouteChannel.IMESSAGE: IMESSAGE}
+DELIVERY: Mapping[RouteChannel, str] = {RouteChannel.TELEGRAM: TELEGRAM}
 
 
 # Kinds that need the owner now: never switched off on any channel. Every kind an
@@ -65,6 +64,8 @@ _CRITICAL = frozenset({
     AlertKind.API_CREDENTIALS_UNEXPECTED,
     AlertKind.REMOTE_AUTH_BLOCKED,  # someone is guessing a device token or pairing code
     AlertKind.RISK_COMMAND_USED,  # entries turned back on or the bot started remotely
+    AlertKind.STRATEGY_NOT_LOADED,  # entries off for the whole run: never silent
+    AlertKind.PROTECTION_CHANGE_IGNORED,  # a settings change the running bot did not take
 })
 LOCKED: frozenset[AlertKind] = _CRITICAL | frozenset(
     FENCE_ALERTS[fence] for fence in ALERT_AT_ONCE if fence in FENCE_ALERTS)

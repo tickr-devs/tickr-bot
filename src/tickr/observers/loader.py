@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import importlib
 import tomllib
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from tickr.config import Config
 from tickr.observers.errors import ObserverError
+from tickr.settings_version import CONFLICT, SettingsVersion, SettingsVersionRefused
+from tickr.store import SettingsVersionConflict, Store
 from tickr.strategy.base import Strategy
 
 STRATEGIES_DIR = "strategies"
@@ -30,6 +32,11 @@ STRATEGY_FILE = "strategy.toml"
 class LoadedStrategy:
     folder: str
     strategy: Strategy
+    values: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
+    """The resolved values the strategy was built from (set by `load_strategy`)."""
+    settings_version: str | None = None
+    """The settings version its decisions and trades reference (`tickr.settings_version`),
+    set by `with_settings_version`; None only for a strategy built some other way (tests)."""
 
     @property
     def identity(self) -> str:
@@ -104,7 +111,31 @@ def load_strategy(root: Path, folder: str, modules: Mapping[str, str]) -> Loaded
             f"{folder}: strategy reports {reported[0]} v{reported[1]}, "
             f"file says {name} v{table.get('version')}"
         )
-    return LoadedStrategy(folder, strategy)
+    return LoadedStrategy(folder, strategy, values)
+
+
+class SettingsVersionError(ObserverError):
+    """No settings version for a strategy's decisions, or one that conflicts with its record:
+    a typed refusal (`cause`, a stable word) the caller journals and alerts on."""
+
+    def __init__(self, folder: str, cause: str, detail: str) -> None:
+        super().__init__(f"{folder}: settings version refused ({cause}): {detail}")
+        self.cause = cause
+
+
+def with_settings_version(loaded: LoadedStrategy, compute: Callable[[], SettingsVersion],
+                          store: Store | None = None) -> LoadedStrategy:
+    """`loaded` with the settings version `compute` gives, recorded in `store` when given.
+    SettingsVersionError when it cannot be computed or conflicts with its record."""
+    try:
+        version = compute()
+        if store is not None:
+            store.record_settings_version(version.value, version.contents)
+    except SettingsVersionRefused as exc:
+        raise SettingsVersionError(loaded.folder, exc.cause, exc.detail) from exc
+    except SettingsVersionConflict as exc:
+        raise SettingsVersionError(loaded.folder, CONFLICT, str(exc)) from exc
+    return replace(loaded, settings_version=version.value)
 
 
 def check_history(loaded: LoadedStrategy, history_sessions: int) -> None:

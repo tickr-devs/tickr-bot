@@ -12,8 +12,7 @@
           "channel": {
             "type": "string",
             "enum": [
-              "mac",
-              "imessage",
+              "telegram",
               "push"
             ]
           },
@@ -28,7 +27,8 @@
                   "no-preflight",
                   "preflight-unreadable",
                   "check-failed",
-                  "not-built"
+                  "not-built",
+                  "not-configured"
                 ]
               },
               {
@@ -68,10 +68,7 @@
           "channels": {
             "type": "object",
             "properties": {
-              "mac": {
-                "type": "boolean"
-              },
-              "imessage": {
+              "telegram": {
                 "type": "boolean"
               },
               "push": {
@@ -79,8 +76,7 @@
               }
             },
             "required": [
-              "mac",
-              "imessage",
+              "telegram",
               "push"
             ],
             "additionalProperties": false

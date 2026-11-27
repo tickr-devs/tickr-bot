@@ -96,11 +96,11 @@ Every run prints JSON lines (`"record": "preflight" | "alert" | "bot-exit"`) to 
 3. Calendar knows today (New York date).
 4. Credential variables named in the active `[environments.*]` table are set. Only the names are
    checked and reported, never the values.
-5. This machine has an alert channel (cause `alert-channel-missing`): today only macOS. On
-   Linux, including Docker, the start is refused; see `docs/deploy-server.md`.
-6. The iMessage recipient variable named by `[alerts] imessage_recipient_variable` is set
-   (cause `alert-recipient-missing`; blocks the start, because the phone is the alert channel
-   that reaches you away from the Mac). Presence only, never the value.
+5. There is an alert channel (cause `alert-channel-missing`): Telegram is set up, that is
+   `[alerts] bot_token_variable` or `chat_id_variable` is set. The same on every operating
+   system; without it the start is refused, because nobody could be told. Presence only, never
+   the value.
+6. When Telegram is set up, both of its variables are set (cause `alert-telegram-missing`).
 7. Broker token folder `<data_dir>/<token_dir>` exists (cause `token-dir-missing`) and is closed to
    other accounts on the machine, no group or other permission bits (cause `token-dir-open`;
    `chmod 700` it). The SDK writes its token file there with default permissions. Only POSIX mode
@@ -138,30 +138,26 @@ All checks are reported; the first failure is the recorded cause.
    ```
    The jobs load it with `sh` (`set -a; . file`), so Tickr code never reads the values. Quote a
    value with single quotes if it contains spaces or `$`.
-   Add your iMessage address here too, under the name in `[alerts] imessage_recipient_variable`:
-   `TICKR_IMESSAGE_TO='+15551234567'` (or your Apple ID email). It is personal data: never
-   put it in the repo or in a plist. To test by hand in Terminal:
-   `set -a; . ~/.config/tickr/env; set +a` first.
-   **Deadline:** `TICKR_IMESSAGE_TO` must be in this file before the first preflight run
-   (03:30 Mac time on Monday with the default `[runtime] preflight_start_local`). Without it
-   preflight fails with `alert-recipient-missing` and the bot job does not start the bot.
+   To test by hand in Terminal: `set -a; . ~/.config/tickr/env; set +a` first.
+   Telegram is the alert channel and its two variables are required: create a bot with
+   @BotFather, put its token and your chat id in this file under the names in
+   `[alerts] bot_token_variable` and `chat_id_variable` (`TICKR_TELEGRAM_BOT_TOKEN`,
+   `TICKR_TELEGRAM_CHAT_ID`). They are secrets and personal data: never put them in the repo or
+   in a plist. **Deadline:** they must be in this file before the first preflight run (03:30
+   on Monday with the default `[runtime] preflight_start_local`). Without them preflight fails
+   with `alert-channel-missing` (neither set) or `alert-telegram-missing` (one of the two) and
+   the bot job does not start the bot. Critical alerts always go to Telegram; the rest follow the
+   routing in the app (channel `telegram`).
 3. Data and token folders: `mkdir -p data && mkdir -m 700 data/webull-token-sandbox`
    (`[environments.sandbox] token_dir`; `data/webull-token-production` before Production). A folder
    that already exists keeps its mode: `chmod 700 data/webull-token-sandbox` instead.
-4. Alerts: sign in to iMessage in the Messages app on this Mac (Messages > Settings > iMessage)
-   with an Apple ID, then, after loading the env file as above, run
+4. Alerts: after loading the env file as above, run
    `.venv/bin/python -m tickr.runtime alert preflight-failed "test"` once. You should get a
-   notification on the Mac and an iMessage on the phone. The Mac notification comes from the
-   Tickr app, with its icon, when the app is at `[alerts] mac_app` (default
-   `/Applications/Tickr.app`: in Xcode, Product > Archive, then Distribute App > Copy App, and
-   put it there under that name). Open it once and allow notifications when it asks. When the
-   app is missing, notifications for it are off, or it fails, the same notification comes from
-   `osascript` instead, under "Script Editor" (allow those in System Settings > Notifications
-   too), so an alert is never lost; a slow app can at worst show it twice. Both channels are sent in the background, so the bot's loop does not wait for the app (which gets at most `[alerts] mac_app_timeout_seconds`), `osascript` or Messages. The first iMessage send asks to let Terminal control Messages: allow it. This only
-   covers Terminal; the launchd jobs need their own permission (see "Alerts from launchd"
-   below). The first JSON line says the alert is on its way (`"delivery": "sending"`,
-   `"pending": ["macos", "imessage"]`); one line per channel follows (`"channel": "macos"`,
-   `"channel": "imessage"`) with its result (`"delivery": "shown"` or `"failed"`). A failed send is never retried; the next alert tries again.
+   Telegram message. The send runs on a background thread, so the bot's loop does not wait for
+   the network (at most `[alerts] notification_timeout_seconds`). The first JSON line says the
+   alert is on its way (`"delivery": "sending"`, `"pending": ["telegram", "feed"]`); one line
+   per channel follows (`"channel": "telegram"`) with its result (`"delivery": "shown"` or
+   `"failed"`). A failed send is never retried; the next alert tries again.
 5. Run preflight by hand: `.venv/bin/python -m tickr.runtime preflight; echo $?`.
 
 ## Install the jobs
@@ -204,14 +200,14 @@ subshell that sources the env file and prints only that one value (the file's ow
 discarded), then exports it; the API process itself never reads the env file. No process the
 API starts gets any credential variable: the Lab replay child, the start-bot command
 (`launchctl kickstart`; the bot job sources the env file itself, launchd never hands it the
-caller's environment) and the alert's notification commands.
+caller's environment) and the alert's send.
 
 At its start the API checks the credential variables it holds (names only). Any beyond those
 above (any at all with the chart off; the account id, another environment's keys or any other
 credential with it on) raise the `api-credentials-unexpected` alert and a line in api.log
 naming them; the API still serves. Its plist is then stale or edited: render and reinstall it as
-below. The API sends this alert as a Mac notification only: it has no iMessage recipient
-variable.
+below. The API writes this alert to the alerts feed file only: it has no Telegram variables
+(they are credential variables it must not hold).
 
 The variable names are fixed when the plist is rendered: after changing `[chart]
 webull_enabled` or `[run] environment`, render again and reinstall the API job only:
@@ -406,30 +402,18 @@ with the bot flat and stopped:
    Read the files, then for each installed job `launchctl bootout gui/$(id -u)/local.tickr.<job>`, copy
    the new plist to `~/Library/LaunchAgents/` and `launchctl bootstrap` it (bot last, and only
    when it is not running).
-5. `launchctl kickstart gui/$(id -u)/local.tickr.test-alert`: the alert arrives (the job's
-   program chain changed, so the Messages permission may ask again; allow it).
+5. `launchctl kickstart gui/$(id -u)/local.tickr.test-alert`: the Telegram alert arrives.
 6. From now on deploy only with `release`; a `git pull` in the checkout changes nothing that
    runs. To go back to the old setup: render with `--release ~/Development/Tickr` and reinstall.
 
-### Alerts from launchd (do this once, at the Mac)
+### Alerts from launchd
 
-macOS grants the Automation permission ("allow ... to control Messages") per calling program.
-Allowing it for Terminal does not cover the launchd jobs, and a job cannot click "OK": without
-the permission every iMessage from the bot and the watchdog fails (recorded as
-`imessage: osascript exited with code 1`) while the Mac notification still works. So, while you
-are at the Mac, after loading `local.tickr.test-alert.plist`:
-
-```sh
-launchctl kickstart gui/$(id -u)/local.tickr.test-alert
-```
-
-A dialog asks to allow control of Messages: click OK. You should get a notification and an
-iMessage "test alert from launchd". Check `~/Library/Logs/Tickr/test-alert.log`: the
-`"channel": "imessage"` line must say `"delivery": "shown"`. The test-alert job runs the same
-program chain as the bot and watchdog jobs (`/bin/sh`, then the venv python) and has no
-schedule, so it can stay installed; kickstart it again after recreating the venv or upgrading
-macOS. If no dialog appears and the send fails, open System Settings > Privacy & Security >
-Automation and allow Messages for the listed program.
+`launchctl kickstart gui/$(id -u)/local.tickr.test-alert` sends a test alert through the same
+program chain as the bot and watchdog jobs (`/bin/sh`, then the venv python). Check
+`~/Library/Logs/Tickr/test-alert.log`: the `"channel": "telegram"` line must say
+`"delivery": "shown"`. The job has no schedule, so it can stay installed; kickstart it again
+after recreating the venv. No operating-system permission is needed: Telegram is a plain HTTPS
+call.
 
 ## Everyday commands
 
@@ -452,6 +436,12 @@ earnings and appends each new or changed record, with its published / last_updat
 receipt time, to `<data_dir>/massive/news-probe/<New York date>.jsonl`. Delay of a `new` record =
 `received_utc - published` (at most; it arrived after `previous_poll_sent_utc`). Lines of the
 first poll are `baseline` and time nothing.
+
+Revision poller (Codex 108 point 7; off): with `[massive] revision_poll_enabled = true`, `tickr
+poll-revisions` (same environment as the probe) keeps every version of each Benzinga earnings report
+and news article it receives under `<data_dir>/<revision_store_dir>`, with the poll coverage in
+`coverage/`. A failed poll or a restart leaves a typed gap there; `revisions.write_l1bz` refuses a
+range that touches one.
 
 The demo day had a launchd job of its own (`local.tickr.demo`) until the apps carried the day
 themselves. If it is still installed on this Mac, remove it once:
@@ -598,22 +588,23 @@ straight to the supervisor. Limits:
 `unprotected-position`, `stop-rejected`, `unknown-order-status`, `foreign-exposure`,
 `broker-reads-failing`, `stream-lost-with-position`, `daily-ceiling-reached`, `bot-crashed`,
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
-`exit-refused`, `observers-stopped`, `not-flat-after-flatten`, `exit-not-filled`,
-`flatten-after-close`, from the API `api-credentials-unexpected` and `risk-command-used` (Mac notification and feed only, see
+`exit-refused`, `observers-stopped`, `strategy-not-loaded` (no entries this run: the active
+strategy or its settings version was refused), `not-flat-after-flatten`, `exit-not-filled`,
+`flatten-after-close`, from the API `api-credentials-unexpected` and `risk-command-used` (feed only, see
 "The API job and the Webull keys") and `remote-auth-blocked` (an address used up its
-failed-authentication budget on the remote port, docs/api.md; Mac notification and feed, feed only
-off macOS), and from
+failed-authentication budget on the remote port, docs/api.md; feed only), and from
 the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
 `watchdog-restarted-bot`, `watchdog-restart-refused`, `watchdog-restart-failed`, `bot-down`,
 `disk-low`. Every alert goes to
-the Mac notification, to iMessage (`[alerts] imessage_recipient_variable`, see setup step 4) and to
+Telegram (`[alerts] bot_token_variable` and `chat_id_variable`, see setup step 2) and to
 the alerts feed below, unless the owner's routing turned its kind off on a channel (PUT
 /alerts/routing, file `[alerts] routing_file` under `data_dir`; docs/api.md, "Notification
 settings"). Critical kinds cannot be turned off, the feed always gets every alert, and deleting
 the routing file turns everything back on.
-The iMessage is sent on a background thread, so the bot's loop never waits for Messages.app; its
-result is journaled as its own `alert` record (`"channel": "imessage"`) once known. An alert
-counts as shown, for repeat suppression, when either channel delivered it.
+The Telegram message is sent on a background thread, so the bot's loop never waits for the
+network; its result is journaled as its own `alert` record (`"channel": "telegram"`) once known.
+An alert counts as shown, for repeat suppression, when either channel delivered it. Every alert
+is also journaled (the bot's, the watchdog's or the job log), whatever the channels did.
 The same kind and text inside `[alerts] dedupe_window_seconds` is shown once; every occurrence is
 still recorded (in the bot's journal, the watchdog's journal, or the job log for these commands).
 
@@ -621,7 +612,7 @@ still recorded (in the bot's journal, the watchdog's journal, or the job log for
 
 Every process that alerts (bot, supervisor, preflight, watchdog, API) also appends one JSON line
 per alert, `{"at", "title", "text"}`, to `data/alerts.jsonl` (`[alerts] feed_file` under
-`[run] data_dir`; the title holds the kind, as in the notification). A Claude session on the Mac
+`[run] data_dir`; the title holds the kind, as in the Telegram message). A Claude session
 (the live-bot monitor) waits on that file in the background and wakes at the first new line, so
 the project chat hears of a crash within seconds, not only the owner's phone:
 
@@ -633,8 +624,8 @@ tail -n +"$((n + 1))" "$f"
 ```
 
 It reads only that file (no credentials, no environment). After each wake it reports the new
-lines and starts waiting again. The feed works only while that session runs; the Mac notification
-and iMessage do not depend on it. A feed line that cannot be written (a full disk) is recorded as
+lines and starts waiting again. The feed works only while that session runs; Telegram
+does not depend on it. A feed line that cannot be written (a full disk) is recorded as
 a failed `feed` channel like any other.
 
 ### `risk-command-used`
@@ -644,8 +635,7 @@ The API raises one of these for every accepted command that raises risk: `entry-
 `python -m tickr.api devices` lists, or `local` for the local port), the port (local or
 remote) and the time; never a token. If you did not do this, the device's token is stolen or
 the phone is not yours: revoke that device now (`python -m tickr.api revoke --name <device>`),
-then pair again. Refused commands raise nothing. It goes to the Mac notification (macOS only)
-and the alerts feed.
+then pair again. Refused commands raise nothing. It goes to the alerts feed.
 
 ### `broker-reads-failing`
 
@@ -865,12 +855,9 @@ is a separate process that covers this:
   watchdog_journal_file`) and in `~/Library/Logs/Tickr/watchdog.log`.
 - It does not exit on its own; when it ends (a crash, a release stopping it) launchd starts it
   again.
-- On a machine with no alert channel (not macOS) it writes a `watchdog-alert-channel-refused`
+- With no alert channel (Telegram not set up) it writes a `watchdog-alert-channel-refused`
   line (`alert-channel-missing`), still runs and journals, and never exits 0, so the scheduler
   shows a failed job.
-- If the iMessage recipient variable is not set, the watchdog writes a
-  `watchdog-alert-channel-refused` line (`alert-recipient-missing`) and still runs, alerting on
-  the Mac only; every iMessage attempt records the same cause.
 
 ### `bot-down`
 
@@ -959,8 +946,9 @@ recovers (no live pid, or a status file not yet rewritten); if the next check is
 From `[runtime] watchdog_restart_before_flatten_seconds` before the flatten time (300 s:
 15:40 ET on a normal day, 12:40 ET on a half day) until its last check, a watchdog bot check
 that finds the bot down while its database shows an open trade starts the bot job once:
-`[runtime] watchdog_restart_command`, by default `launchctl kickstart gui/<uid>/local.tickr.bot`
-(without `-k`, so a job launchd still sees running is left alone). That is the same job the
+`[runtime] watchdog_restart_command`, on a Mac `launchctl kickstart gui/<uid>/local.tickr.bot`
+(without `-k`, so a job launchd still sees running is left alone; shipped since the server
+cutover: the server's restart request, docs/deploy-server.md "Bot restart on the server"). That is the same job the
 schedule starts: preflight again (a failure alerts `bot-did-not-start`), the supervisor, the
 single-instance lock, then the normal startup: recovery, reconciliation, the stop verified.
 Config refuses a restart time at or before the last entry time, so the restarted bot can never

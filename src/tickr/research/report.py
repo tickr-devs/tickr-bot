@@ -126,6 +126,21 @@ def write_whatif(rows: Sequence[wi.WhatIf], out_dir: Path, places: int) -> dict[
     return _json(out_dir / "whatif_summary.json", body, places)
 
 
+CONFIDENCE_COLUMNS = ("label", "line", "sizing", "earned", "lost", "net", "days_in_plus", "days",
+                      "trades")
+
+
+def write_confidence(result: dict[str, dict[str, Any]], out_dir: Path,
+                     places: int) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows = [["simulated", line, kind, v.earned, v.lost, v.net, v.days_in_plus, v.days, v.trades]
+            for line, kinds in result.items() for kind, v in kinds.items()]
+    _write_csv(out_dir / "sizing.csv", CONFIDENCE_COLUMNS, rows, places)
+    body = {"label": "simulated", **{k: {n: asdict(v) for n, v in kinds.items()}
+                                      for k, kinds in result.items()}}
+    return _json(out_dir / "sizing_summary.json", body, places)
+
+
 DIFF_COLUMNS = (
     "symbol", "decision_bar", "kind", "changed",
     "baseline_verdict", "baseline_setup", "baseline_entry_high", "baseline_stop",

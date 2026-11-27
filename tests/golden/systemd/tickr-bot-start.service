@@ -1,0 +1,34 @@
+# Tickr bot start on request: started by tickr-bot-start.path when the owner pressed Start in
+# the app. The request file (request time in UTC and cause): /srv/tickr/data/control/start-request
+# Steps, each once: (1) take the request (rename it to .taken, so a request written during the
+# start is a new event); (2) `up -d --no-recreate` the compose service `bot`: a running bot
+# container is never stopped, recreated or restarted; a stopped one is started as it is (the
+# image it was created from; deploy-server.sh removes a stopped one when it switches the
+# release, so the next start creates it from the new one); a missing one is created and
+# started; the image is never pulled or built here, a missing image fails the step; (3) log
+# the request to the journal. Step (2) holds the compose lock (`flock`, waiting for it;
+# shared with tickr-bot-restart.service, tickr-bot.service and deploy-server.sh), so no other
+# compose command acts on the bot at the same time: /srv/tickr/data/control/compose.lock
+# Never retried: no Restart=, no loop. A failed step stops the rest and stays visible in
+# `systemctl status tickr-bot-start.service`.
+# The env file is the path /run/tickr/env on the host, written by tickr-secrets.service; only its
+# path is named here, never a value.
+# Rendered by `python -m tickr.runtime render-systemd`; see docs/deploy-server.md.
+[Unit]
+Description=Tickr bot start on request
+RequiresMountsFor=/srv/tickr/data
+Requires=docker.service tickr-secrets.service
+After=docker.service tickr-secrets.service
+# When a restart and a start are queued together, the start runs after it (the lock above
+# also covers a restart that arrives while this unit runs).
+After=tickr-bot-restart.service
+
+[Service]
+Type=oneshot
+User=tickr
+EnvironmentFile=/srv/tickr/etc/limits.env
+Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml
+Environment=TICKR_ENV_FILE_HOST=/run/tickr/env
+ExecStart=/bin/mv -fT /srv/tickr/data/control/start-request /srv/tickr/data/control/start-request.taken
+ExecStart=/usr/bin/flock /srv/tickr/data/control/compose.lock /usr/bin/docker compose -f /srv/tickr/etc/compose.yaml -p tickr --profile jobs up -d --no-recreate --no-deps --pull never --no-build bot
+ExecStart=/bin/cat /srv/tickr/data/control/start-request.taken

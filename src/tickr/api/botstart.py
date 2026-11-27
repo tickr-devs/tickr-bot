@@ -1,7 +1,9 @@
-"""POST /commands/start-bot: start the bot job through launchd, never inside the API process.
+"""POST /commands/start-bot: start the bot job, never inside the API process.
 
-The API runs `[api] start_bot_command` (launchd's kickstart of the bot job, without -k, so a job
-that already runs is never restarted). The job then runs the same preflight and supervisor as a
+The API runs `[api] start_bot_command`: on a Mac launchd's kickstart of the bot job (without -k,
+so a job that already runs is never restarted); on the server `request-start`, whose host unit
+runs `docker compose up -d --no-recreate` for the bot and so never touches a running bot
+container (runtime/restartrequest.py). The job then runs the same preflight and supervisor as a
 scheduled start: preflight may still refuse (no session, token, disk ...), and GET /status shows
 what happened. Nothing here talks to the broker.
 

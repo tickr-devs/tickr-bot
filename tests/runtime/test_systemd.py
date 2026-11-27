@@ -100,7 +100,39 @@ def test_every_job_requires_the_secrets_unit_and_holds_no_value(config_path, rep
         assert "After=docker.service tickr-secrets.service\n" in text
         assert "Environment=TICKR_ENV_FILE_HOST=/run/tickr/env\n" in text
     api = (out / "tickr-api.service").read_text("utf-8")
-    assert "tickr-secrets.service" not in api and "TICKR_ENV_FILE_HOST=" not in api
+    # The API needs no credential: it does not wait for the secrets unit, and compose mounts no
+    # env file into it (test below). It still names the env file's path: compose interpolates the
+    # whole file, and x-with-env requires it.
+    assert "tickr-secrets.service" not in api
+    assert "Environment=TICKR_ENV_FILE_HOST=/run/tickr/env\n" in api
+
+
+def test_compose_mounts_no_env_file_into_the_api(repo):
+    text = (repo / "ops" / "docker" / "compose.yaml").read_text("utf-8")
+    api = re.search(r"(?ms)^  api:\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)", text)
+    assert api is not None
+    assert "with-env" not in api.group(1) and "/run/tickr/env" not in api.group(1)
+
+
+def test_every_compose_unit_sets_every_variable_compose_requires(config_path, repo, tmp_path):
+    # 2026-11-27 cutover: tickr-api.service lacked TICKR_ENV_FILE_HOST and `up -d api` refused
+    # on the server ("required variable ... is missing a value"), because compose interpolates
+    # every service, not only the one it starts. CI's compose check sets all of them globally.
+    out = tmp_path / "out"
+    _render(config_path, out)
+    required = set(re.findall(r"\$\{(\w+):\?", (repo / "ops" / "docker" / "compose.yaml")
+                              .read_text("utf-8")))
+    assert {"TICKR_IMAGE", "TICKR_ENV_FILE_HOST", "TICKR_CONFIG_HOST"} <= required
+    limits = set(re.findall(r"(?m)^(\w+)=", (out / "limits.env").read_text("utf-8")))
+    units = [u for u in out.glob("tickr-*.service") if "docker compose" in u.read_text("utf-8")]
+    assert {u.name for u in units} >= {"tickr-api.service", "tickr-bot.service",
+                                       "tickr-preflight.service", "tickr-watchdog.service"}
+    for unit in units:
+        text = unit.read_text("utf-8")
+        names = set(re.findall(r"(?m)^Environment=(\w+)=", text))
+        if re.search(r"(?m)^EnvironmentFile=.*limits\.env$", text):
+            names |= limits
+        assert required <= names, (unit.name, sorted(required - names))
 
 
 @pytest.mark.parametrize("field,value", [
@@ -142,7 +174,9 @@ def test_render_systemd_command(config_path, repo, tmp_path, capsys):
     bot = (out / "tickr-bot.service").read_text("utf-8")
     assert "Environment=TICKR_CONFIG_HOST=/srv/tickr/etc/bot.toml" in bot
     # The units run the compose file named by --compose, never a clone's ops/docker.
-    assert f"ExecStart=/usr/bin/docker compose -f {compose} --profile jobs up -d bot\n" in bot
+    lock = "/srv/tickr/data/control/" + systemd.COMPOSE_LOCK
+    assert (f"ExecStart=/usr/bin/flock {lock} /usr/bin/docker compose -f {compose} "
+            "--profile jobs up -d bot\n") in bot
     assert f"TICKR_IMAGE={IMAGE}\n" in (out / "limits.env").read_text("utf-8")
 
 
@@ -228,12 +262,35 @@ def _fake_server(tmp_path: Path, flat: bool) -> tuple[Path, Path, Path, Path]:
     # owner, this test's own ids; ID_FAILS makes it fail), `--entrypoint cat` prints the image's
     # compose.yaml (IMAGE_COMPOSE, default the etc copy), render-systemd writes the units of
     # the --data and --image it is given (RENDER_IMAGE overrides the image), require-flat
-    # answers the flat result. Every call is logged.
+    # answers the flat result. The bot container is the file bot-container ("STATE IMAGE").
+    # `compose ... -p tickr --profile jobs ps --status running -q bot` prints an id when its
+    # state is running (PS_FAILS makes it fail); `... rm -f bot` (no -s) models compose's Remove
+    # (pkg/compose/remove.go): it is removed unless its state is running (RM_FAILS makes it
+    # fail). Both fail unless the compose lock is held, the paths compose interpolates are set
+    # and --env-file names a limits.env of the release image. Every call is logged.
     docker = tmp_path / "docker"
     docker.write_text(
         f'#!/bin/sh\necho "$@" >> {tmp_path}/docker.log\n'
         'if [ "$1 $2" = "image inspect" ]; then\n'
         f'  for ref in ${{PRESENT-{IMAGE}}}; do [ "$ref" = "$3" ] && exit 0; done; exit 1\nfi\n'
+        'if [ "$1" = compose ]; then\n'
+        '  case " $* " in *" -s "*|*" --stop "*) exit 1 ;; esac\n'
+        '  [ -n "${TICKR_CONFIG_HOST:-}" ] && [ -n "${TICKR_ENV_FILE_HOST:-}" ] || exit 1\n'
+        f'  ! flock -n {tmp_path}/data/control/compose.lock true || exit 1\n'
+        f'  grep -qxF "TICKR_IMAGE={IMAGE}" "$3" || exit 1\n'
+        f'  ctr={tmp_path}/bot-container; state=\n'
+        '  [ -f "$ctr" ] && state=$(cut -d" " -f1 "$ctr")\n'
+        '  case "$*" in\n'
+        '    *" -p tickr --profile jobs ps --status running -q bot")\n'
+        '      [ -z "${PS_FAILS:-}" ] || exit 1\n'
+        '      [ "$state" != running ] || echo 0123abcd ;;\n'
+        '    *" -p tickr --profile jobs rm -f bot")\n'
+        '      [ -z "${RM_FAILS:-}" ] || exit 1\n'
+        '      [ -z "$state" ] || [ "$state" = running ] || rm -f "$ctr" ;;\n'
+        '    *) exit 1 ;;\n'
+        '  esac\n'
+        '  exit 0\n'
+        'fi\n'
         '[ "$1" = run ] || exit 1\n'
         'case " $* " in *" --pull never "*) ;; *) exit 1 ;; esac\n'
         f'case " $* " in *" {IMAGE} "*) ;; *) exit 1 ;; esac\n'
@@ -258,6 +315,7 @@ def _fake_server(tmp_path: Path, flat: bool) -> tuple[Path, Path, Path, Path]:
         '    [ -d "$out" ] || exit 1\n'
         '    : > "$out/tickr-bot.service"; : > "$out/tickr-bot.timer"\n'
         '    echo "PathExists=$data/control/restart-request" > "$out/tickr-bot-restart.path"\n'
+        '    echo "PathExists=$data/control/start-request" > "$out/tickr-bot-start.path"\n'
         '    : > "$out/ports.env"\n'
         '    printf "TICKR_BOT_EXIT_TIMEOUT=1\\nTICKR_IMAGE=%s\\n" "${RENDER_IMAGE:-$image}" \\\n'
         '      > "$out/limits.env" ;;\n'
@@ -452,18 +510,73 @@ def test_deploy_script_installs_the_units_when_flat(tmp_path):
     done = _deploy(tmp_path, flat=True)
     assert done.returncode == 0, done.stderr
     assert sorted(p.name for p in (tmp_path / "units").iterdir()) == [
-        "tickr-bot-restart.path", "tickr-bot.service", "tickr-bot.timer"]
+        "tickr-bot-restart.path", "tickr-bot-start.path", "tickr-bot.service",
+        "tickr-bot.timer"]
     assert (tmp_path / "etc" / "ports.env").exists() and (tmp_path / "etc" / "limits.env").exists()
     log = (tmp_path / "systemctl.log").read_text("utf-8")
     assert "daemon-reload" in log and "tickr-bot.timer" in log
     assert re.search(r"(?m)^enable .*tickr-bot-restart\.path", log)
     assert re.search(r"(?m)^start .*tickr-bot-restart\.path", log)
+    assert re.search(r"(?m)^enable .*tickr-bot-start\.path", log)
+    assert re.search(r"(?m)^start .*tickr-bot-start\.path", log)
     # The control folder: created by the deploy, the service account's only.
     control = tmp_path / "data" / "control"
     assert control.is_dir() and stat.S_IMODE(control.stat().st_mode) == 0o700
     assert control.stat().st_uid == os.getuid()
     # The bot unit is never started or restarted by a deploy.
     assert not re.search(r"(start|restart) .*tickr-bot\.service", log)
+
+
+def _deploy_with_bot(tmp_path: Path, state: str, **extra: str) -> subprocess.CompletedProcess:
+    """A deploy of COMMIT while the bot container of an older release is in `state`."""
+    (tmp_path / "bot-container").write_text(f"{state} {REGISTRY}:{'f' * 40}\n", "utf-8")
+    return _deploy(tmp_path, flat=True, **extra)
+
+
+def test_deploy_script_removes_a_stopped_bot_container_of_the_old_release(tmp_path):
+    done = _deploy_with_bot(tmp_path, "exited")
+    assert done.returncode == 0, done.stderr
+    # Removed: the next Start or scheduled start creates the bot from the new release.
+    assert not (tmp_path / "bot-container").exists()
+    etc, data = tmp_path / "etc", tmp_path / "data"
+    [rm] = [c for c in _calls(tmp_path) if c.startswith("compose ") and " rm " in c]
+    assert rm == (f"compose --env-file {etc}/limits.env -f {etc}/compose.yaml -p tickr "
+                  "--profile jobs rm -f bot")
+    assert " -s" not in rm and "--stop" not in rm  # never stops a running container
+    lock = data / "control" / systemd.COMPOSE_LOCK
+    assert lock.is_file() and stat.S_IMODE(lock.stat().st_mode) == 0o600
+    assert '"$control/' + systemd.COMPOSE_LOCK + '"' in SCRIPT.read_text("utf-8")
+
+
+def test_deploy_script_refuses_while_the_bot_container_runs_and_never_touches_it(tmp_path):
+    # Flat is not enough: a running bot keeps the previous release's image, and Start would
+    # start its stopped container as it is after it ends.
+    done = _deploy_with_bot(tmp_path, "running")
+    assert done.returncode == 1 and "refused: bot-running:" in done.stderr
+    assert (tmp_path / "bot-container").read_text("utf-8") == f"running {REGISTRY}:{'f' * 40}\n"
+    composes = [c for c in _calls(tmp_path) if c.startswith("compose ")]
+    assert len(composes) == 1 and composes[0].endswith(" ps --status running -q bot")
+    assert f" -f {tmp_path}/etc/compose.yaml -p tickr " in composes[0]
+    # Nothing installed: no unit, no limits.env, no systemctl call.
+    assert list((tmp_path / "units").iterdir()) == []
+    assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == COPIED
+    assert not (tmp_path / "systemctl.log").exists()
+
+
+def test_deploy_script_refuses_when_it_cannot_read_whether_the_bot_runs(tmp_path):
+    done = _deploy_with_bot(tmp_path, "exited", PS_FAILS="1")
+    assert done.returncode == 1 and "refused: bot-state-unknown:" in done.stderr
+    assert (tmp_path / "bot-container").exists()
+    assert list((tmp_path / "units").iterdir()) == []
+    assert not (tmp_path / "systemctl.log").exists()
+
+
+def test_deploy_script_refuses_when_the_stopped_bot_container_cannot_be_removed(tmp_path):
+    done = _deploy_with_bot(tmp_path, "exited", RM_FAILS="1")
+    assert done.returncode == 1 and "refused: bot-container-not-removed:" in done.stderr
+    assert (tmp_path / "bot-container").exists()
+    # The files were installed before it, but systemd was not reloaded and nothing enabled.
+    assert not (tmp_path / "systemctl.log").exists()
 
 
 def test_the_bots_grace_period_is_the_exit_timeout_from_config_only(config_path, repo, tmp_path):
@@ -516,17 +629,31 @@ def test_deploy_script_installs_nothing_when_a_copy_fails(tmp_path):
     assert not (tmp_path / "systemctl.log").exists()  # no daemon-reload
 
 
-def test_deploy_script_refuses_over_a_waiting_restart_request(tmp_path):
+@pytest.mark.parametrize(("name", "kind"), [("restart-request", "restart"),
+                                             ("start-request", "start")])
+def test_deploy_script_refuses_over_a_waiting_request(tmp_path, name, kind):
     docker, systemctl, units, etc = _fake_server(tmp_path, True)
     control = tmp_path / "data" / "control"
     control.mkdir(parents=True)
-    (control / "restart-request").write_text("{}\n", "utf-8")
+    (control / name).write_text("{}\n", "utf-8")
     done = subprocess.run(
         [str(SCRIPT), COMMIT, str(etc), str(tmp_path / "data")], capture_output=True,
         text=True, check=False, env=_script_env(units, systemctl, docker))
-    assert done.returncode == 1 and "restart request is waiting" in done.stderr
+    assert done.returncode == 1 and f"bot {kind} request is waiting" in done.stderr
     assert list(units.iterdir()) == [] and not (tmp_path / "systemctl.log").exists()
-    assert (control / "restart-request").exists()  # left for the owner to read
+    assert (control / name).exists()  # left for the owner to read
+
+
+def test_deploy_script_refuses_a_start_request_outside_the_control_folder(tmp_path):
+    docker, systemctl, units, etc = _fake_server(tmp_path, True)
+    docker.write_text(docker.read_text("utf-8").replace("control/start-request",
+                                                        "other/start-request"), "utf-8")
+    (tmp_path / "data").mkdir()
+    done = subprocess.run(
+        [str(SCRIPT), COMMIT, str(etc), str(tmp_path / "data")], capture_output=True,
+        text=True, check=False, env=_script_env(units, systemctl, docker))
+    assert done.returncode == 1 and "is not in the request folder" in done.stderr
+    assert list(units.iterdir()) == [] and not (tmp_path / "systemctl.log").exists()
 
 
 def test_the_restart_unit_restarts_once_with_the_bots_grace_and_never_retries(
@@ -539,6 +666,7 @@ def test_the_restart_unit_restarts_once_with_the_bots_grace_and_never_retries(
     assert steps == [
         "/bin/mv -fT /srv/tickr/data/control/restart-request "
         "/srv/tickr/data/control/restart-request.taken",
+        "/usr/bin/flock /srv/tickr/data/control/compose.lock "
         "/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml -p tickr "
         "--profile jobs up -d --force-recreate --no-deps --pull never --no-build "
         f"-t {cfg.runtime.bot_exit_timeout_seconds} bot",
@@ -548,6 +676,43 @@ def test_the_restart_unit_restarts_once_with_the_bots_grace_and_never_retries(
     path = (out / "tickr-bot-restart.path").read_text("utf-8")
     assert "PathExists=/srv/tickr/data/control/restart-request\n" in path
     assert "Unit=tickr-bot-restart.service\n" in path
+
+
+def test_the_start_unit_never_recreates_a_running_bot_and_never_retries(
+        config_path, repo, tmp_path):
+    cfg = _pinned(config_path)
+    out = tmp_path / "out"
+    systemd.render_all(cfg, repo / "ops" / "systemd", out, _values(cfg))
+    service = (out / "tickr-bot-start.service").read_text("utf-8")
+    steps = re.findall(r"(?m)^ExecStart=(.*)$", service)
+    assert steps == [
+        "/bin/mv -fT /srv/tickr/data/control/start-request "
+        "/srv/tickr/data/control/start-request.taken",
+        "/usr/bin/flock /srv/tickr/data/control/compose.lock "
+        "/usr/bin/docker compose -f /srv/tickr/etc/compose.yaml -p tickr "
+        "--profile jobs up -d --no-recreate --no-deps --pull never --no-build bot",
+        "/bin/cat /srv/tickr/data/control/start-request.taken"]
+    assert "--force-recreate" not in service and " restart " not in steps[1]
+    assert "Type=oneshot\n" in service
+    assert "After=tickr-bot-restart.service\n" in service  # never beside a restart
+    assert not re.search(r"(?m)^(Restart|StartLimit|ExecStartPre|ExecStopPost)", service)
+    path = (out / "tickr-bot-start.path").read_text("utf-8")
+    assert "PathExists=/srv/tickr/data/control/start-request\n" in path
+    assert "Unit=tickr-bot-start.service\n" in path
+
+
+@pytest.mark.parametrize("value", ["other/start-request", "control/restart-request",
+                                   "start-request", "/abs/control/start-request",
+                                   "control/../start-request"])
+def test_a_start_request_outside_the_control_folder_is_refused(config_path, repo, value):
+    text = config_path.read_text("utf-8")
+    old = 'server_start_request_file = "control/start-request"'
+    assert old in text
+    config_path.write_text(text.replace(old, f"server_start_request_file = {value!r}".replace(
+        "'", '"')), "utf-8")
+    cfg = _pinned(config_path)
+    with pytest.raises(config_module.ConfigError, match="server_start_request_file"):
+        _values(cfg)
 
 
 def test_the_compose_project_name_is_tickr_and_data_is_the_host_folder():
@@ -672,8 +837,12 @@ def test_deploy_script_runs_every_python_step_in_the_release_image_and_never_pul
     assert calls[0] == f"image inspect {IMAGE}"
     # The fake docker fails every command that is not `run --pull never` of the release image:
     # the uid check, render-systemd and require-flat all ran in it; none may pull.
-    runs = calls[1:]
+    runs = calls[1:-2]
     assert len(runs) == 5 and all(c.startswith("run --rm --pull never ") for c in runs)
+    # Last: the running-bot check, then (after the install) the removal of a stopped bot
+    # container; compose never pulls.
+    assert calls[-2].startswith("compose ") and calls[-2].endswith(" ps --status running -q bot")
+    assert calls[-1].startswith("compose ") and calls[-1].endswith(" rm -f bot")
     assert sum(f"--entrypoint id {IMAGE} -" in c for c in runs) == 2
     etc, data = tmp_path / "etc", tmp_path / "data"
     [render] = [c for c in runs if " render-systemd " in c]

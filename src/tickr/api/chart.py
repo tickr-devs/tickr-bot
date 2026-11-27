@@ -507,7 +507,7 @@ class Chart:
 
 def write_day_file(path: Path, symbol: str, day: date, read_at: datetime,
                    rows: Sequence[SessionBar]) -> None:
-    contract.write_atomic(path, contract.dumps({
+    contract.write_atomic(path, contract.stored({
         "symbol": symbol, "day": day, "read_at": read_at,
         "bars": [{"start": r.bar.start, "open": r.bar.open, "high": r.bar.high,
                   "low": r.bar.low, "close": r.bar.close, "volume": r.bar.volume,
