@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
 from pathlib import Path
@@ -15,8 +16,9 @@ import pytest
 from api.schema_check import errors  # tests/ is on the path: each test package sits in it
 from baseline import write_baseline
 
-from tickr import config
+from tickr import config, settings_version
 from tickr.api import contract as api
+from tickr.api.history import trade_strategy
 from tickr.api.settingsapply import edited
 from tickr.runtime import service
 from tickr.runtime.alerts import AlertKind
@@ -320,4 +322,71 @@ def test_a_failed_run_facts_write_keeps_trading_and_the_adoption(tmp_path, monke
     assert rig.desk.enter("AAA").admission == "taken"
     record = rig.desk.enter("BBB")
     assert record.admission == "refused"
+    assert record.refusal_cause.startswith("POSITION_LIMIT_REACHED: 1 open position(s), limit 1")
+
+
+# --- the settings version of an adoption (backlog S3 with S5) -----------------------------
+
+VALUES = {"strategy": {"name": "price-action-v1", "version": "3"}}
+
+
+def computed(cfg: config.Config) -> settings_version.SettingsVersion:
+    return settings_version.compute(settings_version.platform_part(cfg), VALUES)
+
+
+def versioned(rig: Rig, versions=computed) -> str:
+    """The rig's desk computes settings versions as the bot does; returns the started one."""
+    rig.desk.desk.versions = versions
+    started = computed(rig.cfg)
+    rig.desk.store.record_settings_version(started.value, started.contents)
+    rig.desk.desk.settings_version = started.value
+    rig.service.strategy = replace(rig.service.strategy, settings_version=started.value)
+    return started.value
+
+
+def opened_under(rig: Rig, symbol: str) -> str | None:
+    return trade_strategy(rig.desk.store, rig.desk.trade_of(symbol).trade_id).settings_version
+
+
+def test_a_trade_opened_after_an_adoption_carries_the_new_version(tmp_path):
+    rig = Rig(tmp_path)
+    started = versioned(rig)
+    assert rig.desk.enter("AAA").admission == "taken"
+    write(rig.path, (SLOTS, "2"))
+    rig.pass_()
+    assert rig.desk.enter("BBB").admission == "taken"
+    new = opened_under(rig, "BBB")
+    assert new not in (None, started)
+    assert opened_under(rig, "AAA") == started  # opened before the adoption: keeps its version
+    (row,) = rig.desk.store.query(
+        "SELECT contents FROM settings_versions WHERE settings_version = ?", (new,))
+    assert f'"{SLOTS}":2' in row[0]  # the new version holds the tightened value
+    assert f'"{SLOTS}":3' not in row[0]
+    assert api.read_run_facts(rig.facts).settings_version == new
+    assert rig.rows(service.SETTINGS_VERSION_REFUSED) == []
+
+
+def refuse(_cfg: config.Config) -> settings_version.SettingsVersion:
+    raise settings_version.SettingsVersionRefused("no_canonical_form", "risk.x: no form")
+
+
+@pytest.mark.parametrize("cause", ["no_canonical_form", settings_version.CONFLICT])
+def test_a_refused_version_keeps_the_adoption_and_records_none(tmp_path, cause):
+    rig = Rig(tmp_path)
+    if cause == settings_version.CONFLICT:
+        versioned(rig)
+        tightened = replace(rig.cfg, risk=replace(rig.cfg.risk, max_open_positions=1))
+        rig.desk.store.record_settings_version(computed(tightened).value, "other contents")
+    else:
+        versioned(rig, refuse)
+    write(rig.path, (SLOTS, "1"))
+    rig.pass_()
+    assert len(rig.rows(ADOPTED)) == 1  # adopted, never undone
+    (row,) = rig.rows(service.SETTINGS_VERSION_REFUSED)
+    assert row["settings_version_refused"] == cause
+    assert rig.desk.desk.settings_version is None  # the stale version is never kept
+    assert api.read_run_facts(rig.facts).settings_version is None
+    assert rig.desk.enter("AAA").admission == "taken"
+    assert opened_under(rig, "AAA") is None
+    record = rig.desk.enter("BBB")
     assert record.refusal_cause.startswith("POSITION_LIMIT_REACHED: 1 open position(s), limit 1")

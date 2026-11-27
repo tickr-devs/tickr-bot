@@ -64,6 +64,7 @@ _CRITICAL = frozenset({
     AlertKind.API_CREDENTIALS_UNEXPECTED,
     AlertKind.REMOTE_AUTH_BLOCKED,  # someone is guessing a device token or pairing code
     AlertKind.RISK_COMMAND_USED,  # entries turned back on or the bot started remotely
+    AlertKind.STRATEGY_NOT_LOADED,  # entries off for the whole run: never silent
     AlertKind.PROTECTION_CHANGE_IGNORED,  # a settings change the running bot did not take
 })
 LOCKED: frozenset[AlertKind] = _CRITICAL | frozenset(

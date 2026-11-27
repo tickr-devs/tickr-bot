@@ -464,6 +464,38 @@ and `stop_confirmed_after_seconds` (see "Per-trade metrics" below). MAE and MFE 
 decision opened the trade, as journaled in its `trade-opened` row; `null` for a manual trade, a
 trade opened before the bot journaled it, or a row it cannot read (display only, never guessed).
 In status it was added after version 1 shipped: a reader takes an entry without it as `null`.
+
+Settings version (backlog S3). Every `strategy` object (`{name, version, settings_version}`,
+here, in `/decisions`, `/skipped`, `/watching`, the latest size and the status's active strategy)
+carries `settings_version`: the version of the settings the decision or trade was made under, a
+SHA-256 (64 hex characters) the bot computes (`src/tickr/settings_version.py`) over a canonical
+text (keys sorted, numbers by exact value: `1.5` = `1.50`, `2` = `2.0`) of two parts:
+the resolved values of every platform setting the settings schema lists
+(`src/tickr/settings_schema.py`, owner `platform`), and what decides entries: with `[model]
+enabled = true` the verified bundle's identity and manifest SHA-256, otherwise the active
+strategy's resolved values without its `[strategy] version` name (an observer: its own values).
+For a trade it is what the `trade-opened` row journaled (also stored on
+`trades.settings_version`); for a decision, what its decision record holds; for the status, the
+one the running bot's entry desk records (`null` while entries are off). In GET /status both the
+active strategy's and each `trades_today` trade's come from the run facts file (see "Run facts"),
+never from status.json, whose `strategy` objects stay `{name, version}`. `null` when not
+recorded (a trade or decision from before S3, a manual trade, research or replay records). It
+was added after version 1 shipped: a reader takes a `strategy` without it as `null`. The bot
+keeps each version's canonical text in table `settings_versions`. A version it cannot compute
+(a value with no canonical form, a missing or unverified bundle) or one recorded before with
+other contents is refused: for the active strategy no entries this run, journaled as
+`strategy-not-loaded` with `settings_version_refused` (the cause word) and alerted
+(`strategy-not-loaded`); an observer is left out (`observers-stopped` alert). When a running bot
+adopts a tightening of live protection (see POST /settings/apply), it computes the version again
+from the config now in force, records it, and from then on new entries and the active strategy's
+decisions carry it (the run facts' `settings_version` too); a trade opened before keeps the
+version it was opened under. If that version cannot be computed or conflicts with its record, the
+tightening is still adopted and never undone, `settings_version` becomes `null` for the rest of
+the run (the version from before is never kept), and the refusal word is journaled
+(`settings-version-refused` with `settings_version_refused` and `detail`). Observers keep the
+version they started with: their values and the platform part they were given at start do not
+change.
+
 `code_version` (in `trades_today` and in `day-v1` `trades`) is the bot code version the trade was
 opened by: the full git commit SHA of the run that opened it, with `-dirty` when a tracked file
 differed from that commit (in the Docker image, the commit it was built from). It is read from
@@ -1049,7 +1081,8 @@ Which alert kinds go to which channel (backlog T14). Code: `src/tickr/api/alerts
   exposure, failing broker reads, a lost stream with a position, not flat after the flatten,
   every bot-down, crash, start and stop failure, preflight failed, the token waiting for
   confirmation, every `watchdog-*` kind, `api-credentials-unexpected`,
-  `remote-auth-blocked`, `risk-command-used` and `protection-change-ignored`.
+  `remote-auth-blocked`, `risk-command-used`, `protection-change-ignored` and
+  `strategy-not-loaded`.
 - `routing_cause`: null, or why the routing file cannot be used (then every kind goes to every
   channel and writes are refused until the owner deletes the file).
 
@@ -1928,20 +1961,22 @@ again).
 - Account: after each successful reconciliation the bot calls
   `contract.write_account(path, AccountV1(...))` (`runtime/account.py`), the same way. Before
   that it journals `reconcile-checked` when due (`record_reconcile`, see "Clean day").
-- Run facts: facts of the running bot that change seldom (`protection_in_force`) live in their
+- Run facts: facts of the running bot that change seldom (`protection_in_force`, the active
+  strategy's `settings_version` and those of the trades the status shows) live in their
   own `run-facts-v1` file (`[runtime] run_facts_file`), not in status.json, which keeps the shape a
   reader from before them accepts (it refuses unknown keys, and the watchdog takes an unreadable
   status file as a bot not running). The bot calls `contract.write_run_facts` (temp file + fsync +
-  rename, like status) at its start and after each adoption of a tightening (journal row, then
-  the adoption, then the file), never per pass. A failed write never stops the loop nor undoes the
+  rename, like status) at its start, after each adoption of a tightening (journal row, then
+  the adoption, then the file) and when the settings versions of the trades the status shows
+  change (a trade closed today first shows), never per pass. A failed write never stops the loop nor undoes the
   adoption and is never retried: it is journaled once per stretch of failures
   (`run-facts-write-failed`). The file carries `run_id`; GET /status shows its facts only when it
   matches the `run_id` of status.json, so a stale (previous run), missing or unreadable file shows
-  an empty `protection_in_force`. Limitation: when the write after an adoption fails, the file
-  this run wrote earlier stays, so GET /status keeps showing the values from before that
-  adoption as in force (with their old `adopted_at`) until a later write succeeds; new entries
-  are already admitted under the adopted values, and the journal (`protection-adopted`, then
-  `run-facts-write-failed`) is the record of what is in force.
+  an empty `protection_in_force` and null settings versions. Limitation: when the write after an
+  adoption fails, the file this run wrote earlier stays, so GET /status keeps showing the values
+  from before that adoption as in force (with their old `adopted_at`) until a later write
+  succeeds; new entries are already admitted under the adopted values, and the journal
+  (`protection-adopted`, then `run-facts-write-failed`) is the record of what is in force.
 - Commands: the bot calls `contract.read_commands(inbox, now, command_max_age_seconds)`. Each item
   is a command or a refusal (unreadable file, expired, dated in the future). For each item the bot
   journals it in one transaction, acts if it is a command, then calls `contract.retire_command`

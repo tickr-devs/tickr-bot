@@ -251,6 +251,7 @@ risk). **Today** means look before the next session. **Info** means no action is
 | `bot-did-not-stop` | Today | The bot was told to stop and is still running. Check the job log and stop it safely (see "Stopping the bot safely" in [operations.md](operations.md#stopping-the-bot-safely)). |
 | `preflight-failed` | Today | A start-up check failed, so the bot did not start. See the start-up causes above and [operations.md](operations.md#preflight-checks). |
 | `token-needs-confirmation` | Today | The broker token needs your confirmation in the Webull app before the bot can trade. Confirm it there. |
+| `strategy-not-loaded` | Today | The strategy or its settings version could not be loaded, so the bot opens no entries for this run (it still reconciles and protects). The alert names the cause; fix it and restart the bot. Always sent on every channel: it cannot be switched off. |
 | `observers-stopped` | Info | The side recorders were switched off for this run. Trading goes on. |
 | `not-flat-after-flatten` | Now | After the end-of-day close the bot still sees a position or order. See [operations.md](operations.md#not-flat-after-flatten). |
 | `watchdog-not-flat` | Now | The watchdog sees a position or open order after the close. See [operations.md](operations.md#watchdog-not-flat). |

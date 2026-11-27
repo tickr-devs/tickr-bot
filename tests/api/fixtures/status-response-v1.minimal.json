@@ -13,7 +13,8 @@
     },
     "strategy": {
       "name": "price-action-v1",
-      "version": "1"
+      "version": "1",
+      "settings_version": null
     },
     "entry_stop": false,
     "entry_block": null,

@@ -139,6 +139,15 @@
       }
     },
     {
+      "kind": "strategy-not-loaded",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "telegram": true,
+        "push": true
+      }
+    },
+    {
       "kind": "not-flat-after-flatten",
       "group": "critical",
       "locked": true,

@@ -226,6 +226,25 @@ class Gate:
 class StrategyId:
     name: str
     version: str
+    # The settings version the decision or trade was made under (backlog S3,
+    # tickr.settings_version): platform settings plus the model's bundle (or, while the model
+    # is off, this strategy's values). Null when not recorded (before S3, a manual trade,
+    # research data). Added after version 1 shipped.
+    settings_version: str | None = _added_later(None)
+
+
+@dataclass(frozen=True)
+class StrategyName:
+    """A strategy's `[strategy]` name and version as status.json records it: without the
+    settings version, so the file keeps the shape a reader from before it accepts. GET /status
+    serves it as a `StrategyId` with the settings version from the run facts file."""
+
+    name: str
+    version: str
+
+
+def strategy_name(strategy: StrategyId) -> StrategyName:
+    return StrategyName(strategy.name, strategy.version)
 
 
 class DeciderKind(StrEnum):
@@ -252,7 +271,7 @@ def strategy_decider(name: str | None, version: str | None) -> DeciderV1 | None:
 
 
 def _decider_of_id(document: Any) -> DeciderV1 | None:
-    strategy: StrategyId | None = document.strategy
+    strategy: StrategyId | StrategyName | None = document.strategy
     return None if strategy is None else strategy_decider(strategy.name, strategy.version)
 
 
@@ -358,7 +377,7 @@ class Trade:
     entry_cause: str | None  # why a field of `entry` is null; null when none is
     # The strategy whose decision opened the trade; null for a manual trade or one opened
     # before the bot journaled it. Added after version 1 shipped.
-    strategy: StrategyId | None = _added_later(None)
+    strategy: StrategyName | None = _added_later(None)
     # The bot code version (git commit, `-dirty` with changed tracked files) of the run that
     # opened the trade, from `runs`; null for a run recorded before it was. Added later.
     code_version: str | None = _added_later(None)
@@ -424,7 +443,7 @@ class StatusV1:
     run_id: str | None
     environment: str
     trading_gate: Gate
-    strategy: StrategyId
+    strategy: StrategyName
     entry_stop: bool
     entry_block: EntryBlock | None  # None = entries allowed
     fences: tuple[Fence, ...]
@@ -475,6 +494,30 @@ class RunFactsV1:
     # Every live protection setting with the value in force for new entries (backlog S5).
     protection_in_force: tuple[ProtectionValue, ...]
     schema_version: int = _const(RUN_FACTS_SCHEMA_VERSION)
+    # Added after v1 shipped (backlog S3): the settings version this run's entry desk records;
+    # null while entries are off.
+    settings_version: str | None = _added_later(None)
+    # Added after v1 shipped (backlog S3): the settings version of each of today's trades in
+    # status `trades_today` that has one, as its `trade-opened` row journaled.
+    trade_settings_versions: tuple[TradeSettingsVersion, ...] = _added_later(())
+
+
+@dataclass(frozen=True)
+class TradeSettingsVersion:
+    """The settings version a trade was opened under, by its entry order's client id."""
+
+    entry_client_order_id: str
+    settings_version: str
+
+
+@dataclass(frozen=True)
+class ServedTradeV1(Trade):
+    """One of status `trades_today` as GET /status serves it: its strategy with the settings
+    version from the run facts file."""
+
+    # As in `Trade`, with `settings_version`: null when the run facts file is missing,
+    # unreadable, of another run or names none for this trade.
+    strategy: StrategyId | None = _added_later(None)
 
 
 @dataclass(frozen=True)
@@ -482,18 +525,41 @@ class ServedStatusV1(StatusV1):
     """The bot's status as GET /status serves it: status.json with the facts of the same run
     from the run facts file."""
 
+    # As in `StatusV1`, with the settings version this run's entry desk records (null while
+    # entries are off, and when the run facts file is missing, unreadable or of another run).
+    strategy: StrategyId
+    trades_today: tuple[ServedTradeV1, ...]
+
     # Added after v1 shipped (backlog S5): every live protection setting with the value in
     # force for new entries; empty when the run facts file is missing, unreadable or of
     # another run, and from a bot that does not report them.
     protection_in_force: tuple[ProtectionValue, ...] = _added_later(())
 
 
+def _init_values(document: Any, cls: type) -> dict[str, Any]:
+    return {f.name: getattr(document, f.name) for f in fields(cls) if f.init}
+
+
+def _served_trade(trade: Trade, versions: Mapping[str, str]) -> ServedTradeV1:
+    strategy = trade.strategy
+    return ServedTradeV1(**{**_init_values(trade, Trade), "strategy": None if strategy is None
+                            else StrategyId(strategy.name, strategy.version,
+                                            versions.get(trade.entry.client_order_id or ""))})
+
+
 def served_status(status: StatusV1, facts: RunFactsV1 | None) -> ServedStatusV1:
     """`status` with the facts of its own run: none when `facts` is missing or of another run."""
-    same = facts is not None and status.run_id is not None and facts.run_id == status.run_id
-    return ServedStatusV1(**{f.name: getattr(status, f.name) for f in fields(StatusV1)
-                             if f.init},
-                          protection_in_force=facts.protection_in_force if same else ())
+    if facts is None or status.run_id is None or facts.run_id != status.run_id:
+        facts = None
+    versions = ({} if facts is None else
+                {t.entry_client_order_id: t.settings_version
+                 for t in facts.trade_settings_versions})
+    return ServedStatusV1(**{
+        **_init_values(status, StatusV1),
+        "strategy": StrategyId(status.strategy.name, status.strategy.version,
+                               None if facts is None else facts.settings_version),
+        "trades_today": tuple(_served_trade(t, versions) for t in status.trades_today),
+        "protection_in_force": () if facts is None else facts.protection_in_force})
 
 
 # ---------------------------------------------------------------- account written by the bot
@@ -2448,7 +2514,8 @@ def decisions_document(symbol: str, day: date, records: tuple[DecisionRecord, ..
         skipped = d.verdict is Verdict.ENTER and r.admission in _SKIPPED
         out.append(DecisionV1(
             at=r.bar_start, action=d.verdict,
-            strategy=StrategyId(d.strategy, d.version), observer=r.role is Role.OBSERVER,
+            strategy=StrategyId(d.strategy, d.version, r.settings_version),
+            observer=r.role is Role.OBSERVER,
             checks=checks_of(d, places), entry_price=_what_if(d.entry_high) if skipped else None,
             stop_price=_what_if(d.stop) if skipped else None, admission=r.admission,
             refusal_cause=r.refusal_cause, refusal=refusal_of(r.refusal_cause)))
@@ -2507,7 +2574,7 @@ def skipped_document(day: date, records: tuple[DecisionRecord, ...],
     return SkippedV1(day=day, signals=tuple(
         SkippedSignalV1(
             at=r.bar_start, symbol=r.symbol,
-            strategy=StrategyId(r.decision.strategy, r.decision.version),
+            strategy=StrategyId(r.decision.strategy, r.decision.version, r.settings_version),
             admission=r.admission, refusal_cause=r.refusal_cause,
             refusal=refusal_of(r.refusal_cause), entry_price=_what_if(r.decision.entry_high),
             stop_price=_what_if(r.decision.stop),
@@ -2803,7 +2870,8 @@ def watching_document(day: date, records: tuple[DecisionRecord, ...], places: in
         decisive = d.decisive
         value, cause = closeness(decisive, places, d.invalidation)
         rows.append(WatchingRowV1(
-            symbol=r.symbol, at=r.bar_start, strategy=StrategyId(d.strategy, d.version),
+            symbol=r.symbol, at=r.bar_start,
+            strategy=StrategyId(d.strategy, d.version, r.settings_version),
             verdict=d.verdict,
             decisive_check=None if decisive is None else shown_check(decisive, check_places),
             closeness=value, closeness_cause=cause, quote_age_seconds=None,
@@ -2879,7 +2947,8 @@ def latest_size(records: tuple[DecisionRecord, ...]) -> LatestSizeV1 | None:
         else:
             binding = SizeBinding.DAILY_ROOM if _room_binds(checks, quantity.measured) else None
         d = r.decision
-        return LatestSizeV1(r.symbol, r.bar_start, StrategyId(d.strategy, d.version), d.verdict,
+        return LatestSizeV1(r.symbol, r.bar_start,
+                            StrategyId(d.strategy, d.version, r.settings_version), d.verdict,
                             quantity.measured, binding,
                             None if binding else BINDING_NOT_RECORDED,
                             price=_measured(checks, SIZING_PRICE_RULE), limits=limits)

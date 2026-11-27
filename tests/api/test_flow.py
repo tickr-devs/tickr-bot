@@ -178,7 +178,8 @@ def test_watching_lists_only_latest_watch_per_symbol_closest_first(api, cfg):
                                        "operator": ">", "threshold": "12.35", "passed": False,
                                        "note": "", "against_trigger": True}
     assert first["at"] == "2026-11-16T15:04:00.000Z"
-    assert first["strategy"] == {"name": ACTIVE[0], "version": ACTIVE[1]}
+    assert first["strategy"] == {"name": ACTIVE[0], "version": ACTIVE[1],
+                                 "settings_version": None}
     assert (first["quote_age_seconds"], first["quote_age_cause"]) == (None, NOT_RECORDED)
     assert body["rows"][1]["decisive_check"] is None
 
@@ -249,7 +250,8 @@ def test_latest_size_is_the_newest_recorded_quantity_with_its_structured_binding
     body = _get(api, "/watching", "watching-v1")
     assert body["latest_size"] == {
         "symbol": "ABCD", "at": "2026-11-16T15:00:00.000Z",
-        "strategy": {"name": ACTIVE[0], "version": ACTIVE[1]}, "verdict": "ENTER",
+        "strategy": {"name": ACTIVE[0], "version": ACTIVE[1], "settings_version": None},
+        "verdict": "ENTER",
         "quantity": "200", "binding": None, "binding_cause": contract.BINDING_NOT_RECORDED,
         "binding_cause_codes": [{"code": "binding_not_proven", "params": {}}],
         "price": None, "limits": []}

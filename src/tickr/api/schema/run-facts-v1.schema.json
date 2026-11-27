@@ -45,6 +45,35 @@
     "schema_version": {
       "type": "integer",
       "const": 1
+    },
+    "settings_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "trade_settings_versions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "entry_client_order_id": {
+            "type": "string"
+          },
+          "settings_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry_client_order_id",
+          "settings_version"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

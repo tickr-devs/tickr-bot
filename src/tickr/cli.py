@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import signal
 import sqlite3
@@ -841,9 +842,10 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     trading calendar: entries are refused without one anyway. Observers that cannot be
     loaded are reported to `observers_refused` and left out: a shadow strategy never stops
     trading."""
+    from tickr import settings_version
     from tickr.data.history import HistoryReader
     from tickr.observers.errors import ObserverError
-    from tickr.observers.loader import load_active, load_observers
+    from tickr.observers.loader import load_active, load_observers, with_settings_version
     from tickr.observers.log import DecisionLog
     from tickr.observers.runner import Limits, ObserverSet, ProcessSpec
     from tickr.runtime.entries import EntryDesk
@@ -852,9 +854,16 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     if calendar is None:
         return None
     loaded = load_active(cfg)  # ObserverError: caller refuses entries
+    # No settings version, or one recorded with other contents: SettingsVersionError (an
+    # ObserverError), so entries are refused, journaled and alerted like a strategy that
+    # cannot load.
+    loaded = with_settings_version(
+        loaded, lambda: settings_version.for_active(cfg, loaded.values), engine.store)
+    platform = settings_version.platform_part(cfg)
     log = DecisionLog.from_config(cfg)
     desk = EntryDesk(engine, cfg, calendar=calendar, last_broker_read_at=last_broker_read_at,
-                     log=log)
+                     log=log, settings_version=loaded.settings_version,
+                     versions=lambda c: settings_version.for_active(c, loaded.values))
     evaluator = Evaluator(engine, cfg, source, strategy=loaded.strategy, desk=desk,
                           history=HistoryReader.from_config(cfg, source, calendar),
                           inbox=inbox, calendar=calendar, today_bars=today_bars, now=NOW)
@@ -863,19 +872,46 @@ def _evaluator(cfg: config_module.Config, engine: Engine, source: MarketData,
     except ObserverError as exc:
         observers_refused(str(exc))
         shadows = ()
+    kept = []
+    for shadow in shadows:  # an observer without a settings version is left out alone
+        try:
+            kept.append(with_settings_version(
+                shadow, lambda s=shadow: settings_version.for_observer(platform, s.values),
+                engine.store))
+        except ObserverError as exc:
+            observers_refused(str(exc))
+    shadows = tuple(kept)
     # The observers run in a child process the bot owns, built again there from their folders
     # (observers.runner), so they never share the trading thread's interpreter lock.
     observers = ObserverSet(shadows, log, cfg.observers.max_evaluation_seconds,
                             cfg.observers.queue_size, cfg.risk.max_quote_age_seconds,
                             cfg.risk.max_clock_skew_seconds,
                             process=ProcessSpec(cfg.root, tuple(cfg.observers.strategy_modules),
-                                                log.directory,
+                                                log.directory, platform,
                                                 config_module.credential_variables(cfg)),
                             limits=Limits(timedelta(seconds=float(
                                 cfg.observers.forget_symbol_seconds)),
                                 cfg.observers.history_sends_per_pass),
                             slow_in_row=cfg.observers.max_slow_evaluations_in_row)
     return evaluator, observers
+
+
+def _entries_off(store: Store, watch: Any, run_id: str, exc: Exception) -> str:
+    """The active strategy or its settings version was refused at start: no entries this run.
+    Journaled (`strategy-not-loaded`, with the settings version's refusal word when that is
+    the cause) and alerted, never a silent disable; the status shows it as the entry block."""
+    from tickr.runtime.alerts import AlertKind
+    from tickr.runtime.service import STRATEGY_NOT_LOADED
+
+    cause = str(exc)
+    refusal = getattr(exc, "cause", None)
+    with store.transaction():
+        store.append(STRATEGY_NOT_LOADED, {"cause": cause,
+                                           **({} if refusal is None
+                                              else {"settings_version_refused": refusal})},
+                     run_id=run_id)
+    watch.alert(AlertKind.STRATEGY_NOT_LOADED, f"entries off for this run: {cause}")
+    return cause
 
 
 def _closer(observers: ObserverSet, cfg: config_module.Config) -> Callable[[], None]:
@@ -993,12 +1029,12 @@ def _run(path: Path) -> int:
                 wired = _evaluator(cfg, engine, adapters.market, inbox, calendar, today_bars,
                                    lambda: bot.last_broker_read_at, observers_refused)
             except ObserverError as exc:  # the bot still protects and exits; no entries
-                wired, entries_off = None, str(exc)
-                with store.transaction():
-                    store.append(service.STRATEGY_NOT_LOADED, {"cause": entries_off},
-                                 run_id=run_id)
+                wired, entries_off = None, _entries_off(store, watch, run_id, exc)
             if wired is not None:
                 evaluator, observers = wired
+                # The status shows the settings version the desk records (None: entries off).
+                strategy = dataclasses.replace(
+                    strategy, settings_version=evaluator.desk.settings_version)
                 market.screen = evaluator.strategy  # discovery applies its liquidity rules
             # Display reads (balance, account kind, today's fills) on their own thread.
             if adapters.display_reads is not None:

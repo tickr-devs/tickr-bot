@@ -11,6 +11,7 @@ from baseline import load_baseline
 from funded import FUNDS
 
 from tickr import config
+from tickr.api.history import trade_strategy
 from tickr.broker.fake import FakeBroker
 from tickr.calendar import NEW_YORK, SessionCalendar
 from tickr.config import GateResult
@@ -85,6 +86,33 @@ def test_admitted_enter_opens_a_trade_at_the_top_of_the_window(tmp_path):
     (opened,) = desk.engine.store.journal("trade-opened", trade.trade_id)
     d = decision()
     assert (opened.body["strategy"], opened.body["strategy_version"]) == (d.strategy, d.version)
+
+
+def test_the_settings_version_goes_on_every_decision_and_the_trade(tmp_path):
+    desk = Desk(tmp_path)
+    desk.desk.settings_version = "f" * 64
+    desk.decide(decision(Verdict.WATCH))
+    desk.decide(decision())
+    desk.desk.log.close()
+    records = load_records([desk.dir / "2026-11-16" / "decisions.jsonl"])
+    assert [r.settings_version for r in records] == ["f" * 64] * 2
+    (trade,) = desk.engine.trades()
+    (row,) = desk.store.query("SELECT settings_version FROM trades")
+    assert row[0] == "f" * 64
+    d = decision()
+    strategy = trade_strategy(desk.store, trade.trade_id)
+    assert (strategy.name, strategy.version, strategy.settings_version) == (
+        d.strategy, d.version, "f" * 64)
+
+
+def test_a_desk_without_a_settings_version_records_none(tmp_path):
+    desk = Desk(tmp_path)
+    desk.decide(decision())
+    desk.desk.log.close()
+    line = (desk.dir / "2026-11-16" / "decisions.jsonl").read_text().splitlines()[0]
+    assert "settings_version" not in json.loads(line)
+    (trade,) = desk.engine.trades()
+    assert trade_strategy(desk.store, trade.trade_id).settings_version is None
 
 
 def test_every_decision_is_recorded_in_the_research_format(tmp_path):

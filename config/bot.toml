@@ -1231,7 +1231,8 @@ stop_marker_file = "stopped-by-operator.json"
 # runtime (writer) and the api server (GET /system).
 preflight_result_file = "preflight.json"
 # Run facts file, relative to data_dir: facts of the running bot that change seldom (the live protection values in
-# force for new entries), replaced atomically at the bot's start and after each change, never per pass, so status.json
+# force for new entries, the settings versions of the run and of the trades its status shows), replaced atomically at
+# the bot's start and after each change, never per pass, so status.json
 # keeps the shape an older reader accepts. A failed write is journaled (run-facts-write-failed) and never stops the
 # loop; the API shows the facts only beside a status of the same run id; read by runtime.service (writer) and the api
 # server (GET /status).

@@ -10,6 +10,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 import pytest
+from api.schema_check import errors  # tests/ is on the path: each test package sits in it
 from baseline import load_baseline, write_baseline
 
 from tickr import cli, config
@@ -26,6 +27,8 @@ from tickr.runtime.watchdog import BYTES_PER_MB
 from tickr.store import Store
 
 ROOT = Path(__file__).resolve().parents[2]
+# status-v1 as the reader before derived `decider` keys shipped accepts it (tests/api).
+BEFORE_DECIDER = ROOT / "tests" / "api" / "frozen" / "status-v1.before-decider.schema.json"
 CFG = load_baseline()
 # The `[strategy] observers` line of the baseline config (tests/baseline.py).
 SHIPPED_OBSERVERS = "observers = " + json.dumps(list(CFG.strategy.observers))
@@ -90,7 +93,7 @@ def test_idle_run_writes_status_and_stops_cleanly(tmp_path):
     assert bot.run(3)
     status = bot.status()
     assert status.bot_state is api.BotState.STOPPED
-    assert status.strategy == service.strategy_id(CFG)
+    assert status.strategy == api.strategy_name(service.strategy_id(CFG))
     assert status.position is None and status.trades_today == ()
     assert status.freshness.last_broker_read_at is not None
     assert bot.store.journal("shutdown-clean")
@@ -250,7 +253,49 @@ def test_a_closed_trade_in_status_names_the_strategy_that_opened_it(tmp_path):
     bot.command(api.CommandKind.FLATTEN)
     assert bot.run(10)
     (done,) = bot.service.status().trades_today
-    assert done.strategy == api.StrategyId("price-action-v1", "3")
+    assert done.strategy == api.StrategyName("price-action-v1", "3")
+
+
+def test_settings_versions_are_run_facts_never_in_status_json(tmp_path, monkeypatch):
+    """Backlog S3: the run's settings version and each shown trade's live in the run facts
+    file, written at the start and when the trades shown change, never per pass; status.json
+    keeps the shape a reader from before them accepts."""
+    bot = Bot(tmp_path)
+    bot.paths = replace(bot.paths, run_facts=tmp_path / "run-facts.json")
+    bot.service.paths = bot.paths
+    bot.service.strategy = replace(bot.service.strategy, settings_version="a" * 64)
+    real = api.write_run_facts
+    written: list[api.RunFactsV1] = []
+
+    def record(path, facts) -> None:
+        written.append(facts)
+        real(path, facts)
+
+    monkeypatch.setattr(api, "write_run_facts", record)
+    t = bot.engine.open_trade("ABC", D(2), D(10), D("9.80"), D(1),
+                              strategy=("price-action-v1", "3"), settings_version="b" * 64)
+    entry = bot.engine.orders(t)[0].client_order_id
+    bot.broker.fill(entry, D(2), D(10))
+    for _ in range(3):
+        bot.engine.step()
+    bot.command(api.CommandKind.FLATTEN)
+    assert bot.run(10)
+    # The start write, then one when the closed trade first showed: no write per pass.
+    assert [f.trade_settings_versions for f in written] == [
+        (), (api.TradeSettingsVersion(entry, "b" * 64),)]
+    facts = api.read_run_facts(bot.paths.run_facts)
+    assert (facts.run_id, facts.settings_version) == ("svc00001", "a" * 64)
+    raw = json.loads(bot.paths.status.read_text("utf-8"))
+    assert errors(json.loads(BEFORE_DECIDER.read_text("utf-8")), raw) == []
+    assert "settings_version" not in json.dumps(raw)
+    served = api.served_status(bot.status(), facts)
+    assert served.strategy.settings_version == "a" * 64
+    (done,) = served.trades_today
+    assert done.strategy == api.StrategyId("price-action-v1", "3", "b" * 64)
+    # The file of another run is not shown.
+    stale = api.served_status(bot.status(), replace(facts, run_id="svc00000"))
+    assert stale.strategy.settings_version is None
+    assert stale.trades_today[0].strategy.settings_version is None
 
 
 def test_flatten_refused_while_a_close_waits_for_the_operator(tmp_path):

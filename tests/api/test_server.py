@@ -189,9 +189,14 @@ def test_status_served_with_age(api, settings):
 def test_status_shows_the_run_facts_of_its_own_run(api, settings):
     server, _ = api
     contract.write_status(settings.status_path, status())
-    contract.write_run_facts(settings.run_facts_path, run_facts("run-1"))
+    contract.write_run_facts(settings.run_facts_path, replace(
+        run_facts("run-1"), settings_version="a" * 64, trade_settings_versions=(
+            contract.TradeSettingsVersion("ap-0002-e", "b" * 64),)))
     body = doc(request(server, "GET", "/status")[1])
     assert body["status"]["protection_in_force"] == contract.to_jsonable(PROTECTION)
+    assert body["status"]["strategy"]["settings_version"] == "a" * 64
+    assert [t["strategy"]["settings_version"] for t in body["status"]["trades_today"]] == [
+        "b" * 64]
     assert errors(schema("status-response-v1"), body) == []
     # status.json itself carries none of them: a reader from before them still reads it.
     assert "protection_in_force" not in json.loads(settings.status_path.read_text("utf-8"))
@@ -202,11 +207,15 @@ def test_run_facts_of_another_run_or_unreadable_are_not_shown(api, settings, fac
     server, _ = api
     contract.write_status(settings.status_path, status())
     if facts == "stale":  # the previous run's file, never rewritten by this run
-        contract.write_run_facts(settings.run_facts_path, run_facts("run-0"))
+        contract.write_run_facts(settings.run_facts_path, replace(
+            run_facts("run-0"), settings_version="a" * 64, trade_settings_versions=(
+                contract.TradeSettingsVersion("ap-0002-e", "b" * 64),)))
     elif facts == "unreadable":
         settings.run_facts_path.write_text('{"schema_version": 1}', "utf-8")
     body = doc(request(server, "GET", "/status")[1])
     assert body["status"]["protection_in_force"] == []
+    assert body["status"]["strategy"]["settings_version"] is None
+    assert [t["strategy"]["settings_version"] for t in body["status"]["trades_today"]] == [None]
     assert body["status"]["run_id"] == "run-1"
     assert errors(schema("status-response-v1"), body) == []
 

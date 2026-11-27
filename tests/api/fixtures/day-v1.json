@@ -74,7 +74,8 @@
       "overshoot_cause": null,
       "strategy": {
         "name": "price-action-v1",
-        "version": "1"
+        "version": "1",
+        "settings_version": null
       },
       "code_version": "6c4eec8b0f3a91d2e5b7c6a8d9e0f1a2b3c4d5e6",
       "result_net_usd": null,

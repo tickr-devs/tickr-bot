@@ -255,3 +255,25 @@ def test_switching_the_model_on_is_refused_until_it_is_wired(tmp_path):
     path.write_text(text)
     with pytest.raises(config.ConfigError, match=r"\[model\] enabled"):
         config.load(path, root=ROOT)
+
+
+def test_the_manifest_hash_names_the_verified_bundle_in_the_settings_version(tmp_path, rows):
+    from tickr import settings_version
+    from tickr.observers.loader import read_values
+
+    cfg = config.load(ROOT / "config" / "bot.toml")
+    folder = write_bundle(tmp_path / cfg.run.data_dir / cfg.model.bundles_dir, rows)
+    assert B.open_bundle(folder).manifest_sha256 == sha256(folder / B.MANIFEST)
+    model = dataclasses.replace(cfg.model, enabled=True, bundle=folder.name)
+    on = dataclasses.replace(cfg, model=model, root=tmp_path)
+    values = read_values(ROOT, cfg.strategy.active)
+    first = settings_version.for_active(on, values)
+    assert sha256(folder / B.MANIFEST) in first.contents
+    # The model decides, so the strategy's values do not count; another manifest does.
+    assert settings_version.for_active(on, {**values, "extra": {"x": 1}}) == first
+    rewrite(folder, training={"labels": "l1/v15"})
+    assert settings_version.for_active(on, values).value != first.value
+    (folder / "h30e.txt").write_text("changed")
+    with pytest.raises(settings_version.SettingsVersionRefused) as exc:
+        settings_version.for_active(on, values)
+    assert exc.value.cause == "model_bundle" and "bundle_file_sha256" in exc.value.detail

@@ -58,6 +58,9 @@ class AlertKind(StrEnum):
     TOKEN_NEEDS_CONFIRMATION = "token-needs-confirmation"
     # The observer queue overflowed: observers are switched off for the run (trading goes on).
     OBSERVERS_STOPPED = "observers-stopped"
+    # The active strategy or its settings version (backlog S3) was refused at start: the bot
+    # protects and reconciles, but opens no entries this run.
+    STRATEGY_NOT_LOADED = "strategy-not-loaded"
     # Broker reads after the flatten time (plus grace) still show our position or order.
     NOT_FLAT_AFTER_FLATTEN = "not-flat-after-flatten"
     # Raised by the separate watchdog job (runtime/watchdog.py), which outlives a crashed bot:

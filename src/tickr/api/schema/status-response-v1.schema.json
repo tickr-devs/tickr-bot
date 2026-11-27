@@ -72,6 +72,16 @@
                 },
                 "version": {
                   "type": "string"
+                },
+                "settings_version": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -536,6 +546,16 @@
                           },
                           "version": {
                             "type": "string"
+                          },
+                          "settings_version": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [

@@ -67,6 +67,7 @@ def test_kinds_cover_spec_section_11():
         "protection-change-ignored",
         "watchdog-restarted-bot", "watchdog-restart-refused", "watchdog-restart-failed",
         "bot-down", "disk-low", "remote-auth-blocked", "risk-command-used",
+        "strategy-not-loaded",
     }
 
 
