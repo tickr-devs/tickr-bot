@@ -265,6 +265,15 @@
       }
     },
     {
+      "kind": "protection-change-ignored",
+      "group": "critical",
+      "locked": true,
+      "channels": {
+        "telegram": true,
+        "push": true
+      }
+    },
+    {
       "kind": "remote-auth-blocked",
       "group": "critical",
       "locked": true,

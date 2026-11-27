@@ -92,6 +92,9 @@ class AlertKind(StrEnum):
     # give it (any, while [chart] webull_enabled is false; any but the active environment's app
     # key and secret while it is true): its plist is stale or hand-edited (runtime/launchd.py).
     API_CREDENTIALS_UNEXPECTED = "api-credentials-unexpected"
+    # A change of config/bot.toml the running bot did not adopt: invalid or unreadable, looser
+    # protection, or a setting outside live protection (runtime/liveprotection.py).
+    PROTECTION_CHANGE_IGNORED = "protection-change-ignored"
     # Raised by the API when a client address used up its failed-authentication budget on the
     # remote port (device token or POST /pair), or every new address is refused because the
     # address table is full of recent failures (api/authlimit.py).

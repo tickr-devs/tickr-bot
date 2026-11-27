@@ -275,6 +275,7 @@ class ApiConfig:
     idempotency_key_ttl_seconds: int
     replay_settings_file: str
     settings_schema_file: str
+    settings_history_file: str
     observer_trades_max_rows: int
     journal_rows: int
     start_bot_command: tuple[str, ...]
@@ -520,6 +521,7 @@ class RuntimeConfig:
     discovery_stop_seconds: Decimal
     stop_marker_file: str
     preflight_result_file: str
+    run_facts_file: str
     release_step_timeout_seconds: int
     release_stop_wait_seconds: int
     release_poll_seconds: Decimal
@@ -745,7 +747,12 @@ def check_extended_sessions(session: SessionConfig) -> None:
 def load(path: Path | str, root: Path | str | None = None) -> Config:
     """Load and validate `config/bot.toml`. `root` is the repo root for relative paths."""
     path = Path(path)
-    raw_bytes = path.read_bytes()
+    return loads(path.read_bytes(), path, root)
+
+
+def loads(raw_bytes: bytes, path: Path, root: Path | str | None = None) -> Config:
+    """`load` on bytes already read from `path` (one read, so the digest and the values come
+    from the same bytes: the running bot's live protection check, runtime/liveprotection.py)."""
     try:
         data = tomllib.loads(raw_bytes.decode("utf-8"))
     except tomllib.TOMLDecodeError as exc:

@@ -4,6 +4,8 @@ Two files on disk decouple the bot from the API process:
 - the bot writes `StatusV1` to `<data_dir>/<status_file>` with `write_status` (temp file + rename);
 - the bot writes `AccountV1` to `<data_dir>/<account_file>` with `write_account` after each
   successful broker read of positions and open orders (reconciliation), the same way;
+- the bot writes `RunFactsV1` to `<data_dir>/<run_facts_file>` with `write_run_facts` at its
+  start and after each change of what it holds, never per pass, the same way;
 - the API writes one `CommandV1` per operator command into `<data_dir>/<commands_dir>/inbox/`
   with `write_command`; the bot reads them with `read_commands`, journals each one, then moves it
   out of the inbox with `retire_command`.
@@ -59,6 +61,7 @@ STATUS_SCHEMA_VERSION = 1
 COMMAND_SCHEMA_VERSION = 1
 ACCOUNT_SCHEMA_VERSION = 1
 QUOTES_SCHEMA_VERSION = 1
+RUN_FACTS_SCHEMA_VERSION = 1
 
 INBOX = "inbox"
 PROCESSED = "processed"
@@ -389,6 +392,17 @@ class CommandRecord:
     cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
 @dataclass(frozen=True)
+class ProtectionValue:
+    """A protection setting new entries are admitted under now, as TOML text. `adopted_at` is
+    when the running bot adopted a tightening of it from config/bot.toml; null when it holds
+    the value the bot started with (backlog S5)."""
+
+    key: str  # dotted key of config/bot.toml, e.g. risk.max_open_positions
+    value: str
+    adopted_at: datetime | None
+
+
+@dataclass(frozen=True)
 class StopProgress:
     """A stop-bot the bot obeyed or is carrying out (added after version 1 shipped). The
     command's own record appears in `recent_commands` once it is done or refused; a refused
@@ -446,6 +460,40 @@ class StatusV1:
     schema_version: int = _const(STATUS_SCHEMA_VERSION)
     # Who decides this run's entries, from `strategy`. Added after version 1 shipped.
     decider: DeciderV1 | None = _derived(_decider_of_id)
+
+
+@dataclass(frozen=True)
+class RunFactsV1:
+    """Facts of one bot run that change seldom, in their own file so status.json keeps the shape
+    a reader from before them accepts (it refuses unknown keys, and the watchdog takes an
+    unreadable status file as a bot not running). Written by the bot at its start and after each
+    change of what it holds, never per pass; never by the API. The API shows them only beside a
+    status of the same `run_id`."""
+
+    written_at: datetime
+    run_id: str
+    # Every live protection setting with the value in force for new entries (backlog S5).
+    protection_in_force: tuple[ProtectionValue, ...]
+    schema_version: int = _const(RUN_FACTS_SCHEMA_VERSION)
+
+
+@dataclass(frozen=True)
+class ServedStatusV1(StatusV1):
+    """The bot's status as GET /status serves it: status.json with the facts of the same run
+    from the run facts file."""
+
+    # Added after v1 shipped (backlog S5): every live protection setting with the value in
+    # force for new entries; empty when the run facts file is missing, unreadable or of
+    # another run, and from a bot that does not report them.
+    protection_in_force: tuple[ProtectionValue, ...] = _added_later(())
+
+
+def served_status(status: StatusV1, facts: RunFactsV1 | None) -> ServedStatusV1:
+    """`status` with the facts of its own run: none when `facts` is missing or of another run."""
+    same = facts is not None and status.run_id is not None and facts.run_id == status.run_id
+    return ServedStatusV1(**{f.name: getattr(status, f.name) for f in fields(StatusV1)
+                             if f.init},
+                          protection_in_force=facts.protection_in_force if same else ())
 
 
 # ---------------------------------------------------------------- account written by the bot
@@ -556,7 +604,7 @@ class StatusResponseV1:
     """GET /status. Always this shape; `status` is null when the bot's file is missing or bad."""
 
     served_at: datetime
-    status: StatusV1 | None
+    status: ServedStatusV1 | None
     age_seconds: Decimal | None
     stale: bool
     unavailable_cause: str | None
@@ -1118,6 +1166,101 @@ class SettingsDraftV1:
     valid: bool
     refusals: tuple[SettingRefusalV1, ...]
     changes: tuple[SettingChangeV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+class SettingsDevice(StrEnum):
+    """Where a settings change came from, decided by the server from the listener and the
+    paired token the request used, never by the request's words."""
+
+    LOCAL = "local"  # the local port (the Mac app, the status page)
+    PHONE = "phone"  # the remote port with the phone's paired token
+    SIMULATOR = "simulator"  # the remote port with the iOS Simulator's token
+    BOT = "bot"  # the bot at its start, writing a pending change whose session has come
+
+
+class SettingsVersionKind(StrEnum):
+    APPLY = "apply"  # POST /settings/apply
+    ROLLBACK = "rollback"  # POST /settings/rollback
+    PROMOTE = "promote"  # the bot's start wrote pending changes from an earlier session
+
+
+class SettingsVersionState(StrEnum):
+    """Whether a version's file writes landed. A version without file writes is `done` at once."""
+
+    WRITING = "writing"  # recorded, files being written (seen only if the writer stopped)
+    DONE = "done"  # every file holds its new digest
+    NOT_WRITTEN = "not_written"  # no file changed: the version never applied
+    UNKNOWN = "unknown"  # a file holds neither digest (changed by someone else meanwhile)
+
+
+class SettingChangeState(StrEnum):
+    WRITTEN = "written"  # in its owner's file since this version
+    PENDING = "pending"  # loosens protection: the bot writes it at its first later start
+    PROMOTED = "promoted"  # a pending change the bot wrote (`settled_by` names that version)
+    SUPERSEDED = "superseded"  # a pending change a later version replaced or rolled back
+
+
+@dataclass(frozen=True)
+class SettingsVersionChangeV1:
+    """One key a version changed: `before` (the file's value then) and `after`, as TOML text.
+    `effective_after` (a New York date) is set on a change that waits for the next session: the
+    bot writes it at its first start on a later date. `settled_by` names the version that
+    promoted or superseded a pending change."""
+
+    owner: str
+    key: str
+    before: str
+    after: str
+    applies: SettingApplies
+    state: SettingChangeState
+    effective_after: date | None
+    settled_by: int | None
+
+
+@dataclass(frozen=True)
+class SettingsVersionFileV1:
+    """An owner file a version wrote: its SHA-256 before and after."""
+
+    owner: str
+    file: str
+    digest_before: str
+    digest_after: str
+
+
+@dataclass(frozen=True)
+class SettingsVersionV1:
+    """One journaled settings change: when, from which device, whether the app said the owner
+    confirmed it with Face ID (the server cannot check that itself), and what changed."""
+
+    version: int
+    kind: SettingsVersionKind
+    at: datetime
+    device: SettingsDevice
+    biometric_confirmed: bool
+    rollback_to: int | None
+    state: SettingsVersionState
+    files: tuple[SettingsVersionFileV1, ...]
+    changes: tuple[SettingsVersionChangeV1, ...]
+
+
+@dataclass(frozen=True)
+class SettingsHistoryV1:
+    """GET /settings/history, oldest first; also the settings history file on disk."""
+
+    versions: tuple[SettingsVersionV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
+class SettingsAppliedV1:
+    """POST /settings/apply and /settings/rollback: the version just journaled.
+    `restart_needed` is true when a change other than a tightening of protection was written to
+    a file while the bot may be running: the bot reads those settings at its start, and adopts
+    a tightening at its next loop pass."""
+
+    version: SettingsVersionV1
+    restart_needed: bool
     api_version: int = _const(API_VERSION)
 
 
@@ -2964,6 +3107,7 @@ class PerformanceV1:
 
 SCHEMA_TYPES: dict[str, type] = {
     "status-v1": StatusV1,
+    "run-facts-v1": RunFactsV1,
     "command-v1": CommandV1,
     "status-response-v1": StatusResponseV1,
     "command-accepted-v1": CommandAcceptedV1,
@@ -2981,6 +3125,8 @@ SCHEMA_TYPES: dict[str, type] = {
     "settings-schema-v1": SettingsSchemaV1,
     "settings-values-v1": SettingsValuesV1,
     "settings-draft-v1": SettingsDraftV1,
+    "settings-history-v1": SettingsHistoryV1,
+    "settings-applied-v1": SettingsAppliedV1,
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
     "system-v1": SystemV1,
@@ -3305,6 +3451,16 @@ def write_status(path: Path | str, status: StatusV1) -> None:
 def read_status(path: Path | str) -> StatusV1:
     """Raises FileNotFoundError when the bot has not written a status yet, else ContractError."""
     return loads(StatusV1, Path(path).read_bytes())
+
+
+def write_run_facts(path: Path | str, facts: RunFactsV1) -> None:
+    """Called by the bot at its start and after each change of its run facts, never per pass."""
+    write_atomic(Path(path), stored(facts))
+
+
+def read_run_facts(path: Path | str) -> RunFactsV1:
+    """Raises FileNotFoundError when the bot has not written one yet, else ContractError."""
+    return loads(RunFactsV1, Path(path).read_bytes())
 
 
 def write_account(path: Path | str, account: AccountV1) -> None:

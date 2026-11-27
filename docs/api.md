@@ -190,6 +190,9 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/settings/schema` | `200` `settings-schema-v1`: every owner setting of the settings schema with its kind, unit, bounds, step, group, words in English and Spanish, when a change applies, the direction that needs Face ID and whether it needs retraining, plus the rules across settings (read-only; see Owner settings below). `503 unavailable` when `[api] settings_schema_file` cannot be read. |
 | GET | `/settings/values` | `200` `settings-values-v1`: each schema setting's value in its owner's file as it is on disk now (TOML text), with each file's SHA-256. `503 unavailable` without a config file path (the demo) or when a file cannot be read. |
 | POST | `/settings/validate` | Body `{"changes": [{"owner", "key", "value"}, ...]}`. `200` `settings-draft-v1`: typed refusals and, per key, when the change would apply and whether it needs Face ID. Writes and applies nothing. `400` for any other body, `503` as GET /settings/values. |
+| POST | `/settings/apply` | Body `{"changes": [...], "base": [{"owner", "digest"}, ...], "biometric_confirmed": true\|false}`. Applies a draft under the apply rules (see Owner settings: apply, history, rollback): `200` `settings-applied-v1` with the journaled version; `400` for a bad body or a refused draft; `403 biometric_required` for a loosening without `biometric_confirmed`; `409 conflict` for a file changed since `base`, another write in progress, nothing to change, a when-flat setting while the bot is not shown flat, or a setting that needs retraining; `503` as GET /settings/values. Nothing changes on any refusal. |
+| POST | `/settings/rollback` | Body `{"version": <n>, "base": [...], "biometric_confirmed": true\|false}`. Sets every key changed after version `n` (0: before the first) back to its value at `n`, through the same rules and answers as apply; `404` without version `n`. |
+| GET | `/settings/history` | `200` `settings-history-v1`: every journaled settings version, oldest first; `503` when the history file is unreadable. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, the trained model's switch and state (`model`), and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
 | GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
@@ -219,6 +222,7 @@ Errors are `error-v1` `{"error": code, "cause": text, "api_version": 1, "cause_c
 (`cause_codes`, added after version 1 shipped, as under "Reason codes" below):
 `forbidden_host` / `forbidden_origin` 403, `not_found` 404, `method_not_allowed` 405,
 `unauthorized` 401 (remote request without the paired token),
+`biometric_required` 403 (a settings change that loosens protection without `biometric_confirmed`),
 `length_required` 411, `payload_too_large` 413, `unsupported_media_type` 415, `bad_request` 400,
 `too_many_pending` 429, `rate_limited` 429 (GET /chart: its request budget is spent and cannot say when it refills),
 `auth_rate_limited` 429 with `Retry-After` (remote port: too many failed authentications from this address, see
@@ -802,7 +806,7 @@ kinds, units, words, apply timing, rules) and `[api] settings_schema_file` (each
 and any maximum), read on every request, so a bad edit of it answers `503` with its cause.
 These routes pass the same guard as every other route: on the remote port they need the paired
 bearer token (`401` without it), on the local port the `Host` rule. Nothing here writes a file,
-a journal row or a database row; applying a draft, its history and rollback come later.
+a journal row or a database row; applying a draft, its history and rollback are below.
 
 - An owner is `platform` (the config file this API was started with) or a strategy folder
   under `strategies/`; a `key` is the dotted `table.key` inside that owner's file.
@@ -836,6 +840,91 @@ a journal row or a database row; applying a draft, its history and rollback come
   `requires_retraining`. A change that loosens protection applies at `next_session` and needs
   Face ID; any other change follows the setting's `applies` (owner decisions 2026-11-15 and
   2026-11-19, backlog S5).
+
+### Owner settings: apply, history, rollback
+
+The rest of backlog S4 with the apply rules of S5. Code: `src/tickr/api/settingsapply.py`. The
+owner files (the config file this API was started with, `strategies/<folder>/strategy.toml`)
+stay the single source of truth; the journal is `<data_dir>/<[api] settings_history_file>`,
+a `settings-history-v1` document.
+
+- POST /settings/apply takes the validate body plus `base` (each owner file's `digest` from GET
+  /settings/values: every owner the draft changes must be listed) and `biometric_confirmed`.
+  The draft is checked as POST /settings/validate checks it (`400` with the refusals); then, per
+  changed key:
+  - a change that tightens protection (`applies` `at_once`) is written to its file now; a
+    running bot adopts it for new entries at its next loop pass (below, "Protection tightened
+    while running");
+  - a change that loosens protection (`next_session`) needs `biometric_confirmed: true`
+    (else `403 biometric_required`) and is journaled `pending` with `effective_after` (today's
+    New York date): the bot writes it at its first start on a later date, before it loads its
+    config, so a restart on the same day never takes it;
+  - a model or strategy setting (`when_flat`) is written only while the bot is shown flat:
+    its status lists no position and no open reservation (a working entry reserves its planned
+    loss), and it is fresh, or the bot is stopped with no process holding its lock. Otherwise
+    `409 conflict` with the cause. It reaches the bot through a safe restart (stop-bot, then
+    start-bot: normal startup and reconciliation); nothing is reloaded in a running bot. So a
+    `when_flat` strategy setting is written while the bot is flat, but a bot that keeps running
+    trades with its old values until it restarts;
+  - a setting that needs retraining is refused (`409`): it applies only with a newly trained
+    model.
+  A change of a key that has a pending change replaces it (the old one becomes `superseded`),
+  also when the new value is the file's present value.
+- `biometric_confirmed` is the app's word that the owner passed Face ID (Touch ID on the Mac)
+  for this change; the server cannot check it. The protection is the paired device token on
+  the remote port plus this flag; the local port has no token, as for every other route.
+  The loopback port is therefore trusted for loosening: there, `biometric_confirmed` is whatever
+  the caller says.
+- Writes are atomic and journaled first: under an exclusive lock (`<history file>.lock`; held by
+  another writer: `409 conflict`, nothing changed) every listed owner file must still have its
+  `base` digest (else `409`: read GET /settings/values again); each candidate file must load
+  with the bot's own loaders (`config.load` on a temp copy beside `bot.toml`; a strategy file
+  through its strategy's `create` and history check from a temp folder beside its folder),
+  else `400` `<file> would not load: <the loader's cause>` with nothing written or journaled
+  (also for the bot's start writing pending changes, which then stay pending); the version is
+  recorded `writing`, each file is replaced in one rename with only the value of its key's line changed
+  (comments and every other line stay; an edit that would change anything else is refused),
+  then the version is `done`. A writer that stopped in between is settled by the next one from
+  the file digests: `done`, `not_written` (pending changes it settled become pending again) or
+  `unknown` (a file holds neither digest).
+- `settings-applied-v1`: `version` (as below) and `restart_needed`: a change other than a
+  tightening of protection was written to a file while the bot may be running (its last status
+  is not `stopped`, or a process holds its lock). The bot reads those settings at its start.
+- Protection tightened while running (`src/tickr/runtime/liveprotection.py`): once per loop
+  pass, before any strategy work, the bot reads `config/bot.toml` and compares its SHA-256 with
+  the last one it examined. A new version is validated exactly as at startup, from the same
+  bytes it digested (a file caught half-written is invalid, never a torn mix). It is adopted
+  only when it differs from the last valid version it examined (at first: the config it started
+  with) in live protection settings alone
+  (the platform settings whose `applies` is `at_once` and that have a loosening direction) and
+  every one of them that moved is stricter than the value in force; then all of them take
+  effect together for new entries (journal `protection-adopted` with each key's `before` and
+  `after`). Anything else (a looser value, an invalid or unreadable file, a change of any other
+  key) is ignored for the rest of the run: journal `protection-change-ignored` with its `cause`
+  (`loosens`, `invalid`, `unreadable`, `other_keys`) and alert `protection-change-ignored`;
+  nothing of it is applied. A change of another key is reported once and keeps its started value
+  until the next start (`restart_needed`); a later version that differs from it in live
+  protection alone (the next tightening) is adopted. A tightening never touches what is
+  already placed: an open trade keeps its broker stop and a working entry its order. GET /status
+  `status.protection_in_force` lists every live protection setting with the value new entries are
+  admitted under now and `adopted_at` (null: the value the bot started with). It comes from the
+  run facts file, not status.json (see "Run facts").
+- POST /settings/rollback `{"version": n, "base", "biometric_confirmed"}`: every key changed by
+  a version after `n` is set back to its value at `n` (the last change at or before `n`, else the
+  value before the first later change; `0` = before version 1), as a draft through the same
+  rules, so a rollback that loosens needs Face ID and waits for the next session. `404` without
+  version `n`, `409` for the latest version or one that never applied.
+- `settings-history-v1`: `versions[]`, oldest first, each with `version` (1, 2, ...), `kind`
+  (`apply`, `rollback`, `promote`: the bot's start wrote pending changes), `at`, `device`
+  (`local`, `phone`, `simulator`, `bot`: decided by the listener and the paired token's Host,
+  never by the request), `biometric_confirmed`, `rollback_to`, `state`, `files[]` (`owner`,
+  `file`, `digest_before`, `digest_after`) and `changes[]` (`owner`, `key`, `before`, `after`,
+  `applies`, `state`: `written`, `pending`, `promoted`, `superseded`; `effective_after`;
+  `settled_by`: the version that promoted or superseded a pending change).
+- The bot (`tickr.runtime run-bot`) writes due pending changes after taking its lock and
+  loads its config again; on any refusal (another writer, a draft the schema now refuses, an
+  unreadable file) it starts with the files as they are and logs why. Every change of a running
+  bot's values, including a tightening, reaches it at its next start.
 
 ### GET /jobs (read-only)
 
@@ -960,7 +1049,7 @@ Which alert kinds go to which channel (backlog T14). Code: `src/tickr/api/alerts
   exposure, failing broker reads, a lost stream with a position, not flat after the flatten,
   every bot-down, crash, start and stop failure, preflight failed, the token waiting for
   confirmation, every `watchdog-*` kind, `api-credentials-unexpected`,
-  `remote-auth-blocked` and `risk-command-used`.
+  `remote-auth-blocked`, `risk-command-used` and `protection-change-ignored`.
 - `routing_cause`: null, or why the routing file cannot be used (then every kind goes to every
   channel and writes are refused until the owner deletes the file).
 
@@ -1839,6 +1928,20 @@ again).
 - Account: after each successful reconciliation the bot calls
   `contract.write_account(path, AccountV1(...))` (`runtime/account.py`), the same way. Before
   that it journals `reconcile-checked` when due (`record_reconcile`, see "Clean day").
+- Run facts: facts of the running bot that change seldom (`protection_in_force`) live in their
+  own `run-facts-v1` file (`[runtime] run_facts_file`), not in status.json, which keeps the shape a
+  reader from before them accepts (it refuses unknown keys, and the watchdog takes an unreadable
+  status file as a bot not running). The bot calls `contract.write_run_facts` (temp file + fsync +
+  rename, like status) at its start and after each adoption of a tightening (journal row, then
+  the adoption, then the file), never per pass. A failed write never stops the loop nor undoes the
+  adoption and is never retried: it is journaled once per stretch of failures
+  (`run-facts-write-failed`). The file carries `run_id`; GET /status shows its facts only when it
+  matches the `run_id` of status.json, so a stale (previous run), missing or unreadable file shows
+  an empty `protection_in_force`. Limitation: when the write after an adoption fails, the file
+  this run wrote earlier stays, so GET /status keeps showing the values from before that
+  adoption as in force (with their old `adopted_at`) until a later write succeeds; new entries
+  are already admitted under the adopted values, and the journal (`protection-adopted`, then
+  `run-facts-write-failed`) is the record of what is in force.
 - Commands: the bot calls `contract.read_commands(inbox, now, command_max_age_seconds)`. Each item
   is a command or a refusal (unreadable file, expired, dated in the future). For each item the bot
   journals it in one transaction, acts if it is a command, then calls `contract.retire_command`

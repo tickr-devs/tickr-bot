@@ -54,6 +54,9 @@ from tickr.runtime.account import (
 )
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.dayend import DayEnd
+from tickr.runtime.liveprotection import ADOPTED as PROTECTION_ADOPTED
+from tickr.runtime.liveprotection import IGNORED as PROTECTION_IGNORED
+from tickr.runtime.liveprotection import Adoption, LiveProtection, toml_text
 from tickr.runtime.protection import LatencyLog, busy
 from tickr.runtime.watchdog import BYTES_PER_MB, DiskFree, disk_free, entry_restart_file
 
@@ -115,6 +118,7 @@ EVALUATION_SLOW = "evaluation-slow"
 LATENCY_FAILED = "protection-latency-failed"
 STRATEGY_NOT_LOADED = "strategy-not-loaded"
 ACCOUNT_WRITE_FAILED = "account-write-failed"  # one row per stretch of failed writes
+RUN_FACTS_WRITE_FAILED = "run-facts-write-failed"  # one row per stretch of failed writes
 STOP_TIMING_FAILED = "stop-timing-failed"  # one row per trade whose stop timing is unreadable
 ENTRY_SEND_FAILED = "entry-send-failed"  # one row per trade whose entry send is unreadable
 RESTART_ENTRY_CANCEL = "bot restarted: a working entry is never resumed"
@@ -153,6 +157,8 @@ class ServicePaths:
     watchdog_entry_restart: Path | None = None
     # The data folder whose free disk space each loop pass checks; None: not checked.
     data: Path | None = None
+    # The run facts file (contract.RunFactsV1); None: never written (tools, some tests).
+    run_facts: Path | None = None
 
     @classmethod
     def from_config(cls, config: Config) -> ServicePaths:
@@ -160,7 +166,7 @@ class ServicePaths:
         commands = data / config.api.commands_dir
         return cls(data / config.api.status_file, commands / api.INBOX,
                    commands / api.PROCESSED, data / config.api.account_file,
-                   entry_restart_file(config), data)
+                   entry_restart_file(config), data, data / config.runtime.run_facts_file)
 
 
 def _no_quote(symbol: str) -> Quote | None:  # noqa: ARG001 - no market: no quote for any
@@ -209,7 +215,8 @@ class Service:
                  watch: Watch | None = None,
                  account_reads: AccountReads | None = None,
                  quote_file: QuoteFile | None = None,
-                 disk_free: DiskFree = disk_free) -> None:
+                 disk_free: DiskFree = disk_free,
+                 protection: LiveProtection | None = None) -> None:
         self.engine = engine
         self._disk_free = disk_free
         self.market = market
@@ -218,6 +225,8 @@ class Service:
         self.observers = observers
         self.watch = watch
         self.config = engine.config
+        # Protection tightened while running (backlog S5); None: the started values throughout.
+        self.protection = protection
         self.now = now
         self.calendar = calendar
         self.strategy = strategy
@@ -238,6 +247,7 @@ class Service:
         # The stop-bot this run obeyed or is carrying out (status `stop_progress`).
         self._progress: tuple[str, api.StopMode | None, api.StopStep, datetime] | None = None
         self._account_failing = False  # the last account file write failed (journaled once)
+        self._run_facts_failing = False  # the last run facts write failed (journaled once)
         # Balances, account kind and today's fills, read on their own thread (display only).
         self.account_reads = account_reads
         # The live quotes file, written on its own thread (display only); the loop journals its
@@ -563,6 +573,41 @@ class Service:
             self.engine.store.append(COMMAND_EFFECT, {"entries_cancel_requested": asked},
                                      key=command.command_id, run_id=self.engine.run_id)
 
+    # --- protection tightened while running -------------------------------------------------
+
+    def _entry_config(self) -> Config:
+        """The config new entries are admitted under: the started one with the protection
+        values in force."""
+        return self.config if self.protection is None else self.protection.config
+
+    def check_protection(self) -> None:
+        """Once per loop pass, before any strategy work: adopt protection the owner tightened
+        in the config file, for new entries only (runtime/liveprotection.py). Anything else is
+        ignored for this run, journaled and alerted."""
+        if self.protection is None:
+            return
+        found = self.protection.check(self.now())
+        if found is None:
+            return
+        store = self.engine.store
+        if isinstance(found, Adoption):
+            with store.transaction():  # journaled before admission uses it
+                store.append(PROTECTION_ADOPTED, found.journal_body(), run_id=self.engine.run_id)
+            if self.evaluator is not None:
+                self.evaluator.desk.adopt(self.protection.risk)
+            self.write_run_facts()  # after the journal row and the adoption, never before
+            return
+        with store.transaction():
+            store.append(PROTECTION_IGNORED, found.journal_body(), run_id=self.engine.run_id)
+        if self.watch is not None:
+            self.watch.alert(AlertKind.PROTECTION_CHANGE_IGNORED, found.alert_text())
+
+    def _protection_in_force(self) -> tuple[api.ProtectionValue, ...]:
+        if self.protection is None:
+            return ()
+        return tuple(api.ProtectionValue(key, toml_text(value), at)
+                     for key, value, at in self.protection.in_force())
+
     # --- session timer ---------------------------------------------------------------------
 
     def flatten_due(self) -> None:
@@ -786,7 +831,7 @@ class Service:
         refused = session_refusal(day, now, AdmissionLimits.from_config(self.config))
         if refused is not None:
             return self._session_block(day, refused)
-        if entries.slots_in_use(self.engine) >= self.config.risk.max_open_positions:
+        if entries.slots_in_use(self.engine) >= self._entry_config().risk.max_open_positions:
             return api.EntryBlock(api.OWN_TRADE_OPEN, "The bot already has a trade open.",
                                   attention=False)
         return None
@@ -831,11 +876,11 @@ class Service:
         trade is sized down to the room. Admission still decides each entry."""
         from tickr.runtime.entries import daily_loss_room  # entries imports this module
 
-        room = daily_loss_room(self.engine, self.config, self.now())
+        room = daily_loss_room(self.engine, self._entry_config(), self.now())
         if room is None:
             return api.EntryBlock("daily_money_unknown",
                                   "A trade closed today has fills without a known price.")
-        risk = self.config.risk
+        risk = self._entry_config().risk
         if room < risk.min_daily_room_usd:
             return api.EntryBlock("daily_ceiling",
                                   f"Daily loss ceiling {risk.max_daily_loss_usd} USD: less than "
@@ -915,7 +960,7 @@ class Service:
         now = self.now()
         reserved = sum((t.reservation for t in self.engine.trades()), ZERO)
         return (entries.realized_loss_today(self.engine, now), reserved,
-                entries.daily_loss_room(self.engine, self.config, now))
+                entries.daily_loss_room(self.engine, self._entry_config(), now))
 
     def _closed_today(self) -> list[api.DayTrade]:
         today = self.now().astimezone(NEW_YORK).date()
@@ -1058,6 +1103,32 @@ class Service:
         if self.quote_file is not None:
             self.quote_file.journal_failures(self.engine)
 
+    def run_facts(self) -> api.RunFactsV1:
+        return api.RunFactsV1(written_at=self.now(), run_id=self.engine.run_id,
+                              protection_in_force=self._protection_in_force())
+
+    def write_run_facts(self) -> None:
+        """At the start and after each change of what it holds (an adoption), never per pass.
+        Display only: a failed write never ends the loop nor undoes what changed, is never
+        retried, and is journaled once per stretch of failures. The last file written stays: a
+        failed write at the start leaves the previous run's file (the API shows no facts), but a
+        failed write after an adoption leaves this run's earlier file, so the API keeps showing
+        the values from before the adoption as in force until a later write succeeds; the
+        journal (`protection-adopted`, `run-facts-write-failed`) is what holds."""
+        if self.paths.run_facts is None:
+            return
+        try:
+            api.write_run_facts(self.paths.run_facts, self.run_facts())
+        except OSError as exc:
+            if not self._run_facts_failing:
+                with self.engine.store.transaction():
+                    self.engine.store.append(RUN_FACTS_WRITE_FAILED,
+                                             {"error": type(exc).__name__, "detail": str(exc)},
+                                             run_id=self.engine.run_id)
+            self._run_facts_failing = True
+            return
+        self._run_facts_failing = False
+
     def write_account(self) -> None:
         """After a successful reconciliation: what it read from the broker (docs/api.md)."""
         if self.paths.account is None:
@@ -1147,6 +1218,7 @@ class Service:
         alerts."""
         orders = self.config.orders
         self.write_status()
+        self.write_run_facts()
         self.engine.recover()
         # A working entry is never resumed after a restart: its decision is stale and nothing
         # watched it while the bot was down. Cancelled now; a fill that races the cancel is
@@ -1170,6 +1242,7 @@ class Service:
             if self.stopped_by is not None:
                 break  # an operator stop-bot: nothing more this run, straight to the drain
             self.check_disk()
+            self.check_protection()
             self.flatten_due()
             self.write_status()
             if self.watch is not None:

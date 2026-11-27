@@ -695,7 +695,12 @@ def test_every_get_route_answers_the_phone_as_it_answers_the_mac(local_api, remo
 @pytest.mark.parametrize(("method", "path", "body"), [
     ("GET", "/settings/schema", None), ("GET", "/settings/values", None),
     ("POST", "/settings/validate",
-     {"changes": [{"owner": "platform", "key": "risk.max_open_positions", "value": "1"}]})])
+     {"changes": [{"owner": "platform", "key": "risk.max_open_positions", "value": "1"}]}),
+    ("GET", "/settings/history", None),
+    ("POST", "/settings/apply",
+     {"changes": [{"owner": "platform", "key": "risk.max_open_positions", "value": "1"}],
+      "base": [], "biometric_confirmed": False}),
+    ("POST", "/settings/rollback", {"version": 0, "base": [], "biometric_confirmed": False})])
 def test_the_settings_routes_need_the_paired_token(remote_api, remote_settings, method, path,
                                                     body):
     token = paired(remote_api, remote_settings)

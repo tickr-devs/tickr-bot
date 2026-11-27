@@ -23,7 +23,7 @@ from tickr.calendar import (
     MarketDay,
     SessionCalendar,
 )
-from tickr.config import Config, trading_gate
+from tickr.config import Config, RiskConfig, trading_gate
 from tickr.data.base import MarketDataError
 from tickr.engine.core import (
     STOP_PLACES_PER_FILL,
@@ -355,6 +355,11 @@ class EntryDesk:
         # When the desk last tried to read the balance, whatever the outcome.
         self._balance_tried_at: datetime | None = None
 
+    def adopt(self, risk: RiskConfig) -> None:
+        """Admit new entries under these [risk] values from now on: protection a running bot
+        tightened (runtime/liveprotection.py). Nothing already placed is touched."""
+        self.limits = AdmissionLimits.from_config(replace(self.config, risk=risk))
+
     # --- money -----------------------------------------------------------------------------
 
     def _reservations(self) -> Decimal:
@@ -365,7 +370,7 @@ class EntryDesk:
         `[risk] buying_power_max_age_seconds` ago, whatever its outcome: a failing read costs
         one request per that age, never one per decision (no retry on the loop thread). A
         failed read keeps the old figure, which admission then finds too old."""
-        max_age = timedelta(seconds=float(self.config.risk.buying_power_max_age_seconds))
+        max_age = timedelta(seconds=float(self.limits.buying_power_max_age_seconds))
         tried = self._balance_tried_at
         if tried is not None and timedelta(0) <= now - tried < max_age:
             return

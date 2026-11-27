@@ -42,7 +42,8 @@
       "kind": "strategy",
       "name": "price-action-v1",
       "version": "1"
-    }
+    },
+    "protection_in_force": []
   },
   "age_seconds": "0.250",
   "stale": false,
