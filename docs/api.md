@@ -1304,7 +1304,9 @@ default (`[live_activity] enabled = false`); config load refuses `enabled = true
 - Events: `start` when a position is open and no activity is live (the day's first fill, or
   the first after the activity ended); `update` when the state, the day's result, the positions,
   a stop price or a stop's confirmation changes, and, with `pnl_refresh_seconds` above 0, at
-  most that often for prices alone; `end` when flat. A missing or stale status file pushes
+  most that often for prices alone; `end` when flat. A start with no `activity_start`
+  token of the app is not sent: the activity stays not live, the journal names the cause once per
+  such spell, and the next look tries again. A missing or stale status file pushes
   nothing. The last push is kept in `[live_activity] state_file`, written before the push.
 - content-state (agreed with the app, mockup v138; `ContentState` is the one place it lives):
   `state` (`open`, `paused` = an entry block with `attention`, `alarm` = a position's stop not

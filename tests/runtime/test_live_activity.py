@@ -296,6 +296,32 @@ def test_a_signed_out_devices_activity_tokens_are_never_pushed_and_are_dropped(
     assert world.journal[-1]["failures"] == []
 
 
+def test_a_start_with_no_start_token_is_not_sent_journaled_once_and_tried_again(world):
+    world.store.remove("phone", PushTokenKind.ACTIVITY_START)
+    assert world.look(positions=(PENDING,)) == (None, [])
+    assert not world.publisher._sent  # never marked live: a later start is not lost
+    assert not (world.data / world.cfg.live_activity.state_file).exists()
+    assert world.journal == [{"event": "start", "state": "open", "sent": 0,
+                              "failures": [live_activity.NO_START_TOKEN]}]
+    assert world.look(positions=(PENDING,)) == (None, [])
+    assert len(world.journal) == 1  # once per empty spell, not per look
+    world.store.register("phone", PushToken(PushTokenKind.ACTIVITY_START, START_TOKEN,
+                                            "development", "bot.tickr.ios", IOS, AT))
+    event, calls = world.look(positions=(PENDING,))
+    assert event is Event.START
+    assert [_token(c) for c in calls] == [START_TOKEN]
+    assert world.look(positions=(OTHER,))[0] is Event.UPDATE  # live from here on
+
+
+def test_a_start_token_of_another_app_only_is_no_start_token(cfg, store, environ):  # noqa: F811
+    store.remove("phone", PushTokenKind.ACTIVITY_START)
+    store.register("mac", PushToken(PushTokenKind.ACTIVITY_START, START_TOKEN, "development",
+                                    "bot.tickr.mac", MACOS, AT))
+    world = World(cfg, store, environ)
+    assert world.look(positions=(PENDING,)) == (None, [])
+    assert world.journal[-1]["failures"] == [live_activity.NO_START_TOKEN]
+
+
 def test_the_content_state_has_exactly_the_agreed_fields():
     content = live_activity.ContentState(ActivityState.OPEN, 0, (), None, None, None)
     assert set(content.jsonable()) == {"state", "day_pnl_cents", "positions",

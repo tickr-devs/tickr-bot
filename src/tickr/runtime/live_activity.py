@@ -13,6 +13,10 @@ content-state, and compares what makes an event with what it last pushed:
   pnl_refresh_seconds` above 0, at most that often for the prices and unrealized P&L alone;
 - end when flat: state `flat`, with `dismissal-date` = now + `end_linger_seconds` when above 0.
 
+A start with no `activity_start` token of the app (or no way to read the tokens) is not sent:
+the activity stays not live, the journal names the cause once per such spell, and the next look
+tries again.
+
 What it pushed is written to `[live_activity] state_file` before the push, so a restarted
 watchdog neither starts a second activity nor repeats an event. Each push is one attempt per
 device, never retried (`alerts.ApnsClient`); a 410 or BadDeviceToken drops that token. A status
@@ -38,7 +42,7 @@ from tickr.api.contract import AccountV1, PushTokenKind, StatusV1, StopState
 from tickr.config import Config
 from tickr.engine.core import OPERATOR_FENCES, Fence
 from tickr.runtime.alerts import ApnsClient, NotifyError
-from tickr.runtime.push_tokens import short_hash
+from tickr.runtime.push_tokens import PushToken, short_hash
 
 # Apple, "Starting and updating Live Activities with ActivityKit push notifications": the push
 # type, the topic suffix after the app's bundle id, and the two priorities (10 = at once, 5 =
@@ -49,6 +53,8 @@ PRIORITY_NOW = "10"
 PRIORITY_BUDGETED = "5"
 CENTS_PER_DOLLAR = 100
 STATE_VERSION = 1  # version of the state file's layout
+# The journaled cause of a start not sent: the app has registered no push-to-start token.
+NO_START_TOKEN = "no-start-token: the app has registered no activity_start token"
 RECORD = "live-activity"  # the watchdog journal's record name for each push and failure
 # Fences that say a held position has no verified stop (the bot alerts unprotected-position).
 UNPROTECTED_FENCES = frozenset({Fence.UNPROTECTED, Fence.UNPROTECTED_TIMEOUT})
@@ -195,6 +201,9 @@ class Publisher:
         self._account_path = data / config.api.account_file
         self._state_path = data / self._live.state_file
         self._sent = self._load()
+        # Why the last start found no device to push to, once journaled; None once a start had
+        # one. A start with no device is never sent, so the journal names each empty spell once.
+        self._no_start: str | None = None
 
     def _load(self) -> Sent | None:
         try:
@@ -260,24 +269,40 @@ class Publisher:
             event = Event.UPDATE
         else:
             return None
+        devices, failures = self._recipients(event)
+        if event is Event.START and not devices:
+            # Nothing can start an activity: it stays not live, and the next look tries again.
+            cause = "; ".join(failures) or NO_START_TOKEN
+            if cause != self._no_start:
+                self._no_start = cause
+                self._journal(RECORD, {"event": event.value, "state": content.state.value,
+                                       "sent": 0, "failures": [cause]})
+            return None
+        if event is Event.START:
+            self._no_start = None
         self._sent = Sent(event is not Event.END, seen.events, content.jsonable(), unix)
         self._save(self._sent)  # before the push: never pushed twice, also across a restart
         urgent = event is Event.END or content.state is ActivityState.ALARM
-        self._push(event, content, unix, PRIORITY_NOW if urgent else PRIORITY_BUDGETED)
+        self._push(event, content, unix, PRIORITY_NOW if urgent else PRIORITY_BUDGETED,
+                   devices, failures)
         return event
 
-    def _push(self, event: Event, content: ContentState, now: int, priority: str) -> None:
+    def _recipients(self, event: Event) -> tuple[list[PushToken], list[str]]:
+        """The app's tokens for `event`'s kind (start: push-to-start; update, end: the live
+        activity's), and the failures met finding them."""
         kind = PushTokenKind.ACTIVITY_START if event is Event.START else (
             PushTokenKind.ACTIVITY_UPDATE)
-        body: dict[str, Any] = {"event": event.value, "state": content.state.value,
-                                "priority": priority, "sent": 0, "failures": []}
         try:
             recipients = self._client.devices(kind)
-            body["failures"].extend(recipients.failures)
-            devices = [d for d in recipients.tokens if d.bundle_id == self._live.app_bundle_id]
         except NotifyError as exc:
-            body["failures"].append(str(exc))
-            devices = []
+            return [], [str(exc)]
+        return ([d for d in recipients.tokens if d.bundle_id == self._live.app_bundle_id],
+                list(recipients.failures))
+
+    def _push(self, event: Event, content: ContentState, now: int, priority: str,
+              devices: list[PushToken], failures: list[str]) -> None:
+        body: dict[str, Any] = {"event": event.value, "state": content.state.value,
+                                "priority": priority, "sent": 0, "failures": list(failures)}
         data = payload(event, content, now, self._live.attributes_type,
                        self._live.end_linger_seconds)
         for device in devices:
