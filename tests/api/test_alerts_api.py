@@ -43,7 +43,7 @@ def test_everything_is_on_before_the_owner_changes_anything(api):  # noqa: F811
     assert body["routing_cause"] is None
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
         ("mac", False, "no-preflight"), ("imessage", False, "no-preflight"),
-        ("push", False, "not-built")]
+        ("telegram", False, "no-preflight"), ("push", False, "not-built")]
 
 
 def test_channels_come_from_the_latest_preflight_checks(api, settings):  # noqa: F811
@@ -51,7 +51,8 @@ def test_channels_come_from_the_latest_preflight_checks(api, settings):  # noqa:
     _record(settings, [("alert-channel", True), ("alert-recipient", False)])
     body = doc(request(server, "GET", "/alerts")[1])
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
-        ("mac", True, None), ("imessage", False, "check-failed"), ("push", False, "not-built")]
+        ("mac", True, None), ("imessage", False, "check-failed"),
+        ("telegram", False, "not-configured"), ("push", False, "not-built")]
 
 
 def test_a_cell_is_switched_off_and_on_and_the_answer_is_the_new_settings(api, settings):  # noqa: F811
@@ -61,7 +62,7 @@ def test_a_cell_is_switched_off_and_on_and_the_answer_is_the_new_settings(api, s
     assert resp.status == 200, payload
     assert errors(schema("alerts-v1"), doc(payload)) == []
     assert _kind(doc(payload), "disk-low")["channels"] == {
-        "mac": True, "imessage": False, "push": True}
+        "mac": True, "imessage": False, "telegram": True, "push": True}
     assert _kind(doc(request(server, "GET", "/alerts")[1]), "disk-low")["channels"]["imessage"] \
         is False
     assert settings.alerts.routing.path.exists()

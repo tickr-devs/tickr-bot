@@ -13,7 +13,7 @@ alert channel is an owner decision (see "Open owner decisions").
 
 | Area | On the Mac | On Linux / in Docker | Done here |
 |---|---|---|---|
-| Alert channels | `runtime/alerts.py`: Mac notification and iMessage through `/usr/bin/osascript` and Messages.app. | `default_notifier` returns no channel off macOS. Before this change every alert was journaled `"delivery": "no-notifier"` and preflight still passed: the bot would have run with nobody told. Nothing crashed (no import of `osascript`, it is only a path). | Preflight check `alert-channel` (before `alert-recipient`, so it is the reported cause) refuses with `alert-channel-missing` (blocks the start, exit 1). The watchdog journals `watchdog-alert-channel-refused` with that cause, still runs and journals, and never exits 0 (1 instead of 0; 3 on a closed day), so its unit shows failed. **Blocker.** |
+| Alert channels | `runtime/alerts.py`: Mac notification and iMessage through `/usr/bin/osascript` and Messages.app. | `default_notifier` returns no channel off macOS. Before this change every alert was journaled `"delivery": "no-notifier"` and preflight still passed: the bot would have run with nobody told. Nothing crashed (no import of `osascript`, it is only a path). | Preflight check `alert-channel` (before `alert-recipient`, so it is the reported cause) refuses with `alert-channel-missing` (blocks the start, exit 1). The watchdog journals `watchdog-alert-channel-refused` with that cause, still runs and journals, and never exits 0 (1 instead of 0; 3 on a closed day), so its unit shows failed. **Blocker**, unless Telegram is configured: `TICKR_TELEGRAM_BOT_TOKEN` and `TICKR_TELEGRAM_CHAT_ID` (`[alerts] bot_token_variable`, `chat_id_variable`) give the server its own alert channel (`runtime/alerts.py` `TelegramNotifier`); preflight checks them (`alert-telegram`) and the iMessage recipient check no longer blocks off macOS. On the AWS server both names go into the `tickr-bot/env` secret with the Webull variables; `tickr-secrets.service` writes every name in it to the env file `/run/tickr/env`, which the bot, preflight and watchdog containers source (`ops/aws/bot/README.md`, "Fill the secret"). |
 | caffeinate | `/usr/bin/caffeinate` in the bot and watchdog plists' shell line. | Not needed: a server does not sleep. Not called anywhere in Python. | Nothing. |
 | launchd | Five plists rendered by `render-launchd` from `[runtime]` times. | No launchd. `render-launchd` still works but its output is useless. | `ops/docker/compose.yaml` plus host systemd timers (below). `render-systemd` writes the units and timers from `[runtime]` (below). |
 | Paths | Logs in `~/Library/Logs/Tickr`; env file `~/.config/tickr/env`; repo root = parent of `config/`. | Logs are the container logs (`docker compose logs`), rotated by the json-file driver. Env file: any host path, mounted read-only at `/run/tickr/env`. Repo root is `/app` in the image. Preflight's hint still names `~/.config/tickr/env` (text only). | Compose file. |
@@ -169,12 +169,26 @@ every release.
    ```sh
    C="docker compose -f /srv/tickr/etc/compose.yaml --profile jobs"
    $C run --rm preflight mkdir -m 700 /app/data/webull-token-sandbox
-   $C run --rm preflight; echo $?      # today: 1, alert-channel-missing
+   $C run --rm preflight; echo $?      # 1, alert-channel-missing, until Telegram is set
    ```
-6. API: `docker compose -f /srv/tickr/etc/compose.yaml up -d api`;
+6. **Cutover step: send one test alert before the first bot start; the owner confirms it
+   arrived.** With `TICKR_TELEGRAM_BOT_TOKEN` and `TICKR_TELEGRAM_CHAT_ID` in the env file
+   (on AWS: in the `tickr-bot/env` secret, then `sudo systemctl restart tickr-secrets`):
+   ```sh
+   $C run --rm preflight python -m tickr.runtime --config /app/config/bot.toml \
+       alert preflight-failed "test alert from the server"
+   ```
+   It sends one alert through every configured channel, exactly like the bot's jobs (same
+   image, env file and config), and prints a JSON `alert` line `"delivery": "sending"`, then
+   one per channel once it has answered: `"delivery":
+   "shown"` with `"channel": "telegram"` when Telegram accepted it, or `"failed"` with an
+   `error` naming only the HTTP status or the failure type (never the token or chat id).
+   `preflight-failed` is a locked kind, so the owner's routing cannot turn it off. Do not start
+   the bot until the message is on the owner's phone.
+7. API: `docker compose -f /srv/tickr/etc/compose.yaml up -d api`;
    `curl -s http://127.0.0.1:8766/` on the server.
-7. Production only: uncomment the authorization bind mount in `compose.yaml`.
-8. Schedule the jobs with systemd timers (below). Stop the bot with
+8. Production only: uncomment the authorization bind mount in `compose.yaml`.
+9. Schedule the jobs with systemd timers (below). Stop the bot with
    `docker compose -f /srv/tickr/etc/compose.yaml stop bot`; logs with `... logs -f bot`.
    Before rebooting the server, the same rule as the Mac: wait for the `bot-exit` line.
 
@@ -507,9 +521,9 @@ Delete the zip from the data folder after copying it.
 
 ## Open owner decisions
 
-1. **Linux alert channel (blocker).** iMessage needs Messages.app on a signed-in Mac. Choices
-   include keeping a Mac as the iMessage sender, or a channel that works from Linux. A new
-   channel is an owner decision; nothing is implemented. Until then preflight refuses on Linux.
+1. **Linux alert channel.** iMessage needs Messages.app on a signed-in Mac. Telegram
+   (`TelegramNotifier`, above) is the channel that works from Linux: preflight refuses on Linux
+   until both Telegram variables are set, and step 6 proves the send before the first start.
 2. **Where the server runs** (home box, VPS and its region; latency to Webull; who else has root
    on it, since root can read the env file and the token folder).
 3. **How its clock is synced** (chrony or systemd-timesyncd, which servers), and whether
