@@ -35,7 +35,7 @@ from .test_server import schema as contract_schema
 ROOT = Path(__file__).resolve().parents[2]
 PA3 = schema.PA3
 STRATEGY = Path("strategies") / PA3 / "strategy.toml"
-SLOTS = "risk.max_open_positions"  # 6 in config/bot.toml; lower tightens (applies at once)
+SLOTS = "risk.max_open_positions"  # 20 in config/bot.toml; lower tightens (applies at once)
 QUOTE_AGE = "risk.max_quote_age_seconds"  # 5; raise loosens (next session, Face ID)
 ATR = "indicators.atr_period"  # 14; a strategy setting, applies when flat
 
@@ -113,7 +113,7 @@ def test_tightening_is_written_at_once_and_journaled_with_time_and_device(served
         1, "apply", "local", "done")
     assert version["at"] == contract.format_time(T0 + timedelta(seconds=2))
     assert version["changes"] == [{
-        "owner": "platform", "key": SLOTS, "before": "6", "after": "5", "applies": "at_once",
+        "owner": "platform", "key": SLOTS, "before": "20", "after": "5", "applies": "at_once",
         "state": "written", "effective_after": None, "settled_by": None}]
     # A tightening needs no restart: the running bot adopts it at its next loop pass.
     assert body["restart_needed"] is False
@@ -121,7 +121,7 @@ def test_tightening_is_written_at_once_and_journaled_with_time_and_device(served
     after = (root / "config/bot.toml").read_text("utf-8")
     changed = [(a, b) for a, b in zip(before.splitlines(), after.splitlines(), strict=True)
                if a != b]
-    assert changed == [("max_open_positions = 6", "max_open_positions = 5")]
+    assert changed == [("max_open_positions = 20", "max_open_positions = 5")]
     assert _history(server) == [version]
     assert version["files"][0]["digest_after"] == _base(server)[0]["digest"]
 
@@ -203,10 +203,10 @@ def test_rollback_restores_the_values_of_an_earlier_version(served):
     assert [(c["key"], c["before"], c["after"], c["state"]) for c in version["changes"]] == [
         (SLOTS, "4", "5", "pending")]
     assert _value(root, "platform", SLOTS) == 4
-    # Back to before any change: slots 6 replaces the pending 5.
+    # Back to before any change: slots 20 replaces the pending 5.
     resp, body = _rollback(server, 0, biometric=True)
     assert resp.status == 200
-    assert [(c["key"], c["after"]) for c in body["version"]["changes"]] == [(SLOTS, "6")]
+    assert [(c["key"], c["after"]) for c in body["version"]["changes"]] == [(SLOTS, "20")]
     versions = _history(server)
     assert [(c["state"], c["settled_by"]) for v in versions[2:4] for c in v["changes"]] == [
         ("superseded", 4), ("superseded", 5)]
@@ -245,13 +245,13 @@ def test_a_concurrent_writer_holding_the_lock_is_refused(served):
         resp, body = _apply(server, ("platform", SLOTS, "5"))
         fcntl.flock(held.fileno(), fcntl.LOCK_UN)
     assert resp.status == 409 and "being written now" in body["cause"]
-    assert _value(root, "platform", SLOTS) == 6
+    assert _value(root, "platform", SLOTS) == 20
 
 
 def test_refusals_change_nothing(served):
     server, root = served
     before = (root / "config/bot.toml").read_bytes()
-    resp, body = _apply(server, ("platform", SLOTS, "6"))
+    resp, body = _apply(server, ("platform", SLOTS, "20"))
     assert resp.status == 409 and "nothing to change" in body["cause"]
     resp, body = _apply(server, ("platform", SLOTS, "0"))
     assert resp.status == 400 and "BELOW_MINIMUM" in body["cause"]
@@ -276,10 +276,10 @@ def test_a_writer_that_stopped_after_journaling_is_settled_from_the_digests(serv
     contract.write_atomic(paths.history, contract.dumps(contract.SettingsHistoryV1((left,))))
     path = root / "config/bot.toml"
     path.write_text(path.read_text("utf-8").replace("max_open_positions = 5",
-                                                    "max_open_positions = 6"), "utf-8")
+                                                    "max_open_positions = 20"), "utf-8")
     assert _apply(server, ("platform", SLOTS, "4"))[0].status == 200
     first, second = _history(server)
-    assert first["state"] == "not_written" and second["changes"][0]["before"] == "6"
+    assert first["state"] == "not_written" and second["changes"][0]["before"] == "20"
 
 
 def test_edit_keeps_comments_and_refuses_an_ambiguous_key():
