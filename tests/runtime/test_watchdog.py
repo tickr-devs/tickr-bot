@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -900,3 +901,32 @@ def test_check_relays_and_a_missing_feed_is_not_a_finding(cfg, tmp_path):
     guard.check(AT)
     assert [s for s in recorder.shown if "device-session" in s][-1].endswith(
         "four (at 2026-11-27T17:00:00Z)")
+
+
+def test_journal_writes_each_line_whole_under_its_lock(tmp_path, monkeypatch, capsys):
+    """The watchdog loop and the Live Activity thread share one Journal: a line is printed and
+    appended while the lock is held, so two writers never interleave."""
+    journal = watchdog.Journal(tmp_path / "watchdog.jsonl")
+    held = []
+    real_print = print
+
+    def checking_print(*args, **kwargs):
+        held.append(journal._lock.locked())
+        real_print(*args, **kwargs)
+
+    monkeypatch.setattr("builtins.print", checking_print)
+    big = "x" * (1 << 16)  # longer than one buffered write
+
+    def writer(name):
+        for n in range(50):
+            journal.write(name, {"n": n, "pad": big})
+
+    threads = [threading.Thread(target=writer, args=(name,)) for name in ("loop", "live")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert held and all(held)
+    lines = (tmp_path / "watchdog.jsonl").read_text("utf-8").splitlines()
+    assert sorted((json.loads(line)["record"], json.loads(line)["n"]) for line in lines) == \
+        sorted((name, n) for name in ("loop", "live") for n in range(50))

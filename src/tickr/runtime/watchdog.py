@@ -74,6 +74,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import threading
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -256,21 +257,25 @@ def not_running(config: Config, lock_path: Path, status_path: Path,
 
 
 class Journal:
-    """JSON lines to stdout and to the watchdog's own file (never the bot's database)."""
+    """JSON lines to stdout and to the watchdog's own file (never the bot's database). Two
+    threads write it (the watchdog's loop and the Live Activity publisher), so each line is
+    written whole under one lock: lines never interleave on stdout or in the file."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._lock = threading.Lock()
 
     def write(self, record: str, body: dict[str, Any]) -> None:
         line = json.dumps({"record": record, **body}, sort_keys=True, default=str)
-        print(line, flush=True)
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-        except OSError as exc:
-            print(json.dumps({"record": JOURNAL_FAILED, "error": type(exc).__name__}),
-                  flush=True)
+        with self._lock:
+            print(line, flush=True)
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+            except OSError as exc:
+                print(json.dumps({"record": JOURNAL_FAILED, "error": type(exc).__name__}),
+                      flush=True)
 
 
 RELAY_OFFSET = "relay_offset"  # state-file key: bytes of the alerts feed already relayed
