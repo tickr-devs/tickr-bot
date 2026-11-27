@@ -14,7 +14,7 @@ One row per (session date, strategy, version, role, setup, kind, name) with its 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from zoneinfo import ZoneInfo
@@ -62,3 +62,24 @@ def table(records: Sequence[DecisionRecord], zone: ZoneInfo) -> tuple[RefusalRow
         return (day, strategy, version, role, setup or "", KINDS.index(kind), -count, name)
 
     return tuple(RefusalRow(*key, count) for key, count in sorted(counts.items(), key=order))
+
+
+PLATFORM = "platform_refusal"
+
+
+def platform_only(rows: Sequence[RefusalRow], sealed: Callable[[date], bool]
+                  ) -> tuple[RefusalRow, ...]:
+    """Rows of a day where `sealed(day)` is true (the sealed exam window, owner ruling
+    2026-11-26) keep only the platform's refusal causes, counted per day and cause with no
+    strategy, version, role or setup; strategy checks and entries of that day are left out.
+    Other days are unchanged."""
+    merged: Counter[tuple[date, str]] = Counter()
+    for r in rows:
+        if sealed(r.day) and r.kind == PLATFORM:
+            merged[(r.day, r.name)] += r.count
+    kept = [r for r in rows if not sealed(r.day)]
+    kept += [RefusalRow(day, "", "", "", None, PLATFORM, name, count)
+             for (day, name), count in merged.items()]
+    return tuple(sorted(kept, key=lambda r: (r.day, r.strategy, r.version, r.role,
+                                             r.setup or "", KINDS.index(r.kind), -r.count,
+                                             r.name)))

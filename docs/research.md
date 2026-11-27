@@ -32,6 +32,67 @@ a move without height has none, with its cause.
 Outcomes are price moves, never called profit. What-if results are simulated with the replay's
 conservative fill model and prove nothing about real fills.
 
+## Sealed exam window: what no research command reads
+
+The sealed exam data (backlog R20, `docs/promotion.md` rung 0) has one home, the `[sealed]` table
+of the repository's `config/research.toml`: `ranges` (closed `[first, last]` date ranges, today
+2026-07-01 to 2026-08-14) and `every_day_from` (2026-11-20: that day and every later one). A day
+is the exchange-time-zone date (`[research] session_timezone` of the same file) of an input's
+time. `research/sealed.py` reads that fixed file, never a `--settings` argument, and there is no
+override flag: the exam unseals only when the owner edits the table.
+
+**Sealed** (owner ruling 2026-11-26): market data (bars, ticks, quotes, news, earnings), feature
+tables, labels, model scores, decision records with their outcomes, and any P&L or return of a
+decision. `model/features/full.py` keeps refusing live inputs on its own.
+
+**Not sealed**: the platform's execution reports may read the bot's OWN order, fill and timing
+records of sealed days (what was sent, when, and its fill). They open no market-data file of a
+sealed day, print no per-decision or per-symbol return, no model score and nothing grouped by
+model output, and their numbers are operational evidence only, never used to choose a model,
+label, threshold or feature.
+
+The table names every command in exactly one list; a command in neither (or a list naming a
+command that does not exist) is refused:
+
+- `sealed_commands`: `calibration`, `collar`, `decide`, `diff`, `gate`, `observers`,
+  `outcomes`, `sizing`, `whatif`. Every input of a sealed day is refused.
+- `execution_commands`: `fill-quality`, `latency`, `refusals`, `slippage`. The bot's own
+  records of sealed days pass; a sealed market-data input is still refused.
+
+Each command checks before it computes anything. A refusal stops the whole run with
+`research refused: sealed_window: <input> touches the sealed exam window on <day>` (exit 2, no
+output written); a sealed day is never dropped while the rest is reported.
+
+| Command | Refused on a sealed day | Passes on a sealed day (own records) |
+|---|---|---|
+| `gate` | `--start..--end` (before any file is opened), every trade day, every `--covered-days` day | - |
+| `outcomes`, `whatif`, `observers` | every decision's `time` and `bar_start`, every bar | - |
+| `decide` | every bar | - |
+| `diff` | every decision of each record set | - |
+| `collar` | every captured quote and captured bar (both are market data), `--decisions` | - |
+| `calibration`, `sizing` | every answer's `day` (the answers file must carry the column) | - |
+| `latency` | every captured quote (`--quotes` is market data and required, so in practice the whole command) | stream notices (`--notices`) |
+| `fill-quality` | every captured quote (`--quotes`) | the database's trades, orders and fills (run it without `--quotes`); absolute prices withheld (below) |
+| `slippage` | - | the database's stopped trades; absolute prices and P&L withheld, never in the replay feed (below) |
+| `refusals` | - | the bot's decision records: platform refusal causes only (below) |
+
+What an execution report prints for a sealed day (owner ruling 2026-11-26):
+
+- `slippage`: each trade row keeps its stop slippage (`slippage_usd`, `slippage_percent`,
+  against the stop's trigger price) and its quantities, and leaves `stop_price`,
+  `stop_fill_price`, `entry_price` and `realized_loss_usd` empty; the day row keeps its sums but
+  not `realized_loss_usd`. `slippage_summary.json`, the replay's `measured_slippage_file` feed,
+  counts only days outside the window and lists the others in `sealed_days_excluded`.
+  `slippage_operations.json` (format `tickr-slippage-operations-v1`) counts every live day for
+  operations, sealed days included (`sealed_days`, realized P&L null when one is among them); it
+  is never a replay input and the replay refuses it.
+- `fill-quality`: each trade row keeps every fill's slippage against its limit or quote, the
+  delays, shares and fees, and leaves `entry_limit`, `entry_fill`, `entry_ask`, `exit_fill` and
+  `exit_bid` empty; the per-day and overall figures are percents and stay.
+- `refusals`: a sealed day's rows are the platform's refusal causes only, counted per day and
+  cause with strategy, version, role and setup empty; its strategy checks and entry counts are
+  left out. `refusals_summary.json` lists those days in `platform_only_days`.
+
 ## Decision records (input)
 
 One JSON object per line, written by `tickr.research.records.write_records` (the bot is
@@ -254,7 +315,8 @@ missing price has a `cause` and is left out of every sum. Days are New York date
 Outputs: `slippage_trades.csv`, `slippage_days.csv` (per day: stopped and measured trades,
 planned and realized loss, stop slippage in USD and percent) and `slippage_summary.json`, whose
 `stop_slippage_percent` = sum((stop - fill) x shares) / sum(stop x shares) x 100 over every
-measured stop fill.
+measured stop fill outside the sealed exam window, and `slippage_operations.json`, the same
+totals over every day for operations only (see "Sealed exam window": the replay refuses it).
 
 **Replay and backtests.** `measured_slippage_file` in `config/replay.toml` (relative to that
 file's folder; `""` = none) selects a `slippage_summary.json`: its `stop_slippage_percent`
@@ -273,7 +335,8 @@ python -m tickr.research calibration --answers answers.csv --settings config/res
 
 Input: one CSV of stored model answers on months the model never saw (the caller picks the
 months; the tool cannot tell). Header row; `outcome` = 1 if the event the probabilities predict
-happened, else 0; every column named `p_<name>` is a probability in 0..1 (for example `p_layer1`,
+happened, else 0; `day` = the answer's trading day (YYYY-MM-DD; an answer on a sealed day
+refuses the whole run, see "Sealed exam window" above); every column named `p_<name>` is a probability in 0..1 (for example `p_layer1`,
 `p_layer2`); other columns are ignored. A blank probability cell means that layer gave no
 answer for the row and is skipped (counted). Nothing writes this file yet: the training job or
 the bot must export it. A bad value is refused with file and line, never clipped.
@@ -448,6 +511,9 @@ refused): `horizons_minutes`, `atr_period`, `session_timezone`
 `gate_positive_months`, `gate_window_months` and `gate_drop_best_percent` (`gate` reads them as
 SENSITIVITY parameters K, M and X, never pass or fail; the backlog R23 numbers: 2 of 3 months,
 best 1%) and `gate_tail_percents` (`gate`).
+`[sealed]` holds the sealed exam window and the two command lists (see "Sealed exam window"
+above); the `--settings` file may leave it out, because only the repository's own file is read
+for it.
 What-if and `decide` use `config/replay.toml`, so they fill and replay exactly like the replay. Every
 report also rounds to its `output_decimal_places` (`--replay-settings` with `--config`, default
 `config/replay.toml`): that number has one home.
