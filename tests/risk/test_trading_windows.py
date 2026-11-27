@@ -40,8 +40,10 @@ def test_shipped_config_trades_the_regular_session_only() -> None:
 def test_extended_windows_follow_the_shipped_offsets() -> None:
     pre, regular, post = trading_windows(MONDAY, BOTH)
     d = MONDAY.ny_date
+    # Positions are carried across sessions (owner 2026-11-27): only the last window flattens.
     assert (pre.opens, pre.first_entry, pre.last_entry, pre.flatten, pre.closes) == (
-        ny(d, 4, 0), ny(d, 5, 0), ny(d, 9, 15), ny(d, 9, 25), ny(d, 9, 30))
+        ny(d, 4, 0), ny(d, 4, 0), ny(d, 9, 15), None, ny(d, 9, 30))
+    assert regular.flatten is None
     assert (post.opens, post.first_entry, post.last_entry, post.flatten, post.closes) == (
         ny(d, 16, 0), ny(d, 16, 5), ny(d, 19, 0), ny(d, 19, 30), ny(d, 20, 0))
     assert pre.order_session is post.order_session is TradingSession.ALL
@@ -52,6 +54,22 @@ def test_extended_windows_follow_the_shipped_offsets() -> None:
     assert window_at(windows, ny(d, 9, 30)) is regular
     assert window_at(windows, ny(d, 16, 0)) is post
     assert window_at(windows, ny(d, 20, 0)) is None
+
+
+def test_without_carry_every_window_flattens_itself() -> None:
+    pre, regular, post = trading_windows(MONDAY, replace(BOTH, carry_across_sessions=False))
+    d = MONDAY.ny_date
+    times = MONDAY.session_times(CFG.session.last_entry_minutes_before_close,
+                                 CFG.session.flatten_minutes_before_close)
+    assert (pre.flatten, regular.flatten, post.flatten) == (
+        ny(d, 9, 25), times.flatten, ny(d, 19, 30))
+
+
+def test_the_last_enabled_window_always_flattens() -> None:
+    pre, regular = trading_windows(MONDAY, replace(BOTH, postmarket_enabled=False))
+    assert pre.flatten is None and regular.flatten is not None
+    (regular,) = trading_windows(MONDAY, CFG.session)
+    assert regular.flatten is not None
 
 
 def test_half_day_post_market_ends_at_the_calendar_extended_close() -> None:
@@ -78,6 +96,8 @@ def test_windows_never_overlap_and_flatten_before_they_close() -> None:
     for a, b in zip(windows, windows[1:], strict=False):
         assert a.closes <= b.opens
     for w in windows:
-        assert w.flatten < w.closes and w.first_entry < w.last_entry
+        assert w.flatten is None or w.flatten < w.closes
+        assert w.first_entry < w.last_entry
+    assert windows[-1].flatten is not None
     assert all(w.opens.tzinfo is not None for w in windows)
     assert windows[0].opens.astimezone(UTC).date() == date(2026, 11, 16)

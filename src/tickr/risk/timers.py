@@ -4,7 +4,7 @@ and the day's trading windows: the regular session plus the pre-market and post-
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -35,16 +35,17 @@ class WindowKind(StrEnum):
 @dataclass(frozen=True)
 class TradingWindow:
     """One session the bot trades in. Entries only in [first_entry, last_entry); everything of
-    ours closed from `flatten`; nothing may be left at `closes` (each window flattens itself:
-    no position is carried into the next session or overnight). `order_session` is what our
-    orders carry (Webull `support_trading_session`); `size_fraction` scales the planned loss
-    and the notional cap of an entry in this window."""
+    ours closed from `flatten`; nothing may be left at `closes`. `flatten` is None when the
+    window hands its open trades to the next enabled window of the day (`[session]
+    carry_across_sessions`); the day's last enabled window always flattens (nothing overnight).
+    `order_session` is what our orders carry (Webull `support_trading_session`);
+    `size_fraction` scales the planned loss and the notional cap of an entry in this window."""
 
     kind: WindowKind
     opens: datetime
     first_entry: datetime
     last_entry: datetime
-    flatten: datetime
+    flatten: datetime | None
     closes: datetime
     order_session: TradingSession
     size_fraction: Decimal
@@ -99,6 +100,8 @@ def trading_windows(day: MarketDay, session: SessionConfig) -> tuple[TradingWind
             session.postmarket_last_entry_minutes_before_close,
             session.postmarket_flatten_minutes_before_close,
             TradingSession.ALL, session.postmarket_size_fraction))
+    if session.carry_across_sessions:
+        windows = [replace(w, flatten=None) for w in windows[:-1]] + windows[-1:]
     return tuple(windows)
 
 

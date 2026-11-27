@@ -386,8 +386,7 @@ def test_extended_window_refuses_a_strategy_not_allowed_there(lim):
 
 def test_extended_window_times(lim):
     on = _extended(lim, "price-action-v3")
-    assert admit(_moved(_at(4, 30)), on).cause is C.BEFORE_FIRST_ENTRY  # first entry 05:00
-    assert admit(_moved(_at(5, 0), decision=HALF), on).ok
+    assert admit(_moved(_at(4, 0), decision=HALF), on).ok  # first entry 04:00 (owner 2026-11-27)
     assert admit(_moved(_at(9, 15)), on).cause is C.AFTER_LAST_ENTRY
     assert admit(_moved(_at(16, 4)), on).cause is C.BEFORE_FIRST_ENTRY  # first entry 16:05
     assert admit(_moved(_at(18, 59), decision=HALF), on).ok
