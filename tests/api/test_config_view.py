@@ -52,7 +52,7 @@ def test_shows_every_key_of_the_shipped_file_with_its_comment(served):
     parsed = tomllib.loads(path.read_text("utf-8"), parse_float=Decimal)
     shown = {s["name"]: {k["key"]: k for k in s["keys"]} for s in body["sections"]}
 
-    inline = {"route_limits"}  # the shipped file's only inline tables
+    inline = {"route_limits", "apns_hosts"}  # the shipped file's only inline tables
 
     def tables(prefix: str, table: dict) -> dict[str, dict]:
         out = {prefix: {k: v for k, v in table.items()

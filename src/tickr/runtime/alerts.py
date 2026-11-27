@@ -1,6 +1,6 @@
 """Owner alerts (spec section 11): a Telegram message to the owner's chat and a line in the
 alerts feed file (`[alerts] feed_file`), which a Claude session waits on. Telegram is the one
-channel that works on a server; app push comes later.
+channel that works on a server; the apps' APNs push (`ApnsNotifier`) is only ever an extra one.
 
 `Alerter.alert(kind, text)` never raises and never retries. It returns an `AlertOutcome` that the
 caller always writes to its journal, whether the notification was shown, suppressed as a repeat,
@@ -14,14 +14,23 @@ The Telegram bot token and chat id are personal data: only the variable NAMES ar
 (`[alerts] bot_token_variable`, `chat_id_variable`); the values are read from the
 environment at the moment of one send and never stored, logged or put in an error text. The
 channel is off while neither variable is set.
+APNs push to the Tickr apps works the same way: `[alerts] apns_*_variable` NAME the key id, team
+id and the path of the .p8 signing key; the key is read from that path only to sign a provider
+token and is never logged. The apps' device tokens are personal data (`runtime/push_tokens.py`):
+an error names a device by `short_hash` only.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
+import re
+import socket
+import ssl
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -29,12 +38,27 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+from tickr.api.contract import PushTokenKind
 from tickr.config import AlertsConfig
+from tickr.runtime.push_tokens import (
+    PushToken,
+    PushTokenStore,
+    StoreError,
+    short_hash,
+)
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+# h2 and cryptography are imported inside the APNs code path only (signing, sending, the key
+# check), so the bot, the watchdog and the API import this module on a machine without them
+# and only a configured push needs them.
 
 FEED = "feed"
 TELEGRAM = "telegram"
+PUSH = "push"
 NOTIFIER = "notifier"  # name of a single channel given to Alerter
 
 
@@ -125,6 +149,12 @@ class NotifyError(Exception):
     """The notification could not be shown; the message says why."""
 
 
+class NoRecipient(NotifyError):
+    """The channel has nobody to send to and already said so in this process (the apps' push
+    before any device registered). Nothing is sent; the alert gets no outcome for this channel,
+    so the journal names the empty channel once, not on every alert."""
+
+
 class Notifier(Protocol):
     """One alert delivery channel (`TelegramNotifier`, `FeedNotifier`), or several at once
     (`Channels`). `default_notifier` chooses them for the bot and the watchdog alike."""
@@ -213,6 +243,318 @@ class TelegramNotifier:
             raise NotifyError(f"telegram answered HTTP {status}")
 
 
+# APNs protocol constants (Apple, "Sending notification requests to APNs" and "Establishing a
+# token-based connection to APNs"): HTTPS port, HTTP/2 by ALPN, the request path, the headers and
+# answers this sender reads, and the ES256 provider token (a JWT signed with P-256 and SHA-256,
+# its signature the raw 32-byte r and s).
+APNS_PORT = 443
+APNS_ALPN = "h2"
+APNS_PATH = "/3/device/"
+APNS_PUSH_TYPE = "alert"
+APNS_PRIORITY = "10"  # deliver at once (alerts are never deferred to save power)
+APNS_SOUND = "default"
+APNS_CRITICAL_LEVEL = "time-sensitive"  # breaks through Focus; iOS uses "active" until allowed
+APNS_GONE = 410  # the device token is no longer active for the topic
+APNS_BAD_DEVICE_TOKEN = "BadDeviceToken"
+APNS_EXPIRED_TOKEN = "ExpiredProviderToken"
+APNS_REASON = re.compile(r"^[A-Za-z]{1,64}$")  # Apple's reasons are one CamelCase word
+JWT_ALGORITHM = "ES256"
+ES256_COORDINATE_BYTES = 32
+H2_READ_BYTES = 65535  # one socket read: the HTTP/2 default flow-control window
+
+
+def apns_names(config: AlertsConfig) -> tuple[str, str, str]:
+    return (config.apns_key_id_variable, config.apns_team_id_variable,
+            config.apns_key_path_variable)
+
+
+def apns_on(config: AlertsConfig, environ: Mapping[str, str]) -> bool:
+    """Whether the owner set up APNs: any of its variables is present (presence only). None
+    present = the push channel is off; some alone is a half setup that preflight refuses."""
+    return any(environ.get(name) for name in apns_names(config) if name)
+
+
+def apns_missing(config: AlertsConfig, environ: Mapping[str, str]) -> list[str]:
+    """NAMES of the APNs variables not set (empty when it is off or complete). Presence only."""
+    if not apns_on(config, environ):
+        return []
+    return [name for name in apns_names(config) if not environ.get(name)]
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def sign_provider_token(key: ec.EllipticCurvePrivateKey, key_id: str, team_id: str,
+                        issued_at: int) -> str:
+    """The APNs provider token: an ES256 JWT {alg, kid} . {iss, iat}."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    header = _b64url(json.dumps({"alg": JWT_ALGORITHM, "kid": key_id},
+                                separators=(",", ":")).encode())
+    claims = _b64url(json.dumps({"iss": team_id, "iat": issued_at},
+                                separators=(",", ":")).encode())
+    signing_input = f"{header}.{claims}".encode("ascii")
+    r, s = decode_dss_signature(key.sign(signing_input, ec.ECDSA(hashes.SHA256())))
+    signature = (r.to_bytes(ES256_COORDINATE_BYTES, "big")
+                 + s.to_bytes(ES256_COORDINATE_BYTES, "big"))
+    return f"{header}.{claims}.{_b64url(signature)}"
+
+
+def load_key(path: str) -> ec.EllipticCurvePrivateKey:
+    """The .p8 signing key at `path`. Errors name the failure kind only, never the content.
+    Preflight calls it too, so a wrong key file refuses the start, not the first alert."""
+    from cryptography.exceptions import UnsupportedAlgorithm
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except OSError as exc:
+        raise NotifyError(f"apns-key-unreadable: {type(exc).__name__}") from None
+    try:
+        key = serialization.load_pem_private_key(data, password=None)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        raise NotifyError("apns-key-invalid: not a PEM private key") from None
+    if not isinstance(key, ec.EllipticCurvePrivateKey) or key.curve.name != ec.SECP256R1.name:
+        raise NotifyError("apns-key-invalid: not a P-256 key")
+    return key
+
+
+class ProviderToken:
+    """The signed provider token, reused for `[alerts] apns_token_lifetime_seconds` (below
+    Apple's one hour) and signed again after that, or when a variable changes. Thread-safe: the
+    background sends share it."""
+
+    def __init__(self, config: AlertsConfig, environ: Mapping[str, str],
+                 clock: Callable[[], float] = time.time) -> None:
+        self._config = config
+        self._environ = environ
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._cached: tuple[tuple[str, str, str], float, str] | None = None
+
+    def get(self) -> str:
+        """The token; NotifyError when the key cannot be read or is not a P-256 key."""
+        names = apns_names(self._config)
+        ids = (self._environ[names[0]], self._environ[names[1]], self._environ[names[2]])
+        now = self._clock()
+        with self._lock:
+            if self._cached is not None:
+                cached_ids, issued_at, token = self._cached
+                if (cached_ids == ids
+                        and now - issued_at < self._config.apns_token_lifetime_seconds):
+                    return token
+            issued = int(now)
+            token = sign_provider_token(load_key(ids[2]), ids[0], ids[1], issued)
+            self._cached = (ids, issued, token)
+            return token
+
+    def forget(self) -> None:
+        """APNs said the token expired: the next send signs a new one."""
+        with self._lock:
+            self._cached = None
+
+
+# One HTTP/2 POST: (host, path, headers, body, timeout seconds) -> (status, response body).
+Transport = Callable[[str, str, list[tuple[str, str]], bytes, float], tuple[int, bytes]]
+Connect = Callable[[str, float], Any]
+
+
+def _tls_connect(host: str, timeout: float) -> ssl.SSLSocket:
+    context = ssl.create_default_context()
+    context.set_alpn_protocols([APNS_ALPN])
+    raw = socket.create_connection((host, APNS_PORT), timeout=timeout)
+    try:
+        sock = context.wrap_socket(raw, server_hostname=host)
+    except BaseException:
+        raw.close()
+        raise
+    if sock.selected_alpn_protocol() != APNS_ALPN:
+        sock.close()
+        raise NotifyError("apns did not agree to HTTP/2")
+    return sock
+
+
+def h2_post(host: str, path: str, headers: list[tuple[str, str]], body: bytes,
+            timeout: float, connect: Connect = _tls_connect) -> tuple[int, bytes]:
+    """One POST on a new HTTP/2 connection, closed after the answer. Raises NotifyError (the
+    stream or connection ended without an answer, or an answer without a numeric status),
+    OSError or an h2 error."""
+    import h2.config
+    import h2.connection
+    import h2.events
+    sock = connect(host, timeout)
+    try:
+        conn = h2.connection.H2Connection(
+            h2.config.H2Configuration(client_side=True, header_encoding="utf-8"))
+        conn.initiate_connection()
+        stream = conn.get_next_available_stream_id()
+        conn.send_headers(stream, [(":method", "POST"), (":scheme", "https"),
+                                   (":authority", host), (":path", path), *headers,
+                                   ("content-length", str(len(body)))])
+        conn.send_data(stream, body, end_stream=True)
+        sock.sendall(conn.data_to_send())
+        status: int | None = None
+        data = bytearray()
+        while True:
+            chunk = sock.recv(H2_READ_BYTES)
+            if not chunk:
+                raise NotifyError("apns closed the connection before answering")
+            for event in conn.receive_data(chunk):
+                if isinstance(event, h2.events.ResponseReceived) and event.stream_id == stream:
+                    answered = dict(event.headers).get(":status")
+                    if not (isinstance(answered, str) and answered.isdigit()):
+                        raise NotifyError("apns answered without a numeric status")
+                    status = int(answered)
+                elif isinstance(event, h2.events.DataReceived) and event.stream_id == stream:
+                    data += event.data
+                    conn.acknowledge_received_data(event.flow_controlled_length, stream)
+                elif isinstance(event, h2.events.StreamEnded) and event.stream_id == stream:
+                    if status is None:
+                        raise NotifyError("apns ended the stream without a status")
+                    return status, bytes(data)
+                elif isinstance(event, h2.events.StreamReset) and event.stream_id == stream:
+                    raise NotifyError(f"apns reset the stream (HTTP/2 error {event.error_code})")
+                elif isinstance(event, h2.events.ConnectionTerminated):
+                    raise NotifyError(f"apns closed the connection (HTTP/2 error "
+                                      f"{event.error_code})")
+            pending = conn.data_to_send()
+            if pending:
+                sock.sendall(pending)
+    finally:
+        sock.close()
+
+
+def apns_payload(kind: str | None, title: str, text: str, critical: bool) -> bytes:
+    """The notification: alert title and body with the default sound, grouped by kind
+    (`thread-id`, and `kind` for the app); a critical kind is time-sensitive."""
+    aps: dict[str, Any] = {"alert": {"title": title, "body": text}, "sound": APNS_SOUND}
+    body: dict[str, Any] = {"aps": aps}
+    if kind is not None:
+        aps["thread-id"] = kind
+        body["kind"] = kind
+    if critical:
+        aps["interruption-level"] = APNS_CRITICAL_LEVEL
+    return json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _apns_reason(body: bytes) -> str:
+    """Apple's reason word from an error answer, or "" (anything else is never echoed)."""
+    try:
+        reason = json.loads(body).get("reason")
+    except (ValueError, AttributeError):
+        return ""
+    return reason if isinstance(reason, str) and APNS_REASON.match(reason) else ""
+
+
+def _never_critical(_kind: str) -> bool:
+    return False
+
+
+class ApnsNotifier:
+    """One push per registered device of the Tickr apps (`push_tokens.PushTokenStore`), to the
+    APNs host of its build's environment, and only for a bundle id in `[alerts] apns_topics`.
+    One attempt per device, never retried. A token APNs says is gone (410, or BadDeviceToken)
+    is removed and the removal named in the error, which the journal records. Errors name the
+    device by `short_hash`, the HTTP status and Apple's reason only: never a device token, the
+    key or the provider token."""
+
+    def __init__(self, config: AlertsConfig, store: PushTokenStore,
+                 environ: Mapping[str, str] = os.environ, transport: Transport = h2_post,
+                 critical: Callable[[str], bool] = _never_critical,
+                 clock: Callable[[], float] = time.time) -> None:
+        self._config = config
+        self._store = store
+        self._environ = environ
+        self._transport = transport
+        self._critical = critical
+        self._timeout = float(config.notification_timeout_seconds)
+        self._provider = ProviderToken(config, environ, clock)
+        # Whether "no device registered" was already reported by this process; set again
+        # once a device is seen, so the journal names it once per empty spell, not per alert.
+        self._reported_empty = False
+        self._empty_lock = threading.Lock()
+
+    def notify(self, title: str, text: str) -> None:
+        self.notify_kind(None, title, text)
+
+    def notify_kind(self, kind: str | None, title: str, text: str) -> None:
+        try:
+            self._push(kind, title, text)
+        except NotifyError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a push failure never breaks the caller
+            # Only the type: an unexpected error's message may hold a device or provider token.
+            # `from None` drops the chain.
+            raise NotifyError(f"apns failed: {type(exc).__name__}") from None
+
+    def _push(self, kind: str | None, title: str, text: str) -> None:
+        missing = apns_missing(self._config, self._environ)
+        if missing or not apns_on(self._config, self._environ):
+            raise NotifyError("apns-missing: " + ", ".join(missing or apns_names(self._config))
+                              + " not set")
+        try:
+            devices = {key: token for key, token in self._store.read().items()
+                       if token.kind is PushTokenKind.ALERT}  # Live Activity tokens: not here
+        except StoreError as exc:
+            raise NotifyError(f"apns-store-unreadable: {exc}") from None
+        with self._empty_lock:
+            if not devices:
+                if self._reported_empty:
+                    raise NoRecipient("apns-no-device: no app has registered a push token")
+                self._reported_empty = True
+                raise NotifyError("apns-no-device: no app has registered a push token")
+            self._reported_empty = False
+        payload = apns_payload(kind, title, text, kind is not None and self._critical(kind))
+        failures = []
+        for _key, device in sorted(devices.items()):
+            error = self._send(device, payload)
+            if error is not None:
+                failures.append(f"device {short_hash(device.token)}: {error}")
+        if failures:
+            raise NotifyError("apns: " + "; ".join(failures))
+
+
+    def _send(self, device: PushToken, payload: bytes) -> str | None:
+        """One push to one device; the error text, or None when APNs accepted it."""
+        if device.bundle_id not in self._config.apns_topics:
+            return "topic-refused: the bundle id is not in [alerts] apns_topics"
+        host = self._config.apns_hosts.get(device.environment)
+        if host is None:
+            return "environment-unknown: not a key of [alerts] apns_hosts"
+        try:
+            jwt = self._provider.get()
+        except NotifyError as exc:
+            return str(exc)
+        headers = [("authorization", f"bearer {jwt}"), ("apns-topic", device.bundle_id),
+                   ("apns-push-type", APNS_PUSH_TYPE), ("apns-priority", APNS_PRIORITY),
+                   ("content-type", "application/json")]
+        try:
+            status, body = self._transport(host, APNS_PATH + device.token,
+                                           headers, payload, self._timeout)
+        except NotifyError as exc:
+            return str(exc)
+        except Exception as exc:  # noqa: BLE001 - OSError, an h2 error: one device's failure
+            # (h2 is imported only inside the transport.) Only the type, never the message.
+            return f"apns did not answer: {type(exc).__name__}"
+        if status == HTTP_OK:
+            return None
+        reason = _apns_reason(body)
+        text = f"HTTP {status}" + (f" {reason}" if reason else "")
+        if reason == APNS_EXPIRED_TOKEN:
+            self._provider.forget()
+        if status == APNS_GONE or reason == APNS_BAD_DEVICE_TOKEN:
+            try:
+                removed = self._store.remove_token(device.token)
+            except (OSError, StoreError) as exc:
+                return f"{text} (token not removed: {type(exc).__name__})"
+            if removed:
+                return f"{text} (token removed)"
+        return text
+
+
 class FeedNotifier:
     """Appends one JSON line per alert ({at, title, text}) to the alerts feed file, so whatever
     waits on that file (a Claude session) learns of the alert at once. Every process
@@ -238,7 +580,11 @@ def feed_path(root: Path, data_dir: str, config: AlertsConfig) -> Path:
     return root / data_dir / config.feed_file
 
 
-Done = Callable[[str, "str | None"], None]
+class Done(Protocol):
+    """A background channel's result: its name, the error or None when shown, and `quiet`
+    when it had nobody to send to and already said so (`NoRecipient`): no outcome follows."""
+
+    def __call__(self, name: str, error: str | None, quiet: bool = False) -> None: ...
 
 
 def _spawn_daemon(target: Callable[[], None]) -> threading.Thread:
@@ -272,15 +618,17 @@ class Channels:
         return tuple(name for name, _ in self._channels) + self.background
 
     def send(self, title: str, text: str, done: Done,
-             skip: frozenset[str] = frozenset()) -> list[tuple[str, str | None]]:
+             skip: frozenset[str] = frozenset(),
+             kind: str | None = None) -> list[tuple[str, str | None]]:
         """Start the background channels, run the others, all but those named in `skip`;
-        (name, error or None) of the ones run in this thread."""
+        (name, error or None) of the ones run in this thread. `kind` (an AlertKind value)
+        reaches the channels that use it (the app push groups and ranks by it)."""
         self._threads = [t for t in self._threads if t.is_alive()]
         for name, channel in self._background:
             if name in skip:
                 continue
             try:
-                self._threads.append(self._spawn(_once(channel, name, title, text, done)))
+                self._threads.append(self._spawn(_once(channel, name, kind, title, text, done)))
             except Exception as exc:  # noqa: BLE001 - a thread that cannot start
                 # Reported like any failed send, so the caller never raises into the bot's
                 # loop and never waits for an outcome that cannot come.
@@ -290,7 +638,9 @@ class Channels:
             if name in skip:
                 continue
             try:
-                channel.notify(title, text)
+                _deliver(channel, kind, title, text)
+            except NoRecipient:
+                continue  # nobody to send to, already reported: no result
             except NotifyError as exc:
                 results.append((name, str(exc)))
             else:
@@ -310,14 +660,24 @@ class Channels:
         self._threads = []
 
 
-def _ignore(_name: str, _error: str | None) -> None:
+def _ignore(_name: str, _error: str | None, _quiet: bool = False) -> None:
     return None
 
 
-def _once(channel: Notifier, name: str, title: str, text: str, done: Done) -> Callable[[], None]:
+def _deliver(channel: Notifier, kind: str | None, title: str, text: str) -> None:
+    if isinstance(channel, ApnsNotifier):
+        channel.notify_kind(kind, title, text)
+    else:
+        channel.notify(title, text)
+
+
+def _once(channel: Notifier, name: str, kind: str | None, title: str, text: str,
+          done: Done) -> Callable[[], None]:
     def run() -> None:
         try:
-            channel.notify(title, text)
+            _deliver(channel, kind, title, text)
+        except NoRecipient as exc:
+            done(name, str(exc), quiet=True)
         except NotifyError as exc:
             done(name, str(exc))
         except Exception as exc:  # noqa: BLE001 - a background channel never raises upward
@@ -328,15 +688,28 @@ def _once(channel: Notifier, name: str, title: str, text: str, done: Done) -> Ca
 
 
 def default_notifier(config: AlertsConfig, environ: Mapping[str, str] = os.environ,
-                     feed: Path | None = None) -> Notifier | None:
-    """The channels for this machine: Telegram once one of its variables is set and, given its
-    path, the alerts feed file, all in the background because the network can take seconds and
-    the bot's loop must not wait for it. None when Telegram is not set up: the feed file alone
-    is not a way to reach the owner (preflight refuses, `alert-channel-missing`). The same on
-    every operating system."""
+                     feed: Path | None = None,
+                     data_dir: Path | None = None) -> Notifier | None:
+    """The channels for this machine: Telegram once one of its variables is set, the apps' push
+    once an APNs variable is set (given the data folder that holds their device tokens) and,
+    given its path, the alerts feed file, all in the background because the network can take
+    seconds and the bot's loop must not wait for it. None when Telegram is not set up: the feed
+    file alone is not a way to reach the owner (preflight refuses, `alert-channel-missing`). The
+    same on every operating system.
+
+    The push is only ever an extra channel: it reaches nobody until a phone registered, the
+    token is still valid and notifications are allowed, none of which can be proved here. So
+    without Telegram there is no notifier (None), push or not."""
     if not telegram_on(config, environ):
         return None
     background: list[tuple[str, Notifier]] = [(TELEGRAM, TelegramNotifier(config, environ))]
+    if apns_on(config, environ) and data_dir is not None:
+        # Imported here: alert_routing imports this module (its delivery names).
+        from tickr.runtime.alert_routing import LOCKED
+        locked = frozenset(kind.value for kind in LOCKED)
+        store = PushTokenStore(data_dir / config.push_tokens_file)
+        background.append((PUSH, ApnsNotifier(config, store, environ,
+                                              critical=locked.__contains__)))
     if feed is not None:
         background.append((FEED, FeedNotifier(feed)))
     return Channels((), tuple(background))
@@ -419,7 +792,7 @@ class Alerter:
         self._last_shown: dict[tuple[AlertKind, str], datetime] = {}
         # Background sends of each alert not yet collected by completed().
         self._sending: dict[tuple[AlertKind, str], int] = {}
-        self._done: queue.SimpleQueue[tuple[AlertKind, str, str, str | None]] = \
+        self._done: queue.SimpleQueue[tuple[AlertKind, str, str, str | None, bool]] = \
             queue.SimpleQueue()
 
     def alert(self, kind: AlertKind, text: str) -> AlertOutcome:
@@ -433,8 +806,8 @@ class Alerter:
         if self._channels is None:
             return AlertOutcome(kind, text, now, Delivery.NO_NOTIFIER, None)
 
-        def done(name: str, error: str | None) -> None:  # on a background thread
-            self._done.put((kind, text, name, error))
+        def done(name: str, error: str | None, quiet: bool = False) -> None:  # background
+            self._done.put((kind, text, name, error, quiet))
 
         try:
             skip = self._routing(kind)
@@ -448,7 +821,8 @@ class Alerter:
         if pending:
             self._sending[key] = len(pending)
         try:
-            results = self._channels.send(f"{self._title}: {kind.value}", text, done, skip)
+            results = self._channels.send(f"{self._title}: {kind.value}", text, done, skip,
+                                          kind=kind.value)
         except BaseException:
             # No outcome will follow for sends that never started: the alert must not stay
             # suppressed until the process restarts.
@@ -473,7 +847,7 @@ class Alerter:
         outcomes = []
         while True:
             try:
-                kind, text, name, error = self._done.get_nowait()
+                kind, text, name, error, quiet = self._done.get_nowait()
             except queue.Empty:
                 return outcomes
             now = self._clock()
@@ -482,6 +856,8 @@ class Alerter:
                 self._sending[(kind, text)] = left
             else:
                 self._sending.pop((kind, text), None)
+            if quiet:
+                continue  # nobody to send to, reported once already: no outcome, not shown
             if error is None:
                 self._last_shown[(kind, text)] = now
             outcomes.append(AlertOutcome(kind, text, now,

@@ -94,8 +94,8 @@ Screens: Settings › Notifications (Mac), Settings › Safety (iOS). Channels (
 iMessage, iPhone push), a matrix of alert kinds by channel with switches, critical kinds locked on,
 the latest alerts with how each was delivered, and a test button.
 
-Push needs the Apple Developer Program and APNs (backlog); its column stays drawn as disabled until
-then.
+Push goes through APNs once its variables are set and an app registered at `POST /push-token`
+(docs/api.md "Push tokens").
 
 Built so far (bot and API side): `GET /alerts` without `recent`, and `PUT /alerts/routing`
 (docs/api.md, "Notification settings"). `recent`, `POST /alerts/test` and the app screens follow.

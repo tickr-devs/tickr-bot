@@ -173,19 +173,26 @@ flatten_grace_seconds = 500
 close_order_cutoff_seconds = 60
 # Trade on half days: false = no trading on half days; read by safety.
 half_days_enabled = false
-# Extended sessions (owner 2026-11-16). Each enabled session is its own trading window that flattens itself before it
-# ends: no position is carried into the next session or overnight. Orders in them are LIMIT only with Webull session ALL.
+# Extended sessions (owner 2026-11-16, 2026-11-27). Each enabled session is its own trading window; orders in them are
+# LIMIT only with Webull session ALL. Nothing is held overnight: the last enabled window of the day flattens itself.
 # The offsets and sizes below are proposals awaiting the owner's confirmation before either session is enabled.
 # config.load refuses either *_enabled = true until the bot-watched protection outside the regular session is built
 # (Webull takes no stop there: F7 in docs/webull-facts.md; owner decision 2026-11-16 in docs/decisions.md).
+# Hold open positions from one enabled session into the next enabled one on the same day (owner 2026-11-27: "я разрешаю
+# держать ордера сквозь сессии"): true = a window followed by another enabled window does not flatten, its trades are
+# handed over at the boundary (09:30 to a broker stop, 16:00 to the bot-watched stop); false = every window flattens
+# itself; read by risk.timers.
+carry_across_sessions = true
 # Trade in the pre-market (calendar premarket_open to regular_open, 04:00-09:30 ET); read by risk.timers.
 premarket_enabled = false
-# Pre-market: first entry this many minutes after the pre-market opens (05:00 ET: the first hour is the thinnest); read by risk.timers.
-premarket_first_entry_minutes_after_open = 60
+# Pre-market: first entry this many minutes after the pre-market opens (0 = 04:00 ET, owner 2026-11-27: entries from the
+# market's open); read by risk.timers.
+premarket_first_entry_minutes_after_open = 0
 # Pre-market: last entry this many minutes before the regular open (09:15 ET); read by risk.timers.
 premarket_last_entry_minutes_before_close = 15
 # Pre-market: everything closed this many minutes before the regular open (09:25 ET), so nothing meets the opening
-# auction; read by risk.timers.
+# auction; used only when the pre-market is the day's last enabled window or carry_across_sessions = false; read by
+# risk.timers.
 premarket_flatten_minutes_before_close = 5
 # Pre-market: share of the planned loss per trade and of the notional cap an entry may use (0.5 = half size); read by
 # risk.timers.
@@ -1330,6 +1337,33 @@ bot_token_variable = "TICKR_TELEGRAM_BOT_TOKEN"
 chat_id_variable = "TICKR_TELEGRAM_CHAT_ID"
 # Host of the Telegram Bot API, reached over HTTPS only; read by runtime.alerts.
 telegram_host = "api.telegram.org"
+# Push alerts to the Tickr apps through Apple Push Notification service (APNs), token-based auth. The device push tokens
+# the apps register (POST /push-token) are kept in this JSON file relative to [run] data_dir, 0600: personal data, never
+# logged; read by api.server (writer) and runtime.alerts.
+push_tokens_file = "push-tokens.json"
+# NAME of the environment variable holding the APNs signing key's Key ID (10 characters, Apple Developer > Keys). All three
+# apns_*_variable names set in the environment = the push channel is on; none = off; some without the others fails
+# preflight (alert-push-missing). Values are set only in the owner's env file, never here; read by runtime.alerts and
+# preflight.
+apns_key_id_variable = "TICKR_APNS_KEY_ID"
+# NAME of the environment variable holding the owner's Apple Developer Team ID (the JWT issuer); read by runtime.alerts and
+# preflight.
+apns_team_id_variable = "TICKR_APNS_TEAM_ID"
+# NAME of the environment variable holding the path of the APNs signing key (.p8 file, a secret: read only from that
+# path at send time, never logged or copied); read by runtime.alerts and preflight.
+apns_key_path_variable = "TICKR_APNS_KEY_PATH"
+# APNs host by the app build's aps-environment entitlement, the only environments POST /push-token takes (400 for any
+# other): "development" (Xcode and debug builds) is served by Apple's development host, "production" (TestFlight and App
+# Store) by the production host; HTTP/2 over HTTPS port 443. A table, so that no Python source names these words (hard
+# rule 5); read by api.server and runtime.alerts.
+apns_hosts = { development = "api.sandbox.push.apple.com", production = "api.push.apple.com" }
+# The apps' bundle ids (#827), the only APNs topics: POST /push-token refuses any other bundle_id (400) and the sender
+# never signs a push for another topic; read by api.server and runtime.alerts.
+apns_topics = ["bot.tickr.ios", "bot.tickr.mac"]
+# Seconds one signed APNs provider token (JWT) is reused before a new one is signed. Apple: tokens older than 1 hour are
+# rejected (ExpiredProviderToken), and signing more often than every 20 minutes is refused (TooManyProviderTokenUpdates),
+# so this stays between the two (50 minutes); read by runtime.alerts.
+apns_token_lifetime_seconds = 3000
 
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API

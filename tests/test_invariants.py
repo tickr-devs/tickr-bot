@@ -215,7 +215,7 @@ def files_with(root: Path, needles: list[str]) -> list[str]:
 
 NETWORK_MODULES = {"requests", "urllib3", "httpx", "aiohttp", "socket", "ssl", "paho", "grpc",
                    "websocket", "websockets", "http.client", "urllib.request", "ftplib",
-                   "smtplib", "webull", "anthropic"}
+                   "smtplib", "webull", "anthropic", "h2"}
 # Who may import an outbound-network module, and why.
 NETWORK_IMPORTERS = {
     "broker/webull.py": "the Webull adapter: every host comes from the allowlist (rule 9)",
@@ -231,7 +231,10 @@ NETWORK_IMPORTERS = {
     "demo/record.py": "`tickr demo --record`: reads the demo's own API on the loopback port it "
                       "opened itself (127.0.0.1, port 0), never another host",
     "runtime/alerts.py": "the Telegram alert channel: one HTTPS POST to [alerts] telegram_host "
-                         "from config, token and chat id by variable name only, never retried",
+                         "from config, token and chat id by variable name only, never retried; "
+                         "the apps' APNs push: one HTTP/2 POST per registered device to the "
+                         "[alerts] apns_hosts host of its environment, key by variable name "
+                         "only, never retried",
     "model/features/pinned/l1labels.py": "byte copy of the training's label builder (md5 "
                                          "0a22137f, never edited): socket only for "
                                          "gethostname() in its build claim files, which the "

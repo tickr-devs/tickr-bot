@@ -148,6 +148,35 @@ All checks are reported; the first failure is the recorded cause.
    with `alert-channel-missing` (neither set) or `alert-telegram-missing` (one of the two) and
    the bot job does not start the bot. Critical alerts always go to Telegram; the rest follow the
    routing in the app (channel `telegram`).
+   Optional, push to the Tickr apps (APNs). In Apple Developer > Certificates, Identifiers &
+   Profiles > Keys, create a key with Apple Push Notifications service and download its
+   `AuthKey_<key id>.p8` (Apple lets you download it once). Keep it outside the repo, the file
+   mode 0600 in a folder of mode 0700:
+   ```sh
+   install -d -m 700 ~/.config/tickr/apns
+   mv ~/Downloads/AuthKey_<key id>.p8 ~/.config/tickr/apns/ && chmod 600 ~/.config/tickr/apns/*.p8
+   ```
+   Then add three lines to the env file (placeholders here; never put the real ids in the repo),
+   under the names in `[alerts] apns_key_id_variable`, `apns_team_id_variable` and
+   `apns_key_path_variable`:
+   ```sh
+   TICKR_APNS_KEY_ID=<key id>
+   TICKR_APNS_TEAM_ID=<team id>
+   TICKR_APNS_KEY_PATH=<path to AuthKey_<key id>.p8>
+   ```
+   None set = push is off. Preflight then fails with `alert-push-missing` if one of the three is
+   not set, `alert-push-key-unreadable` if the path is not a readable file and
+   `alert-push-key-invalid` if it is not a P-256 `.p8` key; the key is read only to check and
+   sign it, never logged. Push is an extra channel only: it never counts as the alert channel
+   preflight requires (that is Telegram), because it reaches nobody until a phone has
+   registered. Until then each process journals `apns-no-device` once, not per alert. Each app
+   registers its device at `POST /push-token`; critical alerts always go to every registered
+   device as time-sensitive, the rest follow the routing in the app (channel `push`). The API
+   job never gets these variables (it does not push). On a server (docs/deploy-server.md) the
+   three names go into the env file the same way, and the key must be inside the container:
+   put it in the data folder (`/app/data/apns/`, folder 0700, file 0600, owned by the service
+   account) and set `TICKR_APNS_KEY_PATH` to that path. The bot, preflight and watchdog read
+   the variables at their next start.
 3. Data and token folders: `mkdir -p data && mkdir -m 700 data/webull-token-sandbox`
    (`[environments.sandbox] token_dir`; `data/webull-token-production` before Production). A folder
    that already exists keeps its mode: `chmod 700 data/webull-token-sandbox` instead.

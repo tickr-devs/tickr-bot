@@ -70,5 +70,6 @@ def test_cli_writes_csv_and_summary_and_filters_strategy(tmp_path, capsys):
     assert {r["version"] for r in rows} == {"1"}
     summary = json.loads((out / "refusals_summary.json").read_text())
     assert summary == {"days": ["2026-11-10", "2026-11-11"], "rows": 6,
-                       "by_kind": {"first_failed_check": 4, "platform_refusal": 1, "enter": 2}}
+                       "by_kind": {"first_failed_check": 4, "platform_refusal": 1, "enter": 2},
+                       "platform_only_days": []}
     assert "by_kind" in capsys.readouterr().out

@@ -358,7 +358,13 @@ def test_load_refuses_missing_column_and_duplicates(tmp_path):
     assert info.value.cause == GateRefused.DUPLICATE
 
 
-def _cli(tmp_path, trades, days, start="2026-08-01", end="2026-10-31"):
+# The command refuses the sealed exam window (config/research.toml [sealed]): its tests use an
+# open period, April to June 2026, ending the day before the window opens on 2026-07-01.
+CLI_START, CLI_END = "2026-04-01", "2026-06-30"
+OPEN_DAYS = _days(date(2026, 4, 1), date(2026, 6, 30))
+
+
+def _cli(tmp_path, trades, days, start=CLI_START, end=CLI_END):
     out = tmp_path / "o"
     code = main(["gate", "--trades", str(trades), "--covered-days", str(days),
                  "--start", start, "--end", end, "--all-sessions-usd", "4000",
@@ -367,16 +373,17 @@ def _cli(tmp_path, trades, days, start="2026-08-01", end="2026-10-31"):
     return code, out
 
 
+def _open_row(trade_id, day, **change):
+    return ROW | {"trade_id": trade_id, "slippage": "0", "entry_time": f"{day}T10:00:00-04:00",
+                  "exit_time": f"{day}T11:00:00-04:00"} | change
+
+
 def test_cli_writes_descriptive_outputs(tmp_path, capsys):
-    trades = _trades_file(tmp_path / "t.csv", ROW | {"slippage": "0"},
-                          ROW | {"trade_id": "a2", "slippage": "0", "result": "-0.5",
-                                 "entry_time": "2026-09-01T10:00:00-04:00",
-                                 "exit_time": "2026-09-01T11:00:00-04:00"},
-                          ROW | {"trade_id": "a3", "slippage": "0", "result": "2",
-                                 "spread_in_result": "false",
-                                 "entry_time": "2026-10-05T10:00:00-04:00",
-                                 "exit_time": "2026-10-05T11:00:00-04:00"})
-    days = _write(tmp_path / "d.csv", ["day"], [[d.isoformat()] for d in sorted(ALL_DAYS)])
+    trades = _trades_file(tmp_path / "t.csv", _open_row("a1", "2026-04-06",
+                                                        exit_time="2026-04-06T10:30:00-04:00"),
+                          _open_row("a2", "2026-05-05", result="-0.5"),
+                          _open_row("a3", "2026-06-01", result="2", spread_in_result="false"))
+    days = _write(tmp_path / "d.csv", ["day"], [[d.isoformat()] for d in sorted(OPEN_DAYS)])
     code, out = _cli(tmp_path, trades, days)
     assert code == 0
     printed = capsys.readouterr().out
@@ -393,7 +400,7 @@ def test_cli_writes_descriptive_outputs(tmp_path, capsys):
     assert [r["check"] for r in rows if r["outcome"] == "checked by hand"] == list(MANUAL)
     summary = json.loads((out / "gate_summary.json").read_text())
     assert summary["report"] == "descriptive" and summary["conclusive"] is True
-    assert summary["frozen"]["start"] == "2026-08-01" and summary["frozen"]["end"] == "2026-10-31"
+    assert summary["frozen"]["start"] == CLI_START and summary["frozen"]["end"] == CLI_END
     assert set(summary["frozen"]["calendar_files_sha256"]) >= {"us-equity-2026.json"}
     assert summary["lines"]["all_sessions"]["line_label"] == "hypothetical"
     assert summary["lines"]["main_session"]["line_label"] == "descriptive"

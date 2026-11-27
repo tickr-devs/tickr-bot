@@ -57,7 +57,7 @@ from tickr.api import (
 )
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
-from tickr.api.alerts import AlertsSettings, alerts_document
+from tickr.api.alerts import AlertsSettings, alerts_document, push_token_document
 from tickr.api.botstart import StartRefused, StartSettings, run_command, start_bot
 from tickr.api.causes import safe_cause
 from tickr.api.chart import Chart, ChartRefused, ChartSettings, parse_query
@@ -122,6 +122,13 @@ from tickr.research.errors import RecordFileError
 from tickr.research.records import DecisionRecord
 from tickr.runtime.alert_routing import RefusalCause, RoutingRefused
 from tickr.runtime.alerts import Alerter, AlertKind
+from tickr.runtime.push_tokens import (
+    LOCAL,
+    BadRegistration,
+    StoreError,
+    parse_kind,
+    parse_registration,
+)
 from tickr.strategy.base import Role
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -965,6 +972,7 @@ SETTINGS_APPLY = "/settings/apply"  # POST only: applies a draft (api/settingsap
 SETTINGS_ROLLBACK = "/settings/rollback"  # POST only: applies an earlier version's values
 SETTINGS_HISTORY = "/settings/history"  # GET: every journaled settings version
 ALERT_ROUTING = "/alerts/routing"  # PUT only: one cell of the owner's alert routing
+PUSH_TOKEN = "/push-token"  # POST registers this device's APNs token, DELETE removes it
 DAY_PREFIX = "/days/"
 # Headers a proxy adds to a request it forwards (Go's ReverseProxy, which `tailscale serve` is,
 # adds X-Forwarded-For; Tailscale adds its identity headers). The remote port's loopback Host is
@@ -1287,6 +1295,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, alerts_document(self.server.settings.alerts))
             elif path == ALERT_ROUTING:
                 self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
+            elif path == PUSH_TOKEN:
+                self._error("method_not_allowed", "use POST or DELETE",
+                            {"Allow": "POST, DELETE"})
             elif path == "/journal":
                 self._json(200, journal_document(self.server.settings.jobs.database,
                                                  self.server.settings.journal_rows))
@@ -1343,6 +1354,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == ALERT_ROUTING:
                 self._error("method_not_allowed", "use PUT", {"Allow": "PUT"})
+                return
+            if path == PUSH_TOKEN:
+                self._register_push_token()
                 return
             if path == PAIR_ROUTE and self.server.remote:
                 self._redeem()
@@ -1491,7 +1505,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard():
             return
         try:
-            if self._path() != SESSION_ROUTE or not self.server.remote:
+            path = self._path()
+            if path == PUSH_TOKEN:
+                self._remove_push_token()
+                return
+            if path != SESSION_ROUTE or not self.server.remote:
                 self._error("method_not_allowed", "only GET and POST are supported",
                             {"Allow": "GET, POST"})
                 return
@@ -1532,6 +1550,57 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request" if bad else "conflict", safe_cause(exc))
             return
         self._json(200, alerts_document(settings, routing))
+
+    def _push_device(self) -> str:
+        """Which device is calling: the name `_guard` authorized (a paired or signed-in device,
+        the same across its token refreshes, or the Simulator's), or `LOCAL` for the Mac's own
+        app on the local port. Never empty: `_guard` sets it before any route runs."""
+        if not self.server.remote:
+            return LOCAL
+        if not self.device_name:
+            raise RuntimeError("no authorized device name")  # answered as a typed 500
+        return self.device_name
+
+    def _register_push_token(self) -> None:
+        """POST /push-token with {"token", "environment", "bundle_id", "platform"} and an
+        optional "kind" ("alert" when left out): store this device's APNs token of that kind,
+        replacing only that kind's earlier one; 200 push-token-v1. 400 for a token that is not
+        hex, an environment that is not a key of [alerts] apns_hosts, a bundle id outside
+        [alerts] apns_topics, an unknown kind or another body. The token is never echoed or
+        logged."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        settings = self.server.settings.alerts
+        try:
+            token = parse_registration(body, settings.apns_topics, settings.apns_environments,
+                                       self.server.clock())
+        except BadRegistration as exc:
+            self._error("bad_request", safe_cause(exc))
+            return
+        try:
+            settings.push_tokens.register(self._push_device(), token)
+        except StoreError as exc:
+            self._error("unavailable", f"{safe_cause(exc)}; delete the file to start over")
+            return
+        self._json(200, push_token_document(token, token.kind))
+
+    def _remove_push_token(self) -> None:
+        """DELETE /push-token?kind=<kind>: remove this device's APNs token of that kind ("alert"
+        when left out; none stored is fine), 200 push-token-v1 with registered false. 400 for
+        an unknown kind, 503 when the token file is unreadable."""
+        try:
+            query = _query(urlsplit(self.path).query, frozenset({"kind"}), frozenset({"kind"}))
+            kind = parse_kind(query.get("kind", contract.PushTokenKind.ALERT.value))
+        except (BadQuery, BadRegistration) as exc:
+            self._error("bad_request", safe_cause(exc))
+            return
+        try:
+            self.server.settings.alerts.push_tokens.remove(self._push_device(), kind)
+        except StoreError as exc:
+            self._error("unavailable", f"{safe_cause(exc)}; delete the file to start over")
+            return
+        self._json(200, push_token_document(None, kind))
 
     def _redeem(self) -> None:
         """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`
@@ -1735,11 +1804,13 @@ class Handler(BaseHTTPRequestHandler):
                 kept = devices.without(paired, exc.revoked)
                 if kept is not None:
                     _write_private(settings.devices_path, devices.render(kept))
-                # The alert is recorded before the 401: a client never gets ahead of it.
+                # Tokens are dropped, then the alert is recorded, then the 401: the app never sees
+                # its tokens outlive the sign-out, and a client never gets ahead of the alert.
+                left = drop_push_tokens(settings, exc.revoked)
                 why = ("a refresh token that was already used came back, so a copy of it may "
                        "exist (or the app lost the answer to its own refresh)" if exc.reused
                        else "its sign-in expired")
-                self._device_session_alert(f"device {exc.revoked!r} signed out: {why}")
+                self._device_session_alert(f"device {exc.revoked!r} signed out: {why}{left}")
             self._error("unauthorized", exc.cause)
             return None, exc
         # One write retires the presented token and records the new one, before the answer.
@@ -1762,8 +1833,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if kept is not None:
                 _write_private(settings.devices_path, devices.render(kept))
-        # The alert is recorded before the answer: a client never gets ahead of it.
-        self._device_session_alert(f"device {name!r} signed out")
+        # Tokens are dropped, then the alert is recorded, then the answer.
+        left = drop_push_tokens(settings, name)
+        self._device_session_alert(f"device {name!r} signed out{left}")
         self._send(204, b"", "application/json", {})
 
     def _start_lab_replay(self) -> None:
@@ -2232,10 +2304,12 @@ def pair_simulator(settings: ApiSettings) -> Path:
 
 def unpair_simulator(settings: ApiSettings) -> None:
     """Revoke the Simulator's token: delete its hash (the api server refuses it at once) and the
-    file holding it. The phone's token is untouched."""
+    file holding it, and drop the Simulator's push tokens (StoreError after the revocation when
+    they could not be). The phone's token is untouched."""
     with _pairing_lock(settings):
         settings.simulator_token_hash_path.unlink(missing_ok=True)
         settings.simulator_token_path.unlink(missing_ok=True)
+    settings.alerts.push_tokens.remove_device(SIMULATOR_DEVICE)  # StoreError: kept, see revoke
 
 
 def pair(settings: ApiSettings, name: str, now: datetime | None = None) -> Path:
@@ -2299,12 +2373,26 @@ def list_devices(settings: ApiSettings) -> tuple[devices.Device, ...]:
         return load_devices(settings)
 
 
+def drop_push_tokens(settings: ApiSettings, name: str) -> str:
+    """Drop the APNs tokens of `name`, a device just signed out or revoked, so nothing is pushed
+    to it again. "" when done; otherwise a clause for the caller's alert or message naming why
+    they are kept (the device is revoked all the same)."""
+    try:
+        settings.alerts.push_tokens.remove_device(name)
+    except StoreError as exc:
+        return (f"; its push tokens could not be dropped ({safe_cause(exc)}): delete "
+                f"{settings.alerts.push_tokens.path.name}")
+    return ""
+
+
 def revoke_device(settings: ApiSettings, name: str) -> bool:
-    """Revoke one device's token: the api server refuses it from the next request on; the other
-    devices keep working. False when no device has that name (nothing changes)."""
+    """Revoke one device's token and drop its push tokens: the api server refuses it from the
+    next request on; the other devices keep working. False when no device has that name (any
+    push tokens left under the name are dropped all the same). StoreError, after the device is
+    revoked, when its push tokens could not be dropped."""
     with _pairing_lock(settings):
         kept = devices.without(load_devices(settings), name)
-        if kept is None:
-            return False
-        _write_private(settings.devices_path, devices.render(kept))
-        return True
+        if kept is not None:
+            _write_private(settings.devices_path, devices.render(kept))
+    settings.alerts.push_tokens.remove_device(name)
+    return kept is not None

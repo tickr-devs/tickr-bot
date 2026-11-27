@@ -66,8 +66,9 @@ def _percent(key: str, raw: Any, *, zero_ok: bool) -> Decimal:
 
 
 def settings_from_mapping(data: dict[str, Any]) -> ResearchSettings:
-    if set(data) != {"research"} or not isinstance(data["research"], dict):
-        raise ResearchSettingsError("settings must contain exactly one table: [research]")
+    # [sealed] (the exam window) is read by research/sealed.py, from the repository's file only.
+    if set(data) - {"sealed"} != {"research"} or not isinstance(data["research"], dict):
+        raise ResearchSettingsError("settings must contain [research] and no table but [sealed]")
     table = data["research"]
     missing = sorted(KEYS - set(table))
     unknown = sorted(set(table) - KEYS)

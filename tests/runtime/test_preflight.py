@@ -387,3 +387,87 @@ def test_telegram_check_exists_only_once_set_up_and_checks_presence_only(config_
     environ[cfg.chat_id_variable] = CANARY
     ok = _run(config_path, environ)
     assert ok.cause is None and CANARY not in ok.summary()
+
+
+def _p8(path: Path) -> Path:
+    """A P-256 private key in PEM, as Apple's AuthKey_<key id>.p8 holds one."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key = ec.generate_private_key(ec.SECP256R1())
+    path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                       serialization.PrivateFormat.PKCS8,
+                                       serialization.NoEncryption()))
+    return path
+
+
+def _apns_only(config_path: Path, key: Path) -> dict[str, str]:
+    """Ready credentials and the three APNs variables; no Telegram."""
+    cfg = config_module.load(config_path).alerts
+    environ = _ready(config_path)
+    del environ[cfg.bot_token_variable], environ[cfg.chat_id_variable]
+    environ[cfg.apns_key_id_variable] = CANARY
+    environ[cfg.apns_team_id_variable] = CANARY
+    environ[cfg.apns_key_path_variable] = str(key)
+    return environ
+
+
+def test_push_check_exists_only_once_set_up_and_refuses_a_half_setup(config_path, tmp_path):
+    cfg = config_module.load(config_path).alerts
+    environ = _ready(config_path)
+    names = {c.name.value for c in _run(config_path, environ).checks}
+    assert "alert-push" not in names  # off: no APNs variable set
+    environ[cfg.apns_key_id_variable] = CANARY
+    refused = _run(config_path, environ)
+    assert refused.cause is PreflightCause.ALERT_PUSH_MISSING
+    summary = refused.summary()
+    assert cfg.apns_team_id_variable in summary and cfg.apns_key_path_variable in summary
+    assert CANARY not in summary
+    environ[cfg.apns_team_id_variable] = CANARY
+    environ[cfg.apns_key_path_variable] = str(tmp_path / "no-such-key.p8")
+    missing_key = _run(config_path, environ)
+    assert missing_key.cause is PreflightCause.ALERT_PUSH_KEY_UNREADABLE
+    assert "no-such-key" not in missing_key.summary()  # the variable is named, not its value
+    environ[cfg.apns_key_path_variable] = str(_p8(tmp_path / "AuthKey.p8"))
+    ok = _run(config_path, environ)
+    assert ok.cause is None and CANARY not in ok.summary()
+
+
+@pytest.mark.parametrize("content", [b"x", b"-----BEGIN PRIVATE KEY-----\nAAAA\n"])
+def test_push_check_loads_the_key_so_a_wrong_file_refuses_the_start(config_path, tmp_path,
+                                                                    content):
+    key = tmp_path / "AuthKey.p8"
+    key.write_bytes(content)
+    environ = _ready(config_path)  # Telegram set up, every other check passing
+    cfg = config_module.load(config_path).alerts
+    environ[cfg.apns_key_id_variable] = CANARY
+    environ[cfg.apns_team_id_variable] = CANARY
+    environ[cfg.apns_key_path_variable] = str(key)
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.ALERT_PUSH_KEY_INVALID and result.blocks_start
+    push = next(c for c in result.checks if c.name.value == "alert-push")
+    assert not push.passed and "P-256" in push.detail
+    assert "BEGIN" not in result.summary() and "AAAA" not in result.summary()  # no content
+
+
+@pytest.mark.parametrize("platform", [MAC, LINUX])
+def test_push_is_never_the_alert_channel(config_path, tmp_path, monkeypatch, platform):
+    """Fable's case on #828: no Telegram, only the three APNs variables, a garbage key file
+    and no registered device. Push reaches nobody, so the start is refused."""
+    monkeypatch.setattr("sys.platform", platform)
+    garbage = tmp_path / "AuthKey.p8"
+    garbage.write_text("x", "utf-8")
+    environ = _apns_only(config_path, garbage)
+    result = _run(config_path, environ)
+    assert result.cause is PreflightCause.ALERT_CHANNEL_MISSING and result.blocks_start
+    failed = {c.name.value for c in result.checks if not c.passed}
+    assert {"alert-channel", "alert-push"} <= failed
+    # A good key and still no Telegram: push alone is never enough either.
+    cfg = config_module.load(config_path).alerts
+    environ[cfg.apns_key_path_variable] = str(_p8(tmp_path / "good.p8"))
+    good = _run(config_path, environ)
+    assert good.cause is PreflightCause.ALERT_CHANNEL_MISSING
+    assert {c.name.value for c in good.checks if not c.passed} == {"alert-channel"}
+    # Telegram is what lets the bot start; push then rides along.
+    environ[cfg.bot_token_variable] = CANARY
+    environ[cfg.chat_id_variable] = CANARY
+    assert _run(config_path, environ).cause is None

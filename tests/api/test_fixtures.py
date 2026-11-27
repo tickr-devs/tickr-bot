@@ -552,20 +552,29 @@ def documents() -> dict[str, object]:
             model=contract.ModelV1(True, None, None, contract.MODEL_LOAD_NOT_RECORDED)),
         # Settings > Environment: Sandbox loaded; Production off with a record for an old digest.
         "readiness-v1": _readiness(),
-        # The notification settings: disk-low kept off Telegram; push not built yet.
+        # The notification settings: disk-low kept off Telegram; push not set up.
         "alerts-v1": contract.AlertsV1((
             contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, True, None),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
-                                    contract.AlertChannelCause.NOT_BUILT)),
+                                    contract.AlertChannelCause.NOT_CONFIGURED)),
             alerts_api._kinds(Routing(frozenset({(AlertKind.DISK_LOW,
                                                   contract.AlertChannel.TELEGRAM)}))), None),
         "alerts-v1.unreadable": contract.AlertsV1((
             contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, False,
                                     contract.AlertChannelCause.NO_PREFLIGHT),
             contract.AlertChannelV1(contract.AlertChannel.PUSH, False,
-                                    contract.AlertChannelCause.NOT_BUILT)),
+                                    contract.AlertChannelCause.NO_PREFLIGHT)),
             alerts_api._kinds(Routing(frozenset())),
             "routing-file-unreadable: Expecting value: line 1 column 1 (char 0)"),
+        # POST /push-token: the iPhone's TestFlight build registered; DELETE: nothing left.
+        "push-token-v1": contract.PushTokenV1(True, contract.PushTokenKind.ALERT, "production",
+                                              "bot.tickr.ios", contract.PushPlatform.IOS, T0),
+        # A Live Activity push-to-start token, stored for the planned Live Activity sender.
+        "push-token-v1.activity-start": contract.PushTokenV1(
+            True, contract.PushTokenKind.ACTIVITY_START, "development", "bot.tickr.ios",
+            contract.PushPlatform.IOS, T0),
+        "push-token-v1.removed": contract.PushTokenV1(False, contract.PushTokenKind.ALERT, None,
+                                                      None, None, None),
         # The Overview's journal card: the latest rows, oldest first; "line #731".
         "journal-v1": JournalV1(731, (
             JournalRowV1(728, T0 - timedelta(seconds=9), "order-intent", "ABCD"),

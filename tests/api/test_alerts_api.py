@@ -42,7 +42,7 @@ def test_everything_is_on_before_the_owner_changes_anything(api):  # noqa: F811
     assert {k["kind"] for k in body["kinds"] if k["locked"]} == {k.value for k in LOCKED}
     assert body["routing_cause"] is None
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
-        ("telegram", False, "no-preflight"), ("push", False, "not-built")]
+        ("telegram", False, "no-preflight"), ("push", False, "no-preflight")]
 
 
 def test_channels_come_from_the_latest_preflight_checks(api, settings):  # noqa: F811
@@ -50,11 +50,23 @@ def test_channels_come_from_the_latest_preflight_checks(api, settings):  # noqa:
     _record(settings, [("alert-channel", False)])
     body = doc(request(server, "GET", "/alerts")[1])
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
-        ("telegram", False, "not-configured"), ("push", False, "not-built")]
+        ("telegram", False, "not-configured"), ("push", False, "not-configured")]
     _record(settings, [("alert-channel", True), ("alert-telegram", True)])
     body = doc(request(server, "GET", "/alerts")[1])
     assert [(c["channel"], c["configured"], c["cause"]) for c in body["channels"]] == [
-        ("telegram", True, None), ("push", False, "not-built")]
+        ("telegram", True, None), ("push", False, "not-configured")]
+
+
+def test_push_is_configured_once_its_preflight_check_passed(api, settings):  # noqa: F811
+    server, _ = api
+    _record(settings, [("alert-channel", True), ("alert-push", True)])
+    body = doc(request(server, "GET", "/alerts")[1])
+    assert ("push", True, None) in [(c["channel"], c["configured"], c["cause"])
+                                    for c in body["channels"]]
+    _record(settings, [("alert-channel", True), ("alert-push", False)])
+    body = doc(request(server, "GET", "/alerts")[1])
+    assert ("push", False, "check-failed") in [(c["channel"], c["configured"], c["cause"])
+                                               for c in body["channels"]]
 
 
 def test_a_cell_is_switched_off_and_on_and_the_answer_is_the_new_settings(api, settings):  # noqa: F811

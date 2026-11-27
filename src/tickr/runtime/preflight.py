@@ -16,6 +16,11 @@ Checks, all reported, the first failure is the single cause:
    operating system: without it the bot would run with no way to reach the owner, so the
    start is refused (`alert-channel-missing`);
 4c. when Telegram is set up, both variables are present (a half setup is refused);
+4d. when APNs push is set up (any `[alerts] apns_*_variable` present), all three are present
+   and the key path names a readable P-256 `.p8` key (loaded, never printed). The push is only
+   ever an extra channel: it never satisfies 4b, because it reaches nobody until a phone
+   registered, its token is valid and notifications are allowed, none of which preflight can
+   prove;
 5. broker token folder present;
 5b. no operator stop marker (runtime/stopmarker.py): after a stop-bot command the bot stays
    stopped, and this check fails every morning, until the owner runs `tickr clear-stop`;
@@ -34,6 +39,7 @@ Exit codes: 0 ready, 1 failed, 2 config invalid, 3 no session today.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import stat
@@ -49,7 +55,12 @@ from tickr.observers.errors import ObserverError
 from tickr.observers.loader import load_active
 from tickr.runtime import stopmarker
 from tickr.runtime.alerts import (
+    NotifyError,
+    apns_missing,
+    apns_names,
+    apns_on,
     default_notifier,
+    load_key,
     telegram_missing,
     telegram_on,
 )
@@ -85,6 +96,9 @@ class PreflightCause(StrEnum):
     CREDENTIALS_MISSING = "credentials-missing"
     ALERT_CHANNEL_MISSING = "alert-channel-missing"
     ALERT_TELEGRAM_MISSING = "alert-telegram-missing"
+    ALERT_PUSH_MISSING = "alert-push-missing"
+    ALERT_PUSH_KEY_UNREADABLE = "alert-push-key-unreadable"
+    ALERT_PUSH_KEY_INVALID = "alert-push-key-invalid"
     TOKEN_DIR_MISSING = "token-dir-missing"
     TOKEN_DIR_OPEN = "token-dir-open"
     TOKEN_UNUSABLE = "token-unusable"
@@ -102,6 +116,7 @@ class CheckName(StrEnum):
     CREDENTIALS = "credentials"
     ALERT_CHANNEL = "alert-channel"
     ALERT_TELEGRAM = "alert-telegram"
+    ALERT_PUSH = "alert-push"
     TOKEN_DIR = "token-dir"
     TOKEN = "token"
     STRATEGY = "strategy"
@@ -315,12 +330,46 @@ def _check_alert_telegram(cfg: config_module.Config,
                   f"set: {cfg.alerts.bot_token_variable}, {cfg.alerts.chat_id_variable}"),)
 
 
+def _check_alert_push(cfg: config_module.Config,
+                      environ: Mapping[str, str]) -> tuple[Check, ...]:
+    """The check exists only once APNs is set up (any of its variables present): the three
+    variables present, and the key path a readable file holding a P-256 private key. The key
+    is loaded the way the sender loads it (`alerts.load_key`), so a wrong file refuses the
+    start rather than the first alert; its content never reaches the check's text."""
+    if not apns_on(cfg.alerts, environ):
+        return ()
+    missing = apns_missing(cfg.alerts, environ)
+    if missing:
+        return (Check(CheckName.ALERT_PUSH, False,
+                      "not set: " + ", ".join(missing) + " (APNs key id, team id and key "
+                      "path); " + ENV_FILE_HINT, PreflightCause.ALERT_PUSH_MISSING),)
+    names = apns_names(cfg.alerts)
+    key_path = environ[names[2]]
+    if not (os.path.isfile(key_path) and os.access(key_path, os.R_OK)):
+        return (Check(CheckName.ALERT_PUSH, False,
+                      f"the APNs key file named by {names[2]} is not a readable file",
+                      PreflightCause.ALERT_PUSH_KEY_UNREADABLE),)
+    try:
+        load_key(key_path)
+    except NotifyError as exc:  # the failure kind only (`load_key` never puts content in it)
+        unreadable = str(exc).startswith("apns-key-unreadable")
+        return (Check(CheckName.ALERT_PUSH, False,
+                      f"the APNs key file named by {names[2]} "
+                      + ("cannot be read" if unreadable else "is not a P-256 .p8 private key"),
+                      PreflightCause.ALERT_PUSH_KEY_UNREADABLE if unreadable
+                      else PreflightCause.ALERT_PUSH_KEY_INVALID),)
+    return (Check(CheckName.ALERT_PUSH, True, "set: " + ", ".join(names)),)
+
+
 def _check_alert_channel(cfg: config_module.Config, environ: Mapping[str, str]) -> Check:
+    # No data folder: the apps' push is left out, so it can never be the channel that lets
+    # the bot start (it is an extra one; `default_notifier` never returns it alone either).
     if default_notifier(cfg.alerts, environ) is None:
         return Check(CheckName.ALERT_CHANNEL, False,
                      "no alert channel: Telegram is not set up (set "
                      f"{cfg.alerts.bot_token_variable} and {cfg.alerts.chat_id_variable}; "
-                     "see docs/operations.md, Alerts); " + ENV_FILE_HINT,
+                     "the apps' push never counts; see docs/operations.md, Alerts); "
+                     + ENV_FILE_HINT,
                      PreflightCause.ALERT_CHANNEL_MISSING)
     return Check(CheckName.ALERT_CHANNEL, True, "telegram")
 
@@ -409,6 +458,7 @@ def run_preflight(
     checks = (config_check, _check_code_version(cfg, environ), disk, calendar,
               _check_credentials(cfg, environ),
               _check_alert_channel(cfg, environ), *_check_alert_telegram(cfg, environ),
+              *_check_alert_push(cfg, environ),
               _check_token_dir(cfg), _check_stop_marker(cfg), _check_database(cfg),
               _check_strategy(cfg))
     blocking = any(not c.passed and c.cause is not PreflightCause.STRATEGY_REFUSED
