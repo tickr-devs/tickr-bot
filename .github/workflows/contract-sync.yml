@@ -1,0 +1,77 @@
+name: contract-sync
+# Carries the API contract the apps are built against to tickr-ios: the JSON schemas
+# (src/tickr/api/schema/), the fixtures the Swift tests decode (tests/api/fixtures/), the codes the
+# bot sends (contract/codes.json) and the demo day (contract/DemoDay.jsonl.xz, which goes to
+# TickrKit's resources). Runs when main changes any of them, or by hand from the Actions tab. When
+# tickr-ios differs it opens one pull request there from the fixed `contract-sync` branch, or
+# updates the one still open; tickr-ios's own CI then shows whether the apps still read the
+# contract. tickr-ios keeps the same paths, plus contract/SOURCE naming the bot commit.
+# Needs the secret CONTRACT_PR_TOKEN: a fine-grained token with Contents and Pull requests
+# read/write on tickr-devs/tickr-ios only (this workflow's own token cannot reach another repo).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - src/tickr/api/schema/**
+      - tests/api/fixtures/**
+      - contract/**
+      - .github/workflows/contract-sync.yml
+# One run at a time; a second one waits instead of racing on the same branch.
+concurrency:
+  group: contract-sync
+  cancel-in-progress: false
+# Reads this repository only; tickr-ios is written with CONTRACT_PR_TOKEN.
+permissions:
+  contents: read
+jobs:
+  contract-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: The token is set
+        env:
+          TOKEN: ${{ secrets.CONTRACT_PR_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "Secret CONTRACT_PR_TOKEN is missing (see the comment at the top of this file)."
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          path: bot
+      - uses: actions/checkout@v7
+        with:
+          repository: tickr-devs/tickr-ios
+          token: ${{ secrets.CONTRACT_PR_TOKEN }}
+          path: ios
+      - name: Copy the contract
+        run: |
+          mkdir -p ios/src/tickr/api ios/tests/api ios/contract
+          rsync -a --delete bot/src/tickr/api/schema/ ios/src/tickr/api/schema/
+          rsync -a --delete bot/tests/api/fixtures/ ios/tests/api/fixtures/
+          cp bot/contract/codes.json ios/contract/codes.json
+          cp bot/contract/DemoDay.jsonl.xz ios/apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz
+          echo "tickr-devs/tickr-bot ${GITHUB_SHA}" > ios/contract/SOURCE
+      # Opens the pull request only when something besides SOURCE changed.
+      - id: changed
+        working-directory: ios
+        run: |
+          if git status --porcelain -- . ':!contract/SOURCE' | grep -q .; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.any == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          path: ios
+          token: ${{ secrets.CONTRACT_PR_TOKEN }}
+          branch: contract-sync
+          delete-branch: true
+          commit-message: "API contract from tickr-bot ${{ github.sha }}"
+          title: "API contract from tickr-bot"
+          body: |
+            The API contract as of tickr-devs/tickr-bot@${{ github.sha }}, copied by its
+            `.github/workflows/contract-sync.yml`: schemas, fixtures, `contract/codes.json` and the
+            demo day. If a check fails here, the apps no longer read what the bot sends.
