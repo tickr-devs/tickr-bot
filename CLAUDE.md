@@ -21,8 +21,9 @@ Broker facts live in `docs/webull-facts.md`. Owner decisions live in `docs/decis
 
 The apps live in `tickr-devs/tickr-ios`, the site in `tickr-web`, Terraform in `tickr-infra`.
 The apps read only the API contract: `src/tickr/api/schema/`, `tests/api/fixtures/` and
-`contract/` (`codes.json`, `DemoDay.jsonl.xz`). Change it on purpose, regenerate it with its tests,
-and expect the `contract-sync` pull request in tickr-ios to need a matching app change.
+`contract/` (`codes.json`, `DemoDay.jsonl.xz`). Change it on purpose and regenerate it with its tests.
+After the merge, `contract-sync` adds it to the one open `contract-sync` pull request in tickr-ios;
+a new or changed schema's Swift model is pushed to that same branch, so both land together.
 
 ## How we work
 

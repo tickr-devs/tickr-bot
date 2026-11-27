@@ -2,10 +2,17 @@ name: contract-sync
 # Carries the API contract the apps are built against to tickr-ios: the JSON schemas
 # (src/tickr/api/schema/), the fixtures the Swift tests decode (tests/api/fixtures/), the codes the
 # bot sends (contract/codes.json) and the demo day (contract/DemoDay.jsonl.xz, which goes to
-# TickrKit's resources). Runs when main changes any of them, or by hand from the Actions tab. When
-# tickr-ios differs it opens one pull request there from the fixed `contract-sync` branch, or
-# updates the one still open; tickr-ios's own CI then shows whether the apps still read the
-# contract. tickr-ios keeps the same paths, plus contract/SOURCE naming the bot commit.
+# TickrKit's resources). Runs when main changes any of them, or by hand from the Actions tab.
+#
+# One branch, `contract-sync`, and one pull request in tickr-ios carry every contract change the
+# apps have not merged yet. The branch is never reset: each run merges tickr-ios main into it and
+# adds the new contract on top, so commits the apps' thread pushes to it (the Swift model of a new
+# or changed schema) stay. That pull request is where a bot change and its Swift model land
+# together: it is red until the model is there, and it is never closed by hand. When tickr-ios
+# main already holds this contract (an app pull request carried it), the run closes the leftover
+# pull request and deletes the branch. A merge conflict on the branch fails the run (ci-alert
+# opens an issue): a person resolves it on the branch.
+# tickr-ios keeps the same paths, plus contract/SOURCE naming the bot commit.
 # Needs the secret CONTRACT_PR_TOKEN: a fine-grained token with Contents and Pull requests
 # read/write on tickr-devs/tickr-ios only (this workflow's own token cannot reach another repo).
 on:
@@ -45,33 +52,47 @@ jobs:
           repository: tickr-devs/tickr-ios
           token: ${{ secrets.CONTRACT_PR_TOKEN }}
           path: ios
-      - name: Copy the contract
-        run: |
-          mkdir -p ios/src/tickr/api ios/tests/api ios/contract
-          rsync -a --delete bot/src/tickr/api/schema/ ios/src/tickr/api/schema/
-          rsync -a --delete bot/tests/api/fixtures/ ios/tests/api/fixtures/
-          cp bot/contract/codes.json ios/contract/codes.json
-          cp bot/contract/DemoDay.jsonl.xz ios/apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz
-          echo "tickr-devs/tickr-bot ${GITHUB_SHA}" > ios/contract/SOURCE
-      # Opens the pull request only when something besides SOURCE changed.
-      - id: changed
+          fetch-depth: 0
+      - name: Bring the contract onto the contract-sync branch
         working-directory: ios
+        env:
+          GH_TOKEN: ${{ secrets.CONTRACT_PR_TOKEN }}
+          REPO: tickr-devs/tickr-ios
+          BOT_SHA: ${{ github.sha }}
         run: |
-          if git status --porcelain -- . ':!contract/SOURCE' | grep -q .; then
-            echo "any=true" >> "$GITHUB_OUTPUT"
+          git config user.name "tickr-contract-sync"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin contract-sync > /dev/null; then
+            git checkout -q -B contract-sync origin/contract-sync
+            # Keeps the apps' commits on the branch; a conflict stops the run here.
+            git merge -q --no-edit origin/main
           else
-            echo "any=false" >> "$GITHUB_OUTPUT"
+            git checkout -q -B contract-sync origin/main
           fi
-      - if: steps.changed.outputs.any == 'true'
-        uses: peter-evans/create-pull-request@v8
-        with:
-          path: ios
-          token: ${{ secrets.CONTRACT_PR_TOKEN }}
-          branch: contract-sync
-          delete-branch: true
-          commit-message: "API contract from tickr-bot ${{ github.sha }}"
-          title: "API contract from tickr-bot"
-          body: |
-            The API contract as of tickr-devs/tickr-bot@${{ github.sha }}, copied by its
-            `.github/workflows/contract-sync.yml`: schemas, fixtures, `contract/codes.json` and the
-            demo day. If a check fails here, the apps no longer read what the bot sends.
+          mkdir -p src/tickr/api tests/api contract
+          rsync -a --delete ../bot/src/tickr/api/schema/ src/tickr/api/schema/
+          rsync -a --delete ../bot/tests/api/fixtures/ tests/api/fixtures/
+          cp ../bot/contract/codes.json contract/codes.json
+          cp ../bot/contract/DemoDay.jsonl.xz apps/shared/Sources/TickrKit/Resources/DemoDay.jsonl.xz
+          if git status --porcelain -- . ':!contract/SOURCE' | grep -q .; then
+            echo "tickr-devs/tickr-bot $BOT_SHA" > contract/SOURCE
+            git add -A
+            git commit -q -m "API contract from tickr-bot $BOT_SHA"
+          fi
+          pr=$(gh pr list --repo "$REPO" --head contract-sync --state open --json number --jq '.[0].number // empty')
+          if git diff --quiet origin/main HEAD -- . ':!contract/SOURCE'; then
+            # tickr-ios main already has everything on the branch.
+            if [ -n "$pr" ]; then
+              gh pr close "$pr" --repo "$REPO" --delete-branch \
+                --comment "tickr-ios main already holds this contract; nothing left to merge."
+            elif git ls-remote --exit-code --heads origin contract-sync > /dev/null; then
+              git push -q origin --delete contract-sync
+            fi
+            echo "tickr-ios is up to date with tickr-bot $BOT_SHA."
+            exit 0
+          fi
+          git push -q origin contract-sync
+          if [ -z "$pr" ]; then
+            gh pr create --repo "$REPO" --head contract-sync --base main \
+              --title "API contract from tickr-bot" --body-file ../bot/.github/contract-sync-pr.md
+          fi
