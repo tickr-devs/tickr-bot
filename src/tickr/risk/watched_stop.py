@@ -28,6 +28,15 @@ class Watch(StrEnum):
 
 
 @dataclass(frozen=True)
+class WatchQuote:
+    """What the engine watches one symbol with: its latest book, and whether the feed that
+    delivered it is proven alive for this symbol (the caller's liveness rule, probe Q1)."""
+
+    quote: Quote
+    feed_alive: bool
+
+
+@dataclass(frozen=True)
 class WatchLimits:
     max_quote_age_seconds: Decimal
     max_clock_skew_seconds: Decimal
