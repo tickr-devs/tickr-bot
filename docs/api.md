@@ -101,12 +101,26 @@ any other body; `503` when the code file is unreadable. Neither the code nor the
 an error or the log. A missing or empty `remote_hosts_file` (the default) turns remote access off; an unreadable
 one, or a name in it that is not a lowercase DNS name, stops the API at start.
 
+`POST /session` (remote port only): signing a device in with the owner's tickr.bot account instead
+of a pairing link. The app signs in at tickr.bot (OAuth 2.0 authorization code with PKCE, client
+`tickr-ios` or `tickr-mac`, `resource=https://bot.tickr.bot`) and gets a 60-second RS256 access
+token, the grant. Body exactly `{"grant": "<grant>", "name": "<device name>"}`, no bearer token.
+The bot checks the grant itself (`api/signin.py`) against the provider key pinned in
+`[api] remote_signin_key_file` and never calls tickr.bot. It checks the signature, `iss`, `aud`,
+`token_use` "access", the `scope`, the lifetime, `exp`, `client_id` among
+`remote_signin_clients` and `sub` among `remote_signin_accounts`. Each grant is redeemed once:
+its `jti` digest is kept in `remote_signin_used_file` until it expires. `200` with `paired-v1` for
+the named device (added, or replacing its earlier token). `401 unauthorized` with the one failed
+check as the cause, or when sign-in is off (`remote_signin_accounts` empty, the default), counted
+against the pair budget. `400` for any other body. `DELETE /session` with a device's token revokes
+that device's token, `204`; the device signs in again to come back.
+
 ### Failed authentication limit
 
 The remote port counts failed checks per client address (`api/authlimit.py`): a `401` on any
 route (wrong, missing or unpaired token) counts against the token budget, `[api]
 remote_auth_failures` per `remote_auth_window_seconds`; a `401` at `POST /pair` (no pairing
-waiting, expired or wrong code) against the stricter pair budget, `remote_pair_failures` per
+waiting, expired or wrong code) or `POST /session` (a refused grant) against the stricter pair budget, `remote_pair_failures` per
 `remote_pair_window_seconds` (at least the code's lifetime). A `400` (malformed body) tests no
 credential and counts nothing. An address over a budget gets `429 auth_rate_limited` with
 `Retry-After` (seconds until its oldest counted failure leaves the window) before its token or

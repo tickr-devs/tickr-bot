@@ -44,7 +44,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import authlimit, contract, devices, flow, settled, symbols, trade_whatif
+from tickr.api import authlimit, contract, devices, flow, settled, signin, symbols, trade_whatif
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.alerts import AlertsSettings, alerts_document
@@ -131,6 +131,9 @@ BEARER = "Bearer "
 PRIVATE_FILE_MODE = 0o600  # owner read and write only (POSIX mode bits)
 LOCK_SUFFIX = ".lock"  # the pairing lock file: next to the code file, never holds data
 PAIR_ROUTE = "/pair"  # POST on the remote port only: redeem the one-time pairing code
+# On the remote port only: POST with a tickr.bot sign-in grant buys a device token; DELETE with
+# a device's token ends that device's session (its token is revoked).
+SESSION_ROUTE = "/session"
 # Fewest random bytes in a token or pairing code: 128 bits, the usual floor for a bearer secret.
 MIN_SECRET_BYTES = 16
 IPV6_BITS = 128  # length of an IPv6 address (protocol constant)
@@ -159,6 +162,10 @@ class ApiSettings:
     auth_failures: int
     pair_window_seconds: int  # POST /pair budget, stricter
     pair_failures: int
+    # tickr.bot sign-in (POST /session): None while [api] remote_signin_accounts is empty (off).
+    signin_rules: signin.Rules | None
+    signin_key: signin.PublicKey | None
+    signin_used_path: Path  # SHA-256 of each redeemed grant id until the grant expires
     auth_max_addresses: int  # addresses each budget tracks; full of live ones = fail closed
     auth_ipv6_prefix_length: int  # an IPv6 client counts as its network of this length
     status_path: Path
@@ -300,6 +307,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
     if PurePosixPath(api.lab_replay_data_dir) == PurePosixPath(api.lab_replay_results_dir):
         raise ConfigError("[api] lab_replay_data_dir and lab_replay_results_dir must be "
                           "two different folders")
+    signin_rules, signin_key = _signin(cfg)
     return ApiSettings(
         host=api.host,
         port=api.port,
@@ -320,6 +328,9 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         auth_failures=api.remote_auth_failures,
         pair_window_seconds=api.remote_pair_window_seconds,
         pair_failures=api.remote_pair_failures,
+        signin_rules=signin_rules,
+        signin_key=signin_key,
+        signin_used_path=data / api.remote_signin_used_file,
         auth_max_addresses=api.remote_auth_max_addresses,
         auth_ipv6_prefix_length=api.remote_auth_ipv6_prefix_length,
         status_path=data / api.status_file,
@@ -1001,8 +1012,8 @@ class Handler(BaseHTTPRequestHandler):
             if origin is not None and origin != f"https://{host}":
                 self._error("forbidden_origin", f"Origin {origin!r} is not allowed")
                 return False
-            if self.command == "POST" and self._path() == PAIR_ROUTE:
-                return True  # the pairing code in the body is the credential: see _redeem
+            if self.command == "POST" and self._path() in (PAIR_ROUTE, SESSION_ROUTE):
+                return True  # the code or grant in the body is the credential: see _redeem
             return self._authorized(host)
         if host in self.server.allowed_host_headers:
             if origin is not None and origin not in self.server.allowed_origins:
@@ -1263,6 +1274,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == PAIR_ROUTE and self.server.remote:
                 self._redeem()
                 return
+            if path == SESSION_ROUTE and self.server.remote:
+                self._sign_in()
+                return
             if path not in COMMAND_ROUTES:
                 if path in GET_ROUTES or path.startswith(DAY_PREFIX):
                     self._error("method_not_allowed", "use GET", {"Allow": "GET"})
@@ -1383,6 +1397,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(200, advisor_document(settings.advisor_dir, settings.advisor_runs))
 
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib naming
+        if not self._guard():
+            return
+        try:
+            if self._path() != SESSION_ROUTE or not self.server.remote:
+                self._error("method_not_allowed", "only GET and POST are supported",
+                            {"Allow": "GET, POST"})
+                return
+            self._sign_out()
+        except Exception as exc:  # noqa: BLE001 - one typed answer instead of a dropped socket
+            self._error("internal", type(exc).__name__)
+
     def do_PUT(self) -> None:  # noqa: N802 - stdlib naming
         if not self._guard():
             return
@@ -1486,6 +1512,89 @@ class Handler(BaseHTTPRequestHandler):
         settings.pairing_code_path.unlink(missing_ok=True)
         settings.pairing_path.unlink(missing_ok=True)
         return token
+
+    def _sign_in(self) -> None:
+        """POST /session with {"grant": "<tickr.bot grant>", "name": "<device name>"} on the
+        remote port: a grant tickr.bot signed for one of `[api] remote_signin_accounts` buys one
+        new bearer token for the device `name` (added, or its earlier token replaced), 200
+        paired-v1. Each grant is redeemed once; a refused grant changes nothing and counts
+        against the POST /pair budget. Neither the grant nor the token is ever logged or echoed."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        if (set(body) != {"grant", "name"} or not isinstance(body["grant"], str)
+                or not body["grant"] or not isinstance(body["name"], str)
+                or not devices.valid_name(body["name"])):
+            self._error("bad_request", 'body must be exactly {"grant": "<grant>", "name": '
+                        '"<device name: letters, digits, space, dot, dash, underscore>"}')
+            return
+        settings = self.server.settings
+        with self.server.pair_lock, _pairing_lock(settings):
+            refused = self._admit(PAIR_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                try:
+                    token = self._sign_in_locked(body["grant"], body["name"])
+                finally:  # every 401 here is a grant that failed; a 503 tested none
+                    self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
+        if refused is not None:
+            self._refuse(PAIR_ROUTE_KIND, refused)
+        elif token is not None:
+            self._json(200, PairedV1(token=token))
+
+    def _sign_in_locked(self, grant: str, name: str) -> str | None:
+        """`_sign_in` under the pairing locks: the new token, or None once refused."""
+        settings = self.server.settings
+        if settings.signin_rules is None or settings.signin_key is None:
+            self._error("unauthorized", "sign-in is off: [api] remote_signin_accounts is empty")
+            return None
+        now = self.server.clock()
+        try:
+            checked = signin.check(grant, settings.signin_key, settings.signin_rules, now)
+        except signin.SignInRefused as exc:
+            self._error("unauthorized", exc.cause)
+            return None
+        try:
+            used = _used_grants(settings.signin_used_path, now)
+            paired = load_devices(settings)
+        except (OSError, ValueError, TypeError, ContractError) as exc:
+            self._error("unavailable", f"the used-grant file is unreadable ({type(exc).__name__})")
+            return None
+        except devices.DeviceFileError as exc:
+            self._device_list_unreadable(exc)
+            return None
+        digest = signin.jti_digest(checked.jti)
+        if digest in used:
+            self._error("unauthorized", "this grant was used already; sign in again")
+            return None
+        used[digest] = checked.expires_at
+        # The grant is spent before the token exists: a crash between the two loses a grant
+        # (the app signs in again), never lets one buy two tokens.
+        _write_private(settings.signin_used_path, json.dumps(
+            {d: contract.format_time(t) for d, t in sorted(used.items())}) + "\n")
+        token = secrets.token_urlsafe(settings.token_bytes)
+        device = devices.Device(name, devices.digest(token), now, None)
+        _write_private(settings.devices_path,
+                       devices.render(devices.with_device(paired, device)))
+        return token
+
+    def _sign_out(self) -> None:
+        """DELETE /session with a device's bearer token: that device's token is revoked, 204.
+        The Simulator's token is not a signed-in device and is refused."""
+        name = self.device_name
+        if name in (LOCAL_DEVICE, SIMULATOR_DEVICE, ""):
+            self._error("conflict", "this token is not a signed-in device's")
+            return
+        settings = self.server.settings
+        with self.server.pair_lock, _pairing_lock(settings):
+            try:
+                kept = devices.without(load_devices(settings), name)
+            except (OSError, devices.DeviceFileError) as exc:
+                self._device_list_unreadable(exc)
+                return
+            if kept is not None:
+                _write_private(settings.devices_path, devices.render(kept))
+        self._send(204, b"", "application/json", {})
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated
@@ -1783,7 +1892,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error("method_not_allowed", "only GET and POST are supported",
                         {"Allow": "GET, POST"})
 
-    do_HEAD = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
+    do_HEAD = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815 - stdlib naming
 
 
 def make_server(settings: ApiSettings, clock: Callable[[], datetime] = _now, *,
@@ -1799,6 +1908,47 @@ def make_remote_server(local: ApiServer) -> ApiServer:
     """The phone-facing listener next to `local`, sharing its settings, clock and inbox lock."""
     return ApiServer(local.settings, local.clock, remote=True, inbox_lock=local.inbox_lock,
                      start_lock=local.start_lock, lab=local.lab, shared=local)
+
+
+def _signin(cfg: Config) -> tuple[signin.Rules | None, signin.PublicKey | None]:
+    """The sign-in rules and the pinned provider key, or (None, None) while sign-in is off."""
+    api = cfg.api
+    if not api.remote_signin_accounts:
+        return None, None
+    if api.remote_signin_max_lifetime_seconds <= 0:
+        raise ConfigError("[api] remote_signin_max_lifetime_seconds must be positive")
+    if not api.remote_signin_clients or not all(api.remote_signin_accounts):
+        raise ConfigError("[api] remote_signin_clients and remote_signin_accounts must name "
+                          "at least one client and no empty account")
+    try:
+        key = signin.load_key((cfg.root / api.remote_signin_key_file).read_text("ascii"))
+    except (OSError, UnicodeDecodeError, signin.KeyFileError) as exc:
+        raise ConfigError(f"[api] remote_signin_key_file is unusable ({safe_cause(exc)})") from exc
+    rules = signin.Rules(
+        issuer=api.remote_signin_issuer, audience=api.remote_signin_audience,
+        scope=api.remote_signin_scope, clients=frozenset(api.remote_signin_clients),
+        accounts=frozenset(api.remote_signin_accounts),
+        max_lifetime_seconds=api.remote_signin_max_lifetime_seconds)
+    return rules, key
+
+
+def _used_grants(path: Path, now: datetime) -> dict[str, datetime]:
+    """The redeemed grant ids still unexpired at `now` (digest -> expiry); an absent file is
+    none. Any other shape raises, so a damaged file refuses sign-in instead of forgetting."""
+    try:
+        document = json.loads(path.read_text("ascii"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(document, dict):
+        raise ValueError("not an object")
+    used = {}
+    for digest, expires in document.items():
+        if not devices.HEX_DIGEST.match(digest) or not isinstance(expires, str):
+            raise ValueError("not a used-grant entry")
+        at = contract.parse_time(expires)
+        if at > now:
+            used[digest] = at
+    return used
 
 
 def _write_private(path: Path, text: str) -> None:
