@@ -303,6 +303,7 @@ class ApiConfig:
     settled_cache_dir: str
     settled_memory_days: int
     settled_disk_days: int
+    readiness_clean_days: int
 
 
 @dataclass(frozen=True)

@@ -195,6 +195,7 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/settings/history` | `200` `settings-history-v1`: every journaled settings version, oldest first; `503` when the history file is unreadable. |
 | GET | `/jobs` | `200` `jobs-v1`: the bot's scheduled work for the Settings jobs strip (read-only; see GET /jobs below). |
 | GET | `/system` | `200` `system-v1`: the apps' System card: the Webull link, the latest preflight (the 03:30 morning check), model training progress, the trained model's switch and state (`model`), and the machine's own services (on a Mac the watchdog with its restarts and the no-sleep hold), read-only (see GET /system below). |
+| GET | `/readiness` | `200` `readiness-v1`: the Production readiness view: `trading_gate()` of every configured environment without switching to it, the owner authorization record field by field, and the readiness checklist (read-only, informs only; see GET /readiness below). |
 | GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
 | PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "telegram"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
@@ -1058,6 +1059,58 @@ machine's own services follow under `host`, so a bot on a server keeps the rest 
   `model_load_not_recorded`, because the API process never loads a bundle itself. Config load
   refuses `enabled = true` today, so the API sends `off`. The model's live data feed is not
   part of this block yet: it comes as its own key once the feed is wired (R24).
+
+No part of this document is per user: a later bot or account identity is one more key.
+
+### GET /readiness (read-only)
+
+The readiness view of Settings › Environment (Mac) and Settings › Safety (iOS). Code:
+`src/tickr/api/readiness.py`. It only informs: the single barrier stays `trading_gate()` in
+`src/tickr/config.py` (rule 5), which this view calls and never changes. The API never writes
+the config or the authorization file, and has no route that enables an environment: the owner
+edits `[environments.<name>] trading_enabled` and creates the authorization file by hand.
+Which environments the checklist is about comes from the config alone (those with
+`requires_owner_authorization`); the code never names an environment. (The plan in
+`docs/api-planned.md` called it `GET /production`; no source file may contain an environment's
+name, `tests/test_config.py`.)
+
+- `environment`: the environment the API process loaded; `config_digest`: `config.digest` of
+  the file it loaded, the value an authorization record's `config_digest` must equal (a hash of
+  the committed config, not a secret). A config edited after the API started shows in GET
+  /config `changed_since_start`; restart the API to see its digest here.
+- `gate`: `trading_gate()` of the loaded environment, `{open, cause, code, params}` as
+  `status.trading_gate` (codes under "Reason codes").
+- `environments[]`, in config order: `name`, `loaded`, `trading_enabled`,
+  `requires_owner_authorization`; `keys_present`: the app key, app secret and account
+  variables are all set in the API process (true), some are (false), none is (null: the API
+  job is started without other environments' credentials, so it cannot tell). Names only:
+  values are never read or served (rule 4). `gate`: `trading_gate()` itself run on a copy of
+  the loaded config whose `[run] environment` names this section, so it says exactly what the
+  gate would say if this environment were loaded. `authorization`: null when the section
+  requires none; otherwise `file` (relative to the repo root, `""` when none is set),
+  `present`, and what the file says: `environment`, `approved_on` (as written),
+  `digest_matches` (its `config_digest` equals `config_digest`), each null when absent or the
+  file cannot be read. `valid`, `cause`, `code`, `params` are the gate's own authorization
+  check (the `authorization_*` gate codes), also while trading is disabled. Its `statement` is
+  never served.
+- `checklist[]`: `{code, environment, state, value, cause}` in this order; `state` `pass`,
+  `fail` or `unknown` (not proven either way, `cause` says why); `value` what was measured,
+  as text, or null; `cause` English detail, null on `pass` (clients translate by `code` and
+  `state`). First the evidence of the loaded environment, where the bot runs now:
+  - `clean_days`: clean days (GET /days verdict `clean`) against `[api] readiness_clean_days`,
+    `value` "N / M"; `unknown` when history cannot be read.
+  - `preflight`: the latest preflight record (as GET /system `morning_check`): `pass` when it
+    ran today (New York) and was `ready`, `fail` when it ran today and failed, `unknown` when
+    it ran on another day (`value` its date), had no session, or none is recorded.
+  - `unattended_safeguard`: the watchdog launchd job's latest start (as GET /system
+    `host.watchdog.started_day`): `pass` today, `fail` never, `unknown` on an earlier day or on
+    a host without machine services (`[api] system_services = "none"`).
+  Then, for each environment that requires owner authorization:
+  - `keys`: `keys_present` (`unknown` when null).
+  - `data_probe`: chart probe C1 recorded as passed for that environment (the hard gate of
+    `docs/webull-facts.md` section C; `probes.chart_client_gate`). C2 is not a gate there.
+  - `trading_enabled`: its `[environments.<name>] trading_enabled`.
+  - `authorization`: its `authorization.valid`, with the gate's cause.
 
 No part of this document is per user: a later bot or account identity is one more key.
 

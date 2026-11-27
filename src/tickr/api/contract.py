@@ -1906,6 +1906,86 @@ class SystemV1:
     training_cause_codes: tuple[ReasonV1, ...] = _reasons_of("training_cause")
     host_cause_codes: tuple[ReasonV1, ...] = _reasons_of("host_cause")
 
+# ---------------------------------------------------------------- readiness
+
+
+class ReadinessState(StrEnum):
+    PASS = "pass"  # proven done
+    FAIL = "fail"  # proven not done
+    UNKNOWN = "unknown"  # not proven either way: `cause` says why
+
+
+class ReadinessCode(StrEnum):
+    """A readiness check, in the fixed order GET /readiness lists them (docs/api.md)."""
+
+    CLEAN_DAYS = "clean_days"  # clean days of the loaded environment against [api]
+    PREFLIGHT = "preflight"  # today's preflight of the loaded environment
+    UNATTENDED_SAFEGUARD = "unattended_safeguard"  # the watchdog job started today
+    KEYS = "keys"  # the environment's credential variables are set (names only)
+    DATA_PROBE = "data_probe"  # chart probe C1 recorded as passed for the environment
+    TRADING_ENABLED = "trading_enabled"  # [environments.<name>] trading_enabled
+    AUTHORIZATION = "authorization"  # the owner authorization record is valid
+
+
+@dataclass(frozen=True)
+class ReadinessCheckV1:
+    """One readiness check of one environment. `value` is what was measured, as plain text
+    ("3 / 5", a New York date), null when nothing was. `cause` is English detail, null on
+    `pass`; clients translate by `code` and `state`."""
+
+    code: ReadinessCode
+    environment: str
+    state: ReadinessState
+    value: str | None
+    cause: str | None
+
+
+@dataclass(frozen=True)
+class AuthorizationRecordV1:
+    """An environment's owner authorization file, field by field. Never its `statement`.
+    `valid`/`cause`/`code`/`params` are the trading gate's own authorization check
+    (`trading_gate.code` codes); the other fields only show what the file says."""
+
+    file: str  # relative to the repo root; "" when none is configured
+    present: bool
+    environment: str | None  # as the file says; null when absent or unreadable
+    approved_on: str | None
+    digest_matches: bool | None  # its config_digest equals `config_digest`; null when absent
+    valid: bool
+    cause: str
+    code: str
+    params: Params
+
+
+@dataclass(frozen=True)
+class EnvironmentReadinessV1:
+    """One `[environments.<name>]` section, evaluated without switching to it."""
+
+    name: str
+    loaded: bool  # the environment this API process loaded
+    trading_enabled: bool
+    requires_owner_authorization: bool
+    # The app key, app secret and account variables are all set in this process: null when
+    # none is (the API job is started without other environments' credentials).
+    keys_present: bool | None
+    gate: Gate  # trading_gate() as if this environment were loaded
+    authorization: AuthorizationRecordV1 | None  # null when it requires none
+
+
+@dataclass(frozen=True)
+class ReadinessV1:
+    """GET /readiness: the readiness view, read-only. Informs only: the single barrier stays
+    `trading_gate()`; nothing here writes the config or the authorization file."""
+
+    served_at: datetime
+    environment: str  # the environment the API process loaded
+    config_digest: str  # what an authorization record must carry (a hash, not a secret)
+    gate: Gate  # trading_gate() of the loaded environment, as status.trading_gate
+    environments: tuple[EnvironmentReadinessV1, ...]  # config order
+    checklist: tuple[ReadinessCheckV1, ...]
+    api_version: int = _const(API_VERSION)
+
+
 # ---------------------------------------------------------------- alerts (notification settings)
 
 
@@ -3199,6 +3279,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "jobs-v1": JobsV1,
     "journal-v1": JournalV1,
     "system-v1": SystemV1,
+    "readiness-v1": ReadinessV1,
     "alerts-v1": AlertsV1,
     "day-events-v1": DayEventsV1,
     "advisor-runs-v1": AdvisorRunsV1,

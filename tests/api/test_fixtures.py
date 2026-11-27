@@ -165,6 +165,38 @@ def _response(st, age, stale, cause=None) -> StatusResponseV1:
                             api_started_at=T0 - timedelta(hours=1))
 
 
+def _readiness() -> contract.ReadinessV1:
+    state, code = contract.ReadinessState, contract.ReadinessCode
+    on = contract.Gate(True, "trading enabled by configuration", "trading_enabled", {})
+    off = contract.Gate(False, "trading is disabled for environment 'production'",
+                        "trading_disabled", {"environment": "production"})
+    mismatch = "owner authorization does not match the current config digest"
+    return contract.ReadinessV1(
+        served_at=T0, environment="sandbox", config_digest="9a28" + "0" * 60, gate=on,
+        environments=(
+            contract.EnvironmentReadinessV1("sandbox", True, True, False, None, on, None),
+            contract.EnvironmentReadinessV1(
+                "production", False, False, True, None, off,
+                contract.AuthorizationRecordV1(
+                    "authorization/production.toml", True, "production", "2026-11-20", False,
+                    False, mismatch, "authorization_digest_mismatch", {}))),
+        checklist=(
+            contract.ReadinessCheckV1(code.CLEAN_DAYS, "sandbox", state.FAIL, "3 / 5",
+                                      "3 clean days of 5"),
+            contract.ReadinessCheckV1(code.PREFLIGHT, "sandbox", state.PASS, "2026-11-16", None),
+            contract.ReadinessCheckV1(code.UNATTENDED_SAFEGUARD, "sandbox", state.UNKNOWN,
+                                      "2026-11-13", "the watchdog last started on 2026-11-13, "
+                                      "not today"),
+            contract.ReadinessCheckV1(code.KEYS, "production", state.UNKNOWN, None,
+                                      "this process holds none of them"),
+            contract.ReadinessCheckV1(code.DATA_PROBE, "production", state.FAIL, None,
+                                      "chart probe C1 is not recorded for production"),
+            contract.ReadinessCheckV1(code.TRADING_ENABLED, "production", state.FAIL, None,
+                                      "[environments.production] trading_enabled is false"),
+            contract.ReadinessCheckV1(code.AUTHORIZATION, "production", state.FAIL, None,
+                                      mismatch)))
+
+
 def _settings_file(before: str, after: str) -> contract.SettingsVersionFileV1:
     return contract.SettingsVersionFileV1("platform", "config/bot.toml", before, after)
 
@@ -511,6 +543,8 @@ def documents() -> dict[str, object]:
             # [model] enabled is refused by config load today; were it on, the API would not
             # know the bot's load: null with its cause.
             model=contract.ModelV1(True, None, None, contract.MODEL_LOAD_NOT_RECORDED)),
+        # Settings > Environment: Sandbox loaded; Production off with a record for an old digest.
+        "readiness-v1": _readiness(),
         # The notification settings: disk-low kept off Telegram; push not built yet.
         "alerts-v1": contract.AlertsV1((
             contract.AlertChannelV1(contract.AlertChannel.TELEGRAM, True, None),

@@ -669,6 +669,10 @@ settled_memory_days = 10
 # Past days whose built answers (and trades' bar index) the API keeps on disk under settled_cache_dir (the newest by
 # date; older day folders are deleted when a newer one is written), count; read by the api server (api/settled.py).
 settled_disk_days = 30
+# Clean days (GET /days verdict `clean`) of the loaded environment that GET /production's readiness checklist asks for
+# before another environment is enabled (spec-v1 section 1: 5 clean Sandbox days), count; informs only, never a gate;
+# read by the api server (api/readiness.py).
+readiness_clean_days = 5
 
 [market_data]
 # Seconds between discovery passes in the regular session, counted from the start of the minute the pass began, so with
