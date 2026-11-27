@@ -44,7 +44,17 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from tickr.api import authlimit, contract, devices, flow, settled, signin, symbols, trade_whatif
+from tickr.api import (
+    authlimit,
+    contract,
+    devices,
+    flow,
+    sessions,
+    settled,
+    signin,
+    symbols,
+    trade_whatif,
+)
 from tickr.api.advisor import DecisionRefused, advisor_document, record_decision
 from tickr.api.after import AfterSettings, SkippedAfter
 from tickr.api.alerts import AlertsSettings, alerts_document
@@ -64,6 +74,7 @@ from tickr.api.contract import (
     QuotesResponseV1,
     RiskSettings,
     SessionSettings,
+    SessionV1,
     SettingsV1,
     StatusResponseV1,
 )
@@ -137,6 +148,10 @@ PAIR_ROUTE = "/pair"  # POST on the remote port only: redeem the one-time pairin
 # On the remote port only: POST with a tickr.bot sign-in grant buys a device token; DELETE with
 # a device's token ends that device's session (its token is revoked).
 SESSION_ROUTE = "/session"
+# On the remote port only: POST with a signed-in device's refresh token buys a new token pair.
+REFRESH_ROUTE = "/session/refresh"
+# The remote routes that take no bearer token: the code, grant or refresh token is in the body.
+BODY_CREDENTIAL_ROUTES = (PAIR_ROUTE, SESSION_ROUTE, REFRESH_ROUTE)
 # Fewest random bytes in a token or pairing code: 128 bits, the usual floor for a bearer secret.
 MIN_SECRET_BYTES = 16
 IPV6_BITS = 128  # length of an IPv6 address (protocol constant)
@@ -169,6 +184,7 @@ class ApiSettings:
     signin_rules: signin.Rules | None
     signin_key: signin.PublicKey | None
     signin_used_path: Path  # SHA-256 of each redeemed grant id until the grant expires
+    session_lifetimes: sessions.Lifetimes  # a signed-in device's access, refresh, sign-in limits
     auth_max_addresses: int  # addresses each budget tracks; full of live ones = fail closed
     auth_ipv6_prefix_length: int  # an IPv6 client counts as its network of this length
     status_path: Path
@@ -334,6 +350,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         signin_rules=signin_rules,
         signin_key=signin_key,
         signin_used_path=data / api.remote_signin_used_file,
+        session_lifetimes=_session_lifetimes(cfg),
         auth_max_addresses=api.remote_auth_max_addresses,
         auth_ipv6_prefix_length=api.remote_auth_ipv6_prefix_length,
         status_path=data / api.status_file,
@@ -1015,8 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
             if origin is not None and origin != f"https://{host}":
                 self._error("forbidden_origin", f"Origin {origin!r} is not allowed")
                 return False
-            if self.command == "POST" and self._path() in (PAIR_ROUTE, SESSION_ROUTE):
-                return True  # the code or grant in the body is the credential: see _redeem
+            if self.command == "POST" and self._path() in BODY_CREDENTIAL_ROUTES:
+                return True  # the code, grant or refresh token in the body is the credential
             return self._authorized(host)
         if host in self.server.allowed_host_headers:
             if origin is not None and origin not in self.server.allowed_origins:
@@ -1090,6 +1107,10 @@ class Handler(BaseHTTPRequestHandler):
             return False
         if device is None:
             self._error("unauthorized", "the bearer token is not the paired one", challenge)
+            return False
+        if sessions.access_expired(device, self.server.clock()):
+            self._error("unauthorized", "the access token has expired; renew it at POST "
+                        "/session/refresh", challenge)
             return False
         self.device_name = device.name
         return True
@@ -1280,6 +1301,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == SESSION_ROUTE and self.server.remote:
                 self._sign_in()
                 return
+            if path == REFRESH_ROUTE and self.server.remote:
+                self._refresh()
+                return
             if path not in COMMAND_ROUTES:
                 if path in GET_ROUTES or path.startswith(DAY_PREFIX):
                     self._error("method_not_allowed", "use GET", {"Allow": "GET"})
@@ -1366,17 +1390,31 @@ class Handler(BaseHTTPRequestHandler):
         text = (f"{command} by device {self.device_name!r} on the {port} port at "
                 f"{contract.format_time(self.server.clock())}; if this was not you, revoke the "
                 "device (docs/operations.md, risk-command-used)")
+        self._send_alert(AlertKind.RISK_COMMAND_USED, text)
+
+    def _device_session_alert(self, what: str) -> None:
+        """One `device-session` alert: a device signed in or out (never a token or grant)."""
+        if self.server.alerter is None:
+            return
+        self._send_alert(AlertKind.DEVICE_SESSION, (
+            f"{what} on the remote port at {contract.format_time(self.server.clock())}; if this "
+            "was not you, revoke the device (docs/operations.md, device-session)"))
+
+    def _send_alert(self, kind: AlertKind, text: str) -> None:
+        """Raise `kind`, journal-only failures to the log; never raises."""
+        alerter = self.server.alerter
+        if alerter is None:
+            return
         try:
             with self.server.alert_lock:
-                outcomes = [alerter.alert(AlertKind.RISK_COMMAND_USED, text), *alerter.completed()]
+                outcomes = [alerter.alert(kind, text), *alerter.completed()]
             for outcome in outcomes:
                 body = outcome.journal_body()
                 if body["error"]:
                     sys.stderr.write(f"api: alert {body['kind']} {body['delivery']} "
                                      f"({body['error']})\n")
         except Exception as exc:  # noqa: BLE001 - a failing alert never undoes the command
-            sys.stderr.write(f"api: alert {AlertKind.RISK_COMMAND_USED.value} failed "
-                             f"({type(exc).__name__})\n")
+            sys.stderr.write(f"api: alert {kind.value} failed ({type(exc).__name__})\n")
 
     def _advisor_decision(self) -> None:
         """POST /advisor/decision with {"run": "<id>", "verdict": "accepted"|"rejected"}:
@@ -1519,9 +1557,10 @@ class Handler(BaseHTTPRequestHandler):
     def _sign_in(self) -> None:
         """POST /session with {"grant": "<tickr.bot grant>", "name": "<device name>"} on the
         remote port: a grant tickr.bot signed for one of `[api] remote_signin_accounts` buys one
-        new bearer token for the device `name` (added, or its earlier token replaced), 200
-        paired-v1. Each grant is redeemed once; a refused grant changes nothing and counts
-        against the POST /pair budget. Neither the grant nor the token is ever logged or echoed."""
+        token pair for the device `name` (added, or its earlier tokens replaced), 200 session-v1,
+        and a `device-session` alert. Each grant is redeemed once; a refused grant changes
+        nothing and counts against the POST /pair budget. Neither the grant nor a token is ever
+        logged or echoed."""
         body = self._read_json_body()
         if body is None:
             return
@@ -1540,16 +1579,29 @@ class Handler(BaseHTTPRequestHandler):
             refused = self._admit(PAIR_ROUTE_KIND)
             if refused is None:
                 self._last_error = None
+                issued = account = client = None
                 try:
-                    token = self._sign_in_locked(body["grant"], body["name"])
+                    result = self._sign_in_locked(body["grant"], body["name"])
+                    if result is not None:
+                        issued, account, client = result
                 finally:  # every 401 here is a grant that failed; a 503 tested none
                     self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
         if refused is not None:
             self._refuse(PAIR_ROUTE_KIND, refused)
-        elif token is not None:
-            self._json(200, PairedV1(token=token))
+        elif issued is not None:
+            self._json(200, self._session_answer(issued))
+            self._device_session_alert(f"device {body['name']!r} signed in with tickr.bot "
+                                       f"(account {account!r}, app {client!r})")
 
-    def _sign_in_locked(self, grant: str, name: str) -> str | None:
+    def _session_answer(self, issued: sessions.Issued) -> SessionV1:
+        now = self.server.clock()
+        return SessionV1(
+            access_token=issued.access_token,
+            access_expires_in=int((issued.access_expires_at - now).total_seconds()),
+            refresh_token=issued.refresh_token,
+            refresh_expires_in=int((issued.refresh_expires_at - now).total_seconds()))
+
+    def _sign_in_locked(self, grant: str, name: str) -> tuple[sessions.Issued, str, str] | None:
         """`_sign_in` under the pairing locks: the new token, or None once refused."""
         settings = self.server.settings
         if settings.signin_rules is None or settings.signin_key is None:
@@ -1579,11 +1631,66 @@ class Handler(BaseHTTPRequestHandler):
         # (the app signs in again), never lets one buy two tokens.
         _write_private(settings.signin_used_path, json.dumps(
             {d: contract.format_time(t) for d, t in sorted(used.items())}) + "\n")
-        token = secrets.token_urlsafe(settings.token_bytes)
-        device = devices.Device(name, devices.digest(token), now, None)
+        device, issued = sessions.sign_in(name, now, settings.session_lifetimes,
+                                          settings.token_bytes)
         _write_private(settings.devices_path,
                        devices.render(devices.with_device(paired, device)))
-        return token
+        return issued, checked.account, checked.client
+
+    def _refresh(self) -> None:
+        """POST /session/refresh with {"refresh_token": "<token>"} on the remote port, no bearer
+        token: a signed-in device's live refresh token buys a new pair, 200 session-v1; the
+        presented token is retired in the same write. A retired token presented again signs the
+        device out (a copy may exist) and raises `device-session`. Every refusal is a 401 counted
+        against the POST /pair budget; neither token is ever logged or echoed."""
+        body = self._read_json_body()
+        if body is None:
+            return
+        if set(body) != {"refresh_token"} or not isinstance(body["refresh_token"], str) \
+                or not body["refresh_token"]:
+            self._error("bad_request", 'body must be exactly {"refresh_token": "<token>"}')
+            return
+        settings = self.server.settings
+        revoked: str | None = None
+        issued: sessions.Issued | None = None
+        with self.server.pair_lock, _pairing_lock(settings):
+            refused = self._admit(PAIR_ROUTE_KIND)
+            if refused is None:
+                self._last_error = None
+                try:
+                    issued, revoked = self._refresh_locked(body["refresh_token"])
+                finally:  # every 401 here is a refresh token that failed; a 503 tested none
+                    self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
+        if refused is not None:
+            self._refuse(PAIR_ROUTE_KIND, refused)
+            return
+        if revoked is not None:
+            self._device_session_alert(f"device {revoked!r} signed out: a retired refresh token "
+                                       "came back or its sign-in expired")
+        if issued is not None:
+            self._json(200, self._session_answer(issued))
+
+    def _refresh_locked(self, presented: str) -> tuple[sessions.Issued | None, str | None]:
+        """`_refresh` under the pairing locks: the new pair, or the device it signed out."""
+        settings = self.server.settings
+        try:
+            paired = load_devices(settings)
+        except (OSError, devices.DeviceFileError) as exc:
+            self._device_list_unreadable(exc)
+            return None, None
+        try:
+            renewed, issued = sessions.refresh(paired, presented, self.server.clock(),
+                                               settings.session_lifetimes, settings.token_bytes)
+        except sessions.RefreshRefused as exc:
+            if exc.revoked is not None:
+                kept = devices.without(paired, exc.revoked)
+                if kept is not None:
+                    _write_private(settings.devices_path, devices.render(kept))
+            self._error("unauthorized", exc.cause)
+            return None, exc.revoked
+        # One write retires the presented token and records the new one, before the answer.
+        _write_private(settings.devices_path, devices.render(renewed))
+        return issued, None
 
     def _sign_out(self) -> None:
         """DELETE /session with a device's bearer token: that device's token is revoked, 204.
@@ -1602,6 +1709,7 @@ class Handler(BaseHTTPRequestHandler):
             if kept is not None:
                 _write_private(settings.devices_path, devices.render(kept))
         self._send(204, b"", "application/json", {})
+        self._device_session_alert(f"device {name!r} signed out")
 
     def _start_lab_replay(self) -> None:
         """POST /lab/replay with {} or {"version", "compare", "day"}: start the simulated
@@ -1940,6 +2048,17 @@ def _signin(cfg: Config) -> tuple[signin.Rules | None, signin.PublicKey | None]:
         max_lifetime_seconds=api.remote_signin_max_lifetime_seconds,
         clock_skew_seconds=api.remote_signin_clock_skew_seconds)
     return rules, key
+
+
+def _session_lifetimes(cfg: Config) -> sessions.Lifetimes:
+    """A signed-in device's token lifetimes; each positive, none longer than the next."""
+    api = cfg.api
+    lifetimes = sessions.Lifetimes(api.remote_access_token_seconds,
+                                   api.remote_refresh_token_seconds, api.remote_session_max_seconds)
+    if not 0 < lifetimes.access_seconds <= lifetimes.refresh_seconds <= lifetimes.session_seconds:
+        raise ConfigError("[api] remote_access_token_seconds, remote_refresh_token_seconds and "
+                          "remote_session_max_seconds must be positive and in that order")
+    return lifetimes
 
 
 def _used_grants(path: Path, now: datetime) -> dict[str, datetime]:

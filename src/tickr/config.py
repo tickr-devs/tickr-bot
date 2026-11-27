@@ -262,6 +262,9 @@ class ApiConfig:
     remote_signin_max_lifetime_seconds: int
     remote_signin_clock_skew_seconds: int
     remote_signin_used_file: str
+    remote_access_token_seconds: int
+    remote_refresh_token_seconds: int
+    remote_session_max_seconds: int
     remote_auth_max_addresses: int
     remote_auth_ipv6_prefix_length: int
     demo_port: int

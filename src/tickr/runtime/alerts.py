@@ -99,6 +99,10 @@ class AlertKind(StrEnum):
     # Raised by the API for each accepted entry-stop "off" or start-bot: the device (by name),
     # the port and the time, so a stolen device token shows up at once.
     RISK_COMMAND_USED = "risk-command-used"
+    # Raised by the API when a device signs in with tickr.bot, signs out, or is signed out
+    # because a retired refresh token came back: whoever controls tickr.bot's signing key could
+    # sign a device in, so every new device shows up at once.
+    DEVICE_SESSION = "device-session"
 
 
 class Delivery(StrEnum):

@@ -35,7 +35,7 @@ FRAME_BYTES = 3  # the 0x00 0x01 before the 0xFF run and the 0x00 after it (RFC 
 MIN_PADDING = 8  # RFC 8017, section 9.2 step 3: at least 8 bytes of 0xFF
 DER_HEADER = 2  # a DER element's tag byte and first length byte
 PEM = re.compile(r"-----BEGIN PUBLIC KEY-----\s*([A-Za-z0-9+/=\s]+?)\s*-----END PUBLIC KEY-----")
-B64URL = re.compile(r"^[A-Za-z0-9_-]*$")  # base64url without padding (RFC 7515, section 2)
+B64URL = re.compile(r"[A-Za-z0-9_-]*")  # base64url without padding (RFC 7515, section 2)
 # DER tags (X.690): SEQUENCE, INTEGER, BIT STRING, OBJECT IDENTIFIER, NULL.
 SEQUENCE, INTEGER, BIT_STRING, OID, NULL = 0x30, 0x02, 0x03, 0x06, 0x05
 LONG_LENGTH = 0x80  # a DER length byte with this bit set counts the length bytes that follow
@@ -116,7 +116,7 @@ def load_key(text: str) -> PublicKey:
 def check(token: str, key: PublicKey, rules: Rules, now: datetime) -> Grant:
     """The grant `token` carries, or SignInRefused with the first check that failed."""
     parts = token.split(".")
-    if len(parts) != JWS_PARTS or not all(p and B64URL.match(p) for p in parts):
+    if len(parts) != JWS_PARTS or not all(p and B64URL.fullmatch(p) for p in parts):
         raise SignInRefused("the grant is not a signed token")
     header, payload = _json(parts[0], "header"), _json(parts[1], "claims")
     if header.get("alg") != ALGORITHM or "crit" in header:
@@ -141,9 +141,13 @@ def check(token: str, key: PublicKey, rules: Rules, now: datetime) -> Grant:
         raise SignInRefused("the grant's times are missing")
     if expires - issued > rules.max_lifetime_seconds:
         raise SignInRefused("the grant lives longer than tickr.bot's tokens do")
-    if datetime.fromtimestamp(issued, UTC) > now + timedelta(seconds=rules.clock_skew_seconds):
+    try:
+        issued_at = datetime.fromtimestamp(issued, UTC)
+        expires_at = datetime.fromtimestamp(expires, UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise SignInRefused("the grant's times are out of range") from exc
+    if issued_at > now + timedelta(seconds=rules.clock_skew_seconds):
         raise SignInRefused("the grant is issued in the future; check the bot's clock")
-    expires_at = datetime.fromtimestamp(expires, UTC)
     if now >= expires_at:
         raise SignInRefused("the grant has expired; sign in again")
     client, account, jti = payload.get("client_id"), payload.get("sub"), payload.get("jti")

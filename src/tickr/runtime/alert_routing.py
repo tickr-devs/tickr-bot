@@ -64,6 +64,7 @@ _CRITICAL = frozenset({
     AlertKind.API_CREDENTIALS_UNEXPECTED,
     AlertKind.REMOTE_AUTH_BLOCKED,  # someone is guessing a device token or pairing code
     AlertKind.RISK_COMMAND_USED,  # entries turned back on or the bot started remotely
+    AlertKind.DEVICE_SESSION,  # a device signed in or out with tickr.bot
 })
 LOCKED: frozenset[AlertKind] = _CRITICAL | frozenset(
     FENCE_ALERTS[fence] for fence in ALERT_AT_ONCE if fence in FENCE_ALERTS)

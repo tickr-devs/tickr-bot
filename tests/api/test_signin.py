@@ -4,6 +4,7 @@ refusal."""
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -79,6 +80,23 @@ def test_a_grant_is_refused_from_its_expiry_on():
 def test_what_is_not_a_signed_token_is_refused(token):
     with pytest.raises(SignInRefused):
         signin.check(token, _key(), RULES, ISSUED)
+
+
+@pytest.mark.parametrize("times", [(10**18, 10**18 + 30), (-(10**18), -(10**18) + 30)])
+def test_times_out_of_range_are_a_refusal_not_a_crash(monkeypatch, times):
+    """Only a correctly signed grant reaches the times, so the signature check is stood in for."""
+    monkeypatch.setattr(signin, "_verified", lambda message, signature, key: True)
+    header, payload, signature = GRANTS["tokens"]["valid"].split(".")
+    claims = json.loads(signin._bytes(payload))
+    claims["iat"], claims["exp"] = times
+    encoded = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    with pytest.raises(SignInRefused, match="out of range"):
+        signin.check(f"{header}.{encoded}.{signature}", _key(), RULES, ISSUED)
+
+
+def test_a_trailing_newline_is_not_a_signed_token():
+    with pytest.raises(SignInRefused, match="not a signed token"):
+        signin.check(GRANTS["tokens"]["valid"] + "\n", _key(), RULES, ISSUED + timedelta(seconds=1))
 
 
 def test_a_signature_one_bit_off_is_refused():

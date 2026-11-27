@@ -102,36 +102,68 @@ an error or the log. A missing or empty `remote_hosts_file` (the default) turns 
 one, or a name in it that is not a lowercase DNS name, stops the API at start.
 
 `POST /session` (remote port only): signing a device in with the owner's tickr.bot account instead
-of a pairing link. The app signs in at tickr.bot (OAuth 2.0 authorization code with PKCE, client
-`tickr-ios` or `tickr-mac`, `resource=https://api.tickr.bot`) and gets a 60-second RS256 access
-token, the grant. Body exactly `{"grant": "<grant>", "name": "<device name>"}`, no bearer token.
+of a pairing link. The app signs in at tickr.bot on its own screens with the site's methods
+(passkey, email and password, email code, then a second factor) and asks tickr.bot for a grant:
+a 60-second RS256 token for `https://api.tickr.bot`, client `tickr-ios` or `tickr-mac`. Body
+exactly `{"grant": "<grant>", "name": "<device name>"}`, no bearer token.
 The bot checks the grant itself (`api/signin.py`) against the provider key pinned in
 `[api] remote_signin_key_file` and never calls tickr.bot. It checks the signature, `iss`, `aud`,
-`token_use` "access", the `scope`, the lifetime, `exp`, `client_id` among
-`remote_signin_clients` and `sub` among `remote_signin_accounts`. Each grant is redeemed once:
-its `jti` digest is kept in `remote_signin_used_file` until it expires. `200` with `paired-v1` for
-the named device (added, or replacing its earlier token). The name is the device's own: the iPhone
+`token_use` "access", the `scope`, the lifetime, `iat` and `exp` (out of range is a refusal),
+`client_id` among `remote_signin_clients` and `sub` among `remote_signin_accounts`. Each grant is
+redeemed once: its `jti` digest is kept in `remote_signin_used_file` until it expires. `200` with
+`session-v1` for the named device (added, or replacing its earlier tokens), and a
+`device-session` alert (docs/operations.md). The name is the device's own: the iPhone
 and iPad send their model and the start of the app's vendor id ("iPhone 3F2A1B7C"), the Mac its
 computer name with only the characters a device name may hold. Signing in under a name that is
-already listed replaces that device's token on purpose (signing the same device in again), so two
+already listed replaces that device's tokens on purpose (signing the same device in again), so two
 Macs with the same computer name share one entry and the later sign-in wins; rename one of them.
 The bot's own names `local` and `simulator` are refused (`400`). `iat` may be at most
 `remote_signin_clock_skew_seconds` ahead of the bot's clock. `401 unauthorized` with the one failed
 check as the cause, or when sign-in is off (`remote_signin_accounts` empty, the default), counted
-against the pair budget. `400` for any other body. `DELETE /session` with a device's token revokes
-that device's token, `204`; the device signs in again to come back.
+against the pair budget. `400` for any other body.
+
+`session-v1` is `{access_token, access_expires_in, refresh_token, refresh_expires_in}` (seconds
+from the answer). The access token is the device's bearer token on every route until it expires
+(`[api] remote_access_token_seconds`); then any route answers `401` with the cause "the access
+token has expired; renew it at POST /session/refresh". The refresh token lives
+`remote_refresh_token_seconds`, and no token outlives the sign-in itself,
+`remote_session_max_seconds` after `POST /session`: after that the device signs in again. Only
+SHA-256 digests of both tokens are kept in the device list; neither is logged or echoed.
+
+`POST /session/refresh` (remote port only, no bearer token): body exactly
+`{"refresh_token": "<token>"}`. `200` with a new `session-v1`: both tokens are new, and the
+presented refresh token is retired in the same atomic write of the device list, made before the
+answer is sent, so a device never has two live refresh tokens. A retired refresh token presented
+again means a copy of it exists: the device is signed out (removed from the list) and a
+`device-session` alert is raised. So is a refresh after the refresh token or the sign-in expired.
+Every `401` here counts against the pair budget; `400` for any other body. If the app sends a
+refresh and never sees the answer (a dropped connection), its refresh token may already be retired:
+the app does not resend it, and asks the owner to sign in again (no grace period for a lost answer,
+so a stolen token gets no second use either).
+
+`DELETE /session` with a device's access token revokes that device's access and refresh tokens
+together, `204`, and raises `device-session`; the device signs in again to come back. The owner's
+kill switch for a lost phone is `python -m tickr.api revoke --name <device>` on the bot's server
+(see the device commands above): it ends the sign-in at once.
+
+Which tokens expire: only those of a device signed in with tickr.bot. A device paired with `pair`
+and the Simulator's token (`pair-simulator`) do not expire; they stay until revoked.
 
 Turning sign-in on (once tickr.bot runs in production): put the provider's public key, converted
 from tickr.bot's JWKS to a SubjectPublicKeyInfo PEM, at `remote_signin_key_file`
 (`config/signin/tickr-bot-provider.pem`), then set `remote_signin_accounts` to the owner's tickr.bot
-account id (`sub`). With accounts listed and no usable key file the API refuses to start.
+account id (`sub`). With accounts listed and no usable key file the API refuses to start, so the
+deploy that sets accounts must also ship the key file next to `bot.toml`. Before that, measure the
+clock offset of both servers (`chronyc tracking` on the bot's and on tickr.bot's) and write it,
+with the margin, into the comment of `remote_signin_clock_skew_seconds`.
 
 ### Failed authentication limit
 
 The remote port counts failed checks per client address (`api/authlimit.py`): a `401` on any
 route (wrong, missing or unpaired token) counts against the token budget, `[api]
 remote_auth_failures` per `remote_auth_window_seconds`; a `401` at `POST /pair` (no pairing
-waiting, expired or wrong code) or `POST /session` (a refused grant) against the stricter pair budget, `remote_pair_failures` per
+waiting, expired or wrong code), `POST /session` (a refused grant) or `POST /session/refresh` (a
+refused refresh token) against the stricter pair budget, `remote_pair_failures` per
 `remote_pair_window_seconds` (at least the code's lifetime). A `400` (malformed body) tests no
 credential and counts nothing. An address over a budget gets `429 auth_rate_limited` with
 `Retry-After` (seconds until its oldest counted failure leaves the window) before its token or

@@ -553,6 +553,17 @@ remote_signin_clock_skew_seconds = 5
 # File holding the SHA-256 (hex) of each redeemed grant's id (`jti`) until that grant expires, relative to data_dir,
 # written 0600, so a grant buys one token only, across restarts too; read and written by the api server.
 remote_signin_used_file = "remote-signin-used.json"
+# How long a signed-in device's access token (its bearer token) lives, seconds: 15 minutes, so a copied access token
+# is worth little and a revoked device is shut out within that time; the app renews it with its refresh token before
+# then (owner 2026-11-27: a token that expires and refreshes); read by the api server (POST /session, /session/refresh).
+remote_access_token_seconds = 900
+# How long a refresh token lives from its issue, seconds: 30 days, so a device used at least once a month stays signed
+# in and one left unused for longer signs in again; each refresh issues a new one and retires the old; read by the api
+# server (POST /session, /session/refresh).
+remote_refresh_token_seconds = 2592000
+# How long one sign-in lasts at most, however often it refreshes, seconds: 90 days, so every device proves the owner's
+# passkey or second factor at tickr.bot again at least once a quarter; read by the api server (POST /session).
+remote_session_max_seconds = 7776000
 # Most client addresses each budget tracks, count. A tracked address takes at most about 650 bytes (measured: a /64 key
 # and 10 failures), so the token table stays under about 42 MB and the /pair table under about 26 MB. When every
 # tracked address still counts, a new address is refused 429 (fail closed) instead of checked unlimited: an attacker

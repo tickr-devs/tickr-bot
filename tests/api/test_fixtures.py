@@ -97,6 +97,7 @@ from tickr.api.contract import (
     SessionKind,
     SessionSettings,
     SessionTimesV1,
+    SessionV1,
     SettingDifferenceV1,
     SettingsV1,
     SizeBinding,
@@ -217,6 +218,11 @@ def documents() -> dict[str, object]:
         "bot-start-v1": BotStartV1(T0, True),
         # An example only: real tokens never leave the phone's Keychain and the Mac's memory.
         "paired-v1": PairedV1(token="example-token-not-a-secret_0123456789-abcdef"),
+        "session-v1": SessionV1(
+            access_token="example-access-not-a-secret_0123456789-abcdef",
+            access_expires_in=900,
+            refresh_token="0123456789abcdef0123456789abcdef.example-refresh-not-a-secret_0123",
+            refresh_expires_in=2592000),
         "command-accepted-v1.warning": CommandAcceptedV1(
             command=command, warning="the bot does not look alive; the command runs only if "
                                      "the bot reads it before it expires"),
