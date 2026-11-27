@@ -295,10 +295,12 @@ def _watchdog(config_path: Path) -> int:
     if cfg.live_activity.enabled:
         # Imported only here: the bot's process never loads the Live Activity publisher.
         from tickr.runtime import live_activity
-        from tickr.runtime.alerts import ApnsClient
+        from tickr.runtime.alerts import ApnsClient, ended_to_feed
         from tickr.runtime.push_tokens import PushTokenStore
         store = PushTokenStore(cfg.root / cfg.run.data_dir / cfg.alerts.push_tokens_file)
-        live_activity.start(cfg, ApnsClient(cfg.alerts, store), journal.write, WATCHDOG_NOW)
+        client = ApnsClient(cfg.alerts, store,
+                            ended=ended_to_feed(feed_path(cfg.root, cfg.run.data_dir, cfg.alerts)))
+        live_activity.start(cfg, client, journal.write, WATCHDOG_NOW)
     status_path = cfg.root / cfg.run.data_dir / cfg.api.status_file
     sentinel = watchdog.Sentinel(cfg, alerter=alerter, journal=journal, lock_path=lock_path,
                                  status_path=status_path, data_dir=cfg.root / cfg.run.data_dir,

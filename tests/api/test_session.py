@@ -378,6 +378,11 @@ def _session(settings):
     return device.session
 
 
+def _session_name(settings):
+    (device,) = devices.parse(settings.devices_path.read_text("utf-8"))
+    return device.name
+
+
 def test_a_push_registration_expires_when_the_device_could_no_longer_refresh(settings, serve):
     """The push token's expiry is the moment `sessions.refresh` would refuse: the live refresh
     token's end (never past the sign-in's own end). A refresh moves it forward."""
@@ -394,8 +399,9 @@ def test_a_push_registration_expires_when_the_device_could_no_longer_refresh(set
     # Never refreshed again: one instant before the refresh would be refused, both are alive;
     # at that instant the refresh is refused and the push token is dropped, with no API call.
     store = settings.alerts.push_tokens
-    assert store.drop_expired(renewed - timedelta(microseconds=1)) == 0
-    assert store.drop_expired(renewed) == 1 and push_tokens(settings) == {}
+    assert store.drop_expired(renewed - timedelta(microseconds=1)) == ()
+    assert store.drop_expired(renewed) == (_session_name(settings),)
+    assert push_tokens(settings) == {}
     clock.now = renewed
     resp, payload = refresh(server, second["refresh_token"])
     assert resp.status == 401 and "expired" in doc(payload)["cause"]

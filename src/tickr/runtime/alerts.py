@@ -461,6 +461,31 @@ class Recipients(NamedTuple):
     failures: tuple[str, ...]
 
 
+# Told the names of the devices whose push tokens a sender just dropped because their sign-in
+# ended (`ApnsClient.devices`); `ended_to_feed` is the one used outside tests.
+EndedSink = Callable[[tuple[str, ...]], None]
+# The feed line's title for an ended sign-in: the watchdog relays a feed line whose title ends
+# with " device-session" (`watchdog._relayed_text`), as the API's own device-session alerts.
+ENDED_TITLE = "Tickr: " + AlertKind.DEVICE_SESSION.value
+
+
+def _ignore_ended(_names: tuple[str, ...]) -> None:
+    return None
+
+
+def ended_to_feed(feed: Path) -> EndedSink:
+    """One `device-session` line per device in the alerts feed: its sign-in ended because it
+    stopped refreshing, so nothing is pushed to it again. The watchdog relays the line to the
+    owner. Raises NotifyError when the feed cannot be written."""
+    def sink(names: tuple[str, ...]) -> None:
+        notifier = FeedNotifier(feed)
+        for name in names:
+            notifier.notify(ENDED_TITLE, (
+                f"device {name!r} signed out: it stopped refreshing, so its sign-in ended and "
+                "nothing is pushed to it any more; it signs in again to get alerts back"))
+    return sink
+
+
 class ApnsClient:
     """One APNs POST to one registered device of the Tickr apps (`push_tokens.PushTokenStore`),
     to the APNs host of its build's environment, and only for a bundle id in `[alerts]
@@ -473,8 +498,10 @@ class ApnsClient:
 
     def __init__(self, config: AlertsConfig, store: PushTokenStore,
                  environ: Mapping[str, str] = os.environ, transport: Transport = h2_post,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time,
+                 ended: EndedSink = _ignore_ended) -> None:
         self._config = config
+        self._ended = ended
         self._store = store
         self._environ = environ
         self._transport = transport
@@ -485,8 +512,9 @@ class ApnsClient:
     def devices(self, kind: PushTokenKind) -> Recipients:
         """The live registered tokens of `kind`, in a stable order: the one place every APNs
         sender (alerts, Live Activity) takes its recipients from. Tokens whose device's sign-in
-        has ended are left out and dropped from the store; a failed drop is named in
-        `failures`, the tokens are left out all the same. NotifyError while APNs is not set up
+        has ended are left out and dropped from the store, and the devices whose tokens this
+        call dropped are told to `ended` once; a failed drop or report is named in `failures`,
+        the tokens are left out all the same. NotifyError while APNs is not set up
         or the store cannot be read."""
         missing = apns_missing(self._config, self._environ)
         if missing or not apns_on(self._config, self._environ):
@@ -501,9 +529,15 @@ class ApnsClient:
         if any(token.expired(now) for token in tokens.values()):
             # A signed-out device (it stopped refreshing): never pushed to, dropped or not.
             try:
-                self._store.drop_expired(now)
+                dropped = self._store.drop_expired(now)
             except (OSError, StoreError) as exc:
                 failures.append(f"tokens of an ended sign-in not dropped: {type(exc).__name__}")
+            else:
+                if dropped:
+                    try:
+                        self._ended(dropped)
+                    except NotifyError as exc:
+                        failures.append(f"an ended sign-in not reported: {exc}")
         live = [token for _key, token in sorted(tokens.items())
                 if token.kind is kind and not token.expired(now)]
         return Recipients(live, tuple(failures))
@@ -556,8 +590,9 @@ class ApnsNotifier:
     def __init__(self, config: AlertsConfig, store: PushTokenStore,
                  environ: Mapping[str, str] = os.environ, transport: Transport = h2_post,
                  critical: Callable[[str], bool] = _never_critical,
-                 clock: Callable[[], float] = time.time) -> None:
-        self._client = ApnsClient(config, store, environ, transport, clock)
+                 clock: Callable[[], float] = time.time,
+                 ended: EndedSink = _ignore_ended) -> None:
+        self._client = ApnsClient(config, store, environ, transport, clock, ended)
         self._critical = critical
         # Whether "no device registered" was already reported by this process; set again
         # once a device is seen, so the journal names it once per empty spell, not per alert.
@@ -753,8 +788,9 @@ def default_notifier(config: AlertsConfig, environ: Mapping[str, str] = os.envir
         from tickr.runtime.alert_routing import LOCKED
         locked = frozenset(kind.value for kind in LOCKED)
         store = PushTokenStore(data_dir / config.push_tokens_file)
-        background.append((PUSH, ApnsNotifier(config, store, environ,
-                                              critical=locked.__contains__)))
+        background.append((PUSH, ApnsNotifier(
+            config, store, environ, critical=locked.__contains__,
+            ended=_ignore_ended if feed is None else ended_to_feed(feed))))
     if feed is not None:
         background.append((FEED, FeedNotifier(feed)))
     return Channels((), tuple(background))
