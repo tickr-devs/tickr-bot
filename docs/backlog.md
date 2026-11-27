@@ -470,6 +470,8 @@ Answered (recorded in `docs/decisions.md`):
   low disk is caught by preflight's `[runtime] min_free_disk_mb` check (2026-11-16).
 - **Q5** A new listing without relative-volume history is refused with a typed cause (2026-11-16).
 - **Q6** iMessage is enough before unattended days; app push waits for v5 (2026-11-16). Status: superseded (2026-11-25): the owner bought the Apple Developer Program, and app push is being built (#828).
+- **Q7** The pattern day trader rule does not apply to the owner's Webull margin account; the bot
+  adds no day-trade limit of its own (2026-11-27).
 
 ## Done
 
