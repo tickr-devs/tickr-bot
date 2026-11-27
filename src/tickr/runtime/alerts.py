@@ -453,72 +453,42 @@ def _never_critical(_kind: str) -> bool:
     return False
 
 
-class ApnsNotifier:
-    """One push per registered device of the Tickr apps (`push_tokens.PushTokenStore`), to the
-    APNs host of its build's environment, and only for a bundle id in `[alerts] apns_topics`.
-    One attempt per device, never retried. A token APNs says is gone (410, or BadDeviceToken)
-    is removed and the removal named in the error, which the journal records. Errors name the
-    device by `short_hash`, the HTTP status and Apple's reason only: never a device token, the
-    key or the provider token."""
+class ApnsClient:
+    """One APNs POST to one registered device of the Tickr apps (`push_tokens.PushTokenStore`),
+    to the APNs host of its build's environment, and only for a bundle id in `[alerts]
+    apns_topics`; shared by the alert push (`ApnsNotifier`) and the Live Activity publisher
+    (`runtime/live_activity.py`). One attempt, never retried. A token APNs says is gone (410, or
+    BadDeviceToken) is removed and the removal named in the error, which the caller journals.
+    Errors name the device by `short_hash`, the HTTP status and Apple's reason only: never a
+    device token, the key or the provider token."""
 
     def __init__(self, config: AlertsConfig, store: PushTokenStore,
                  environ: Mapping[str, str] = os.environ, transport: Transport = h2_post,
-                 critical: Callable[[str], bool] = _never_critical,
                  clock: Callable[[], float] = time.time) -> None:
         self._config = config
         self._store = store
         self._environ = environ
         self._transport = transport
-        self._critical = critical
         self._timeout = float(config.notification_timeout_seconds)
         self._provider = ProviderToken(config, environ, clock)
-        # Whether "no device registered" was already reported by this process; set again
-        # once a device is seen, so the journal names it once per empty spell, not per alert.
-        self._reported_empty = False
-        self._empty_lock = threading.Lock()
 
-    def notify(self, title: str, text: str) -> None:
-        self.notify_kind(None, title, text)
-
-    def notify_kind(self, kind: str | None, title: str, text: str) -> None:
-        try:
-            self._push(kind, title, text)
-        except NotifyError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - a push failure never breaks the caller
-            # Only the type: an unexpected error's message may hold a device or provider token.
-            # `from None` drops the chain.
-            raise NotifyError(f"apns failed: {type(exc).__name__}") from None
-
-    def _push(self, kind: str | None, title: str, text: str) -> None:
+    def devices(self, kind: PushTokenKind) -> list[PushToken]:
+        """The registered tokens of `kind`, in a stable order. NotifyError while APNs is not
+        set up or the store cannot be read."""
         missing = apns_missing(self._config, self._environ)
         if missing or not apns_on(self._config, self._environ):
             raise NotifyError("apns-missing: " + ", ".join(missing or apns_names(self._config))
                               + " not set")
         try:
-            devices = {key: token for key, token in self._store.read().items()
-                       if token.kind is PushTokenKind.ALERT}  # Live Activity tokens: not here
+            tokens = self._store.read()
         except StoreError as exc:
             raise NotifyError(f"apns-store-unreadable: {exc}") from None
-        with self._empty_lock:
-            if not devices:
-                if self._reported_empty:
-                    raise NoRecipient("apns-no-device: no app has registered a push token")
-                self._reported_empty = True
-                raise NotifyError("apns-no-device: no app has registered a push token")
-            self._reported_empty = False
-        payload = apns_payload(kind, title, text, kind is not None and self._critical(kind))
-        failures = []
-        for _key, device in sorted(devices.items()):
-            error = self._send(device, payload)
-            if error is not None:
-                failures.append(f"device {short_hash(device.token)}: {error}")
-        if failures:
-            raise NotifyError("apns: " + "; ".join(failures))
+        return [token for _key, token in sorted(tokens.items()) if token.kind is kind]
 
-
-    def _send(self, device: PushToken, payload: bytes) -> str | None:
-        """One push to one device; the error text, or None when APNs accepted it."""
+    def send(self, device: PushToken, payload: bytes, *, push_type: str, priority: str,
+             topic_suffix: str = "") -> str | None:
+        """One push to one device on topic `<bundle id><topic_suffix>`; the error text, or None
+        when APNs accepted it."""
         if device.bundle_id not in self._config.apns_topics:
             return "topic-refused: the bundle id is not in [alerts] apns_topics"
         host = self._config.apns_hosts.get(device.environment)
@@ -528,8 +498,9 @@ class ApnsNotifier:
             jwt = self._provider.get()
         except NotifyError as exc:
             return str(exc)
-        headers = [("authorization", f"bearer {jwt}"), ("apns-topic", device.bundle_id),
-                   ("apns-push-type", APNS_PUSH_TYPE), ("apns-priority", APNS_PRIORITY),
+        headers = [("authorization", f"bearer {jwt}"),
+                   ("apns-topic", device.bundle_id + topic_suffix),
+                   ("apns-push-type", push_type), ("apns-priority", priority),
                    ("content-type", "application/json")]
         try:
             status, body = self._transport(host, APNS_PATH + device.token,
@@ -553,6 +524,54 @@ class ApnsNotifier:
             if removed:
                 return f"{text} (token removed)"
         return text
+
+
+class ApnsNotifier:
+    """The alert push: one notification per device's `alert` token (`ApnsClient`). The Live
+    Activity tokens are never pushed to here."""
+
+    def __init__(self, config: AlertsConfig, store: PushTokenStore,
+                 environ: Mapping[str, str] = os.environ, transport: Transport = h2_post,
+                 critical: Callable[[str], bool] = _never_critical,
+                 clock: Callable[[], float] = time.time) -> None:
+        self._client = ApnsClient(config, store, environ, transport, clock)
+        self._critical = critical
+        # Whether "no device registered" was already reported by this process; set again
+        # once a device is seen, so the journal names it once per empty spell, not per alert.
+        self._reported_empty = False
+        self._empty_lock = threading.Lock()
+
+    def notify(self, title: str, text: str) -> None:
+        self.notify_kind(None, title, text)
+
+    def notify_kind(self, kind: str | None, title: str, text: str) -> None:
+        try:
+            self._push(kind, title, text)
+        except NotifyError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a push failure never breaks the caller
+            # Only the type: an unexpected error's message may hold a device or provider token.
+            # `from None` drops the chain.
+            raise NotifyError(f"apns failed: {type(exc).__name__}") from None
+
+    def _push(self, kind: str | None, title: str, text: str) -> None:
+        devices = self._client.devices(PushTokenKind.ALERT)
+        with self._empty_lock:
+            if not devices:
+                if self._reported_empty:
+                    raise NoRecipient("apns-no-device: no app has registered a push token")
+                self._reported_empty = True
+                raise NotifyError("apns-no-device: no app has registered a push token")
+            self._reported_empty = False
+        payload = apns_payload(kind, title, text, kind is not None and self._critical(kind))
+        failures = []
+        for device in devices:
+            error = self._client.send(device, payload, push_type=APNS_PUSH_TYPE,
+                                      priority=APNS_PRIORITY)
+            if error is not None:
+                failures.append(f"device {short_hash(device.token)}: {error}")
+        if failures:
+            raise NotifyError("apns: " + "; ".join(failures))
 
 
 class FeedNotifier:

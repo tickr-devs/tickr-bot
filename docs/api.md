@@ -1250,7 +1250,7 @@ sender).
   and the `device-session` alert (or the command) says the tokens were kept.
 - `kind` (Apple's token types): `alert`, the device token alerts are pushed to (the default);
   `activity_start`, a Live Activity push-to-start token; `activity_update`, one Live Activity's
-  update token. The activity kinds are stored only: nothing sends to them yet (below).
+  update token. The activity kinds are pushed to by the Live Activity publisher (below).
 - Body of POST, exactly: `token` (the device token in hex), `environment` (the build's
   `aps-environment`: `development` for Xcode and debug builds, `production` for TestFlight and
   the App Store; the keys of `[alerts] apns_hosts`), `bundle_id` (one of `[alerts] apns_topics`:
@@ -1268,11 +1268,40 @@ sender).
   alert kind, and `interruption-level` `time-sensitive` for locked kinds. A `410` or
   `BadDeviceToken` answer removes that device's token; the journal says so.
 
-Planned: Live Activity. A sender for the `activity_start` and `activity_update` tokens, built
-once the activity's content-state schema is settled with the app: topic
-`<bundle_id>.push-type.liveactivity`, header `apns-push-type: liveactivity`; updates driven by
-events (a fill, the stop confirmed or not, a pause, the close) plus a P&L refresh whose interval
-will live in config.
+### Live Activity (pushed, not served)
+
+The iPhone Live Activity of a trading day. Code: `src/tickr/runtime/live_activity.py`. Off by
+default (`[live_activity] enabled = false`); config load refuses `enabled = true` while the
+`[alerts] apns_*_variable` name no variable or `app_bundle_id` is not one of `apns_topics`.
+
+- Where it runs: a daemon thread of the watchdog process, which already runs all day apart
+  from the bot, already holds the APNs variables, and already reads the status file. Every
+  `[api] poll_seconds` it reads `status-v1` (and `account-v1` for the broker's last price and
+  unrealized P&L) and compares it with what it last pushed. The bot's process never loads it.
+- Topic `<app_bundle_id>.push-type.liveactivity` (`bot.tickr.ios`), header
+  `apns-push-type: liveactivity`, priority `10` for an alarm and the end, `5` otherwise. Start
+  goes to the `activity_start` tokens, update and end to the `activity_update` tokens, of that
+  bundle id only. One attempt per device, never retried; `410` or `BadDeviceToken` drops the
+  token. Each push is one `live-activity` line in the watchdog journal.
+- Payload: `aps {timestamp, event, content-state}`; on `start` also `attributes-type`
+  (`[live_activity] attributes_type`) and `attributes` `{}`; on `end` also `dismissal-date` =
+  now + `end_linger_seconds` when that is above 0.
+- Events: `start` when a position is open and no activity is live (the day's first fill, or
+  the first after the activity ended); `update` when the state, the day's result, the positions,
+  a stop price or a stop's confirmation changes, and, with `pnl_refresh_seconds` above 0, at
+  most that often for prices alone; `end` when flat. A missing or stale status file pushes
+  nothing. The last push is kept in `[live_activity] state_file`, written before the push.
+- content-state (agreed with the app, mockup v138; `ContentState` is the one place it lives):
+  `state` (`open`, `paused` = an entry block with `attention`, `alarm` = a position's stop not
+  verified while the bot alerts `unprotected-position`, `flat`); `day_pnl_cents` (the day's
+  result as the apps show it: `result_today_net_usd`, gross while fees are unknown);
+  `positions` `[{symbol, last, stop, target, unrealized_cents}]` with prices as decimal
+  strings, `last` and `unrealized_cents` from the broker's account read (null while it lacks
+  them or is stale), `stop` null without a stop, `target` always null until the bot has a
+  profit target (backlog T13); `stops_confirmed_at` (unix seconds of the last broker read with
+  every stop verified; null before the first); `reason_code` (paused: `entry_block.cause`;
+  alarm: the unprotected fence's reason code); `alarm_symbol` (alarm: the first position whose
+  stop is not verified).
 
 ### GET /journal (read-only)
 

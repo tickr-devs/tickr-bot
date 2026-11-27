@@ -565,6 +565,16 @@ class AlertsConfig:
 
 
 @dataclass(frozen=True)
+class LiveActivityConfig:
+    enabled: bool
+    app_bundle_id: str
+    attributes_type: str
+    pnl_refresh_seconds: int
+    end_linger_seconds: int
+    state_file: str
+
+
+@dataclass(frozen=True)
 class EnvironmentConfig:
     trading_enabled: bool
     requires_owner_authorization: bool
@@ -608,6 +618,7 @@ class Config:
     api: ApiConfig
     runtime: RuntimeConfig
     alerts: AlertsConfig
+    live_activity: LiveActivityConfig
     market_data: MarketDataConfig
     chart: ChartConfig
     observers: ObserversConfig
@@ -643,6 +654,7 @@ _SECTIONS: dict[str, type] = {
     "api": ApiConfig,
     "runtime": RuntimeConfig,
     "alerts": AlertsConfig,
+    "live_activity": LiveActivityConfig,
     "market_data": MarketDataConfig,
     "chart": ChartConfig,
     "observers": ObserversConfig,
@@ -1098,6 +1110,7 @@ def loads(raw_bytes: bytes, path: Path, root: Path | str | None = None) -> Confi
             raise ConfigError("[alerts] apns_token_lifetime_seconds must be above 0")
     if not alerts_cfg.push_tokens_file.strip():
         raise ConfigError("[alerts] push_tokens_file must name a file")
+    check_live_activity(built["live_activity"], alerts_cfg)
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:
         raise ConfigError("[strategy] the active strategy cannot also be an observer")
@@ -1125,6 +1138,22 @@ def check_sizing(sizing: SizingConfig, risk: RiskConfig, model: ModelConfig) -> 
     if not 0 < sizing.min_usd <= sizing.max_usd <= risk.position_notional_cap_usd:
         raise ConfigError("[confidence_sizing] min_usd and max_usd must satisfy "
                           "0 < min_usd <= max_usd <= [risk] position_notional_cap_usd")
+
+
+def check_live_activity(live: LiveActivityConfig, alerts: AlertsConfig) -> None:
+    """[live_activity]: never negative; switched on only with APNs set up for its app."""
+    if live.pnl_refresh_seconds < 0 or live.end_linger_seconds < 0:
+        raise ConfigError("[live_activity] pnl_refresh_seconds and end_linger_seconds must be 0 "
+                          "(off) or above")
+    if not live.enabled:
+        return
+    if not alerts.apns_key_id_variable.strip():
+        raise ConfigError("[live_activity] enabled needs APNs: [alerts] apns_*_variable name "
+                          "no variable")
+    if live.app_bundle_id not in alerts.apns_topics:
+        raise ConfigError("[live_activity] app_bundle_id must be one of [alerts] apns_topics")
+    if not live.attributes_type.strip() or not live.state_file.strip():
+        raise ConfigError("[live_activity] attributes_type and state_file must not be empty")
 
 
 def check_history_share(orders: OrdersConfig, name: str, env: EnvironmentConfig) -> None:
