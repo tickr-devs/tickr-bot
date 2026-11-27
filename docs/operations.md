@@ -644,12 +644,15 @@ device name, the tickr.bot account and app), signs out (`DELETE /session`), or i
 the bot because a refresh token that was already used came back or its sign-in expired
 (docs/api.md, `POST /session/refresh`). It names the device and the time, never a token or grant.
 A sign-in you did not make means someone holds your tickr.bot sign-in or tickr.bot's signing key:
-revoke the device now (`python -m tickr.api revoke --name <device>`), change your tickr.bot
-password and passkeys, and set `remote_signin_accounts = []` until it is understood. A device
+revoke the device now (`python -m tickr.api revoke --name <device>`) first, change your
+tickr.bot password and passkeys, and set `remote_signin_accounts = []` until it is understood.
+Emptying the accounts only refuses new sign-ins: a device already signed in keeps its tokens
+until it is revoked, so revoking comes first. A device
 signed out for a reused refresh token is either a copy of that token in use, or the app lost the
 answer to its own refresh (a dropped connection); sign in again on the device, and if it happens
 again without a network fault, treat it as a stolen token. It cannot be switched off and goes to
-the alerts feed.
+the alerts feed; the watchdog relays each one to Telegram, marked `RELAYED from the API:` with the
+API's time (`runtime/watchdog.py`, `Sentinel.relay`).
 
 ### `broker-reads-failing`
 

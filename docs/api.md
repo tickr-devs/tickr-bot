@@ -151,9 +151,12 @@ kill switch for a lost phone is `python -m tickr.api revoke --name <device>` on 
 Which tokens expire: only those of a device signed in with tickr.bot. A device paired with `pair`
 and the Simulator's token (`pair-simulator`) do not expire; they stay until revoked.
 
-Turning sign-in on (once tickr.bot runs in production): put the provider's public key, converted
-from tickr.bot's JWKS to a SubjectPublicKeyInfo PEM, at `remote_signin_key_file`
-(`config/signin/tickr-bot-provider.pem`), then set `remote_signin_accounts` to the owner's tickr.bot
+Turning sign-in on (once tickr.bot runs in production): download tickr.bot's grant key, which the
+site serves as a SubjectPublicKeyInfo PEM at `https://tickr.bot/api/app/grant-key.pem` (there is
+no JWKS), compare its thumbprint with the `kid` of a grant tickr.bot issued, and put it at
+`remote_signin_key_file` (`config/signin/tickr-bot-provider.pem`). Make sure the watchdog runs:
+it relays every `device-session` alert from the alerts feed to Telegram (the API holds no
+credential variable, so it cannot send one itself). Then set `remote_signin_accounts` to the owner's tickr.bot
 account id (`sub`). With accounts listed and no usable key file the API refuses to start, so the
 deploy that sets accounts must also ship the key file next to `bot.toml`. Before that, measure the
 clock offset of both servers (`chronyc tracking` on the bot's and on tickr.bot's) and write it,
