@@ -2,7 +2,8 @@
 
 Where each alert kind goes is the owner's routing file (`runtime/alert_routing.py`); whether a
 channel works on this machine comes from the latest preflight's checks (`alert-telegram` for
-Telegram). Names only: the Telegram token and chat id are never read here.
+Telegram, `alert-push` for the apps' push). Names only: the Telegram token and chat id and the
+APNs key are never read here.
 """
 
 from __future__ import annotations
@@ -23,21 +24,40 @@ from tickr.runtime.alert_routing import (
 )
 from tickr.runtime.alerts import AlertKind
 from tickr.runtime.preflight import CheckName, record_path
+from tickr.runtime.push_tokens import PushToken, PushTokenStore
 
-# The preflight checks each channel needs to pass; push has no delivery in the bot yet.
+# The preflight checks each channel needs to pass.
 NEEDS: dict[RouteChannel, tuple[str, ...]] = {
     RouteChannel.TELEGRAM: (CheckName.ALERT_TELEGRAM.value,),
+    RouteChannel.PUSH: (CheckName.ALERT_PUSH.value,),
 }
+# Channels whose check exists only once their variables are set (runtime/preflight.py).
+OPTIONAL = frozenset({RouteChannel.TELEGRAM, RouteChannel.PUSH})
 
 
 @dataclass(frozen=True)
 class AlertsSettings:
     routing: RoutingStore  # [alerts] routing_file under data_dir, the one writer
     preflight_record: Path  # [runtime] preflight_result_file under data_dir
+    push_tokens: PushTokenStore  # [alerts] push_tokens_file under data_dir: POST /push-token
+    apns_topics: tuple[str, ...]  # [alerts] apns_topics: the only bundle ids registered
+    apns_environments: frozenset[str]  # keys of [alerts] apns_hosts: the only environments
 
     @classmethod
     def from_config(cls, config: Config) -> AlertsSettings:
-        return cls(RoutingStore(routing_path(config)), record_path(config))
+        data = config.root / config.run.data_dir
+        return cls(RoutingStore(routing_path(config)), record_path(config),
+                   PushTokenStore(data / config.alerts.push_tokens_file),
+                   config.alerts.apns_topics, frozenset(config.alerts.apns_hosts))
+
+
+def push_token_document(token: PushToken | None,
+                        kind: api.PushTokenKind) -> api.PushTokenV1:
+    """POST and DELETE /push-token: the device's registration of `kind`, never its token."""
+    if token is None:
+        return api.PushTokenV1(False, kind, None, None, None, None)
+    return api.PushTokenV1(True, token.kind, token.environment, token.bundle_id,
+                           token.platform, token.registered_at)
 
 
 def _channels(record: Path) -> tuple[api.AlertChannelV1, ...]:
@@ -52,8 +72,8 @@ def _channels(record: Path) -> tuple[api.AlertChannelV1, ...]:
             missing = (api.AlertChannelCause.NO_PREFLIGHT if cause == NO_PREFLIGHT
                        else api.AlertChannelCause.PREFLIGHT_UNREADABLE)
             rows.append(api.AlertChannelV1(channel, False, missing))
-        elif channel is RouteChannel.TELEGRAM and needs[0] not in passed:
-            # The check exists only once a Telegram variable is set (runtime/preflight.py).
+        elif channel in OPTIONAL and needs[0] not in passed:
+            # The check exists only once a variable of the channel is set.
             rows.append(api.AlertChannelV1(channel, False, api.AlertChannelCause.NOT_CONFIGURED))
         elif all(passed.get(name) is True for name in needs):
             rows.append(api.AlertChannelV1(channel, True, None))

@@ -11,8 +11,8 @@ every alerting process on each alert. It only ever turns a (kind, channel) cell 
   one off is refused (`RoutingRefused`, cause `locked-kind`).
 
 Routable channels are the owner-facing ones (`RouteChannel`); the alerts feed file (a Claude
-session) is not routable and always gets every alert. A channel without a delivery
-in this code yet (`push`) can be switched and stored, and has no effect until it exists.
+session) is not routable and always gets every alert. `push` is the apps' APNs push
+(`alerts.ApnsNotifier`), present once its variables are set.
 """
 
 from __future__ import annotations
@@ -27,14 +27,14 @@ from pathlib import Path
 from tickr.api.contract import AlertChannel as RouteChannel
 from tickr.api.contract import AlertGroup, write_atomic
 from tickr.config import AlertsConfig, Config
-from tickr.runtime.alerts import TELEGRAM, AlertKind
+from tickr.runtime.alerts import PUSH, TELEGRAM, AlertKind
 from tickr.runtime.watch import ALERT_AT_ONCE, FENCE_ALERTS
 
 ROUTING_SCHEMA_VERSION = 1
 
 
-# The delivery (its name in `alerts.Channels`) behind each routable channel; push has none yet.
-DELIVERY: Mapping[RouteChannel, str] = {RouteChannel.TELEGRAM: TELEGRAM}
+# The delivery (its name in `alerts.Channels`) behind each routable channel.
+DELIVERY: Mapping[RouteChannel, str] = {RouteChannel.TELEGRAM: TELEGRAM, RouteChannel.PUSH: PUSH}
 
 
 # Kinds that need the owner now: never switched off on any channel. Every kind an

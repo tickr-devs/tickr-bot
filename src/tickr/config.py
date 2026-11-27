@@ -555,6 +555,13 @@ class AlertsConfig:
     bot_token_variable: str
     chat_id_variable: str
     telegram_host: str
+    push_tokens_file: str
+    apns_key_id_variable: str
+    apns_team_id_variable: str
+    apns_key_path_variable: str
+    apns_hosts: dict[str, str]
+    apns_topics: tuple[str, ...]
+    apns_token_lifetime_seconds: int
 
 
 @dataclass(frozen=True)
@@ -686,6 +693,10 @@ def _coerce(where: str, value: Any, target: Any) -> Any:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             raise ConfigError(f"{where}: expected a list of strings, got {value!r}")
         return tuple(value)
+    if target == dict[str, str]:
+        if not isinstance(value, dict) or not all(isinstance(v, str) for v in value.values()):
+            raise ConfigError(f"{where}: expected a table of strings, got {value!r}")
+        return dict(value)
     if target == dict[str, tuple[int, Decimal]]:
         if not isinstance(value, dict):
             raise ConfigError(f"{where}: expected a table of route limits, got {value!r}")
@@ -1070,6 +1081,23 @@ def loads(raw_bytes: bytes, path: Path, root: Path | str | None = None) -> Confi
                           "variable or both be empty")
     if alerts_cfg.bot_token_variable and not alerts_cfg.telegram_host.strip():
         raise ConfigError("[alerts] telegram_host must name a host while Telegram has variables")
+    apns_names = (alerts_cfg.apns_key_id_variable, alerts_cfg.apns_team_id_variable,
+                  alerts_cfg.apns_key_path_variable)
+    if any(name.strip() for name in apns_names) and not all(name.strip() for name in apns_names):
+        raise ConfigError("[alerts] apns_key_id_variable, apns_team_id_variable and "
+                          "apns_key_path_variable must all name a variable or all be empty")
+    if apns_names[0].strip():
+        if not alerts_cfg.apns_hosts or not all(h.strip()
+                                                for h in alerts_cfg.apns_hosts.values()):
+            raise ConfigError("[alerts] apns_hosts must name a host for each APNs environment "
+                              "while APNs has variables")
+        if not alerts_cfg.apns_topics or not all(t.strip() for t in alerts_cfg.apns_topics):
+            raise ConfigError("[alerts] apns_topics must list the apps' bundle ids while APNs "
+                              "has variables")
+        if alerts_cfg.apns_token_lifetime_seconds <= 0:
+            raise ConfigError("[alerts] apns_token_lifetime_seconds must be above 0")
+    if not alerts_cfg.push_tokens_file.strip():
+        raise ConfigError("[alerts] push_tokens_file must name a file")
     strategy: StrategySelection = built["strategy"]
     if strategy.active in strategy.observers:
         raise ConfigError("[strategy] the active strategy cannot also be an observer")
@@ -1203,7 +1231,10 @@ def credential_variables(config: Config) -> frozenset[str]:
     names = {config.advisor.api_key_variable, config.massive.api_key_variable,
              config.massive.files_key_id_variable, config.massive.files_secret_variable}
     names |= {name for name in (config.alerts.bot_token_variable,
-                                config.alerts.chat_id_variable) if name}
+                                config.alerts.chat_id_variable,
+                                config.alerts.apns_key_id_variable,
+                                config.alerts.apns_team_id_variable,
+                                config.alerts.apns_key_path_variable) if name}
     for env in config.environments.values():
         names |= {env.app_key_variable, env.app_secret_variable, env.account_variable}
     return frozenset(names)

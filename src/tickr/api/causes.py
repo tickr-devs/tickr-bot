@@ -19,6 +19,9 @@ from tickr.research.errors import RecordFileError
 # (tests/test_refusal_texts.py); a class not here shows as its type name.
 REFUSALS = frozenset({
     "tickr.runtime.alert_routing.RoutingRefused",
+    "tickr.runtime.push_tokens.BadRegistration",
+    "tickr.runtime.push_tokens.StoreError",
+    "tickr.runtime.push_tokens.OldSchema",
     "tickr.api.advisor.Unreadable",
     "tickr.api.advisor.DecisionRefused",
     "tickr.api.cleanday._Unreadable",

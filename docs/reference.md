@@ -150,6 +150,9 @@ alert. See "Preflight checks" in [operations.md](operations.md#preflight-checks)
 | `credentials-missing` | A broker key variable is not set. | Set the named variable (the message names it, never its value). |
 | `alert-channel-missing` | No alert channel is set up: neither Telegram variable is set. | Set both Telegram variables (operations.md, setup step 2). |
 | `alert-telegram-missing` | Only one of the two Telegram variables is set (bot token or chat id). | Set both named variables, or neither to turn Telegram off. |
+| `alert-push-missing` | Some of the three APNs variables (key id, team id, key path) are set, not all. | Set all three named variables, or none to turn push off. |
+| `alert-push-key-unreadable` | The APNs key file named by the key-path variable is not a readable file. | Put the `.p8` key at that path, readable by the bot's account. |
+| `alert-push-key-invalid` | The APNs key file is readable but is not a P-256 `.p8` private key. | Put the `.p8` key downloaded from Apple (AuthKey_<key id>.p8) at that path. |
 | `token-dir-missing` | The folder for the broker token does not exist. | Create it. |
 | `token-dir-open` | The token folder can be read by other users. | Restrict its permissions. |
 | `token-unusable` | The broker token is missing, expired or rejected. | Renew it and confirm it in the Webull app (see the `token-needs-confirmation` alert). |

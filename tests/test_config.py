@@ -732,6 +732,29 @@ def test_extended_sessions_refused_at_load(tmp_path, key, value, match):
         config.load(_copy(tmp_path, text))
 
 
+@pytest.mark.parametrize(("pattern", "value", "match"), [
+    (r'(?m)^apns_team_id_variable = "\S+"', 'apns_team_id_variable = ""',
+     "must all name a variable or all be empty"),
+    (r"(?m)^apns_topics = .+$", "apns_topics = []", "apns_topics must list"),
+    (r"(?m)^apns_hosts = .+$", "apns_hosts = {}", "apns_hosts must name a host"),
+    (r"(?m)^apns_token_lifetime_seconds = \S+", "apns_token_lifetime_seconds = 0",
+     "apns_token_lifetime_seconds must be above 0"),
+])
+def test_a_half_apns_setup_is_refused(tmp_path, pattern, value, match):
+    text = re.sub(pattern, value, BOT.read_text("utf-8"), count=1)
+    assert text != BOT.read_text("utf-8")
+    with pytest.raises(config.ConfigError, match=match):
+        config.load(_copy(tmp_path, text))
+
+
+def test_apns_off_needs_no_hosts_or_topics(tmp_path):
+    text = BOT.read_text("utf-8")
+    for name in ("apns_key_id_variable", "apns_team_id_variable", "apns_key_path_variable"):
+        text = re.sub(rf'(?m)^{name} = "\S+"', f'{name} = ""', text, count=1)
+    text = re.sub(r"(?m)^apns_topics = .+$", "apns_topics = []", text, count=1)
+    assert config.load(_copy(tmp_path, text)).alerts.apns_topics == ()
+
+
 def test_trailing_stop_ships_off_with_the_backlog_starting_values():
     trailing = config.load(BOT).trailing_stop
     assert trailing.enabled is False

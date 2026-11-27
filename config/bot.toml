@@ -1334,6 +1334,33 @@ bot_token_variable = "TICKR_TELEGRAM_BOT_TOKEN"
 chat_id_variable = "TICKR_TELEGRAM_CHAT_ID"
 # Host of the Telegram Bot API, reached over HTTPS only; read by runtime.alerts.
 telegram_host = "api.telegram.org"
+# Push alerts to the Tickr apps through Apple Push Notification service (APNs), token-based auth. The device push tokens
+# the apps register (POST /push-token) are kept in this JSON file relative to [run] data_dir, 0600: personal data, never
+# logged; read by api.server (writer) and runtime.alerts.
+push_tokens_file = "push-tokens.json"
+# NAME of the environment variable holding the APNs signing key's Key ID (10 characters, Apple Developer > Keys). All three
+# apns_*_variable names set in the environment = the push channel is on; none = off; some without the others fails
+# preflight (alert-push-missing). Values are set only in the owner's env file, never here; read by runtime.alerts and
+# preflight.
+apns_key_id_variable = "TICKR_APNS_KEY_ID"
+# NAME of the environment variable holding the owner's Apple Developer Team ID (the JWT issuer); read by runtime.alerts and
+# preflight.
+apns_team_id_variable = "TICKR_APNS_TEAM_ID"
+# NAME of the environment variable holding the path of the APNs signing key (.p8 file, a secret: read only from that
+# path at send time, never logged or copied); read by runtime.alerts and preflight.
+apns_key_path_variable = "TICKR_APNS_KEY_PATH"
+# APNs host by the app build's aps-environment entitlement, the only environments POST /push-token takes (400 for any
+# other): "development" (Xcode and debug builds) is served by Apple's development host, "production" (TestFlight and App
+# Store) by the production host; HTTP/2 over HTTPS port 443. A table, so that no Python source names these words (hard
+# rule 5); read by api.server and runtime.alerts.
+apns_hosts = { development = "api.sandbox.push.apple.com", production = "api.push.apple.com" }
+# The apps' bundle ids (#827), the only APNs topics: POST /push-token refuses any other bundle_id (400) and the sender
+# never signs a push for another topic; read by api.server and runtime.alerts.
+apns_topics = ["bot.tickr.ios", "bot.tickr.mac"]
+# Seconds one signed APNs provider token (JWT) is reused before a new one is signed. Apple: tokens older than 1 hour are
+# rejected (ExpiredProviderToken), and signing more often than every 20 minutes is refused (TooManyProviderTokenUpdates),
+# so this stays between the two (50 minutes); read by runtime.alerts.
+apns_token_lifetime_seconds = 3000
 
 [chart]
 # Serve GET /chart (the apps' chart: any US stock, M1 to monthly candles) from Webull market data. true makes the API

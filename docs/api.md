@@ -261,6 +261,8 @@ in its Swift tests, so a contract change it does not model fails its CI job.
 | GET | `/readiness` | `200` `readiness-v1`: the Production readiness view: `trading_gate()` of every configured environment without switching to it, the owner authorization record field by field, and the readiness checklist (read-only, informs only; see GET /readiness below). |
 | GET | `/alerts` | `200` `alerts-v1`: the notification settings: each owner-facing channel and whether the latest preflight proved it works, and every alert kind with its group, whether it is locked on, and the channels it goes to (see Notification settings below). |
 | PUT | `/alerts/routing` | Body `{"kind": "<alert kind>", "channel": "telegram"\|"push", "on": true\|false}`. Changes that one cell of the owner's alert routing: `200` `alerts-v1`; `400 bad_request` for an unknown kind or channel or another body; `409 conflict` for a locked kind turned off (cause `locked-kind: ...`) or a routing file that cannot be used. Not a bot command. |
+| POST | `/push-token` | Body `{"token": "<hex>", "environment": "development"\|"production", "bundle_id": "<id>", "platform": "ios"\|"macos"}` and optionally `"kind": "alert"\|"activity_start"\|"activity_update"` (default `alert`). Stores this device's APNs token of that kind, replacing only that kind's earlier one: `200` `push-token-v1` (see Push tokens below); `400 bad_request` for a token that is not hex, another environment, a bundle id not in `[alerts] apns_topics`, an unknown kind or another body; `503` when the token file is unreadable. |
+| DELETE | `/push-token?kind=<kind>` | Removes this device's APNs token of that kind (`kind` optional, default `alert`; none stored is fine): `200` `push-token-v1` with `registered` false; `400` for an unknown kind; `503` as POST. |
 | GET | `/journal` | `200` `journal-v1`: the latest `[api] journal_rows` rows of the bot's journal with their numbers (read-only; see GET /journal below). |
 | GET | `/advisor` | `200` `advisor-runs-v1`: the AI advisor's newest `[api] advisor_runs` runs with their proposals, ideas, hold-out verdicts and the owner's decision (read-only; see GET /advisor below). |
 | POST | `/advisor/decision` | Body `{"run": "<run id>", "verdict": "accepted"\|"rejected"}`. Records the owner's review of a proposal or idea (a note, nothing is deployed): `200` `advisor-runs-v1`; `404 not_found` without that run; `409 conflict` for a refused, no-change or unreadable run. Not a bot command. |
@@ -1198,11 +1200,12 @@ Which alert kinds go to which channel (backlog T14). Code: `src/tickr/api/alerts
 `src/tickr/runtime/alert_routing.py`. Alerts go through the channel interface of
 `runtime/alerts.py` (`Channels`); the routing only tells it which channels to skip for a kind.
 
-- `channels`: `telegram`, `push` (the iPhone app's push, not built
-  yet: always `configured` false, `cause` `not-built`). `configured` comes from the latest
-  preflight record's checks (`alert-channel` and `alert-telegram` for `telegram`); `cause`
-  `no-preflight`, `preflight-unreadable`, `not-configured` (Telegram's variables are not set) or
-  `check-failed` when false. The `mac` and `imessage` channels were removed (owner 2026-11-25).
+- `channels`: `telegram`, `push` (the apps' APNs push). `configured` comes from the latest
+  preflight record's checks (`alert-channel` and `alert-telegram` for `telegram`; `alert-push`
+  for `push`); `cause` `no-preflight`, `preflight-unreadable` or `check-failed` when false,
+  `not-configured` for `telegram` and `push` while their variables are not set (their check is
+  then absent). `not-built` is no longer sent. The `mac` and `imessage` channels were removed
+  (owner 2026-11-25).
   The alerts feed file (`[alerts] feed_file`) is not a routable channel: it gets every alert.
 - `kinds`: every `AlertKind` value in code order, each with `group` (`critical`, `trading`,
   `day`, `lab`), `locked` and `channels` `{telegram, push}` (true: it goes there).
@@ -1225,9 +1228,51 @@ each alert, so a change applies at the next alert. A missing file means every ki
 channel; a file out of shape (an unknown or locked kind, an unknown channel, another
 `schema_version`) is not used at all, never partly. An alert skipped on a channel is journaled
 with `routed_off` naming the channels skipped; when every channel this process has is skipped,
-its `delivery` is `routed-off` (not shown, so not a repeat either). `push` cells are stored and
-shown, and take effect once a push channel exists. On the remote port PUT needs the paired
-token like every other request.
+its `delivery` is `routed-off` (not shown, so not a repeat either). On the remote port PUT
+needs the paired token like every other request.
+
+### Push tokens: POST and DELETE /push-token
+
+Each app registers its APNs device token so the bot can push alerts to it. Code:
+`src/tickr/runtime/push_tokens.py` (the store) and `runtime/alerts.py` `ApnsNotifier` (the
+sender).
+
+- Which device: on the remote port, the name of the paired or signed-in device the bearer
+  token belongs to (the name in the device registry, or `simulator`); on the local port, the
+  Mac's own app (`local`). The name stays while a signed-in device's tokens rotate at
+  `POST /session/refresh`, so a registration survives a refresh and DELETE still finds it. One
+  token per device and `kind`; registering again replaces only that kind's token, and the same
+  token of that kind stored under another device (the app signed in under a new name) is
+  dropped.
+- Signing a device out drops all its push tokens: `DELETE /session`, a refresh refused for a
+  reused refresh token or an expired sign-in, `python -m tickr.api revoke --name <device>` and
+  `unpair-simulator`. If the store cannot be read then, the device is signed out all the same
+  and the `device-session` alert (or the command) says the tokens were kept.
+- `kind` (Apple's token types): `alert`, the device token alerts are pushed to (the default);
+  `activity_start`, a Live Activity push-to-start token; `activity_update`, one Live Activity's
+  update token. The activity kinds are stored only: nothing sends to them yet (below).
+- Body of POST, exactly: `token` (the device token in hex), `environment` (the build's
+  `aps-environment`: `development` for Xcode and debug builds, `production` for TestFlight and
+  the App Store; the keys of `[alerts] apns_hosts`), `bundle_id` (one of `[alerts] apns_topics`:
+  any other is refused, the sender never signs for it either), `platform` (`ios`, `macos`).
+- `push-token-v1`: `{registered, kind, environment, bundle_id, platform, registered_at}`;
+  after DELETE `registered` is false and all but `kind` null. The device token is never echoed or logged;
+  the bot's journal names a device by the first 8 hex digits of the token's SHA-256.
+- The store is `<data_dir>/<[alerts] push_tokens_file>`, mode 0600, written atomically,
+  `schema_version` 2 (keyed by device name). A schema-1 file (keyed by bearer-token digest,
+  which changes at every refresh) is refused with `503`, never mapped to names: delete it and
+  each app registers again at its next launch.
+- Sending: once `[alerts] apns_*_variable` are set (preflight `alert-push`), every alert routed
+  to `push` goes once to each device's `alert` token, never retried, to the host of its environment,
+  with `aps.alert {title, body}`, sound `default`, `thread-id` and a top-level `kind` set to the
+  alert kind, and `interruption-level` `time-sensitive` for locked kinds. A `410` or
+  `BadDeviceToken` answer removes that device's token; the journal says so.
+
+Planned: Live Activity. A sender for the `activity_start` and `activity_update` tokens, built
+once the activity's content-state schema is settled with the app: topic
+`<bundle_id>.push-type.liveactivity`, header `apns-push-type: liveactivity`; updates driven by
+events (a fill, the stop confirmed or not, a pause, the close) plus a P&L refresh whose interval
+will live in config.
 
 ### GET /journal (read-only)
 

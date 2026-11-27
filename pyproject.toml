@@ -3,7 +3,9 @@ name = "tickr"
 version = "0.1.0"
 description = "Single-owner intraday trading bot for US common stocks on Webull OpenAPI"
 requires-python = ">=3.12"
-dependencies = []
+# APNs push alerts (runtime/alerts.py): h2 speaks HTTP/2, which APNs requires; cryptography signs
+# the ES256 provider token (already pulled in by the webull extra; any version it pins works).
+dependencies = ["cryptography>=42.0.8", "h2==4.3.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-xdist>=3", "ruff>=0.6"]
