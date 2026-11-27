@@ -21,6 +21,7 @@ REFUSALS = frozenset({
     "tickr.runtime.alert_routing.RoutingRefused",
     "tickr.runtime.push_tokens.BadRegistration",
     "tickr.runtime.push_tokens.StoreError",
+    "tickr.runtime.push_tokens.OldSchema",
     "tickr.api.advisor.Unreadable",
     "tickr.api.advisor.DecisionRefused",
     "tickr.api.cleanday._Unreadable",

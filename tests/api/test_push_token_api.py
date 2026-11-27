@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import stat
 
 import pytest
 
-from tickr.runtime.push_tokens import LOCAL, parse_registration
+from tickr.api.server import revoke_device
+from tickr.runtime.push_tokens import LOCAL, StoreError, parse_registration
 
 from .schema_check import errors
-from .test_remote import local_api, paired, remote, remote_api, remote_settings  # noqa: F401
+from .test_remote import (  # noqa: F401 - fixtures
+    PHONE,
+    local_api,
+    paired,
+    remote,
+    remote_api,
+    remote_settings,
+)
 from .test_server import api, doc, request, schema, settings  # noqa: F401 - fixtures
 
 ROUTE = "/push-token"
@@ -141,9 +148,8 @@ def test_each_paired_device_has_its_own_token_and_the_token_is_never_logged(
     resp, _ = request(local_api, "POST", ROUTE, body(OTHER, platform="macos",
                                                      bundle_id="bot.tickr.mac"))
     assert resp.status == 200
-    key = hashlib.sha256(phone.encode("utf-8")).hexdigest()
     devices = stored(remote_settings)
-    assert devices[key]["token"] == TOKEN and devices[LOCAL]["token"] == OTHER
+    assert devices[PHONE]["token"] == TOKEN and devices[LOCAL]["token"] == OTHER
     # Without the paired token nothing is stored or removed.
     resp, _ = remote(remote_api, "POST", ROUTE, body=body(OTHER))
     assert resp.status == 401
@@ -160,7 +166,50 @@ def test_the_same_device_token_under_a_new_pairing_is_kept_once(api, settings): 
     store = settings.alerts.push_tokens
     server, _ = api
     request(server, "POST", ROUTE, body())
-    # The phone, paired again, registers the same device token under its new bearer digest.
+    # The phone, signed in again under a new name, registers the same device token.
     token = parse_registration(body(), ("bot.tickr.ios",), {"development"}, server.clock())
-    store.register("f" * 64, token)
-    assert list(stored(settings)) == ["f" * 64]
+    store.register("Phone 2", token)
+    assert list(stored(settings)) == ["Phone 2"]
+
+
+def test_a_store_keyed_by_token_digests_is_refused_never_guessed(api, settings):  # noqa: F811
+    """Schema 1 keyed devices by their bearer token's SHA-256, which changes at every refresh:
+    the file is refused (503, kept as it is), never mapped to device names."""
+    server, _ = api
+    path = settings.alerts.push_tokens.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = json.dumps({"schema_version": 1, "devices": {"f" * 64: {"alert": {
+        "token": TOKEN, "environment": "development", "bundle_id": "bot.tickr.ios",
+        "platform": "ios", "registered_at": "2026-11-16T15:00:00.123Z"}}}})
+    path.write_text(old, "utf-8")
+    for method, sent in (("POST", body()), ("DELETE", None)):
+        resp, payload = request(server, method, ROUTE, sent)
+        assert resp.status == 503
+        cause = doc(payload)["cause"]
+        assert "schema 1" in cause and "delete it" in cause and TOKEN not in cause
+    assert path.read_text("utf-8") == old
+
+
+def test_revoking_a_device_drops_its_push_tokens_only(remote_api, remote_settings):  # noqa: F811
+    phone = paired(remote_api, remote_settings)
+    mac = paired(remote_api, remote_settings, "Mac")
+    assert remote(remote_api, "POST", ROUTE, token=phone, body=body())[0].status == 200
+    assert remote(remote_api, "POST", ROUTE, token=phone,
+                  body=body("d4" * 32) | {"kind": "activity_start"})[0].status == 200
+    assert remote(remote_api, "POST", ROUTE, token=mac,
+                  body=body(OTHER, platform="macos", bundle_id="bot.tickr.mac"))[0].status == 200
+    assert revoke_device(remote_settings, PHONE)
+    assert list(stored(remote_settings)) == ["Mac"]
+    assert stored(remote_settings, "activity_start") == {}
+
+
+def test_revoke_with_an_unreadable_store_still_revokes_and_says_so(
+        remote_api, remote_settings):  # noqa: F811
+    phone = paired(remote_api, remote_settings)
+    path = remote_settings.alerts.push_tokens.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", "utf-8")
+    with pytest.raises(StoreError):
+        revoke_device(remote_settings, PHONE)
+    assert remote(remote_api, "GET", "/status", token=phone)[0].status == 401
+    assert path.read_text("utf-8") == "{"
