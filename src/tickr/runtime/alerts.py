@@ -457,7 +457,9 @@ class ApnsNotifier:
     """One push per registered device of the Tickr apps (`push_tokens.PushTokenStore`), to the
     APNs host of its build's environment, and only for a bundle id in `[alerts] apns_topics`.
     One attempt per device, never retried. A token APNs says is gone (410, or BadDeviceToken)
-    is removed and the removal named in the error, which the journal records. Errors name the
+    is removed and the removal named in the error, which the journal records. A token whose
+    device's sign-in has ended (`PushToken.expires_at`) is never pushed to and is dropped; only a
+    failure to drop it is named in the error. Errors name the
     device by `short_hash`, the HTTP status and Apple's reason only: never a device token, the
     key or the provider token."""
 
@@ -471,6 +473,7 @@ class ApnsNotifier:
         self._transport = transport
         self._critical = critical
         self._timeout = float(config.notification_timeout_seconds)
+        self._clock = clock
         self._provider = ProviderToken(config, environ, clock)
         # Whether "no device registered" was already reported by this process; set again
         # once a device is seen, so the journal names it once per empty spell, not per alert.
@@ -495,20 +498,32 @@ class ApnsNotifier:
         if missing or not apns_on(self._config, self._environ):
             raise NotifyError("apns-missing: " + ", ".join(missing or apns_names(self._config))
                               + " not set")
+        now = datetime.fromtimestamp(self._clock(), UTC)
         try:
-            devices = {key: token for key, token in self._store.read().items()
-                       if token.kind is PushTokenKind.ALERT}  # Live Activity tokens: not here
+            tokens = self._store.read()
         except StoreError as exc:
             raise NotifyError(f"apns-store-unreadable: {exc}") from None
+        failures = []
+        if any(token.expired(now) for token in tokens.values()):
+            # A device whose sign-in has ended: never pushed to, whether the drop works or not.
+            try:
+                self._store.drop_expired(now)
+            except (OSError, StoreError) as exc:
+                failures.append(f"tokens of an ended sign-in not dropped: {type(exc).__name__}")
+        devices = {key: token for key, token in tokens.items()
+                   if token.kind is PushTokenKind.ALERT  # Live Activity tokens: not here
+                   and not token.expired(now)}
         with self._empty_lock:
             if not devices:
+                if failures:
+                    raise NotifyError("apns-no-device: no app has a live push token; "
+                                      + "; ".join(failures))
                 if self._reported_empty:
                     raise NoRecipient("apns-no-device: no app has registered a push token")
                 self._reported_empty = True
                 raise NotifyError("apns-no-device: no app has registered a push token")
             self._reported_empty = False
         payload = apns_payload(kind, title, text, kind is not None and self._critical(kind))
-        failures = []
         for _key, device in sorted(devices.items()):
             error = self._send(device, payload)
             if error is not None:

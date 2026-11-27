@@ -13,7 +13,7 @@ import socket
 import stat
 import threading
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import h2.config
@@ -559,3 +559,72 @@ def test_h2_post_refuses_a_connection_closed_before_the_answer():
     with pytest.raises((NotifyError, OSError)):
         h2_post("apns.test", APNS_PATH + IOS_TOKEN, [], b"{}", 5.0,
                 connect=lambda _host, _timeout: client)
+
+
+# ---------------------------------------------------------------- ended sign-ins
+
+
+def _ended_at(clock: Clock) -> datetime:
+    """The clock's now as a datetime: a sign-in that ended exactly then."""
+    return datetime.fromtimestamp(clock.now, UTC)
+
+
+def test_an_ended_sign_ins_tokens_are_never_pushed_and_are_dropped(store, environ):
+    """A signed-in device that never refreshed again: at its sign-in's end its tokens stop
+    receiving alerts and leave the store, though it never calls the API again."""
+    clock = Clock()
+    end = _ended_at(clock)
+    store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
+                                       AT, end))
+    store.register("tablet", PushToken(PushTokenKind.ACTIVITY_START, "f6" * 32, "development",
+                                       "bot.tickr.ios", IOS, AT, end))
+    store.register("phone 2", PushToken(ALERT, "c3" * 32, "development", "bot.tickr.ios", IOS,
+                                        AT, end + timedelta(seconds=1)))
+    wire = Wire()
+    notifier(store, environ, wire, clock).notify_kind(NORMAL.value, "T", "x")
+    assert sorted(path for _, path, _, _ in wire.calls) == sorted(
+        APNS_PATH + t for t in (IOS_TOKEN, MAC_TOKEN, "c3" * 32))
+    assert sorted(store.read()) == [("local", ALERT), ("phone", ALERT), ("phone 2", ALERT)]
+
+
+def test_an_ended_sign_in_is_skipped_even_when_its_tokens_cannot_be_dropped(
+        store, environ, monkeypatch):
+    clock = Clock()
+    store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
+                                       AT, _ended_at(clock)))
+
+    def refuse(_now):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(store, "drop_expired", refuse)
+    wire = Wire()
+    with pytest.raises(NotifyError, match="tokens of an ended sign-in not dropped: OSError"):
+        notifier(store, environ, wire, clock).notify_kind(NORMAL.value, "T", "x")
+    assert sorted(path for _, path, _, _ in wire.calls) == [APNS_PATH + IOS_TOKEN,
+                                                            APNS_PATH + MAC_TOKEN]
+    assert ("tablet", ALERT) in store.read()
+
+
+def test_only_ended_sign_ins_left_is_no_device(tmp_path, environ):
+    clock = Clock()
+    only = PushTokenStore(tmp_path / "data" / "ended.json")
+    only.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
+                                      AT, _ended_at(clock)))
+    wire = Wire()
+    with pytest.raises(NotifyError, match="apns-no-device"):
+        notifier(only, environ, wire, clock).notify_kind(NORMAL.value, "T", "x")
+    assert wire.calls == [] and only.read() == {}
+
+
+def test_a_sign_in_expiry_is_stored_and_a_registration_again_keeps_its_own(store):
+    end = AT + timedelta(days=1)
+    store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
+                                       AT, end))
+    assert store.read()[("tablet", ALERT)].expires_at == end
+    assert store.read()[("phone", ALERT)].expires_at is None  # paired: never ends
+    # Signed in again (a later end) before the drop ran: the new registration is kept.
+    store.register("tablet", PushToken(ALERT, "e5" * 32, "development", "bot.tickr.ios", IOS,
+                                       AT, end + timedelta(days=1)))
+    assert store.drop_expired(end) == 0 and ("tablet", ALERT) in store.read()
+    assert store.drop_expired(end + timedelta(days=1)) == 1
+    assert sorted(store.read()) == [("local", ALERT), ("phone", ALERT)]

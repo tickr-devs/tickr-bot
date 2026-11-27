@@ -715,3 +715,38 @@ def test_both_listeners_alert_under_one_lock(local_api, remote_api):
     """The listeners share one Alerter, so they share the lock around it too: an alert raised
     on the phone's port never interleaves with one raised on the local port."""
     assert remote_api.alert_lock is local_api.alert_lock
+
+
+@pytest.mark.parametrize("name", sorted(devices.RESERVED))
+def test_pair_refuses_the_bots_own_device_names(remote_settings, name):
+    """`local` and `simulator` key the Mac app's and the Simulator's push tokens: a paired
+    device under either would share them. The same names a sign-in refuses (one source)."""
+    with pytest.raises(devices.ReservedName):
+        pair(remote_settings, name, now=NOW)
+    assert not remote_settings.pairing_code_path.exists()
+    assert not remote_settings.pairing_path.exists()
+
+
+@pytest.mark.parametrize("name", sorted(devices.RESERVED))
+def test_a_waiting_code_for_a_reserved_name_is_burnt_and_refused(remote_api, remote_settings,
+                                                                 name):
+    """A code file written before `pair` refused reserved names: never redeemed."""
+    link_file = pair(remote_settings, PHONE, now=NOW)
+    waiting = json.loads(remote_settings.pairing_code_path.read_text("ascii"))
+    remote_settings.pairing_code_path.write_text(json.dumps(waiting | {"name": name}), "ascii")
+    resp, payload = redeem(remote_api, link_code(link_file))
+    assert resp.status == 400 and "reserved" in doc(payload)["cause"]
+    assert errors(schema("error-v1"), doc(payload)) == []
+    assert not remote_settings.pairing_code_path.exists() and not link_file.exists()
+    assert not remote_settings.devices_path.exists()
+
+
+def test_pair_command_refuses_a_reserved_name(tmp_path, capsys):
+    path = tmp_path / "config" / "bot.toml"
+    path.parent.mkdir()
+    path.write_text((ROOT / "config" / "bot.toml").read_text("utf-8"), "utf-8")
+    (tmp_path / "config" / "calendar").symlink_to(ROOT / "config" / "calendar")
+    cfg = with_remote_hosts(config.load(path), REMOTE)
+    assert api_main.main(["--config", str(path), "pair", "--name", devices.LOCAL]) == 2
+    assert "reserved" in capsys.readouterr().err
+    assert not settings_from_config(cfg).pairing_code_path.exists()

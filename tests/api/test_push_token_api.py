@@ -56,7 +56,7 @@ def test_register_replace_and_delete_on_the_local_port(api, settings):  # noqa: 
     assert list(stored(settings)) == [LOCAL]
     assert stored(settings)[LOCAL] | {"registered_at": None} == {
         "token": OTHER, "environment": "production", "bundle_id": "bot.tickr.mac",
-        "platform": "macos", "registered_at": None}
+        "platform": "macos", "registered_at": None, "expires_at": None}
     resp, payload = request(server, "DELETE", ROUTE)
     assert resp.status == 200
     assert errors(schema("push-token-v1"), doc(payload)) == []
@@ -167,7 +167,8 @@ def test_the_same_device_token_under_a_new_pairing_is_kept_once(api, settings): 
     server, _ = api
     request(server, "POST", ROUTE, body())
     # The phone, signed in again under a new name, registers the same device token.
-    token = parse_registration(body(), ("bot.tickr.ios",), {"development"}, server.clock())
+    token = parse_registration(body(), ("bot.tickr.ios",), {"development"}, server.clock(),
+                               expires_at=None)
     store.register("Phone 2", token)
     assert list(stored(settings)) == ["Phone 2"]
 
@@ -213,3 +214,55 @@ def test_revoke_with_an_unreadable_store_still_revokes_and_says_so(
         revoke_device(remote_settings, PHONE)
     assert remote(remote_api, "GET", "/status", token=phone)[0].status == 401
     assert path.read_text("utf-8") == "{"
+
+
+def test_pairing_a_taken_name_again_drops_that_names_push_tokens(remote_api,  # noqa: F811
+                                                                 remote_settings):  # noqa: F811
+    """The name changes hands: the new device must not inherit the earlier one's push tokens
+    (it registers its own once paired)."""
+    phone = paired(remote_api, remote_settings)
+    mac = paired(remote_api, remote_settings, "Mac")
+    assert remote(remote_api, "POST", ROUTE, token=phone, body=body())[0].status == 200
+    assert remote(remote_api, "POST", ROUTE, token=phone,
+                  body=body("d4" * 32) | {"kind": "activity_start"})[0].status == 200
+    assert remote(remote_api, "POST", ROUTE, token=mac,
+                  body=body(OTHER, platform="macos", bundle_id="bot.tickr.mac"))[0].status == 200
+    paired(remote_api, remote_settings)  # PHONE again
+    assert list(stored(remote_settings)) == ["Mac"]
+    assert stored(remote_settings, "activity_start") == {}
+
+
+def test_pairing_with_an_unreadable_push_store_still_pairs(remote_api,  # noqa: F811
+                                                           remote_settings):  # noqa: F811
+    path = remote_settings.alerts.push_tokens.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", "utf-8")
+    phone = paired(remote_api, remote_settings)
+    assert remote(remote_api, "GET", "/status", token=phone)[0].status != 401
+    assert path.read_text("utf-8") == "{"
+
+
+def test_a_paired_devices_registration_never_expires(remote_api,  # noqa: F811
+                                                     remote_settings):  # noqa: F811
+    """A paired device's token does not expire, so neither does its push registration."""
+    phone = paired(remote_api, remote_settings)
+    assert remote(remote_api, "POST", ROUTE, token=phone, body=body())[0].status == 200
+    assert stored(remote_settings)[PHONE]["expires_at"] is None
+
+
+def test_a_store_without_sign_in_expiries_is_refused_never_guessed(api, settings):  # noqa: F811
+    """Schema 2 stored no sign-in end: whether a token's device has signed out by expiry cannot
+    be told, so the file is refused (503, kept as it is), never read as "never expires"."""
+    server, _ = api
+    path = settings.alerts.push_tokens.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = json.dumps({"schema_version": 2, "devices": {PHONE: {"alert": {
+        "token": TOKEN, "environment": "development", "bundle_id": "bot.tickr.ios",
+        "platform": "ios", "registered_at": "2026-11-16T15:00:00.123Z"}}}})
+    path.write_text(old, "utf-8")
+    for method, sent in (("POST", body()), ("DELETE", None)):
+        resp, payload = request(server, method, ROUTE, sent)
+        assert resp.status == 503
+        cause = doc(payload)["cause"]
+        assert "schema 2" in cause and "delete it" in cause and TOKEN not in cause
+    assert path.read_text("utf-8") == old

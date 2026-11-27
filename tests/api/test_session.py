@@ -13,10 +13,11 @@ from datetime import timedelta
 import pytest
 
 from tickr import config
-from tickr.api import devices
+from tickr.api import contract, devices
 from tickr.api.server import make_remote_server, make_server, settings_from_config
 from tickr.config import ConfigError
 from tickr.runtime.alerts import Alerter
+from tickr.runtime.push_tokens import parse_registration
 
 from .test_remote import REMOTE, _serve, remote, with_remote_hosts
 from .test_risk_alert import Recorder
@@ -366,3 +367,52 @@ def test_signing_out_with_an_unreadable_push_store_still_signs_out(settings, ser
     assert path.read_text("utf-8") == "{"
     text = alerts.shown[-1][1]
     assert f"'{NAME}' signed out" in text and "push tokens could not be dropped" in text
+
+
+def test_a_push_registration_carries_the_sign_ins_end_across_refreshes(settings, serve):
+    """The sender never pushes past the sign-in's own end (runtime/push_tokens.py); a refresh
+    never moves that end, so the registration's expiry stays the device's."""
+    clock = Clock(ISSUED + timedelta(seconds=1))
+    server = serve(settings, clock=clock)
+    first = doc(sign_in(server)[1])
+    remote(server, "POST", PUSH, token=first["access_token"], body=push_body())
+    (device,) = devices.parse(settings.devices_path.read_text("utf-8"))
+    end = device.session.expires_at
+    store = settings.alerts.push_tokens
+    assert store.read()[(NAME, contract.PushTokenKind.ALERT)].expires_at == end
+    clock.now += timedelta(seconds=settings.session_lifetimes.access_seconds)
+    second = doc(refresh(server, first["refresh_token"])[1])
+    remote(server, "POST", PUSH, token=second["access_token"], body=push_body("b2" * 32))
+    assert store.read()[(NAME, contract.PushTokenKind.ALERT)].expires_at == end
+    # Never refreshed again: at the sign-in's end the token is dropped, with no API call.
+    assert store.drop_expired(end - timedelta(microseconds=1)) == 0
+    assert store.drop_expired(end) == 1 and push_tokens(settings) == {}
+
+
+def test_signing_in_under_a_taken_name_drops_that_names_push_tokens(settings, serve, alerts):
+    """The name changes hands: the new device never inherits the earlier one's push tokens."""
+    server = serve(settings)
+    token = doc(sign_in(server)[1])["access_token"]
+    for kind in ("alert", "activity_start"):
+        remote(server, "POST", PUSH, token=token, body=push_body(kind=kind))
+    mac = parse_registration(push_body("c3" * 32), ("bot.tickr.ios",), {"development"},
+                             ISSUED, expires_at=None)
+    settings.alerts.push_tokens.register("Mac", mac)  # another device's: kept
+    resp, payload = sign_in(server, "valid_mac_list_audience", name=NAME)
+    assert resp.status == 200, payload
+    assert push_tokens(settings) == {"Mac": {"alert": "c3" * 32}}
+    text = alerts.shown[-1][1]
+    assert f"'{NAME}' signed in" in text and "push tokens" not in text
+
+
+def test_signing_in_with_an_unreadable_push_store_still_signs_in(settings, serve, alerts):
+    server = serve(settings)
+    path = settings.alerts.push_tokens.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", "utf-8")
+    resp, payload = sign_in(server)
+    assert resp.status == 200, payload
+    assert remote(server, "GET", "/status", token=doc(payload)["access_token"])[0].status != 401
+    assert path.read_text("utf-8") == "{"
+    text = alerts.shown[-1][1]
+    assert f"'{NAME}' signed in" in text and "push tokens could not be dropped" in text

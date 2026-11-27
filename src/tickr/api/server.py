@@ -136,11 +136,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 WARM_ERRORS = (HistoryUnavailable, CaptureError, RecordFileError, ObserverError, OSError)
 COMMAND_SOURCE = "api"
 JSON_TYPE = "application/json"
-LOCAL_DEVICE = "local"  # the device name of a request on the local port (no token there)
-SIMULATOR_DEVICE = "simulator"  # the iOS Simulator's token on the remote port's loopback address
-# Device names a sign-in may not take: they name the bot's own access in the journal, and
-# DELETE /session cannot revoke them.
-RESERVED_DEVICES = frozenset({LOCAL_DEVICE, SIMULATOR_DEVICE})
+LOCAL_DEVICE = devices.LOCAL  # the device name of a request on the local port (no token there)
+SIMULATOR_DEVICE = devices.SIMULATOR  # the iOS Simulator's token on the remote loopback address
 LOCAL_PORT, REMOTE_PORT = "local", "remote"  # the port named in a risk-command-used alert
 ENTRY_STOP_STATES = {"on": CommandKind.ENTRY_STOP_ON, "off": CommandKind.ENTRY_STOP_OFF}
 STOP_MODES = {m.value: m for m in contract.StopMode}  # POST /commands/stop-bot {"mode": ...}
@@ -1055,6 +1052,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _guard(self) -> bool:
         self.device_name = ""  # who the token belongs to; set once the request is authorized
+        # When that device's sign-in ends (None: its access does not expire); set with the name.
+        self.device_expires_at: datetime | None = None
         host = self.headers.get("Host")
         origin = self.headers.get("Origin")
         if self.server.remote:
@@ -1165,6 +1164,7 @@ class Handler(BaseHTTPRequestHandler):
                         "/session/refresh", challenge)
             return False
         self.device_name = device.name
+        self.device_expires_at = None if device.session is None else device.session.expires_at
         return True
 
     def _match_device(self, header: str) -> tuple[tuple[devices.Device, ...] | Exception,
@@ -1574,7 +1574,7 @@ class Handler(BaseHTTPRequestHandler):
         settings = self.server.settings.alerts
         try:
             token = parse_registration(body, settings.apns_topics, settings.apns_environments,
-                                       self.server.clock())
+                                       self.server.clock(), expires_at=self.device_expires_at)
         except BadRegistration as exc:
             self._error("bad_request", safe_cause(exc))
             return
@@ -1606,8 +1606,11 @@ class Handler(BaseHTTPRequestHandler):
         """POST /pair with {"code": "<code>"} on the remote port: the one-time pairing code `pair`
         left in the pairing link buys one new bearer token, 200 paired-v1, for the device named
         at `pair` (added, or its earlier token replaced). The code is burnt on success and when
-        found expired; a wrong code changes nothing. Neither the code nor the
-        token is ever logged or echoed in an error."""
+        found expired; a wrong code changes nothing. Push tokens stored under the name are dropped
+        before the answer: they were a previous holder's, and the app registers again. A waiting
+        code for a reserved name (`devices.RESERVED`, written before `pair` refused one) is
+        burnt and refused, 400. Neither the code nor the token is ever logged or echoed in an
+        error."""
         body = self._read_json_body()
         if body is None:
             return
@@ -1619,18 +1622,23 @@ class Handler(BaseHTTPRequestHandler):
             refused = self._admit(PAIR_ROUTE_KIND)
             if refused is None:
                 self._last_error = None
+                token, name, left = None, "", ""
                 try:
-                    token = self._redeem_locked(body["code"])
+                    redeemed = self._redeem_locked(body["code"])
+                    if redeemed is not None:
+                        token, name, left = redeemed
                 finally:  # every 401 here is a code that failed; a 503 tested none
                     self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
         if refused is not None:
             self._refuse(PAIR_ROUTE_KIND, refused)
         elif token is not None:
+            if left:  # tokens dropped (or not), then the alert, then the answer
+                self._device_session_alert(f"device {name!r} paired{left}")
             self._json(200, PairedV1(token=token))
 
-    def _redeem_locked(self, code: str) -> str | None:
+    def _redeem_locked(self, code: str) -> tuple[str, str, str] | None:
         """`_redeem` under the pairing locks, once admitted by the /pair budget: the new token,
-        or None once the refusal is answered."""
+        the device name and `drop_push_tokens`' clause, or None once the refusal is answered."""
         settings = self.server.settings
         try:
             waiting = json.loads(settings.pairing_code_path.read_text("ascii"))
@@ -1660,6 +1668,14 @@ class Handler(BaseHTTPRequestHandler):
             self._error("unauthorized", "the pairing code is not the waiting one")
             return None
         try:
+            devices.refuse_reserved(name)
+        except devices.ReservedName as exc:
+            settings.pairing_code_path.unlink(missing_ok=True)
+            settings.pairing_path.unlink(missing_ok=True)
+            self._error("bad_request", f"{safe_cause(exc)}: run `python -m tickr.api pair` on the "
+                        "Mac again")
+            return None
+        try:
             paired = load_devices(settings)
         except (OSError, devices.DeviceFileError) as exc:
             self._device_list_unreadable(exc)
@@ -1670,15 +1686,16 @@ class Handler(BaseHTTPRequestHandler):
                        devices.render(devices.with_device(paired, device)))
         settings.pairing_code_path.unlink(missing_ok=True)
         settings.pairing_path.unlink(missing_ok=True)
-        return token
+        return token, name, drop_push_tokens(settings, name)
 
     def _sign_in(self) -> None:
         """POST /session with {"grant": "<tickr.bot grant>", "name": "<device name>"} on the
         remote port: a grant tickr.bot signed for one of `[api] remote_signin_accounts` buys one
-        token pair for the device `name` (added, or its earlier tokens replaced), 200 session-v1,
-        and a `device-session` alert. Each grant is redeemed once; a refused grant changes
-        nothing and counts against the POST /pair budget. Neither the grant nor a token is ever
-        logged or echoed."""
+        token pair for the device `name` (added, or its earlier tokens replaced, its push tokens
+        dropped: the app registers again), 200 session-v1, and a `device-session` alert. A
+        reserved name (`devices.RESERVED`) is refused, 400. Each grant is redeemed once; a
+        refused grant changes nothing and counts against the POST /pair budget. Neither the
+        grant nor a token is ever logged or echoed."""
         body = self._read_json_body()
         if body is None:
             return
@@ -1688,28 +1705,30 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request", 'body must be exactly {"grant": "<grant>", "name": '
                         '"<device name: letters, digits, space, dot, dash, underscore>"}')
             return
-        if body["name"] in RESERVED_DEVICES:
-            self._error("bad_request", f"device name {body['name']!r} is reserved for the bot's "
-                        "own access; sign in under another name")
+        try:
+            devices.refuse_reserved(body["name"])
+        except devices.ReservedName as exc:
+            self._error("bad_request", safe_cause(exc))
             return
         settings = self.server.settings
         with self.server.pair_lock, _pairing_lock(settings):
             refused = self._admit(PAIR_ROUTE_KIND)
             if refused is None:
                 self._last_error = None
-                issued = account = client = None
+                issued = account = client = left = None
                 try:
                     result = self._sign_in_locked(body["grant"], body["name"])
                     if result is not None:
-                        issued, account, client = result
+                        issued, account, client, left = result
                 finally:  # every 401 here is a grant that failed; a 503 tested none
                     self._settle(PAIR_ROUTE_KIND, self._last_error == "unauthorized")
         if refused is not None:
             self._refuse(PAIR_ROUTE_KIND, refused)
         elif issued is not None:
-            # The alert is recorded before the answer: a client never gets ahead of it.
+            # Tokens were dropped, then the alert is recorded, then the answer: a client never
+            # gets ahead of the alert, nor finds a previous holder's push tokens under its name.
             self._device_session_alert(f"device {body['name']!r} signed in with tickr.bot "
-                                       f"(account {account!r}, app {client!r})")
+                                       f"(account {account!r}, app {client!r}){left}")
             self._json(200, self._session_answer(issued))
 
     def _session_answer(self, issued: sessions.Issued) -> SessionV1:
@@ -1720,8 +1739,10 @@ class Handler(BaseHTTPRequestHandler):
             refresh_token=issued.refresh_token,
             refresh_expires_in=int((issued.refresh_expires_at - now).total_seconds()))
 
-    def _sign_in_locked(self, grant: str, name: str) -> tuple[sessions.Issued, str, str] | None:
-        """`_sign_in` under the pairing locks: the new token, or None once refused."""
+    def _sign_in_locked(self, grant: str,
+                        name: str) -> tuple[sessions.Issued, str, str, str] | None:
+        """`_sign_in` under the pairing locks: the new token pair, the grant's account and app,
+        and `drop_push_tokens`' clause for the name; or None once refused."""
         settings = self.server.settings
         if settings.signin_rules is None or settings.signin_key is None:
             self._error("unauthorized", "sign-in is off: [api] remote_signin_accounts is empty")
@@ -1754,7 +1775,7 @@ class Handler(BaseHTTPRequestHandler):
                                           settings.token_bytes)
         _write_private(settings.devices_path,
                        devices.render(devices.with_device(paired, device)))
-        return issued, checked.account, checked.client
+        return issued, checked.account, checked.client, drop_push_tokens(settings, name)
 
     def _refresh(self) -> None:
         """POST /session/refresh with {"refresh_token": "<token>"} on the remote port, no bearer
@@ -2319,11 +2340,12 @@ def pair(settings: ApiSettings, name: str, now: datetime | None = None) -> Path:
     redeems the code once at POST /pair for its token, so a copy of the link left anywhere is
     worthless after that or after expiry. Other paired devices keep working; a device already
     paired under `name` keeps its token until the new code is redeemed, which replaces it. A new
-    `pair` replaces a code still waiting. Nothing secret is printed or logged. Returns the link
-    file's path."""
+    `pair` replaces a code still waiting. A reserved name (`devices.RESERVED`) is refused with
+    `devices.ReservedName`. Nothing secret is printed or logged. Returns the link file's path."""
     if not devices.valid_name(name):
         raise ValueError(f"device name {name!r}: letters, digits, space, dot, dash and underscore "
                          "only, starting and ending with a letter or digit")
+    devices.refuse_reserved(name)
     if not settings.remote_hosts:
         raise ConfigError(f"no remote host: write the Tailscale name of this Mac into "
                           f"{settings.remote_hosts_path} first")
@@ -2374,9 +2396,10 @@ def list_devices(settings: ApiSettings) -> tuple[devices.Device, ...]:
 
 
 def drop_push_tokens(settings: ApiSettings, name: str) -> str:
-    """Drop the APNs tokens of `name`, a device just signed out or revoked, so nothing is pushed
-    to it again. "" when done; otherwise a clause for the caller's alert or message naming why
-    they are kept (the device is revoked all the same)."""
+    """Drop the APNs tokens of `name`, a device just signed out or revoked, or a name just taken
+    by a new sign-in or pairing, so nothing is pushed to the earlier holder again. "" when done;
+    otherwise a clause for the caller's alert or message naming why they are kept (the device is
+    signed out, or the new one signed in, all the same)."""
     try:
         settings.alerts.push_tokens.remove_device(name)
     except StoreError as exc:
