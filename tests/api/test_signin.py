@@ -21,7 +21,7 @@ ISSUED = datetime.fromtimestamp(GRANTS["issued_at"], UTC)
 # remote_signin_audience from bot.toml; the check is the same for any audience.
 RULES = Rules(issuer="https://tickr.bot", audience="https://bot.tickr.bot", scope="bot",
               clients=frozenset({"tickr-ios", "tickr-mac"}), accounts=frozenset({"1"}),
-              max_lifetime_seconds=60)
+              max_lifetime_seconds=60, clock_skew_seconds=5)
 
 
 def _key(name="provider.pem"):
@@ -61,6 +61,12 @@ def test_each_wrong_grant_is_refused_with_its_one_cause(case, cause):
         _check(case)
     assert cause in refused.value.cause
     assert GRANTS["tokens"][case] not in refused.value.cause
+
+
+def test_a_grant_issued_beyond_the_clock_skew_is_refused():
+    _check("valid", now=ISSUED - timedelta(seconds=5))
+    with pytest.raises(SignInRefused, match="future"):
+        _check("valid", now=ISSUED - timedelta(seconds=6))
 
 
 def test_a_grant_is_refused_from_its_expiry_on():

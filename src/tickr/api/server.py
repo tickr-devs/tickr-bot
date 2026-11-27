@@ -106,6 +106,9 @@ COMMAND_SOURCE = "api"
 JSON_TYPE = "application/json"
 LOCAL_DEVICE = "local"  # the device name of a request on the local port (no token there)
 SIMULATOR_DEVICE = "simulator"  # the iOS Simulator's token on the remote port's loopback address
+# Device names a sign-in may not take: they name the bot's own access in the journal, and
+# DELETE /session cannot revoke them.
+RESERVED_DEVICES = frozenset({LOCAL_DEVICE, SIMULATOR_DEVICE})
 LOCAL_PORT, REMOTE_PORT = "local", "remote"  # the port named in a risk-command-used alert
 ENTRY_STOP_STATES = {"on": CommandKind.ENTRY_STOP_ON, "off": CommandKind.ENTRY_STOP_OFF}
 STOP_MODES = {m.value: m for m in contract.StopMode}  # POST /commands/stop-bot {"mode": ...}
@@ -1528,6 +1531,10 @@ class Handler(BaseHTTPRequestHandler):
             self._error("bad_request", 'body must be exactly {"grant": "<grant>", "name": '
                         '"<device name: letters, digits, space, dot, dash, underscore>"}')
             return
+        if body["name"] in RESERVED_DEVICES:
+            self._error("bad_request", f"device name {body['name']!r} is reserved for the bot's "
+                        "own access; sign in under another name")
+            return
         settings = self.server.settings
         with self.server.pair_lock, _pairing_lock(settings):
             refused = self._admit(PAIR_ROUTE_KIND)
@@ -1917,6 +1924,8 @@ def _signin(cfg: Config) -> tuple[signin.Rules | None, signin.PublicKey | None]:
         return None, None
     if api.remote_signin_max_lifetime_seconds <= 0:
         raise ConfigError("[api] remote_signin_max_lifetime_seconds must be positive")
+    if api.remote_signin_clock_skew_seconds < 0:
+        raise ConfigError("[api] remote_signin_clock_skew_seconds may not be negative")
     if not api.remote_signin_clients or not all(api.remote_signin_accounts):
         raise ConfigError("[api] remote_signin_clients and remote_signin_accounts must name "
                           "at least one client and no empty account")
@@ -1928,7 +1937,8 @@ def _signin(cfg: Config) -> tuple[signin.Rules | None, signin.PublicKey | None]:
         issuer=api.remote_signin_issuer, audience=api.remote_signin_audience,
         scope=api.remote_signin_scope, clients=frozenset(api.remote_signin_clients),
         accounts=frozenset(api.remote_signin_accounts),
-        max_lifetime_seconds=api.remote_signin_max_lifetime_seconds)
+        max_lifetime_seconds=api.remote_signin_max_lifetime_seconds,
+        clock_skew_seconds=api.remote_signin_clock_skew_seconds)
     return rules, key
 
 

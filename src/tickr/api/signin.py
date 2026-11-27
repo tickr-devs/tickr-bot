@@ -22,7 +22,7 @@ import hmac
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 ALGORITHM = "RS256"  # the only signature the grant may carry (JWA, RFC 7518)
 TOKEN_USE = "access"  # allauth's claim on an access token (an id token says "id")
@@ -74,6 +74,7 @@ class Rules:
     clients: frozenset[str]
     accounts: frozenset[str]
     max_lifetime_seconds: int  # exp - iat may not exceed this (the provider's token lifetime)
+    clock_skew_seconds: int  # how far the provider's clock may run ahead of the bot's (iat check)
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,8 @@ def check(token: str, key: PublicKey, rules: Rules, now: datetime) -> Grant:
         raise SignInRefused("the grant's times are missing")
     if expires - issued > rules.max_lifetime_seconds:
         raise SignInRefused("the grant lives longer than tickr.bot's tokens do")
+    if datetime.fromtimestamp(issued, UTC) > now + timedelta(seconds=rules.clock_skew_seconds):
+        raise SignInRefused("the grant is issued in the future; check the bot's clock")
     expires_at = datetime.fromtimestamp(expires, UTC)
     if now >= expires_at:
         raise SignInRefused("the grant has expired; sign in again")

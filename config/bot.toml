@@ -546,6 +546,10 @@ remote_signin_clients = ["tickr-ios", "tickr-mac"]
 # Longest life a grant may have, exp minus iat, seconds: tickr.bot's access-token lifetime (60, web thread
 # 2026-11-27), so a grant made to live longer is refused; read by the api server (POST /session).
 remote_signin_max_lifetime_seconds = 60
+# How far tickr.bot's clock may run ahead of the bot's when it signs a grant, seconds: a grant whose issue time
+# (`iat`) is later than now plus this is refused (both servers keep NTP time, so a few seconds is plenty); read by
+# the api server (POST /session).
+remote_signin_clock_skew_seconds = 5
 # File holding the SHA-256 (hex) of each redeemed grant's id (`jti`) until that grant expires, relative to data_dir,
 # written 0600, so a grant buys one token only, across restarts too; read and written by the api server.
 remote_signin_used_file = "remote-signin-used.json"

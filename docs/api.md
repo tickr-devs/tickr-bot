@@ -110,10 +110,21 @@ The bot checks the grant itself (`api/signin.py`) against the provider key pinne
 `token_use` "access", the `scope`, the lifetime, `exp`, `client_id` among
 `remote_signin_clients` and `sub` among `remote_signin_accounts`. Each grant is redeemed once:
 its `jti` digest is kept in `remote_signin_used_file` until it expires. `200` with `paired-v1` for
-the named device (added, or replacing its earlier token). `401 unauthorized` with the one failed
+the named device (added, or replacing its earlier token). The name is the device's own: the iPhone
+and iPad send their model and the start of the app's vendor id ("iPhone 3F2A1B7C"), the Mac its
+computer name with only the characters a device name may hold. Signing in under a name that is
+already listed replaces that device's token on purpose (signing the same device in again), so two
+Macs with the same computer name share one entry and the later sign-in wins; rename one of them.
+The bot's own names `local` and `simulator` are refused (`400`). `iat` may be at most
+`remote_signin_clock_skew_seconds` ahead of the bot's clock. `401 unauthorized` with the one failed
 check as the cause, or when sign-in is off (`remote_signin_accounts` empty, the default), counted
 against the pair budget. `400` for any other body. `DELETE /session` with a device's token revokes
 that device's token, `204`; the device signs in again to come back.
+
+Turning sign-in on (once tickr.bot runs in production): put the provider's public key, converted
+from tickr.bot's JWKS to a SubjectPublicKeyInfo PEM, at `remote_signin_key_file`
+(`config/signin/tickr-bot-provider.pem`), then set `remote_signin_accounts` to the owner's tickr.bot
+account id (`sub`). With accounts listed and no usable key file the API refuses to start.
 
 ### Failed authentication limit
 

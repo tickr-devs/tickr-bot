@@ -100,6 +100,13 @@ def test_a_malformed_body_is_a_bad_request(settings, serve, body):
     assert remote(serve(settings), "POST", "/session", body=body)[0].status == 400
 
 
+@pytest.mark.parametrize("name", ["local", "simulator"])
+def test_the_bots_own_device_names_are_refused(settings, serve, name):
+    resp, payload = sign_in(serve(settings), name=name)
+    assert resp.status == 400 and "reserved" in doc(payload)["cause"]
+    assert not settings.devices_path.exists() and not settings.signin_used_path.exists()
+
+
 def test_sign_in_is_off_without_accounts(settings, serve):
     resp, payload = sign_in(serve(replace(settings, signin_rules=None, signin_key=None)))
     assert resp.status == 401 and "off" in doc(payload)["cause"]
