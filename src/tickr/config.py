@@ -257,6 +257,18 @@ class ApiConfig:
     remote_auth_failures: int
     remote_pair_window_seconds: int
     remote_pair_failures: int
+    remote_signin_accounts: tuple[str, ...]
+    remote_signin_key_file: str
+    remote_signin_issuer: str
+    remote_signin_audience: str
+    remote_signin_scope: str
+    remote_signin_clients: tuple[str, ...]
+    remote_signin_max_lifetime_seconds: int
+    remote_signin_clock_skew_seconds: int
+    remote_signin_used_file: str
+    remote_access_token_seconds: int
+    remote_refresh_token_seconds: int
+    remote_session_max_seconds: int
     remote_auth_max_addresses: int
     remote_auth_ipv6_prefix_length: int
     demo_port: int

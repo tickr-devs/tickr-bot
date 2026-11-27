@@ -590,7 +590,7 @@ straight to the supervisor. Limits:
 `bot-did-not-start`, `bot-did-not-stop` (added in review), `preflight-failed`, `token-needs-confirmation`,
 `exit-refused`, `observers-stopped`, `strategy-not-loaded` (no entries this run: the active
 strategy or its settings version was refused), `not-flat-after-flatten`, `exit-not-filled`,
-`flatten-after-close`, from the API `api-credentials-unexpected` and `risk-command-used` (feed only, see
+`flatten-after-close`, from the API `api-credentials-unexpected`, `risk-command-used` and `device-session` (feed only, see
 "The API job and the Webull keys") and `remote-auth-blocked` (an address used up its
 failed-authentication budget on the remote port, docs/api.md; feed only), and from
 the watchdog `watchdog-not-flat`, `watchdog-cannot-check`, `bot-down-with-open-trade`,
@@ -636,6 +636,23 @@ The API raises one of these for every accepted command that raises risk: `entry-
 remote) and the time; never a token. If you did not do this, the device's token is stolen or
 the phone is not yours: revoke that device now (`python -m tickr.api revoke --name <device>`),
 then pair again. Refused commands raise nothing. It goes to the alerts feed.
+
+### `device-session`
+
+The API raises one of these whenever a device signs in with tickr.bot (`POST /session`: the
+device name, the tickr.bot account and app), signs out (`DELETE /session`), or is signed out by
+the bot because a refresh token that was already used came back or its sign-in expired
+(docs/api.md, `POST /session/refresh`). It names the device and the time, never a token or grant.
+A sign-in you did not make means someone holds your tickr.bot sign-in or tickr.bot's signing key:
+revoke the device now (`python -m tickr.api revoke --name <device>`) first, change your
+tickr.bot password and passkeys, and set `remote_signin_accounts = []` until it is understood.
+Emptying the accounts only refuses new sign-ins: a device already signed in keeps its tokens
+until it is revoked, so revoking comes first. A device
+signed out for a reused refresh token is either a copy of that token in use, or the app lost the
+answer to its own refresh (a dropped connection); sign in again on the device, and if it happens
+again without a network fault, treat it as a stolen token. It cannot be switched off and goes to
+the alerts feed; the watchdog relays each one to Telegram, marked `RELAYED from the API:` with the
+API's time (`runtime/watchdog.py`, `Sentinel.relay`).
 
 ### `broker-reads-failing`
 

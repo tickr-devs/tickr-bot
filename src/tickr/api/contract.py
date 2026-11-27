@@ -760,6 +760,20 @@ class PairedV1:
 
 
 @dataclass(frozen=True)
+class SessionV1:
+    """POST /session and POST /session/refresh on the remote port: a signed-in device's token
+    pair (api/sessions.py). `access_token` is the bearer token until it expires; the app then
+    trades `refresh_token` for a new pair, once (the presented one is retired). Lifetimes are in
+    seconds from the answer. The server keeps only the tokens' SHA-256."""
+
+    access_token: str
+    access_expires_in: int
+    refresh_token: str
+    refresh_expires_in: int
+    api_version: int = _const(API_VERSION)
+
+
+@dataclass(frozen=True)
 class CommandAcceptedV1:
     """POST /commands/*: the command is queued for the bot, not yet executed."""
 
@@ -3279,6 +3293,7 @@ SCHEMA_TYPES: dict[str, type] = {
     "command-receipt-v1": CommandReceiptV1,
     "bot-start-v1": BotStartV1,
     "paired-v1": PairedV1,
+    "session-v1": SessionV1,
     "pending-commands-v1": PendingCommandsV1,
     "error-v1": ErrorV1,
     "days-v1": DaysV1,
