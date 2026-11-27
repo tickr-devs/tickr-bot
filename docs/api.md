@@ -163,8 +163,10 @@ that its RFC 7638 thumbprint is the `kid` of tickr.bot's grants. A new key on th
 file here, its thumbprint in that test, and a restart. Make sure the watchdog runs:
 it relays every `device-session` alert from the alerts feed to Telegram (the API holds no
 credential variable, so it cannot send one itself). Then set `remote_signin_accounts` to the owner's tickr.bot
-account id (`sub`). With accounts listed and no usable key file the API refuses to start, so the
-deploy that sets accounts must also ship the key file next to `bot.toml`. Before that, measure the
+account id (`sub`). With accounts listed and no usable key file the API refuses to start. The key
+is read from the checkout the running code is loaded from (`tickr.version.CODE_ROOT`, `/app` in the
+release image, which carries `config/`), never from the data root, so it ships with the code of
+the same release. Before that, measure the
 clock offset of both servers (`chronyc tracking` on the bot's and on tickr.bot's) and write it,
 with the margin, into the comment of `remote_signin_clock_skew_seconds`.
 

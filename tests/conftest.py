@@ -1,5 +1,8 @@
 """Shared test setup for the whole suite."""
 
+import shutil
+from pathlib import Path
+
 import pytest
 
 import tickr.cli as cli
@@ -37,9 +40,18 @@ def watchdog_runs_one_day(monkeypatch):
 TEST_CODE_VERSION = "0123456789abcdef0123456789abcdef01234567"
 
 
+# The pinned sign-in provider key, a file of the checkout ([api] remote_signin_key_file).
+SIGNIN_KEY = Path("config") / "signin" / "tickr-bot-provider.pem"
+
+
 @pytest.fixture(scope="session")
 def _no_git_code_root(tmp_path_factory):
-    return tmp_path_factory.mktemp("code-root")
+    """A checkout with no `.git`, as in the Docker image, that carries the files the API reads
+    from the code's checkout: the pinned sign-in key."""
+    root = tmp_path_factory.mktemp("code-root")
+    (root / SIGNIN_KEY).parent.mkdir(parents=True)
+    shutil.copyfile(Path(__file__).resolve().parents[1] / SIGNIN_KEY, root / SIGNIN_KEY)
+    return root
 
 
 @pytest.fixture(autouse=True)

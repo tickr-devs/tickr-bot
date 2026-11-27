@@ -12,6 +12,7 @@ from datetime import timedelta
 
 import pytest
 
+import tickr.version as running_code
 from tickr import config
 from tickr.api import contract, devices
 from tickr.api.server import make_remote_server, make_server, settings_from_config
@@ -274,7 +275,9 @@ def test_the_local_port_has_no_session_route(settings, serve):
         local.server_close()
 
 
-def test_config_with_accounts_pins_the_key_file(tmp_path):
+def test_config_with_accounts_pins_the_key_file(tmp_path, monkeypatch):
+    # The key is read from the code's checkout (CODE_ROOT); here a checkout without it, then with.
+    monkeypatch.setattr(running_code, "CODE_ROOT", tmp_path)
     cfg = config.load(ROOT / "config" / "bot.toml", root=tmp_path)
     cfg = replace(cfg, api=replace(cfg.api, remote_signin_accounts=("1",)))
     with pytest.raises(ConfigError, match="remote_signin_key_file"):
