@@ -548,10 +548,11 @@ remote_pair_failures = 3
 # tickr.bot accounts whose sign-in grant may get a device a bearer token at POST /session on the remote port (the
 # account's numeric id, the grant's `sub`, as text; tickr.bot gives grants only to an admin in a passkey or
 # authenticator session); empty = sign-in off, POST /session answers 401 and only `pair` adds devices; read by the
-# api server.
-remote_signin_accounts = []
+# api server. "1" is the owner's tickr.bot account (the site's only admin, read on the site server 2026-11-27).
+remote_signin_accounts = ["1"]
 # The pinned public key of tickr.bot's sign-in provider (PEM, SubjectPublicKeyInfo, RSA of at least 2048 bits),
-# relative to the repo root: not a secret; the bot never fetches keys from tickr.bot. A new provider key means a new
+# relative to the checkout the running code is loaded from (tickr.version.CODE_ROOT, /app in the image), never to a
+# data root: not a secret; the bot never fetches keys from tickr.bot. A new provider key means a new
 # file here and a restart. Read by the api server at start when remote_signin_accounts is not empty.
 remote_signin_key_file = "config/signin/tickr-bot-provider.pem"
 # The grant's issuer (`iss`), exactly: tickr.bot's OpenID provider; read by the api server (POST /session).
@@ -568,8 +569,10 @@ remote_signin_clients = ["tickr-ios", "tickr-mac"]
 # 2026-11-27), so a grant made to live longer is refused; read by the api server (POST /session).
 remote_signin_max_lifetime_seconds = 60
 # How far tickr.bot's clock may run ahead of the bot's when it signs a grant, seconds: a grant whose issue time
-# (`iat`) is later than now plus this is refused (both servers keep NTP time, so a few seconds is plenty); read by
-# the api server (POST /session).
+# (`iat`) is later than now plus this is refused. Measured with `chronyc tracking`, both servers on Amazon Time Sync
+# (169.254.169.123, NTP-disciplined): the bot server 0.16 microseconds slow (2026-11-27 21:51Z), tickr.bot's server
+# 0.04 microseconds fast (2026-11-28 03:58Z); 5 s is a margin far above that measured
+# offset; read by the api server (POST /session).
 remote_signin_clock_skew_seconds = 5
 # File holding the SHA-256 (hex) of each redeemed grant's id (`jti`) until that grant expires, relative to data_dir,
 # written 0600, so a grant buys one token only, across restarts too; read and written by the api server.

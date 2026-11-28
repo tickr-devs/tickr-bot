@@ -44,6 +44,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
+import tickr.version as running_code
 from tickr.api import (
     authlimit,
     contract,
@@ -2241,7 +2242,10 @@ def _signin(cfg: Config) -> tuple[signin.Rules | None, signin.PublicKey | None]:
         raise ConfigError("[api] remote_signin_clients and remote_signin_accounts must name "
                           "at least one client and no empty account")
     try:
-        key = signin.load_key((cfg.root / api.remote_signin_key_file).read_text("ascii"))
+        # The pinned key belongs to the code, not to the data root: the checkout the running code
+        # is loaded from (`running_code.CODE_ROOT`, /app in the release image).
+        key_path = running_code.CODE_ROOT / api.remote_signin_key_file
+        key = signin.load_key(key_path.read_text("ascii"))
     except (OSError, UnicodeDecodeError, signin.KeyFileError) as exc:
         raise ConfigError(f"[api] remote_signin_key_file is unusable ({safe_cause(exc)})") from exc
     rules = signin.Rules(
