@@ -14,6 +14,10 @@ the bot's own start reads, none of them written here:
   day, only with `[session] half_days_enabled`, as preflight decides; it lasts from the start to
   that day's extended close (the bot runs through the post-market, docs/operations.md).
 
+After an operator stop-bot the stop marker (runtime/stopmarker.py) refuses every scheduled
+start (preflight check 5b) until Start clears it, so while it exists there is no schedule: the
+cause says the bot is stopped by the operator, never "off until" a start that will not happen.
+
 Refuse, never guess: a calendar that cannot answer a day it must look at (not covered, invalid),
 or no run within `[api] next_session_search_days` days either way, is a null schedule with one
 cause.
@@ -31,11 +35,14 @@ from tickr.api import contract as api
 from tickr.api.causes import safe_cause
 from tickr.calendar import CalendarCause, CalendarRefused, MarketDay, SessionCalendar
 from tickr.config import Config
+from tickr.runtime import stopmarker
 from tickr.runtime.launchd import schedule
 
 # launchd numbers Sunday both 0 and 7 (runtime/launchd.py); ISO numbers it 7.
 _LAUNCHD_SUNDAY = 0
 _ISO_SUNDAY = 7
+OPERATOR_STOPPED = ("stopped by an operator stop-bot command: no scheduled start runs until "
+                    "Start is pressed")
 # A day the calendar answers with no session: the search goes on past it.
 _NO_SESSION = frozenset({CalendarCause.WEEKEND, CalendarCause.HOLIDAY})
 
@@ -43,6 +50,7 @@ _NO_SESSION = frozenset({CalendarCause.WEEKEND, CalendarCause.HOLIDAY})
 @dataclass(frozen=True)
 class ScheduleSettings:
     calendar: Path  # the session calendar's folder
+    stop_marker: Path  # the operator's stop marker (runtime/stopmarker.py)
     timezone: str  # [session] timezone: the zone of bot_start_local
     bot_start: time  # [runtime] bot_start_local
     weekdays: frozenset[int]  # [runtime] launch_weekdays as ISO weekdays (Monday = 1)
@@ -54,6 +62,7 @@ class ScheduleSettings:
         plan = schedule(config.runtime)
         return cls(
             calendar=(config.root / config.session.calendar_file).parent,
+            stop_marker=stopmarker.path(config),
             timezone=config.session.timezone,
             bot_start=time(plan.bot.hour, plan.bot.minute),
             weekdays=frozenset(_ISO_SUNDAY if d == _LAUNCHD_SUNDAY else d for d in plan.weekdays),
@@ -74,6 +83,14 @@ def no_run_within(settings: ScheduleSettings, way: str, today: date) -> str:
 def bot_schedule(settings: ScheduleSettings,
                  now: datetime) -> tuple[api.BotScheduleV1 | None, str | None]:
     """The schedule at `now`, or None with the cause when it cannot be known."""
+    # Present, even unreadable, it blocks the start (stopmarker.describe), so only "absent" is not.
+    try:
+        settings.stop_marker.stat()
+        return None, OPERATOR_STOPPED
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None, OPERATOR_STOPPED
     zone = ZoneInfo(settings.timezone)
     today = now.astimezone(zone).date()
     try:

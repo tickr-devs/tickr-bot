@@ -503,6 +503,8 @@ _PROSE = _shapes(
     ("no_next_session", r"no regular session within (?P<days>[0-9]+) days after (?P<day>"
                         + _DAY + ")"),
     # the bot's run schedule (api/schedule.py)
+    ("operator_stopped", r"stopped by an operator stop-bot command: no scheduled start runs "
+                         r"until Start is pressed"),
     ("no_bot_run", r"no bot run within (?P<days>[0-9]+) days (?P<way>before|after) (?P<day>"
                    + _DAY + ")"),
     # the jobs strip: backup and nightly fetch (api/jobs.py)

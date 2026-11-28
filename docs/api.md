@@ -327,7 +327,8 @@ that has started (today while it runs). Outside a run the apps show "off until
 `next_start_at`" instead of an alarm; they never work the schedule out themselves. `schedule` is
 `null` with `schedule_cause` (and `schedule_cause_codes`) when the calendar cannot answer a day
 it must look at (`calendar_not_covered`, `calendar_invalid`) or no run is within `[api]
-next_session_search_days` days either way (`no_bot_run`).
+next_session_search_days` days either way (`no_bot_run`), or while the operator's stop marker
+is set after a stop-bot, which refuses every scheduled start until Start (`operator_stopped`).
 
 `entry_block` is `null` only when admission could take an entry now. Its `cause` is a stable
 code and `attention` says how to show it. `attention: true` is a real block (trading gate,
@@ -444,7 +445,7 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
 - the session calendar and the day's session: `calendar_weekend` {day}, `calendar_holiday`
   {day}, `calendar_not_covered` {day}, `calendar_invalid` {detail}, `calendar_naive_time`
   {detail}, `calendar_invalid_offset` {detail}, `half_day_off` {day}, `no_next_session`
-  {days, day}, `no_bot_run` {days, way (`before` or `after`), day};
+  {days, day}, `no_bot_run` {days, way (`before` or `after`), day}, `operator_stopped`;
 - jobs: `no_database`, `database_unreadable` {error}, `no_backup`, `nightly_never_ran`,
   `nightly_file_unreadable` {error}; the nightly fetch's own refusals `nightly_in_session`,
   `nightly_low_disk` {free_mb, min_mb}, `nightly_no_pool`, `nightly_pool_empty`,
