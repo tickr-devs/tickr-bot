@@ -20,6 +20,7 @@ from tickr.advisor_files import Verdict as HoldoutVerdict
 from tickr.api import alerts as alerts_api
 from tickr.api import contract
 from tickr.api.advisor import NO_FOLDER as NO_ADVISOR_FOLDER
+from tickr.api.cleanday import NOT_RECORDED
 from tickr.api.contract import (
     AccountOrder,
     AccountPosition,
@@ -336,6 +337,17 @@ def documents() -> dict[str, object]:
                 "bot records them since [orders] reconcile_proof_seconds was added)", (), 0,
                 None, None, 7001)))),
         "days-v1.empty": DaysV1("sandbox", ()),
+        # The calendar's word on each date (2026-11-28): a half day, a market closure, a
+        # weekend with captured data only, and a date the calendar does not cover.
+        "days-v1.sessions": DaysV1("sandbox", tuple(
+            DaySummary(day, 0, 0, 0, Decimal("0"), True, CleanDay(
+                CleanVerdict.UNKNOWN, NOT_RECORDED, (), 0, None, None, None),
+                       result_net_usd=Decimal("0"), session=session)
+            for day, session in ((date(2026, 11, 27), contract.DaySession.HALF),
+                                 (date(2026, 11, 26), contract.DaySession.NONE),
+                                 (date(2026, 11, 22), contract.DaySession.NONE),
+                                 (date(2026, 11, 20), contract.DaySession.REGULAR),
+                                 (date(2025, 12, 31), None)))),
         "day-v1": DayV1("sandbox", DAY, (
             DayTrade("t-0001", "WXYZ", Decimal("20"), Decimal("5.10"), Decimal("5.02"), T0,
                      T0 + timedelta(minutes=7), "stop", Decimal("5.02"), Decimal("50"),
