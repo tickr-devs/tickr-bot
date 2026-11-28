@@ -51,8 +51,11 @@
 # the previous release's image; bot-state-unknown when compose cannot say); (5) install the files
 # (all or nothing); (5b) remove a stopped bot container (`docker compose rm -f bot`, without -s:
 # never a running one), so the next Start or scheduled start creates it from the new release
-# (bot-container-not-removed: systemd is then not reloaded and nothing is enabled), and reload
-# systemd; (6) enable the timers, the restart and start request watches and the API. The bot is
+# (bot-container-not-removed: systemd is then not reloaded and nothing is enabled); (5c) migrate
+# the database to the new release's schema in a throwaway container of the image (no network, no
+# env file; bot.toml read-only, the data folder read-write), still under the lock, so the API
+# reads the days older releases wrote (database-not-migrated: systemd is then not reloaded and
+# nothing is enabled), and reload systemd; (6) enable the timers, the restart and start request watches and the API. The bot is
 # never started or stopped here.
 #
 # Overrides (names only): TICKR_UNITS_DIR (default /etc/systemd/system), TICKR_SYSTEMCTL
@@ -296,6 +299,18 @@ done
 # Still under the compose lock taken before the running-bot check.
 if ! bot_compose "$etc/limits.env" rm -f bot; then
   echo "refused: bot-container-not-removed: a stopped bot container of the previous release could not be removed (read the docker line above; Start would run that container as it is); the new units, ports.env and limits.env are in place but systemd was not reloaded and nothing was enabled or restarted; deploy again" >&2
+  exit 1
+fi
+# Migrate the database to the new release's schema now, still under the compose lock and with
+# no bot container (removed above): the API restarted below, and every other reader of the new
+# release, reads only its own schema, so the days the previous release wrote would stay
+# unreadable until the bot's next start migrated them. migrate-database keeps a verified copy of
+# the old schema first (Store.open) and never creates a database; no network, no env file.
+if ! "$docker" run --rm --pull never --network none --entrypoint python \
+    --mount "type=bind,source=$config,target=/app/config/bot.toml,readonly" \
+    --mount "type=bind,source=$data,target=/app/data" \
+    "$image" -m tickr.runtime --config /app/config/bot.toml migrate-database; then
+  echo "refused: database-not-migrated: the database could not be brought to the new release's schema (read the migrate-database line above); the new units, ports.env and limits.env are in place but systemd was not reloaded and nothing was enabled or restarted; deploy again" >&2
   exit 1
 fi
 exec 9<&-  # release the compose lock
