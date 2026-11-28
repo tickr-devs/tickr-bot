@@ -74,7 +74,7 @@ so it lives only on the host: never in the repo, and the deploy script never pri
 The server has **no clone of the repo, no virtualenv and no GitHub credential**. Everything
 Tickr runs comes from the release image; the few host files below are copied onto the server
 (by SSM from the owner's side) or written by the server's own bootstrap. Every Python step of the
-deploy (`render-systemd`, `require-flat`) runs inside the release image with `docker run --rm
+deploy (`render-systemd`, `require-flat`, `migrate-database`) runs inside the release image with `docker run --rm
 --pull never`.
 
 Layout (`/srv/tickr/etc` is the bootstrap's folder, mode 700, owner `tickr:tickr`; the units
@@ -318,7 +318,25 @@ containers", exit 0. So the next Start or
 scheduled start creates the bot from the new release image, never the stopped container of
 the previous one. When the removal fails it refuses with `bot-container-not-removed` (exit 1):
 the new files are in place, but systemd is not reloaded and nothing is enabled or restarted;
-read the docker line, then deploy again. Last it reloads systemd and enables the timers,
+read the docker line, then deploy again. Then, still under the lock and with no bot container,
+it migrates the database to the new release's schema: `python -m tickr.runtime migrate-database`
+in the release image (no network, no env file; `bot.toml` read-only, the data folder
+read-write). The API and every other reader of a release read only their own schema, so without
+this the days an older release wrote answer `503 database schema vN, this API reads vM` until the
+bot's next start migrates them (2026-11-28, release cd25eeb). It keeps a verified copy of the old
+schema first (`tickr.pre-v<N>.sqlite3` next to the database; it needs free space on the data
+disk equal to the database's size), holds the bot's lock (`tickr.lock`: refused while a bot
+runs), never creates a database, and refuses a file that is not a Tickr database (schema 0), a
+database of another environment or one newer than the release. If the copy was written but a
+migration step then failed (or the copy died half way, for example on a full disk), the next
+try refuses with `FileExistsError` on that `pre-v<N>` file and deploying again does not help:
+check the database's schema and the copy (`PRAGMA user_version`, `PRAGMA integrity_check`),
+move the copy aside, free space if needed, then deploy again. The bot's own start behaves the
+same. When it fails it refuses
+with `database-not-migrated` (exit 1): the new files are in place, systemd is not reloaded and
+nothing is enabled or restarted; read the `migrate-database` line, then deploy again. A rollback
+to an older image after this finds a newer schema and refuses it (forward-only migrations): put
+the `pre-v<N>` copy back only if nothing was written since. Last it reloads systemd and enables the timers,
 `tickr-bot-restart.path`, `tickr-bot-start.path` and the API (`TICKR_SERVICE_USER`, default
 `tickr`, is the units' `User=`). It never starts or stops the bot. Not yet run on a real
 server.

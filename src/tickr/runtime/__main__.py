@@ -12,6 +12,11 @@
   `release` and `rollback` require just before they switch.
 - `require-flat`: `broker-flat` plus the database's open trades; exit 0 only when flat (the
   server deploy's gate, ops/systemd/deploy-server.sh).
+- `migrate-database`: under the bot's lock (refused while a bot runs), bring the database to
+  this code's schema (Store.open: a verified `<name>.pre-v<N>.sqlite3` copy first), never
+  creating one; the server deploy runs it while
+  the bot container is down, so the API and every other reader of the new release read the
+  days the previous release wrote (ops/systemd/deploy-server.sh).
 - `alert <kind> <text>`: show one alert (used to test notifications).
 - `render-launchd`: write filled-in plists from ops/launchd into a folder; installs nothing.
 - `render-systemd`: write the systemd units and timers from ops/systemd (Linux server); installs
@@ -34,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 import tomllib
@@ -46,6 +52,7 @@ from tickr import config as config_module
 from tickr.api import contract
 from tickr.broker.base import Broker, BrokerError
 from tickr.calendar import CalendarRefused
+from tickr.lock import LOCK_FILE, AlreadyRunning, SingleInstanceLock
 from tickr.runtime import launchd, restartrequest, systemd, watchdog
 from tickr.runtime import release as release_module
 from tickr.runtime.alert_routing import routing_path, skipped_by
@@ -70,7 +77,7 @@ from tickr.runtime.preflight import (
 )
 from tickr.runtime.signals import StopRequest, install_stop_handler, restore_handlers
 from tickr.runtime.supervisor import supervise
-from tickr.store import DATABASE_FILE
+from tickr.store import DATABASE_FILE, MIGRATIONS, EnvironmentMismatch, Store
 
 TITLE = "Tickr"
 TEMPLATE_DIR = Path("ops") / "launchd"
@@ -470,6 +477,69 @@ def _require_flat(config_path: Path) -> int:
     return 0 if cause is None else int(ExitCode.FAILED)
 
 
+MIGRATE_DATABASE = "migrate-database"
+
+
+def _migrate_database(config_path: Path) -> int:
+    """Migrate the database to this code's schema, once, with the bot down (the server
+    deploy). Readers (the API, `tickr status`, `tickr maintain`) read only the current schema,
+    so without this the days an older release wrote stay unreadable until the bot's next start.
+    The bot's own lock is held throughout, as the bot holds it around its Store.open: while a
+    bot runs this refuses and changes nothing. No database: nothing is created. A file that is
+    not a Tickr database (schema 0), a database of another environment or one newer than this
+    code is refused untouched. Prints one JSON line: from, to and the cause of a refusal."""
+    cfg = config_module.load(config_path)
+    data = cfg.root / cfg.run.data_dir
+    database = data / DATABASE_FILE
+    target = len(MIGRATIONS)
+    if not database.exists() or database.stat().st_size == 0:
+        _emit(MIGRATE_DATABASE, {"from": None, "to": None, "cause": None,
+                                 "detail": "no database yet: the bot creates it"})
+        return 0
+    cause: str | None = None
+    current: int | None = None
+    lock = SingleInstanceLock(data / LOCK_FILE)
+    try:
+        lock.acquire()
+    except AlreadyRunning:
+        _emit(MIGRATE_DATABASE, {"from": None, "to": None,
+                                 "cause": "the bot is running (it holds its lock); nothing "
+                                          "was changed"})
+        return int(ExitCode.FAILED)
+    try:
+        reader = Store.open_readonly(database)
+        try:
+            found = reader.schema_version
+            current = found
+            if found == 0:
+                cause = "schema v0: not a Tickr database"
+            elif found > target:
+                cause = f"schema v{found} is newer than this code (v{target})"
+            else:
+                reader.require_environment(cfg.environment_name)
+        finally:
+            reader.close()
+        if cause is None and found < target:
+            Store.open(database,
+                       busy_timeout_seconds=cfg.run.database_busy_timeout_seconds).close()
+    except EnvironmentMismatch as exc:
+        cause = str(exc)
+    except (sqlite3.Error, OSError, RuntimeError) as exc:
+        cause = f"{type(exc).__name__}: {exc}"
+    finally:
+        lock.release()
+    if cause is not None:
+        _emit(MIGRATE_DATABASE, {"from": current, "to": None, "cause": cause})
+        return int(ExitCode.FAILED)
+    if current == target:
+        detail = "already current"
+    else:
+        detail = (f"migrated; the v{current} copy is "
+                  f"{database.stem}.pre-v{(current or 0) + 1}{database.suffix}")
+    _emit(MIGRATE_DATABASE, {"from": current, "to": target, "cause": None, "detail": detail})
+    return 0
+
+
 # Replaced in tests: the command runner of `release` and `rollback`.
 RELEASE_RUNNER: release_module.Runner = release_module.run_process
 
@@ -503,6 +573,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser(release_module.BROKER_FLAT,
                    help="read positions and open orders once (read-only), for release")
     sub.add_parser(REQUIRE_FLAT, help="exit 0 only when the broker and the database show flat")
+    sub.add_parser(MIGRATE_DATABASE,
+                   help="with the bot down: migrate the database to this code's schema")
     run = sub.add_parser("run-bot", help="preflight, then run the bot command after --")
     run.add_argument("bot_command", nargs=argparse.REMAINDER)
     alert = sub.add_parser("alert", help="show one alert")
@@ -563,6 +635,8 @@ def main(argv: list[str] | None = None) -> int:
             return _broker_flat(args.config)
         if args.command == REQUIRE_FLAT:
             return _require_flat(args.config)
+        if args.command == MIGRATE_DATABASE:
+            return _migrate_database(args.config)
         if args.command == "alert":
             _alert(args.config, None, AlertKind(args.kind), args.text)
             return 0

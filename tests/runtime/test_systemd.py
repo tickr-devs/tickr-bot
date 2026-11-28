@@ -262,7 +262,9 @@ def _fake_server(tmp_path: Path, flat: bool) -> tuple[Path, Path, Path, Path]:
     # owner, this test's own ids; ID_FAILS makes it fail), `--entrypoint cat` prints the image's
     # compose.yaml (IMAGE_COMPOSE, default the etc copy), render-systemd writes the units of
     # the --data and --image it is given (RENDER_IMAGE overrides the image), require-flat
-    # answers the flat result. The bot container is the file bot-container ("STATE IMAGE").
+    # answers the flat result, migrate-database succeeds only under the compose lock with no bot
+    # container (MIGRATE_FAILS makes it fail). The bot container is the file bot-container
+    # ("STATE IMAGE").
     # `compose ... -p tickr --profile jobs ps --status running -q bot` prints an id when its
     # state is running (PS_FAILS makes it fail); `... rm -f bot` (no -s) models compose's Remove
     # (pkg/compose/remove.go): it is removed unless its state is running (RM_FAILS makes it
@@ -320,6 +322,10 @@ def _fake_server(tmp_path: Path, flat: bool) -> tuple[Path, Path, Path, Path]:
         '    printf "TICKR_BOT_EXIT_TIMEOUT=1\\nTICKR_IMAGE=%s\\n" "${RENDER_IMAGE:-$image}" \\\n'
         '      > "$out/limits.env" ;;\n'
         f'  *" require-flat") exit {0 if flat else 1} ;;\n'
+        '  *" migrate-database")\n'
+        '    [ -z "${MIGRATE_FAILS:-}" ] || exit 1\n'
+        f'    ! flock -n {tmp_path}/data/control/compose.lock true || exit 1\n'
+        f'    [ ! -f {tmp_path}/bot-container ] || exit 1 ;;\n'
         '  *) exit 1 ;;\nesac\n', "utf-8")
     mounted = tmp_path / "mountpoint"
     mounted.write_text('#!/bin/sh\n[ "$1" = -q ] && [ ! -e "$2/.not-mounted" ]\n', "utf-8")
@@ -576,6 +582,15 @@ def test_deploy_script_refuses_when_the_stopped_bot_container_cannot_be_removed(
     assert done.returncode == 1 and "refused: bot-container-not-removed:" in done.stderr
     assert (tmp_path / "bot-container").exists()
     # The files were installed before it, but systemd was not reloaded and nothing enabled.
+    assert not (tmp_path / "systemctl.log").exists()
+
+
+def test_deploy_script_refuses_when_the_database_cannot_be_migrated(tmp_path):
+    # The API of the new release reads only its own schema: a deploy that cannot migrate stops
+    # before systemd is told about the new units, and says so.
+    done = _deploy_with_bot(tmp_path, "exited", MIGRATE_FAILS="1")
+    assert done.returncode == 1 and "refused: database-not-migrated:" in done.stderr
+    assert not (tmp_path / "bot-container").exists()  # removed before the migration
     assert not (tmp_path / "systemctl.log").exists()
 
 
@@ -837,12 +852,12 @@ def test_deploy_script_runs_every_python_step_in_the_release_image_and_never_pul
     assert calls[0] == f"image inspect {IMAGE}"
     # The fake docker fails every command that is not `run --pull never` of the release image:
     # the uid check, render-systemd and require-flat all ran in it; none may pull.
-    runs = calls[1:-2]
-    assert len(runs) == 5 and all(c.startswith("run --rm --pull never ") for c in runs)
+    runs = calls[1:-3] + calls[-1:]
+    assert len(runs) == 6 and all(c.startswith("run --rm --pull never ") for c in runs)
     # Last: the running-bot check, then (after the install) the removal of a stopped bot
-    # container; compose never pulls.
-    assert calls[-2].startswith("compose ") and calls[-2].endswith(" ps --status running -q bot")
-    assert calls[-1].startswith("compose ") and calls[-1].endswith(" rm -f bot")
+    # container, then the database migration; compose never pulls.
+    assert calls[-3].startswith("compose ") and calls[-3].endswith(" ps --status running -q bot")
+    assert calls[-2].startswith("compose ") and calls[-2].endswith(" rm -f bot")
     assert sum(f"--entrypoint id {IMAGE} -" in c for c in runs) == 2
     etc, data = tmp_path / "etc", tmp_path / "data"
     [render] = [c for c in runs if " render-systemd " in c]
@@ -860,6 +875,13 @@ def test_deploy_script_runs_every_python_step_in_the_release_image_and_never_pul
     assert "--entrypoint" not in flat  # the image's entrypoint sources the env file
     assert flat.endswith(f" {IMAGE} python -m tickr.runtime --config /app/config/bot.toml "
                          "require-flat")
+    migrate = calls[-1]
+    assert "--network none --entrypoint python " in migrate
+    assert f"type=bind,source={etc}/bot.toml,target=/app/config/bot.toml,readonly" in migrate
+    assert f"type=bind,source={data},target=/app/data " in migrate
+    assert "/run/tickr/env" not in migrate  # no credential is needed to migrate
+    assert migrate.endswith(f" {IMAGE} -m tickr.runtime --config /app/config/bot.toml "
+                            "migrate-database")
 
 
 def test_deploy_script_needs_no_clone(tmp_path):
