@@ -569,8 +569,10 @@ remote_signin_clients = ["tickr-ios", "tickr-mac"]
 # 2026-11-27), so a grant made to live longer is refused; read by the api server (POST /session).
 remote_signin_max_lifetime_seconds = 60
 # How far tickr.bot's clock may run ahead of the bot's when it signs a grant, seconds: a grant whose issue time
-# (`iat`) is later than now plus this is refused (both servers keep NTP time, so a few seconds is plenty; measured
-# 2026-11-27: the bot server under 1 microsecond from NTP, Amazon Time Sync); read by the api server (POST /session).
+# (`iat`) is later than now plus this is refused. Measured with `chronyc tracking`, both servers on Amazon Time Sync
+# (169.254.169.123, NTP-disciplined): the bot server 0.16 microseconds slow (2026-11-27 21:51Z), tickr.bot's server
+# 0.04 microseconds fast (2026-11-28 03:58Z); 5 s covers the grant's network trip and a resync, far above that
+# offset; read by the api server (POST /session).
 remote_signin_clock_skew_seconds = 5
 # File holding the SHA-256 (hex) of each redeemed grant's id (`jti`) until that grant expires, relative to data_dir,
 # written 0600, so a grant buys one token only, across restarts too; read and written by the api server.
