@@ -692,6 +692,9 @@ class BotScheduleV1:
     next_start_at: datetime  # the start of the next run after served_at (not the current one)
     next_end_at: datetime  # that run's end (its day's extended close)
     last_trading_day: date  # the day of the latest run that has started (today while it runs)
+    # The start of that run; null while expected_running is false (added 2026-11-28): the apps
+    # read a silent bot as starting, not down, until this plus the status's stale age.
+    run_started_at: datetime | None = _added_later(None)
 
 
 @dataclass(frozen=True)

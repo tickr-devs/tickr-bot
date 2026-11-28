@@ -51,6 +51,7 @@ def test_inside_a_run_it_ends_at_the_extended_close(settings):
     plan = at(settings, ny(2026, 11, 16, 10, 0))  # Monday 10:00
     assert plan.timezone == "America/New_York" and plan.expected_running
     assert plan.run_ends_at == ny(2026, 11, 16, 20, 0)
+    assert plan.run_started_at == ny(2026, 11, 16, 4, 0)
     assert (plan.next_start_at, plan.next_end_at) == (ny(2026, 11, 17, 4, 0),
                                                       ny(2026, 11, 17, 20, 0))
     assert plan.last_trading_day == date(2026, 11, 16)
@@ -59,6 +60,7 @@ def test_inside_a_run_it_ends_at_the_extended_close(settings):
 def test_before_the_start_and_at_the_close_the_bot_is_off(settings):
     early = at(settings, ny(2026, 11, 16, 3, 59))
     assert not early.expected_running and early.run_ends_at is None
+    assert early.run_started_at is None
     assert early.next_start_at == ny(2026, 11, 16, 4, 0)
     assert early.last_trading_day == date(2026, 11, 13)  # the Friday before
     start = at(settings, ny(2026, 11, 16, 4, 0))

@@ -163,7 +163,8 @@ NY = "America/New_York"
 # T0 is 10:00 New York on Monday 2026-11-16: inside its 04:00-20:00 run (EST, UTC-5).
 RUNNING = contract.BotScheduleV1(NY, True, datetime(2026, 11, 17, 1, 0, tzinfo=UTC),
                                  datetime(2026, 11, 17, 9, 0, tzinfo=UTC),
-                                 datetime(2026, 11, 18, 1, 0, tzinfo=UTC), date(2026, 11, 16))
+                                 datetime(2026, 11, 18, 1, 0, tzinfo=UTC), date(2026, 11, 16),
+                                 datetime(2026, 11, 16, 9, 0, tzinfo=UTC))
 # Saturday 2026-11-21: off until Monday 04:00 New York; Friday was the last run.
 OFF = contract.BotScheduleV1(NY, False, None, datetime(2026, 11, 23, 9, 0, tzinfo=UTC),
                              datetime(2026, 11, 24, 1, 0, tzinfo=UTC), date(2026, 11, 20))

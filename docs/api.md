@@ -319,8 +319,9 @@ are fixed for the process's life, so clients read `/settings` again when it chan
 run, from its own timer and session calendar (api/schedule.py): `[runtime] bot_start_local` on
 `launch_weekdays`, read in `[session] timezone` (`timezone`, for showing the times), on the days
 the calendar opens and, on a half day, only with `[session] half_days_enabled`; each run lasts
-to that day's extended close. `expected_running` is true inside a run, with `run_ends_at` its end
-(`null` otherwise); `next_start_at` and `next_end_at` are the next run after `served_at` (the
+to that day's extended close. `expected_running` is true inside a run, with `run_started_at` and `run_ends_at` its start
+and end (`null` otherwise; `run_started_at` added later, so a client allows the status's stale
+age after it before reading a silent bot as down); `next_start_at` and `next_end_at` are the next run after `served_at` (the
 04:00 ET pre-market start, not the 09:30 open); `last_trading_day` is the day of the latest run
 that has started (today while it runs). Outside a run the apps show "off until
 `next_start_at`" instead of an alarm; they never work the schedule out themselves. `schedule` is
