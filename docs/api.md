@@ -315,6 +315,19 @@ cannot be trusted. Clients should poll every `poll_seconds`. `api_started_at` (a
 version 1 shipped; `null` from an older API) is when the API process started: its `/settings`
 are fixed for the process's life, so clients read `/settings` again when it changes.
 
+`schedule` (added after version 1 shipped; `null` from an older API) is when the bot is meant to
+run, from its own timer and session calendar (api/schedule.py): `[runtime] bot_start_local` on
+`launch_weekdays`, read in `[session] timezone` (`timezone`, for showing the times), on the days
+the calendar opens and, on a half day, only with `[session] half_days_enabled`; each run lasts
+to that day's extended close. `expected_running` is true inside a run, with `run_ends_at` its end
+(`null` otherwise); `next_start_at` and `next_end_at` are the next run after `served_at` (the
+04:00 ET pre-market start, not the 09:30 open); `last_trading_day` is the day of the latest run
+that has started (today while it runs). Outside a run the apps show "off until
+`next_start_at`" instead of an alarm; they never work the schedule out themselves. `schedule` is
+`null` with `schedule_cause` (and `schedule_cause_codes`) when the calendar cannot answer a day
+it must look at (`calendar_not_covered`, `calendar_invalid`) or no run is within `[api]
+next_session_search_days` days either way (`no_bot_run`).
+
 `entry_block` is `null` only when admission could take an entry now. Its `cause` is a stable
 code and `attention` says how to show it. `attention: true` is a real block (trading gate,
 operator pause, a fence: the code is the fence name with `_`, a daily ceiling, strategy not
@@ -430,7 +443,7 @@ performance `<name>_cause`. Codes (params in braces; wire times become `HH:MM` N
 - the session calendar and the day's session: `calendar_weekend` {day}, `calendar_holiday`
   {day}, `calendar_not_covered` {day}, `calendar_invalid` {detail}, `calendar_naive_time`
   {detail}, `calendar_invalid_offset` {detail}, `half_day_off` {day}, `no_next_session`
-  {days, day};
+  {days, day}, `no_bot_run` {days, way (`before` or `after`), day};
 - jobs: `no_database`, `database_unreadable` {error}, `no_backup`, `nightly_never_ran`,
   `nightly_file_unreadable` {error}; the nightly fetch's own refusals `nightly_in_session`,
   `nightly_low_disk` {free_mb, min_mb}, `nightly_no_pool`, `nightly_pool_empty`,

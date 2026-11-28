@@ -158,12 +158,24 @@ LAB_VERSIONS = (
 LAB_DAYS = tuple(DAY - timedelta(days=d) for d in (3, 4, 5, 6, 7, 10, 11))
 
 
-def _response(st, age, stale, cause=None) -> StatusResponseV1:
+NY = "America/New_York"
+# T0 is 10:00 New York on Monday 2026-11-16: inside its 04:00-20:00 run (EST, UTC-5).
+RUNNING = contract.BotScheduleV1(NY, True, datetime(2026, 11, 17, 1, 0, tzinfo=UTC),
+                                 datetime(2026, 11, 17, 9, 0, tzinfo=UTC),
+                                 datetime(2026, 11, 18, 1, 0, tzinfo=UTC), date(2026, 11, 16))
+# Saturday 2026-11-21: off until Monday 04:00 New York; Friday was the last run.
+OFF = contract.BotScheduleV1(NY, False, None, datetime(2026, 11, 23, 9, 0, tzinfo=UTC),
+                             datetime(2026, 11, 24, 1, 0, tzinfo=UTC), date(2026, 11, 20))
+
+
+def _response(st, age, stale, cause=None, schedule=RUNNING,
+              schedule_cause=None) -> StatusResponseV1:
     return StatusResponseV1(served_at=T0 + timedelta(seconds=2),
                             status=None if st is None else served(st), age_seconds=age,
                             stale=stale, unavailable_cause=cause,
                             summary=contract.summarize(st, age, stale, cause), poll_seconds=POLL,
-                            api_started_at=T0 - timedelta(hours=1))
+                            api_started_at=T0 - timedelta(hours=1), schedule=schedule,
+                            schedule_cause=schedule_cause)
 
 
 def _readiness() -> contract.ReadinessV1:
@@ -266,6 +278,15 @@ def documents() -> dict[str, object]:
                                   None, False),)), Decimal("2.000"), False),
         "status-response-v1.unavailable": _response(
             None, None, False, "the bot has not written a status file"),
+        # Off by schedule over a weekend: the bot's last status, stale, and no alarm.
+        "status-response-v1.off-schedule": replace(_response(status(
+            bot_state=BotState.STOPPED, entry_block=contract.EntryBlock(
+                "bot_stopped", "The bot is stopped.")), Decimal("187200.000"), True,
+            schedule=OFF), served_at=datetime(2026, 11, 21, 15, 0, 2, 123000, tzinfo=UTC)),
+        # The calendar does not cover the day: no schedule, one cause.
+        "status-response-v1.no-schedule": _response(
+            status(), Decimal("2.000"), False, schedule=None,
+            schedule_cause="OUT_OF_COVERAGE: 2028-01-03 is not covered by any file"),
         "command-accepted-v1": CommandAcceptedV1(command=command, warning=None),
         # Settings > Start: launchd took the start; the operator stop was cleared first.
         "bot-start-v1": BotStartV1(T0, True),
