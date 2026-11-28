@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -17,8 +18,10 @@ from tickr.api.history import (
     HistoryPaths,
     HistoryUnavailable,
     closed_trades,
+    day_session,
     trade_metrics,
 )
+from tickr.calendar import SessionCalendar
 from tickr.data.capture import BARS_FILE
 from tickr.store import Store
 
@@ -700,3 +703,24 @@ def test_settings_point_history_at_the_environment(settings):  # noqa: F811
     assert settings.history.environment == "sandbox"
     assert settings.history.capture.parts[-2:] == ("capture", "sandbox")
     assert replace(settings.history, environment="x").environment == "x"
+
+
+def test_days_carry_the_calendar_session(served):
+    """Each date's session from the bot's own calendar, for the apps' day picker: a weekend
+    or closure is `none`, never left for the apps to guess."""
+    server, paths = served
+    shutil.copytree(Path(__file__).resolve().parents[2] / "config" / "calendar", paths.calendar,
+                    dirs_exist_ok=True)
+    for day in (PREVIOUS, date(2026, 11, 14), date(2026, 11, 26), date(2026, 11, 27)):
+        _bars_file(paths, day, [_bar("ABCD", 0, day=day)])
+    body = doc(request(server, "GET", "/days")[1])
+    assert errors(schema("days-v1"), body) == []
+    assert [(d["day"], d["session"]) for d in body["days"]] == [
+        ("2026-11-27", "half"), ("2026-11-26", "none"), ("2026-11-14", "none"),
+        ("2026-11-13", "regular")]
+
+
+def test_day_session_is_null_where_the_calendar_cannot_answer():
+    calendar = SessionCalendar.load(Path(__file__).resolve().parents[2] / "config" / "calendar")
+    assert day_session(calendar, date(2025, 12, 31)) is None  # not covered
+    assert day_session(None, date(2026, 11, 13)) is None  # calendar unreadable

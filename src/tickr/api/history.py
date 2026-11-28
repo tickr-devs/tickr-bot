@@ -26,7 +26,13 @@ from tickr.api.cleanday import JournalFold, clean_days
 from tickr.api.performance import performance
 from tickr.api.settled import DayBarsIndex
 from tickr.archive import existing
-from tickr.calendar import NEW_YORK, CalendarRefused, SessionCalendar, ny_date_of
+from tickr.calendar import (
+    NEW_YORK,
+    CalendarCause,
+    CalendarRefused,
+    SessionCalendar,
+    ny_date_of,
+)
 from tickr.config import Config
 from tickr.data.capture import BARS_FILE, CapturedBarsDays, CaptureError
 from tickr.engine.core import (
@@ -401,6 +407,21 @@ def closed_trades(store: Store, environment: str | None = None,
     return result
 
 
+# Calendar refusals that answer "no session that date"; any other is "not known".
+_NO_SESSION = frozenset({CalendarCause.WEEKEND, CalendarCause.HOLIDAY})
+
+
+def day_session(calendar: SessionCalendar | None, day: date) -> api.DaySession | None:
+    """`day`'s session in the calendar; None when there is no calendar or it cannot answer."""
+    if calendar is None:
+        return None
+    try:
+        market = calendar.day(day)
+    except CalendarRefused as refused:
+        return api.DaySession.NONE if refused.cause in _NO_SESSION else None
+    return api.DaySession.HALF if market.half_day else api.DaySession.REGULAR
+
+
 @dataclass(frozen=True)
 class HistoryPaths:
     environment: str
@@ -650,6 +671,7 @@ class History:
         trades, runs = self._read_db()
         dates = runs | self._capture_days() | {ny_date_of(t.closed_at) for t in trades}
         clean = self._clean(dates, today)
+        calendar = self._calendar()
         summaries = []
         for day in sorted(dates, reverse=True):
             of_day = self._of_day(trades, day)
@@ -659,7 +681,8 @@ class History:
                 losses=sum(1 for t in of_day if t.result_gross_usd < 0),
                 result_gross_usd=sum((t.result_gross_usd for t in of_day), ZERO),
                 result_net_usd=total_net(of_day),
-                has_bars=existing(self._bars_file(day)) is not None, clean=clean[day]))
+                has_bars=existing(self._bars_file(day)) is not None, clean=clean[day],
+                session=day_session(calendar, day)))
         return api.DaysV1(environment=self.paths.environment, days=tuple(summaries))
 
     def day(self, day: date, today: date) -> api.DayV1:

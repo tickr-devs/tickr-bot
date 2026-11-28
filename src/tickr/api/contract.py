@@ -962,6 +962,14 @@ class CleanDay:
 
     cause_codes: tuple[ReasonV1, ...] = _reasons_of("cause")
 
+class DaySession(StrEnum):
+    """What the session calendar says of a New York date (GET /days)."""
+
+    REGULAR = "regular"  # a full trading day
+    HALF = "half"  # an early close
+    NONE = "none"  # no session: a weekend or a market closure
+
+
 @dataclass(frozen=True)
 class DaySummary:
     """One New York date with records: closed trades, a bot run, or captured market data."""
@@ -976,6 +984,10 @@ class DaySummary:
     # Added after version 1 shipped (2026-11-16): the day's result after fees, the sum of its
     # trades' `result_net_usd`; null while any of them is null.
     result_net_usd: Decimal | None = _added_later(None)
+    # Added after version 1 shipped (2026-11-28): the date's session from the bot's own session
+    # calendar, for the apps' day picker; null when the calendar does not cover the date or
+    # cannot be read (the apps keep the row and never guess).
+    session: DaySession | None = _added_later(None)
 
 
 @dataclass(frozen=True)
