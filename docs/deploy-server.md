@@ -324,8 +324,15 @@ in the release image (no network, no env file; `bot.toml` read-only, the data fo
 read-write). The API and every other reader of a release read only their own schema, so without
 this the days an older release wrote answer `503 database schema vN, this API reads vM` until the
 bot's next start migrates them (2026-11-28, release cd25eeb). It keeps a verified copy of the old
-schema first (`tickr.pre-v<N>.sqlite3` next to the database), never creates a database, and
-refuses a database of another environment or newer than the release. When it fails it refuses
+schema first (`tickr.pre-v<N>.sqlite3` next to the database; it needs free space on the data
+disk equal to the database's size), holds the bot's lock (`tickr.lock`: refused while a bot
+runs), never creates a database, and refuses a file that is not a Tickr database (schema 0), a
+database of another environment or one newer than the release. If the copy was written but a
+migration step then failed (or the copy died half way, for example on a full disk), the next
+try refuses with `FileExistsError` on that `pre-v<N>` file and deploying again does not help:
+check the database's schema and the copy (`PRAGMA user_version`, `PRAGMA integrity_check`),
+move the copy aside, free space if needed, then deploy again. The bot's own start behaves the
+same. When it fails it refuses
 with `database-not-migrated` (exit 1): the new files are in place, systemd is not reloaded and
 nothing is enabled or restarted; read the `migrate-database` line, then deploy again. A rollback
 to an older image after this finds a newer schema and refuses it (forward-only migrations): put

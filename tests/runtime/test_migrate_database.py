@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tickr import config as config_module
 from tickr.api.history import History, HistoryPaths
+from tickr.lock import LOCK_FILE, SingleInstanceLock
 from tickr.runtime.__main__ import main
 from tickr.store import DATABASE_FILE, MIGRATIONS, Store
 
@@ -75,7 +76,7 @@ def test_a_current_database_is_left_as_it_is(config_path, capsys):
     code, row = _run(config_path, capsys)
     assert code == 0 and row["from"] == row["to"] == len(MIGRATIONS)
     assert row["detail"] == "already current" and database.read_bytes() == before
-    assert sorted(p.name for p in database.parent.iterdir()) == [database.name]
+    assert sorted(p.name for p in database.parent.iterdir()) == sorted([database.name, LOCK_FILE])
 
 
 def test_no_database_is_never_created(config_path, capsys):
@@ -112,3 +113,33 @@ def test_an_existing_copy_of_the_old_schema_is_never_overwritten(config_path, ca
     code, row = _run(config_path, capsys)
     assert code == 1 and "FileExistsError" in row["cause"]
     assert copy.read_bytes() == b"an earlier copy" and _version(database) == OLD
+
+
+def test_a_running_bot_is_never_migrated_under(config_path, capsys):
+    # The bot holds its lock around its own Store.open for its whole run: a migration then
+    # would change the schema under a live process.
+    database = _database(config_path)
+    _write(database, OLD)
+    with SingleInstanceLock(database.parent / LOCK_FILE):
+        code, row = _run(config_path, capsys)
+    assert code == 1 and "the bot is running" in row["cause"]
+    assert _version(database) == OLD
+    assert not database.with_name(f"{database.stem}.pre-v{OLD + 1}{database.suffix}").exists()
+
+
+def test_the_lock_is_released_after_the_migration(config_path, capsys):
+    database = _database(config_path)
+    _write(database, OLD)
+    assert _run(config_path, capsys)[0] == 0
+    with SingleInstanceLock(database.parent / LOCK_FILE):
+        pass  # a bot starting next takes it
+
+
+def test_a_file_that_is_not_a_tickr_database_is_refused_untouched(config_path, capsys):
+    database = _database(config_path)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    sqlite3.connect(database).execute("CREATE TABLE other (x)").connection.close()
+    before = database.read_bytes()
+    code, row = _run(config_path, capsys)
+    assert code == 1 and "not a Tickr database" in row["cause"]
+    assert database.read_bytes() == before
