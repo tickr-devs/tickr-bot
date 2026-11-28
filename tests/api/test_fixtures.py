@@ -128,6 +128,7 @@ from tickr.api.contract import (
 )
 from tickr.api.history import NO_ENTRY, NOT_READ
 from tickr.api.performance import performance
+from tickr.api.schedule import OPERATOR_STOPPED
 from tickr.data.base import ScreenerKind
 from tickr.replay.engine import ExitReason
 from tickr.research.records import Admission
@@ -163,7 +164,8 @@ NY = "America/New_York"
 # T0 is 10:00 New York on Monday 2026-11-16: inside its 04:00-20:00 run (EST, UTC-5).
 RUNNING = contract.BotScheduleV1(NY, True, datetime(2026, 11, 17, 1, 0, tzinfo=UTC),
                                  datetime(2026, 11, 17, 9, 0, tzinfo=UTC),
-                                 datetime(2026, 11, 18, 1, 0, tzinfo=UTC), date(2026, 11, 16))
+                                 datetime(2026, 11, 18, 1, 0, tzinfo=UTC), date(2026, 11, 16),
+                                 datetime(2026, 11, 16, 9, 0, tzinfo=UTC))
 # Saturday 2026-11-21: off until Monday 04:00 New York; Friday was the last run.
 OFF = contract.BotScheduleV1(NY, False, None, datetime(2026, 11, 23, 9, 0, tzinfo=UTC),
                              datetime(2026, 11, 24, 1, 0, tzinfo=UTC), date(2026, 11, 20))
@@ -284,6 +286,11 @@ def documents() -> dict[str, object]:
             bot_state=BotState.STOPPED, entry_block=contract.EntryBlock(
                 "bot_stopped", "The bot is stopped.")), Decimal("187200.000"), True,
             schedule=OFF), served_at=datetime(2026, 11, 21, 15, 0, 2, 123000, tzinfo=UTC)),
+        # Stopped by the operator: no scheduled start runs until Start, so no schedule.
+        "status-response-v1.operator-stopped": _response(status(
+            bot_state=BotState.STOPPED, entry_block=contract.EntryBlock(
+                "bot_stopped", "The bot is stopped.")), Decimal("3600.000"), True,
+            schedule=None, schedule_cause=OPERATOR_STOPPED),
         # The calendar does not cover the day: no schedule, one cause.
         "status-response-v1.no-schedule": _response(
             status(), Decimal("2.000"), False, schedule=None,

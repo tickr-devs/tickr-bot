@@ -13,7 +13,7 @@ import pytest
 from tickr import config
 from tickr.api import contract
 from tickr.api.reasons import prose_reasons
-from tickr.api.schedule import ScheduleSettings, bot_schedule
+from tickr.api.schedule import OPERATOR_STOPPED, ScheduleSettings, bot_schedule
 from tickr.api.server import make_server, settings_from_config
 
 from .test_server import Clock
@@ -51,6 +51,7 @@ def test_inside_a_run_it_ends_at_the_extended_close(settings):
     plan = at(settings, ny(2026, 11, 16, 10, 0))  # Monday 10:00
     assert plan.timezone == "America/New_York" and plan.expected_running
     assert plan.run_ends_at == ny(2026, 11, 16, 20, 0)
+    assert plan.run_started_at == ny(2026, 11, 16, 4, 0)
     assert (plan.next_start_at, plan.next_end_at) == (ny(2026, 11, 17, 4, 0),
                                                       ny(2026, 11, 17, 20, 0))
     assert plan.last_trading_day == date(2026, 11, 16)
@@ -59,6 +60,7 @@ def test_inside_a_run_it_ends_at_the_extended_close(settings):
 def test_before_the_start_and_at_the_close_the_bot_is_off(settings):
     early = at(settings, ny(2026, 11, 16, 3, 59))
     assert not early.expected_running and early.run_ends_at is None
+    assert early.run_started_at is None
     assert early.next_start_at == ny(2026, 11, 16, 4, 0)
     assert early.last_trading_day == date(2026, 11, 13)  # the Friday before
     start = at(settings, ny(2026, 11, 16, 4, 0))
@@ -123,3 +125,15 @@ def test_status_response_carries_the_schedule(cfg):
     assert response.schedule_cause is None and response.schedule is not None
     assert not response.schedule.expected_running
     assert response.schedule.next_start_at == ny(2026, 11, 23, 4, 0)
+
+
+def test_an_operator_stop_means_no_schedule(cfg, settings):
+    """After stop-bot no scheduled start runs until Start, so there is no "off until"."""
+    marker = settings.stop_marker
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("unrecognized\n", "utf-8")  # present, whatever it holds
+    plan, cause = bot_schedule(settings, ny(2026, 11, 21, 10, 0).astimezone(UTC))
+    assert plan is None and cause == OPERATOR_STOPPED
+    assert [r.code for r in prose_reasons(cause)] == ["operator_stopped"]
+    marker.unlink()
+    assert bot_schedule(settings, ny(2026, 11, 21, 10, 0).astimezone(UTC))[0] is not None
