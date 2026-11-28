@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from tickr import config as config_module
+from tickr.api.schedule import ScheduleSettings
 from tickr.runtime import __main__ as runtime_main
 from tickr.runtime import systemd
 from tickr.runtime.__main__ import main
@@ -178,6 +179,13 @@ def test_render_systemd_command(config_path, repo, tmp_path, capsys):
     assert (f"ExecStart=/usr/bin/flock {lock} /usr/bin/docker compose -f {compose} "
             "--profile jobs up -d bot\n") in bot
     assert f"TICKR_IMAGE={IMAGE}\n" in (out / "limits.env").read_text("utf-8")
+    # The timers run in [session] timezone, the zone GET /status `schedule` reads
+    # (api/schedule.py): one source, no zone of the command's own.
+    cfg = config_module.load(config_path)
+    plan = ScheduleSettings.from_config(cfg)
+    start = f"{plan.bot_start.hour:02d}:{plan.bot_start.minute:02d}:00"
+    timer = (out / "tickr-bot.timer").read_text("utf-8")
+    assert f"OnCalendar=Mon,Tue,Wed,Thu,Fri *-*-* {start} {plan.timezone}\n" in timer
 
 
 def test_render_systemd_refuses_a_missing_compose_file(config_path, repo, tmp_path, capsys):

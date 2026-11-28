@@ -6,8 +6,10 @@ the bot should run and does not; they never work the schedule out themselves. So
 the bot's own start reads, none of them written here:
 
 - the timer: `[runtime] bot_start_local` on `[runtime] launch_weekdays` (validated by
-  runtime.launchd), read as wall-clock time in `[session] timezone` (the zone the server's
-  systemd units are rendered in, runtime `--timezone`);
+  runtime.launchd), read as wall-clock time in `[session] timezone`. On the server that is the
+  zone `render-systemd` writes into the timers (its `--timezone` defaults to it, and the deploy
+  passes none). On a Mac, launchd fires in the Mac's own zone, so this holds there only while the
+  Mac is on New York time;
 - the session calendar: a run is a day the calendar opens (no weekend, no closure) and, on a half
   day, only with `[session] half_days_enabled`, as preflight decides; it lasts from the start to
   that day's extended close (the bot runs through the post-market, docs/operations.md).

@@ -84,8 +84,6 @@ SERVER_ENV_FILE = Path("/run/tickr/env")
 SERVER_DATA = Path("/srv/tickr/data")
 SERVER_CONFIG = "bot.toml"
 SERVER_USER = "tickr"
-# The zone of the [runtime] times: the exchange's.
-SERVER_ZONE = "America/New_York"
 
 
 def _emit(record: str, body: dict[str, object]) -> None:
@@ -374,7 +372,9 @@ def _render_systemd(args: argparse.Namespace) -> int:
     except OSError as exc:
         raise config_module.ConfigError(
             f"cannot read the compose file {args.compose}: {type(exc).__name__}") from exc
-    filled = systemd.values(cfg, paths, args.timezone, compose_text)
+    # One zone for the timers and for GET /status `schedule` (api/schedule.py): [session] timezone.
+    zone = args.timezone if args.timezone is not None else cfg.session.timezone
+    filled = systemd.values(cfg, paths, zone, compose_text)
     for path in systemd.render_all(cfg, cfg.root / SYSTEMD_TEMPLATE_DIR, args.out, filled):
         print(path)
     return 0
@@ -532,7 +532,8 @@ def main(argv: list[str] | None = None) -> int:
     units.add_argument("--image", required=True,
                        help="image reference every compose service runs (TICKR_IMAGE in "
                             "limits.env): the release image <registry>/tickr-bot:<commit>")
-    units.add_argument("--timezone", default=SERVER_ZONE, help="IANA zone of the [runtime] times")
+    units.add_argument("--timezone", default=None,
+                       help="IANA zone of the [runtime] times (default: [session] timezone)")
     request = sub.add_parser(REQUEST_RESTART,
                              help="server: ask the host to restart the bot container once")
     request.add_argument("--cause", required=True, help="one word, logged by the host unit")

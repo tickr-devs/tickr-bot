@@ -213,7 +213,7 @@ It writes:
 - `tickr-api.service` (always on; `docker compose up -d api`) and `tickr-{preflight,bot,watchdog,nightly-fetch}`
   `.service` + `.timer` (the compose jobs, `--profile jobs`). Timer times and weekdays are
   `[runtime]` `preflight_start_local`, `bot_start_local`, `watchdog_start_local`, `nightly_fetch_start_local` and
-  `launch_weekdays`, in `America/New_York` (`--timezone`); a start missed while the server was
+  `launch_weekdays`, in `[session] timezone` (America/New_York; `--timezone` overrides it, the deploy passes none, and GET /status `schedule` reads the same zone); a start missed while the server was
   down is not caught up.
 - Every job unit has `Requires=` and `After=tickr-secrets.service`, the oneshot unit that writes
   the env file at `/run/tickr/env`. That unit comes from the server bootstrap; this command does
