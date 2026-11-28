@@ -88,6 +88,7 @@ from tickr.api.journal import day_events, journal_document
 from tickr.api.lab_replay import LabReplay, LabReplayRefused, LabReplaySettings
 from tickr.api.observer_results import ObserverResults, SimulationPaths
 from tickr.api.readiness import ReadinessSettings, readiness_document
+from tickr.api.schedule import ScheduleSettings, bot_schedule
 from tickr.api.settingsapply import (
     ApplyRefused,
     SettingsPaths,
@@ -237,6 +238,7 @@ class ApiSettings:
     chart: ChartSettings  # GET /chart: source switch, cache and calendar
     after: AfterSettings  # prices after, overshoot (day-v1) and what-if (skipped-v1)
     jobs: JobsSettings  # GET /jobs: schedule, database and calendar
+    schedule: ScheduleSettings  # GET /status schedule: the bot's timer and the calendar
     system: SystemSettings  # GET /system: link, preflight record, training, machine services
     readiness: ReadinessSettings  # GET /readiness: the readiness view
     alerts: AlertsSettings  # GET /alerts and PUT /alerts/routing: the notification settings
@@ -407,6 +409,7 @@ def settings_from_config(cfg: Config, config_path: Path | None = None) -> ApiSet
         after=AfterSettings(minutes, api.after_r_decimal_places,
                             (cfg.root / cfg.session.calendar_file).parent),
         jobs=JobsSettings.from_config(cfg),
+        schedule=ScheduleSettings.from_config(cfg),
         system=SystemSettings.from_config(cfg),
         readiness=ReadinessSettings.from_config(cfg),
         alerts=AlertsSettings.from_config(cfg),
@@ -622,6 +625,7 @@ class ApiServer(ThreadingHTTPServer):
             if age < 0:
                 status, age, cause = None, None, "status file is dated in the future"
         stale = age is not None and age > self.settings.status_stale_seconds
+        plan, plan_cause = bot_schedule(self.settings.schedule, now)
         return StatusResponseV1(
             served_at=now,
             status=None if status is None else contract.served_status(status, self._run_facts()),
@@ -631,6 +635,8 @@ class ApiServer(ThreadingHTTPServer):
             summary=contract.summarize(status, age, stale, cause),
             poll_seconds=self.settings.poll_seconds,
             api_started_at=self.started_at,
+            schedule=plan,
+            schedule_cause=plan_cause,
         )
 
     def readiness(self) -> contract.ReadinessV1:

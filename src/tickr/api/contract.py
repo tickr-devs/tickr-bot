@@ -679,6 +679,22 @@ class CommandV1:
 
 
 @dataclass(frozen=True)
+class BotScheduleV1:
+    """When the bot is meant to run (api/schedule.py): its timer ([runtime] bot_start_local on
+    launch_weekdays, in `timezone`) on the days the session calendar opens and the bot trades,
+    each run lasting to that day's extended close. Added after version 1 shipped. The apps show
+    "off until `next_start_at`" while `expected_running` is false, and alarm only while it is
+    true and the bot does not run."""
+
+    timezone: str  # IANA zone of the schedule ([session] timezone), for showing its times
+    expected_running: bool  # now is inside a scheduled run
+    run_ends_at: datetime | None  # the end of that run; null while expected_running is false
+    next_start_at: datetime  # the start of the next run after served_at (not the current one)
+    next_end_at: datetime  # that run's end (its day's extended close)
+    last_trading_day: date  # the day of the latest run that has started (today while it runs)
+
+
+@dataclass(frozen=True)
 class StatusResponseV1:
     """GET /status. Always this shape; `status` is null when the bot's file is missing or bad."""
 
@@ -693,8 +709,13 @@ class StatusResponseV1:
     # When this API process started (added after version 1 shipped). Its settings are fixed for
     # the process's life, so clients read GET /settings again when this changes.
     api_started_at: datetime | None = _added_later(None)
+    # The bot's run schedule (added after version 1 shipped); null with `schedule_cause` when the
+    # calendar cannot answer or no run is within [api] next_session_search_days either way.
+    schedule: BotScheduleV1 | None = _added_later(None)
+    schedule_cause: str | None = _added_later(None)
 
     unavailable_cause_codes: tuple[ReasonV1, ...] = _reasons_of("unavailable_cause")
+    schedule_cause_codes: tuple[ReasonV1, ...] = _reasons_of("schedule_cause")
 
 @dataclass(frozen=True)
 class AccountResponseV1:

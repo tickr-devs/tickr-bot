@@ -502,6 +502,9 @@ _PROSE = _shapes(
     ("half_day_off", r"no session (?P<day>" + _DAY + r"): half day, half_days_enabled = false"),
     ("no_next_session", r"no regular session within (?P<days>[0-9]+) days after (?P<day>"
                         + _DAY + ")"),
+    # the bot's run schedule (api/schedule.py)
+    ("no_bot_run", r"no bot run within (?P<days>[0-9]+) days (?P<way>before|after) (?P<day>"
+                   + _DAY + ")"),
     # the jobs strip: backup and nightly fetch (api/jobs.py)
     ("no_database", r"the bot has not created its database yet"),
     ("database_unreadable", r"database unreadable \((?P<error>\w+)\)"),
